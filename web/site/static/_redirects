@@ -6,7 +6,7 @@
 /cli           /senders#cli                                                    302
 /send          /senders                                                        302
 /receive       /receivers                                                      302
-/firefox       /download/firefox                                               302
+/firefox       https://addons.mozilla.org/firefox/addon/playbridge-video-detector/ 302
 /chrome        https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim 302
 /extension     /senders#extension                                              302
 /github        https://github.com/playbridgeapp/playbridge                     302

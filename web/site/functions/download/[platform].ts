@@ -1,6 +1,8 @@
 import { downloadTargetForPlatform, resolveProductRelease } from '../_lib/releases.js';
 
 const GITHUB_REPO = 'playbridgeapp/playbridge';
+// The Firefox extension is distributed through its AMO listing only.
+const FIREFOX_ADDON_URL = 'https://addons.mozilla.org/firefox/addon/playbridge-video-detector/';
 
 interface Env {
   GITHUB_TOKEN?: string;
@@ -11,6 +13,7 @@ export const onRequestGet: PagesFunction<Env, 'platform'> = async (context) => {
   if (platform === 'appletv') {
     return Response.redirect(`https://github.com/${GITHUB_REPO}/tree/main/tv/apple`, 302);
   }
+  if (platform === 'firefox') return Response.redirect(FIREFOX_ADDON_URL, 302);
 
   const target = downloadTargetForPlatform(platform);
   if (!target) return new Response('Platform Not Found', { status: 404 });

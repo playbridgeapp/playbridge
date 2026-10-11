@@ -74,55 +74,22 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: pnpm install --frozen-lockfile
 
-    - name: Test
+    # Typecheck, tests, Firefox/Chrome builds, store validation, zero-warning
+    # Firefox lint and deterministic store packages + SHA256SUMS.txt in
+    # extension/artifacts/. The store jobs below submit exactly these files.
+    - name: Store check and package
       if: steps.check_tag.outputs.skipped == 'false'
-      run: pnpm test
+      run: pnpm store:check
 
-    - name: Build
+    - name: Upload store artifacts
       if: steps.check_tag.outputs.skipped == 'false'
-      run: pnpm run build
-
-    - name: Install web-ext
-      if: steps.check_tag.outputs.skipped == 'false'
-      run: npm install -g web-ext
-
-    - name: Sign extension via AMO
-      if: steps.check_tag.outputs.skipped == 'false'
-      env:
-        AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-        AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
-      run: |
-        # Build now emits dist/firefox and dist/chrome — sign the Firefox build.
-        web-ext sign \
-          --source-dir dist/firefox \
-          --artifacts-dir dist \
-          --channel unlisted \
-          --api-key "$AMO_JWT_ISSUER" \
-          --api-secret "$AMO_JWT_SECRET"
-
-    - name: Rename Firefox output
-      if: steps.check_tag.outputs.skipped == 'false'
-      run: |
-        find dist -maxdepth 1 -name "*.xpi" -type f | while read f; do
-          mv "$f" "dist/playbridge-extension-${{ steps.version.outputs.version }}.xpi"
-        done
-
-    - name: Package Chrome zip (for the Chrome Web Store)
-      if: steps.check_tag.outputs.skipped == 'false'
-      run: |
-        # Zip the CONTENTS of dist/chrome so manifest.json sits at the archive root.
-        (cd dist/chrome && zip -r "../playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip" .)
-
-    - name: Upload to R2
-      if: steps.check_tag.outputs.skipped == 'false'
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-      run: |
-        aws s3 cp dist/ \
-          s3://${{ secrets.R2_BUCKET }}/extension-release/ \
-          --recursive --exclude "*" --include "*.xpi" --include "*.zip"
+      uses: actions/upload-artifact@v6
+      with:
+        name: extension-store-artifacts
+        path: |
+          extension/artifacts/*.zip
+          extension/artifacts/SHA256SUMS.txt
+        if-no-files-found: error
 
   release:
     needs: build-extension
@@ -131,47 +98,156 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Download store artifacts
+        uses: actions/download-artifact@v7
         with:
-          fetch-depth: 0
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' extension/manifests/firefox.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Download artifact from R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-        run: |
-          mkdir -p output
-          aws s3 sync s3://${{ secrets.R2_BUCKET }}/extension-release/ output/
+          name: extension-store-artifacts
+          path: output
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: extension-v${{ steps.version.outputs.version }}
-          name: PlayBridge Extension v${{ steps.version.outputs.version }}
+          tag_name: extension-v${{ needs.build-extension.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: PlayBridge Extension v${{ needs.build-extension.outputs.version }}
           body: |
             <!-- tag: 9f2d8e -->
             <!-- playbridge-rollout-delay-hours: 24 -->
-            **PlayBridge Extension:** v${{ steps.version.outputs.version }}
+            **PlayBridge Extension:** v${{ needs.build-extension.outputs.version }}
 
-            | Browser | File | Install |
-            |---------|------|---------|
-            | Firefox | `playbridge-extension-${{ steps.version.outputs.version }}.xpi` | Drag into Firefox, or `about:addons` → Install Add-on From File |
-            | Chrome / Edge / Brave | `playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip` | Unzip, then `chrome://extensions` → Developer mode → Load unpacked (or upload the zip to the Chrome Web Store) |
+            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/extension-v${{ needs.build-extension.outputs.version }}/extension/CHANGELOG.md)
+
+            Install from the stores to get automatic updates. This version was submitted to both stores and appears there once review finishes.
+
+            | Browser | Install |
+            |---------|---------|
+            | Firefox | [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/playbridge-video-detector/) |
+            | Chrome / Edge / Brave | [Chrome Web Store](https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim) |
+
+            The attached zips are the exact packages submitted to the stores, plus the source archive provided to Mozilla and `SHA256SUMS.txt`. The Firefox zip is unsigned (for `about:debugging` only); the Chrome zip can be loaded unpacked from `chrome://extensions` in Developer mode.
           files: output/*
           generate_release_notes: false
 
-      - name: Clean up R2 after release
-        if: always()
+  # Submits the version to the public AMO listing. AMO version numbers are
+  # unique across channels, so CI no longer signs a self-distributed copy.
+  submit-firefox:
+    needs: [build-extension, release]
+    if: needs.build-extension.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download store artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: extension-store-artifacts
+          path: artifacts
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Submit to addons.mozilla.org
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          VERSION: ${{ needs.build-extension.outputs.version }}
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          aws s3 rm s3://${{ secrets.R2_BUCKET }}/extension-release/ --recursive
+          set -euo pipefail
+          if [ -z "$WEB_EXT_API_KEY" ] || [ -z "$WEB_EXT_API_SECRET" ]; then
+            echo "::error::AMO_JWT_ISSUER / AMO_JWT_SECRET secrets are not configured."
+            exit 1
+          fi
+          # Sign exactly the package attached to the release.
+          mkdir firefox
+          unzip -q "artifacts/playbridge-extension-firefox-$VERSION.zip" -d firefox
+          # The bundled scripts are generated, so Mozilla requires the source
+          # archive. --approval-timeout 0 returns once the version is submitted;
+          # review continues on AMO.
+          npx --yes web-ext@10.7.0 sign \
+            --channel listed \
+            --source-dir firefox \
+            --artifacts-dir web-ext-artifacts \
+            --upload-source-code "artifacts/playbridge-extension-source-$VERSION.zip" \
+            --approval-timeout 0
+
+  # Uploads to the Chrome Web Store and submits for review; Google publishes
+  # automatically once the review passes.
+  submit-chrome:
+    needs: [build-extension, release]
+    if: needs.build-extension.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download store artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: extension-store-artifacts
+          path: artifacts
+
+      - name: Submit to the Chrome Web Store
+        env:
+          VERSION: ${{ needs.build-extension.outputs.version }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: gofdcnocpnieoonficfnfccolcocoaim
+        run: |
+          set -euo pipefail
+          for name in CWS_CLIENT_ID CWS_CLIENT_SECRET CWS_REFRESH_TOKEN CWS_PUBLISHER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name secret is not configured."
+              exit 1
+            fi
+          done
+
+          token=$(curl -fsS https://oauth2.googleapis.com/token \
+            --data-urlencode "client_id=$CWS_CLIENT_ID" \
+            --data-urlencode "client_secret=$CWS_CLIENT_SECRET" \
+            --data-urlencode "refresh_token=$CWS_REFRESH_TOKEN" \
+            --data-urlencode "grant_type=refresh_token" | jq -r '.access_token // empty')
+          if [ -z "$token" ]; then
+            echo "::error::Could not get a Chrome Web Store access token."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+
+          item="https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID"
+          upload="https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID:upload"
+          auth="Authorization: Bearer $token"
+
+          # Do not use curl -f here: the error body explains a rejected upload.
+          response=$(curl -sS -X POST -H "$auth" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@artifacts/playbridge-extension-chrome-$VERSION.zip" \
+            "$upload")
+          echo "Upload response: $response"
+          state=$(jq -r '.uploadState // empty' <<<"$response")
+
+          for _ in $(seq 1 30); do
+            case "$state" in
+              IN_PROGRESS|UPLOAD_IN_PROGRESS) ;;
+              *) break ;;
+            esac
+            sleep 10
+            status=$(curl -sS -H "$auth" "$item:fetchStatus")
+            state=$(jq -r '.lastAsyncUploadState // empty' <<<"$status")
+            echo "Upload state: $state"
+          done
+          if [ "$state" != "SUCCEEDED" ]; then
+            echo "::error::Chrome Web Store upload did not succeed (state: ${state:-unknown})."
+            exit 1
+          fi
+
+          response=$(curl -sS -X POST -H "$auth" \
+            -H "Content-Type: application/json" \
+            -d '{"publishType":"DEFAULT_PUBLISH"}' \
+            "$item:publish")
+          echo "Publish response: $response"
+          if [ -z "$(jq -r '.state // empty' <<<"$response")" ]; then
+            echo "::error::Chrome Web Store did not accept the submission."
+            exit 1
+          fi
