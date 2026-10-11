@@ -1,7 +1,7 @@
 {
     "manifest_version": 2,
     "name": "PlayBridge Video Detector",
-    "version": "0.15.0",
+    "version": "0.15.1",
     "description": "Detect and cast browser videos through the PlayBridge desktop app.",
     "icons": {
         "128": "icon.png"
@@ -47,9 +47,6 @@
             "data_collection_permissions": {
                 "required": ["browsingActivity", "websiteContent"]
             }
-        },
-        "gecko_android": {
-            "strict_min_version": "142.0"
         }
     }
 }

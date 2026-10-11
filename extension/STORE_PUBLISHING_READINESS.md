@@ -109,7 +109,7 @@ These items cannot be completed safely from the repository alone:
 - A 128x128 PNG icon is present and included in both packages.
 - The privacy policy now describes media URLs, request headers, video metadata,
   session storage, and local per-site preferences.
-- Firefox 140+/Android 142+ declares `browsingActivity` and `websiteContent`
+- Firefox 140+ (desktop only; no `gecko_android`, so AMO does not list it for Android) declares `browsingActivity` and `websiteContent`
   through Firefox's built-in consent experience.
 - Chrome starts media handling disabled until the user accepts a full-page
   disclosure; revocation clears detections and disables media/overlay paths.
@@ -237,7 +237,7 @@ clean profile on the oldest supported browser and current stable Firefox/Chrome:
 
 New AMO extensions submitted after 2025-11-03 must use Firefox's built-in data
 collection declaration. The Firefox manifest now declares the required
-categories and targets Firefox desktop 140+/Android 142+.
+categories and targets Firefox desktop 140+ only.
 
 This finding assumes PlayBridge is creating a new AMO listing now. Mozilla says
 updates to add-ons created before 2025-11-03 do not yet have to adopt the system,
@@ -264,7 +264,7 @@ contain Cookie or Authorization values.
 Firefox's built-in consent UI is available from Firefox 140. The implemented
 release path is:
 
-1. `strict_min_version` is `140.0` and Firefox Android is `142.0`;
+1. `strict_min_version` is `140.0` and there is no `gecko_android` key (desktop only);
 2. required data-collection permissions are declared;
 3. the privacy/listing copy uses the same descriptions;
 4. the owner must still verify the real install prompt in Firefox 140 and
