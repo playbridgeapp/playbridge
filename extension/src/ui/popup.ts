@@ -272,7 +272,42 @@ function renderDevices() {
     devicesList.replaceChildren();
 
     if (bridgeCapabilities?.selectDevice) {
-        // 1. "This computer" row first
+        const chips = protocolChips(bridgeDevices);
+        const showChips = chips.length >= 2;
+        const activeProtocol = showChips
+            ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+            : null;
+        const visibleDevices = showChips && activeProtocol
+            ? filterByProtocol(bridgeDevices, activeProtocol)
+            : bridgeDevices;
+
+        // 1. Protocol filter chips row at the TOP
+        if (showChips) {
+            const chipsRow = document.createElement('div');
+            chipsRow.className = 'protocol-chips-row';
+            chips.forEach((chip) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'protocol-chip' + (chip === activeProtocol ? ' active' : '');
+                btn.textContent = formatDeviceProtocol(chip) || chip;
+                btn.setAttribute('data-protocol', chip);
+                btn.addEventListener('click', () => {
+                    rememberedProtocol = chip;
+                    try {
+                        browser.storage.local
+                            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+                            .catch(() => {});
+                    } catch {
+                        // ignore
+                    }
+                    renderDevices();
+                });
+                chipsRow.appendChild(btn);
+            });
+            devicesList.appendChild(chipsRow);
+        }
+
+        // 2. "This computer" row next
         const isLocalActive =
             bridgeSelection?.kind === 'local' || bridgeTarget === 'local';
 
@@ -309,16 +344,7 @@ function renderDevices() {
         });
         devicesList.appendChild(localItem);
 
-        // 2. Devices
-        const chips = protocolChips(bridgeDevices);
-        const showChips = chips.length >= 2;
-        const activeProtocol = showChips
-            ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
-            : null;
-        const visibleDevices = showChips && activeProtocol
-            ? filterByProtocol(bridgeDevices, activeProtocol)
-            : bridgeDevices;
-
+        // 3. Devices
         visibleDevices.forEach((d) => {
             const isTvActive = isActiveDevice(d, bridgeSelection, currentStatus?.activeTv);
 
@@ -350,6 +376,16 @@ function renderDevices() {
                 actions.appendChild(tag);
 
                 item.addEventListener('click', () => {
+                    if (d.protocol) {
+                        rememberedProtocol = d.protocol;
+                        try {
+                            browser.storage.local
+                                .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: d.protocol })
+                                .catch(() => {});
+                        } catch {
+                            // ignore
+                        }
+                    }
                     browser.runtime
                         .sendMessage({ action: 'selectDevice', id: d.id || d.uuid })
                         .then(() => {
@@ -385,30 +421,6 @@ function renderDevices() {
             devicesList.appendChild(item);
         });
 
-        if (showChips) {
-            const chipsRow = document.createElement('div');
-            chipsRow.className = 'protocol-chips-row';
-            chips.forEach((chip) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'protocol-chip' + (chip === activeProtocol ? ' active' : '');
-                btn.textContent = formatDeviceProtocol(chip) || chip;
-                btn.setAttribute('data-protocol', chip);
-                btn.addEventListener('click', () => {
-                    rememberedProtocol = chip;
-                    try {
-                        browser.storage.local
-                            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
-                            .catch(() => {});
-                    } catch {
-                        // ignore
-                    }
-                    renderDevices();
-                });
-                chipsRow.appendChild(btn);
-            });
-            devicesList.appendChild(chipsRow);
-        }
         return;
     }
 
@@ -429,29 +441,6 @@ function renderDevices() {
     const legacyVisibleDevices = legacyShowChips && legacyActiveProtocol
         ? filterByProtocol(bridgeDevices, legacyActiveProtocol)
         : bridgeDevices;
-
-    legacyVisibleDevices.forEach((d) => {
-        const item = document.createElement('div');
-        item.className = 'saved-connection-item';
-        const info = document.createElement('div');
-        info.className = 'saved-connection-info';
-        const name = document.createElement('span');
-        name.className = 'saved-connection-ip';
-        name.textContent = d.name;
-        info.appendChild(name);
-
-        const actions = document.createElement('div');
-        actions.className = 'saved-connection-actions';
-
-        const tag = document.createElement('span');
-        tag.className = 'saved-connection-pin';
-        tag.textContent = d.paired ? 'paired' : 'not paired';
-        actions.appendChild(tag);
-
-        item.appendChild(info);
-        item.appendChild(actions);
-        devicesList.appendChild(item);
-    });
 
     if (legacyShowChips) {
         const chipsRow = document.createElement('div');
@@ -477,6 +466,29 @@ function renderDevices() {
         });
         devicesList.appendChild(chipsRow);
     }
+
+    legacyVisibleDevices.forEach((d) => {
+        const item = document.createElement('div');
+        item.className = 'saved-connection-item';
+        const info = document.createElement('div');
+        info.className = 'saved-connection-info';
+        const name = document.createElement('span');
+        name.className = 'saved-connection-ip';
+        name.textContent = d.name;
+        info.appendChild(name);
+
+        const actions = document.createElement('div');
+        actions.className = 'saved-connection-actions';
+
+        const tag = document.createElement('span');
+        tag.className = 'saved-connection-pin';
+        tag.textContent = d.paired ? 'paired' : 'not paired';
+        actions.appendChild(tag);
+
+        item.appendChild(info);
+        item.appendChild(actions);
+        devicesList.appendChild(item);
+    });
 }
 
 function updateStatusUI(s) {

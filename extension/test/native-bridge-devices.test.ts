@@ -715,7 +715,7 @@ test("filterByProtocol filters devices by protocol case-insensitively", () => {
   assert.deepEqual(filterByProtocol(devices, undefined), devices);
 });
 
-test("popup and content script render protocol chips row and remove per-row protocol badges", async () => {
+test("popup and content script render protocol chips row at the top and remove per-row protocol badges", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
 
@@ -741,6 +741,14 @@ test("popup and content script render protocol chips row and remove per-row prot
     /btn\.className = 'protocol-chip'/,
     "popup.ts must render protocol-chip buttons",
   );
+  // Chips row must be appended before 'This computer' row in popup
+  const popupChipsIdx = popupSource.indexOf("devicesList.appendChild(chipsRow);");
+  const popupLocalIdx = popupSource.indexOf("devicesList.appendChild(localItem);");
+  assert.equal(
+    popupChipsIdx !== -1 && popupLocalIdx !== -1 && popupChipsIdx < popupLocalIdx,
+    true,
+    "popup.ts must append protocol chips row at the top above This computer",
+  );
 
   // Check content.ts
   const contentSource = fs.readFileSync(
@@ -764,11 +772,46 @@ test("popup and content script render protocol chips row and remove per-row prot
     /chipBtn\.className = "protocol-chip"/,
     "content.ts must render protocol-chip buttons",
   );
+  // Chips row must be appended before 'This computer' row in content picker
+  const contentChipsIdx = contentSource.indexOf("devicePickerEl.appendChild(chipsRow);");
+  const contentLocalIdx = contentSource.indexOf("devicePickerEl.appendChild(localBtn);");
+  assert.equal(
+    contentChipsIdx !== -1 && contentLocalIdx !== -1 && contentChipsIdx < contentLocalIdx,
+    true,
+    "content.ts must append protocol chips row at the top above This computer",
+  );
   // Chip click handler must check e.isTrusted and must not call closePicker
   assert.match(
     contentSource,
     /chipBtn\.addEventListener\("click",\s*\((?:e|\w+)\)\s*=>\s*\{\s*if\s*\(!e\.isTrusted\)\s*return;\s*e\.stopPropagation\(\);\s*e\.preventDefault\(\);[\s\S]*?renderPicker\(\);/,
     "content.ts chip click must guard with isTrusted and re-render picker without closing",
+  );
+});
+
+test("picking a TV in popup or picker updates remembered protocol while picking This computer does not", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+
+  const popupSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/ui/popup.ts"),
+    "utf-8",
+  );
+  // In popup selectDevice click handler:
+  assert.match(
+    popupSource,
+    /if\s*\(d\.protocol\)\s*\{\s*rememberedProtocol = d\.protocol;\s*try\s*\{\s*browser\.storage\.local\s*\.set\(\{\s*\[DEVICE_PICKER_PROTOCOL_STORAGE_KEY\]:\s*d\.protocol\s*\}\)/,
+    "popup selectDevice must update rememberedProtocol in memory and storage",
+  );
+
+  const contentSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/content.ts"),
+    "utf-8",
+  );
+  // In content selectDevice click handler:
+  assert.match(
+    contentSource,
+    /if\s*\(device\.protocol\)\s*\{\s*rememberedPickerProtocol = device\.protocol;\s*try\s*\{\s*browser\.storage\.local\s*\.set\(\{\s*\[DEVICE_PICKER_PROTOCOL_STORAGE_KEY\]:\s*device\.protocol\s*\}\)/,
+    "content selectDevice must update rememberedPickerProtocol in memory and storage",
   );
 });
 

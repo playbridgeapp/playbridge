@@ -918,9 +918,9 @@ input:checked+.slider:before {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding-top: 8px;
-    margin-top: 4px;
-    border-top: 1px solid var(--bg-tertiary);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--bg-tertiary);
 }
 
 .protocol-chip {

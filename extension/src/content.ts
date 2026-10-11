@@ -653,9 +653,9 @@ function injectOverlayStyles(root: ShadowRoot): void {
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
-      padding-top: 6px;
-      margin-top: 2px;
-      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 6px;
+      margin-bottom: 2px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
     .picker-protocol-chips button.protocol-chip {
       background: rgba(255, 255, 255, 0.06);
@@ -1033,7 +1033,53 @@ function renderPicker(): void {
   if (!devicePickerEl) return;
   devicePickerEl.replaceChildren();
 
-  // 1. This computer row
+  const devices = currentBridgeStatus?.devices || [];
+  const chips = protocolChips(devices);
+  const showChips = chips.length >= 2;
+  const activeProtocol = showChips
+    ? defaultProtocol(
+        devices,
+        currentBridgeStatus?.selection,
+        rememberedPickerProtocol,
+        currentBridgeStatus?.activeTv,
+      )
+    : null;
+  const visibleDevices = showChips && activeProtocol
+    ? filterByProtocol(devices, activeProtocol)
+    : devices;
+
+  // 1. Protocol filter chips row at the TOP
+  if (showChips) {
+    const chipsRow = document.createElement("div");
+    chipsRow.className = "picker-protocol-chips";
+    for (const chip of chips) {
+      const chipBtn = document.createElement("button");
+      chipBtn.type = "button";
+      chipBtn.className = "protocol-chip" + (chip === activeProtocol ? " active" : "");
+      chipBtn.textContent = formatDeviceProtocol(chip) || chip;
+      chipBtn.setAttribute("data-protocol", chip);
+
+      chipBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        rememberedPickerProtocol = chip;
+        try {
+          browser.storage.local
+            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+            .catch(() => {});
+        } catch {
+          // ignore
+        }
+        renderPicker();
+      });
+
+      chipsRow.appendChild(chipBtn);
+    }
+    devicePickerEl.appendChild(chipsRow);
+  }
+
+  // 2. This computer row next
   const isLocalActive =
     currentBridgeStatus?.selection?.kind === "local" ||
     currentBridgeStatus?.target === "local";
@@ -1062,22 +1108,7 @@ function renderPicker(): void {
   });
   devicePickerEl.appendChild(localBtn);
 
-  // 2. Devices
-  const devices = currentBridgeStatus?.devices || [];
-  const chips = protocolChips(devices);
-  const showChips = chips.length >= 2;
-  const activeProtocol = showChips
-    ? defaultProtocol(
-        devices,
-        currentBridgeStatus?.selection,
-        rememberedPickerProtocol,
-        currentBridgeStatus?.activeTv,
-      )
-    : null;
-  const visibleDevices = showChips && activeProtocol
-    ? filterByProtocol(devices, activeProtocol)
-    : devices;
-
+  // 3. Devices
   for (const device of visibleDevices) {
     const isTvActive = isActiveDevice(
       device,
@@ -1105,6 +1136,16 @@ function renderPicker(): void {
         e.stopPropagation();
         e.preventDefault();
         closePicker();
+        if (device.protocol) {
+          rememberedPickerProtocol = device.protocol;
+          try {
+            browser.storage.local
+              .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: device.protocol })
+              .catch(() => {});
+          } catch {
+            // ignore
+          }
+        }
         browser.runtime
           .sendMessage({ action: "selectDevice", id: device.id || device.uuid })
           .catch(() => {});
@@ -1137,37 +1178,6 @@ function renderPicker(): void {
     }
 
     devicePickerEl.appendChild(devBtn);
-  }
-
-  // 3. Protocol filter chips row at the bottom
-  if (showChips) {
-    const chipsRow = document.createElement("div");
-    chipsRow.className = "picker-protocol-chips";
-    for (const chip of chips) {
-      const chipBtn = document.createElement("button");
-      chipBtn.type = "button";
-      chipBtn.className = "protocol-chip" + (chip === activeProtocol ? " active" : "");
-      chipBtn.textContent = formatDeviceProtocol(chip) || chip;
-      chipBtn.setAttribute("data-protocol", chip);
-
-      chipBtn.addEventListener("click", (e) => {
-        if (!e.isTrusted) return;
-        e.stopPropagation();
-        e.preventDefault();
-        rememberedPickerProtocol = chip;
-        try {
-          browser.storage.local
-            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
-            .catch(() => {});
-        } catch {
-          // ignore
-        }
-        renderPicker();
-      });
-
-      chipsRow.appendChild(chipBtn);
-    }
-    devicePickerEl.appendChild(chipsRow);
   }
 }
 
