@@ -4,11 +4,15 @@ import android.util.Log
 import com.playbridge.sender.cast.MediaTrack
 import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.sender.cast.TvPlayerSettings
+import com.playbridge.sender.cast.remote.RemoteObservation
+import android.os.SystemClock
 import com.playbridge.sender.library.PlaylistEpisode
 import com.playbridge.sender.library.PlaylistUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
@@ -59,6 +63,8 @@ class ConnectionCoordinator(
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
+    private val mutableRemoteObservation = MutableStateFlow(RemoteObservation())
+    val remoteObservation = mutableRemoteObservation.asStateFlow()
     private val pendingQueueCommands = ConcurrentHashMap<String, CompletableDeferred<QueueCommandResult>>()
     private val pendingLogRequests = ConcurrentHashMap<String, CompletableDeferred<TvLogsResult.Logs>>()
     
@@ -87,6 +93,7 @@ class ConnectionCoordinator(
                         "context" -> {
                             val active = json.optString("active", "idle")
                             tvActiveContext.value = active
+                            mutableRemoteObservation.update { it.copy(contextSequence = it.contextSequence + 1L) }
                             Log.d(TAG, "TV Active Context updated: $active")
                             // Clear playlist and playback states when TV goes idle
                             if (active == "idle") {
@@ -145,7 +152,16 @@ class ConnectionCoordinator(
                                     .takeIf { it in setOf("video", "audio", "image") }
                                     ?: "video",
                             )
+                            val mediaChanged = tvPlayback.value?.let { it.title != next.title || it.mediaKind != next.mediaKind } == true
                             if (next != tvPlayback.value) tvPlayback.value = next
+                            mutableRemoteObservation.update { previous ->
+                                previous.copy(
+                                    playbackSequence = previous.playbackSequence + 1L,
+                                    mediaGeneration = previous.mediaGeneration + if (mediaChanged) 1L else 0L,
+                                    playbackAtMs = SystemClock.uptimeMillis(),
+                                    browserMuted = if (json.has("muted")) json.optBoolean("muted") else null,
+                                )
+                            }
                         }
                         "command_result" -> {
                             val requestId = json.optString("requestId", "")
@@ -230,7 +246,11 @@ class ConnectionCoordinator(
                                 qualityAvailable = json.optBoolean("qualityAvailable", false),
                             )
                             Log.d(TAG, "TV Player settings updated")
+                            mutableRemoteObservation.update { it.copy(settingsReported = true, settingsFields = json.keys().asSequence().toSet()) }
                         }
+                    }
+                    if (json.optString("type") in setOf("context", "playlist_status", "status", "tracks", "player_settings")) {
+                        mutableRemoteObservation.update { it.copy(sequence = it.sequence + 1L, atMs = SystemClock.uptimeMillis()) }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing WebSocket message: ${e.message}", e)
@@ -300,6 +320,7 @@ class ConnectionCoordinator(
     fun clearPlaybackSnapshots() {
         tvPlayback.value = null
         tvPlaylistState.value = null
+        mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L) }
     }
 
     /**
@@ -318,6 +339,7 @@ class ConnectionCoordinator(
         tvAudioTracks.value = emptyList()
         tvSubtitleTracks.value = emptyList()
         tvPlayerSettings.value = TvPlayerSettings()
+        mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L, settingsReported = false, settingsFields = emptySet(), browserMuted = null) }
         nowPlayingTvId.value = null
         nowPlayingSeason.value = null
         nowPlayingEpisodeStart.value = 1

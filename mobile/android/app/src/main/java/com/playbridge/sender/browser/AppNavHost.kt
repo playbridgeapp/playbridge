@@ -1011,249 +1011,30 @@ fun AppNavHost(
                 }
                 Screen.Remote -> {
                     BackHandler(onBack = onRemoteBack)
-                    // Perf: high-frequency TV tickers collected locally so per-second
-                    // position updates recompose only this branch, not the whole host.
-                    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
-                    val tvPlaylistState by connectionCoordinator.tvPlaylistState.collectAsStateWithLifecycle()
-                    val tvPlayback by connectionCoordinator.tvPlayback.collectAsStateWithLifecycle()
-                    val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsStateWithLifecycle()
-                    val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsStateWithLifecycle()
-                    val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsStateWithLifecycle()
-                    val detectorRevision = VideoDetector.processingVersion
-                    val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsStateWithLifecycle()
-                    val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
-                    val externalControlFailure by connectionViewModel.externalControlFailureVersion.collectAsStateWithLifecycle()
-                    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
-                    val external = activeExternalDevice
-                    val remoteTimeline = resolveRemoteTimeline(
-                        activeContext = tvActiveContext,
-                        playback = tvPlayback,
-                        playerSettings = tvPlayerSettings,
-                    )
-                    val externalCapabilities by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
-                    val nativeCapabilities by connectionViewModel.webSocketClient.tvCapabilitiesState.collectAsStateWithLifecycle()
-                    val nativePlayers = nativeCapabilities.players.ifEmpty { tvDevice?.players.orEmpty() }
-                    val nativeInput = com.playbridge.sender.cast.remote.nativeRemoteInputAvailability(
-                        nativePlayers, nativeCapabilities.features, image = tvPlayback?.mediaKind == "image",
-                    )
-                    var remoteCommandFailure by remember { mutableLongStateOf(0L) }
-                    fun sent(ok: Boolean) { if (!ok) remoteCommandFailure++ }
-                    if (external != null) {
-                        val externalPlayback = when (externalStatus?.state) {
-                            PlaybackState.PLAYING -> "playing"
-                            PlaybackState.BUFFERING -> "buffering"
-                            PlaybackState.PAUSED -> "paused"
-                            PlaybackState.ERROR -> "error"
-                            else -> "idle"
-                        }
-                        RemoteControlScreen(
-                            activeContext = com.playbridge.sender.cast.remote.externalRemoteContext(externalPlayback),
-                            onBrowseLibrary = { onScreenChange(Screen.Library) },
-                            onOpenBrowser = { onScreenChange(Screen.Browser) },
-                            remoteSessionKey = external.endpointKey.toString(),
-                            remoteMediaKey = externalStatus?.loadEpoch?.toString(),
-                            commandFailureVersion = externalControlFailure,
-                            receiverConnected = externalCapabilities.isReadyForPlayback && externalPlayback != "error",
-                            onBack = onRemoteBack,
-                            linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
-                            onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
-                            onRemoteKey = { key ->
-                                when {
-                                    key == "volume_up" -> connectionViewModel.externalAdjustVolume(true)
-                                    key == "volume_down" -> connectionViewModel.externalAdjustVolume(false)
-                                    external.resolvedProtocol == com.playbridge.sender.model.CastProtocol.ROKU ->
-                                        connectionViewModel.rokuKeypress(key)
-                                }
-                            },
-                            onMouseMove = { _, _ -> },
-                            onMouseClick = {},
-                            onMouseScroll = { _, _ -> },
-                            onPlayerControl = { cmd ->
-                                when (cmd) {
-                                    "play" -> connectionViewModel.externalPlay()
-                                    "pause" -> connectionViewModel.externalPause()
-                                    "stop" -> connectionViewModel.externalStop()
-                                    "seek_back" -> connectionViewModel.externalSeek(
-                                        ((externalStatus?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L),
-                                    )
-                                    "seek_forward" -> connectionViewModel.externalSeek(
-                                        com.playbridge.sender.cast.remote.relativeRemoteSeek(
-                                            externalStatus?.positionMs ?: 0L, 10_000L, externalStatus?.durationMs ?: 0L,
-                                        ),
-                                    )
-                                }
-                            },
-                            playbackState = externalPlayback,
-                            externalProtocolLabel = external.resolvedProtocol.displayName,
-                            externalCapabilities = externalCapabilities.capabilities,
-                            isLive = externalStatus?.isLive == true,
-                            positionMs = externalStatus?.positionMs ?: 0L,
-                            durationMs = externalStatus?.durationMs ?: 0L,
-                            mediaTitle = externalMediaTitle ?: external.name,
-                            onSeekTo = { connectionViewModel.externalSeek(it) },
-                            tvName = external.name,
-                        )
-                    } else RemoteControlScreen(
-                        activeContext = tvActiveContext,
-                        onBrowseLibrary = { onScreenChange(Screen.Library) },
-                        onOpenBrowser = { onScreenChange(Screen.Browser) },
-                        remoteSessionKey = tvDevice?.endpointKey.toString(),
-                        remoteMediaKey = "${tvPlaylistState?.playbackId}:${tvPlaylistState?.currentItemId}",
-                        commandFailureVersion = remoteCommandFailure,
-                        nativeVolumeSupported = com.playbridge.sender.cast.remote.nativeRemoteVolumeSupported(
-                            nativePlayers, nativeCapabilities.features,
-                        ),
-                        nativeRemoteSupported = nativeInput.remote,
-                        nativeTouchpadSupported = nativeInput.touchpad,
-                        playbackState = tvPlayback?.state,
-                        isLive = remoteTimeline.isLive,
-                        isSeekable = remoteTimeline.isSeekable,
-                        positionMs = tvPlayback?.positionMs ?: 0L,
-                        durationMs = tvPlayback?.durationMs ?: 0L,
-                        mediaTitle = tvPlayback?.title,
-                        mediaKind = tvPlayback?.mediaKind ?: "video",
-                        episodes = tvPlaylistState?.items ?: emptyList(),
-                        currentEpisodeIndex = tvPlaylistState?.currentIndex ?: 0,
-                        videoTracks = tvVideoTracks,
-                        audioTracks = tvAudioTracks,
-                        subtitleTracks = tvSubtitleTracks,
-                        detectedSubtitles = remember(remoteCastSourceTabId, remoteCastTitle, tvPlayback?.title, detectorRevision) {
-                            if (remoteCastSourceTabId != null && remoteCastTitle == tvPlayback?.title) {
+                    com.playbridge.sender.cast.remote.RemoteRoute(
+                        subtitleSourceKey = Triple(remoteCastSourceTabId, remoteCastTitle, VideoDetector.processingVersion),
+                        detectedSubtitles = { title ->
+                            if (remoteCastSourceTabId != null && remoteCastTitle == title) {
                                 VideoDetector.getVideosForTab(remoteCastSourceTabId).filter { it.isSubtitle }
                             } else emptyList()
                         },
-                        onSeekTo = { positionMs ->
-                            sent(connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("seek_to:$positionMs")))
-                        },
-                        onJumpToEpisode = { index ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistJumpCommandJson(index))
-                        },
-                        onSelectAudio = { id ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_track:$id"))
-                        },
-                        onSelectSubtitle = { id ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_track:$id"))
-                        },
-                        onSetVideoQuality = { maxHeight ->
-                            val value = maxHeight.takeIf { it > 0 }?.toString() ?: "auto"
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("video_quality:$value"))
-                        },
-                        playerSettings = tvPlayerSettings,
-                        onSetSpeed = { speed ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("speed:$speed"))
-                        },
-                        onSetScaling = { mode ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("scaling:$mode"))
-                        },
-                        onToggleAudioBoost = {
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_boost"))
-                        },
-                        onAdjustSubtitleOffset = { delta ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_offset:$delta"))
-                        },
-                        onSwitchEngine = { engineId ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("switch_player:$engineId"))
-                        },
-                        onAddSubtitleUrl = { url ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:$url"))
-                        },
-                        onAddSubtitleResource = { resource ->
-                            val features = connectionViewModel.webSocketClient.tvCapabilitiesState.value.features
-                            when {
-                                connectionState !is WebSocketClient.ConnectionState.Connected -> false
-                                "subtitle_resource_add_v1" in features -> {
-                                    val requestId = java.util.UUID.randomUUID().toString()
-                                    scope.launch {
-                                        val result = connectionCoordinator.sendConfirmedQueueCommand(
-                                            requestId,
-                                            com.playbridge.shared.protocol.createAddSubtitleCommandJson(
-                                                resource, requestId,
-                                            ),
-                                            timeoutMs = 30_000L,
-                                        )
-                                        if (result?.ok != true) {
-                                            val message = when (result?.error) {
-                                                "no_active_playback" -> "No video is playing on the TV"
-                                                "invalid_command" -> "The TV rejected this subtitle"
-                                                "subtitle_unavailable" -> "The TV could not load this subtitle"
-                                                else -> "The TV did not confirm the subtitle"
-                                            }
-                                            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                    true
+                        onEffect = { effect ->
+                            when (effect) {
+                                is com.playbridge.sender.cast.remote.RemoteEffect.Navigate -> when (effect.destination) {
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Origin -> onRemoteBack()
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Connections -> onScreenChange(Screen.Connection)
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Library -> onScreenChange(Screen.Library)
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.PhoneBrowser -> onScreenChange(Screen.Browser)
                                 }
-                                resource.headers.isEmpty() ->
-                                    connectionViewModel.webSocketClient.send(
-                                        com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:${resource.url}")
-                                    )
-                                else -> false
+                                is com.playbridge.sender.cast.remote.RemoteEffect.OpenManager -> when (effect.manager) {
+                                    com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserScripts -> showUserScripts = true
+                                    com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserAgent -> showTvUserAgent = true
+                                }
+                                com.playbridge.sender.cast.remote.RemoteEffect.UnlinkWebsite -> linkedPageCastCoordinator.unlink("unlinked")
+                                com.playbridge.sender.cast.remote.RemoteEffect.RetryConnection -> tvDevice?.let { connectionViewModel.connect(it) }
+                                is com.playbridge.sender.cast.remote.RemoteEffect.Notice -> if (effect.subtitle) Toast.makeText(appContext, effect.message, Toast.LENGTH_LONG).show()
                             }
                         },
-                        onBack = onRemoteBack,
-                        linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
-                        onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
-                        onRemoteKey = { key ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
-                        },
-                        onMouseMove = { dx, dy ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("move", dx, dy)
-                        },
-                        onMouseClick = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("click", 0f, 0f)
-                        },
-                        onMouseScroll = { dx, dy ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
-                        },
-                        onPinchZoom = { factor ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("zoom", factor, 0f)
-                        },
-                        onRotateImage = { degrees ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("rotate", degrees, 0f)
-                        },
-                        onTransformAnchor = { x, y ->
-                            connectionViewModel.webSocketClient.sendMouseCommand(
-                                "transform_anchor",
-                                x,
-                                y,
-                            )
-                        },
-                        onResetZoom = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("reset", 0f, 0f)
-                        },
-                        onMouseDown = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
-                        },
-                        onMouseUp = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
-                        },
-                        onPointerGestureEnd = {
-                            connectionViewModel.webSocketClient.endPointerGesture()
-                        },
-                        onBrowserControl = { action ->
-                            when (action) {
-                                // Phone-side actions: open a manager sheet and ask the TV for
-                                // its current state — not a browser command.
-                                "manage_user_scripts" -> {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createUserScriptQueryJson())
-                                    showUserScripts = true
-                                }
-                                "manage_user_agent" -> {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createUserAgentQueryJson())
-                                    showTvUserAgent = true
-                                }
-                                else -> sent(connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action)))
-                            }
-                        },
-                        onPlayerControl = { command ->
-                            val ok = connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
-                            sent(ok)
-                            if (ok && command == "stop") { connectionCoordinator.tvActiveContext.value = "idle" }
-                        },
-                        // Connected-device status pill (switching/disconnecting lives in the Library cast picker).
-                        tvName = activeExternalDevice?.name
-                            ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
-                        connectionState = connectionState
                     )
                 }
                 Screen.Home -> {

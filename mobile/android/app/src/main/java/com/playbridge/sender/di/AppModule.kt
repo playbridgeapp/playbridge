@@ -265,6 +265,26 @@ val appModule = module {
         )
     }
 
+    // Remote adapters reuse the process-wide connection/session owners.
+    single<com.playbridge.sender.cast.remote.NativeRemoteTransport> {
+        com.playbridge.sender.cast.remote.WebSocketNativeRemoteTransport(
+            get(), get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
+    }
+    single<com.playbridge.sender.cast.remote.ExternalRemoteTransport> {
+        com.playbridge.sender.cast.remote.CastSessionExternalRemoteTransport(
+            get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
+    }
+    single<com.playbridge.sender.cast.remote.TvRemoteChannel> { com.playbridge.sender.cast.remote.UnavailableTvRemoteChannel() }
+    single { com.playbridge.sender.cast.remote.RemoteInputRouter(get()) }
+    single {
+        com.playbridge.sender.cast.remote.RemoteControllerRegistry.create(
+            get(), get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+        )
+    }
+    viewModel { com.playbridge.sender.cast.remote.RemoteViewModel(get(), get()) }
+
     // 6. ViewModels
     viewModel {
         ConnectionViewModel(

@@ -1,7 +1,6 @@
 package com.playbridge.sender.cast
 
 import android.net.Uri
-import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -156,7 +155,17 @@ import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteNavBar
-import com.playbridge.sender.cast.remote.RemoteOptimisticState
+import com.playbridge.sender.cast.remote.RemoteNavAvailability
+import com.playbridge.sender.cast.remote.RemoteTransportAvailability
+import com.playbridge.sender.cast.remote.RemoteUiState
+import com.playbridge.sender.cast.remote.RemoteAction
+import com.playbridge.sender.cast.remote.RemoteSheet
+import com.playbridge.sender.cast.remote.RemoteSheetFlags
+import com.playbridge.sender.cast.remote.RemoteInputMode
+import com.playbridge.sender.cast.remote.RemoteViewport
+import com.playbridge.sender.cast.remote.RemoteScreenPlayback
+import com.playbridge.sender.cast.remote.stage1PolicyState
+import com.playbridge.sender.cast.remote.resolveRemoteLayout
 import com.playbridge.sender.cast.remote.RemoteTransportRow
 import com.playbridge.sender.cast.remote.RemoteVolumeKeys
 import com.playbridge.sender.cast.remote.crossedSeekBound
@@ -164,9 +173,7 @@ import com.playbridge.sender.cast.remote.relativeRemoteSeek
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
 import com.playbridge.sender.cast.remote.rememberRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.remoteDoubleTapAction
-import com.playbridge.sender.cast.remote.remoteNavAvailability
 import com.playbridge.sender.cast.remote.remotePressFeedback
-import com.playbridge.sender.cast.remote.remoteTransportAvailability
 import com.playbridge.sender.cast.remote.remoteWaveClocks
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.library.PlaylistEpisode
@@ -175,7 +182,6 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ln
 import kotlin.math.sin
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Live playback status synced from the TV via `status` messages. */
@@ -275,96 +281,50 @@ fun RemoteControlScreen(
     onUnlinkWebsite: () -> Unit = {},
     onBrowseLibrary: () -> Unit = {},
     onOpenBrowser: () -> Unit = {},
-    remoteSessionKey: String = "",
-    remoteMediaKey: String? = null,
-    commandFailureVersion: Long = 0L,
-    nativeVolumeSupported: Boolean = true,
-    nativeRemoteSupported: Boolean = true,
-    nativeTouchpadSupported: Boolean = true,
     receiverConnected: Boolean = connectionState is WebSocketClient.ConnectionState.Connected,
+    managedState: RemoteUiState,
+    onRemoteUiAction: (RemoteAction) -> Unit = {},
+    onSubmitSubtitle: ((playbridge.SubtitleResource) -> Unit)? = null,
 ) {
-    var showSettingsSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
-    var showAddSubtitle by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
-    var showSubtitlesSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
-    var showKeyboardSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
+    val remoteSessionKey = managedState.sessionId.toString()
+    val remoteMediaKey = managedState.playback?.mediaId.toString()
+    val sheets = RemoteSheetFlags(
+        read = { managedState.sheet },
+        write = { onRemoteUiAction(it?.let { sheet -> RemoteAction.OpenSheet(sheet) } ?: RemoteAction.CloseSheet) },
+    )
+    var showSettingsSheet by sheets.flag(RemoteSheet.More)
+    var showAddSubtitle by sheets.flag(RemoteSheet.AddSubtitle)
+    var showSubtitlesSheet by sheets.flag(RemoteSheet.Subtitles)
+    var showKeyboardSheet by sheets.flag(RemoteSheet.Keyboard)
     val motion = rememberRemoteMotionPolicy()
     val haptics = rememberRemoteHaptics()
-    var optimistic by remember(remoteSessionKey, remoteMediaKey, activeContext, mediaTitle, currentEpisodeIndex, receiverConnected) {
-        mutableStateOf(RemoteOptimisticState(SystemClock::uptimeMillis))
-    }
-    val reportedPlaying = playbackState == "playing" || playbackState == "buffering"
-    LaunchedEffect(positionMs, playbackState) {
-        optimistic = optimistic.reconcile(positionMs, reportedPlaying)
-    }
-    LaunchedEffect(optimistic) {
-        while (optimistic.hasPending) {
-            delay(100L)
-            optimistic = optimistic.expire()
-        }
-    }
-    LaunchedEffect(commandFailureVersion) {
-        if (commandFailureVersion > 0L) optimistic = optimistic.clear()
-    }
-    LaunchedEffect(playbackState) {
-        if (playbackState == "error") optimistic = optimistic.clear()
-    }
-    val displayedPosition = optimistic.position(positionMs)
-    val displayedPlaying = optimistic.playing(reportedPlaying)
-    val seek: (Long) -> Unit = { target ->
-        if (receiverConnected) {
-            optimistic = optimistic.seek(target, durationMs)
-            if (activeContext == "browser") onBrowserControl("seek_to:${optimistic.position(positionMs)}")
-            else onSeekTo(optimistic.position(positionMs))
-        }
-    }
+    val playback = RemoteScreenPlayback(
+        position = { managedState.playback?.displayedPositionMs ?: 0L },
+        playing = { managedState.playback?.displayedPlaying == true },
+        seek = { onRemoteUiAction(RemoteAction.SeekTo(it)) },
+        toggle = { onRemoteUiAction(RemoteAction.TogglePlayPause) },
+    )
+    val displayedPosition = playback.position()
+    val displayedPlaying = playback.playing()
+    val seek = playback.seek
     val playPause: () -> Unit = {
-        if (receiverConnected) {
-            val next = !optimistic.playing(reportedPlaying)
-            optimistic = optimistic.play(next)
-            haptics.perform(RemoteFeedback.PLAY_PAUSE)
-            if (activeContext == "browser") onBrowserControl("toggle_play")
-            else onPlayerControl(if (next) "play" else "pause")
-        }
+        if (receiverConnected) { haptics.perform(RemoteFeedback.PLAY_PAUSE); playback.toggle() }
     }
     val remoteContext = remoteContextOf(activeContext)
-    val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
     val resolvedMediaKind = mediaKind.takeIf { it in setOf("video", "audio", "image") } ?: "video"
     val isImage = resolvedMediaKind == "image"
     val isAudio = resolvedMediaKind == "audio"
     val externalMode = externalProtocolLabel != null
     val capabilities = externalCapabilities.orEmpty()
-    val supportsRemote = if (externalMode) Capability.REMOTE in capabilities else nativeRemoteSupported
-    val supportsVolume = if (externalMode) Capability.VOLUME in capabilities else nativeVolumeSupported
     val supportsSeek = if (externalMode) Capability.SEEK in capabilities else isSeekable
-    val availableModes = availableRemoteModes(
-        remoteContext = remoteContext,
-        externalMode = externalMode,
-        supportsRemote = supportsRemote,
-        supportsTouchpad = nativeTouchpadSupported,
-    )
-    var modeByContext by remember {
-        mutableStateOf(
-            mapOf(
-                RemoteContext.PLAYER to RemoteMode.CONTEXT,
-                RemoteContext.BROWSER to RemoteMode.TOUCHPAD,
-                RemoteContext.IDLE to RemoteMode.CONTEXT
-            )
-        )
-    }
-    val selectedMode = modeByContext[remoteContext] ?: RemoteMode.CONTEXT
+    val layout = resolveRemoteLayout(managedState, RemoteViewport())
+    val availableModes = layout.modes.map { it.screenMode() }
+    val selectedMode = managedState.inputMode.screenMode()
     val effectiveMode = selectedMode.takeIf { it in availableModes } ?: RemoteMode.CONTEXT
-    fun selectMode(mode: RemoteMode) { modeByContext = modeByContext + (remoteContext to mode) }
+    fun selectMode(mode: RemoteMode) { onRemoteUiAction(RemoteAction.SelectInputMode(mode.inputMode())) }
+    val nav = layout.nav.let { RemoteNavAvailability(it.back.enabled, it.home.enabled, it.keys.enabled, it.volume.enabled) }
+    val transport = layout.transport.let { RemoteTransportAvailability(it.visible, it.seek, it.previous, it.next) }
 
-    LaunchedEffect(remoteContext, videoActive) {
-        if (remoteContext == RemoteContext.BROWSER && videoActive) {
-            selectMode(RemoteMode.CONTEXT)
-        }
-    }
-
-    val nav = remoteNavAvailability(activeContext, externalMode, supportsRemote, supportsVolume, receiverConnected)
-    val transport = remoteTransportAvailability(
-        activeContext, externalMode, supportsSeek, isLive, isImage, episodes.map { it.index }, currentEpisodeIndex,
-    )
     RemoteVolumeKeys(nav.volume, remoteSessionKey) { up -> onRemoteKey(if (up) "volume_up" else "volume_down") }
     CompositionLocalProvider(LocalRemoteMotionPolicy provides motion) {
     Scaffold(
@@ -379,8 +339,8 @@ fun RemoteControlScreen(
                         previous = transport.previous,
                         next = transport.next,
                         onJumpToEpisode = onJumpToEpisode,
-                        onSeekBack = { seek(relativeRemoteSeek(optimistic.position(positionMs), -10_000L, durationMs)) },
-                        onSeekForward = { seek(relativeRemoteSeek(optimistic.position(positionMs), 10_000L, durationMs)) },
+                        onSeekBack = { onRemoteUiAction(RemoteAction.SeekBy(-10_000L)) },
+                        onSeekForward = { onRemoteUiAction(RemoteAction.SeekBy(10_000L)) },
                         onPlayPause = playPause,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -518,7 +478,8 @@ fun RemoteControlScreen(
                                 enableVolume = nav.volume,
                                 mediaTitle = mediaTitle,
                                 onBrowserControl = onBrowserControl,
-                                onRemoteKey = onRemoteKey
+                                onRemoteKey = onRemoteKey,
+                                browserSheets = sheets,
                             )
 
                             RemoteContext.IDLE -> IdleEmptyState(
@@ -533,7 +494,7 @@ fun RemoteControlScreen(
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                 DpadArea(onRemoteKey = onRemoteKey, enabled = receiverConnected && motion.resumed)
                             }
-                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true })
+                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true }, browserSheets = sheets)
                         }
                         RemoteMode.TOUCHPAD -> {
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -552,7 +513,7 @@ fun RemoteControlScreen(
                                     onGestureEnd = onPointerGestureEnd,
                                 )
                             }
-                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true })
+                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true }, browserSheets = sheets)
                         }
                         RemoteMode.KEYBOARD -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             KeyboardArea(onRemoteKey = onRemoteKey)
@@ -592,6 +553,7 @@ fun RemoteControlScreen(
     if (showAddSubtitle && resolvedMediaKind == "video") {
         AddSubtitleDialog(
             detectedSubtitles = detectedSubtitles,
+            onSubmitResource = onSubmitSubtitle,
             onAddResource = { resource ->
                 val sent = onAddSubtitleResource(resource)
                 if (sent) {
@@ -634,11 +596,18 @@ internal fun availableRemoteModes(
     externalMode: Boolean,
     supportsRemote: Boolean,
     supportsTouchpad: Boolean = supportsRemote,
-): List<RemoteMode> = buildList {
-    add(RemoteMode.CONTEXT)
-    if (supportsRemote && (remoteContext != RemoteContext.IDLE || externalMode)) add(RemoteMode.DPAD)
-    if (!externalMode && supportsTouchpad && remoteContext != RemoteContext.IDLE) add(RemoteMode.TOUCHPAD)
-    if (!externalMode && supportsRemote && remoteContext == RemoteContext.BROWSER) add(RemoteMode.KEYBOARD)
+): List<RemoteMode> = resolveRemoteLayout(
+    stage1PolicyState(remoteContext.name.lowercase(), externalMode, supportsRemote, supportsTouchpad),
+    RemoteViewport(),
+).modes.map { it.screenMode() }
+
+private fun RemoteInputMode.screenMode(): RemoteMode = when (this) {
+    RemoteInputMode.Context -> RemoteMode.CONTEXT; RemoteInputMode.Pad -> RemoteMode.DPAD
+    RemoteInputMode.Pointer -> RemoteMode.TOUCHPAD; RemoteInputMode.Keyboard -> RemoteMode.KEYBOARD
+}
+private fun RemoteMode.inputMode(): RemoteInputMode = when (this) {
+    RemoteMode.CONTEXT -> RemoteInputMode.Context; RemoteMode.DPAD -> RemoteInputMode.Pad
+    RemoteMode.TOUCHPAD -> RemoteInputMode.Pointer; RemoteMode.KEYBOARD -> RemoteInputMode.Keyboard
 }
 
 private fun remoteContextOf(active: String): RemoteContext = when (active) {
@@ -789,7 +758,8 @@ private fun ColumnScope.BrowserContextView(
     enableVolume: Boolean,
     mediaTitle: String?,
     onBrowserControl: (String) -> Unit,
-    onRemoteKey: (String) -> Unit
+    onRemoteKey: (String) -> Unit,
+    browserSheets: RemoteSheetFlags,
 ) {
     val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
     if (videoActive) {
@@ -813,7 +783,7 @@ private fun ColumnScope.BrowserContextView(
         )
     }
 
-    BrowserContextRow(onBrowserControl = onBrowserControl)
+    BrowserContextRow(onBrowserControl = onBrowserControl, sheets = browserSheets)
 }
 
 @Composable
@@ -821,8 +791,9 @@ private fun ColumnScope.ModeBottomBar(
     ctx: RemoteContext,
     onBrowserControl: (String) -> Unit,
     onMore: () -> Unit,
+    browserSheets: RemoteSheetFlags,
 ) {
-    if (ctx == RemoteContext.BROWSER) BrowserContextRow(onBrowserControl)
+    if (ctx == RemoteContext.BROWSER) BrowserContextRow(onBrowserControl, browserSheets)
     if (ctx == RemoteContext.PLAYER) {
         TrackChipsRow(emptyList(), emptyList(), false, {}, {}, onMore)
     }
@@ -1500,8 +1471,8 @@ private fun TouchpadArea(
 }
 
 @Composable
-private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
-    var showMoreSheet by remember { mutableStateOf(false) }
+private fun BrowserContextRow(onBrowserControl: (String) -> Unit, sheets: RemoteSheetFlags) {
+    var showMoreSheet by sheets.flag(RemoteSheet.BrowserMore)
     Row(
         modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp)).padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1840,6 +1811,7 @@ private fun ChipGroup(options: List<Pair<String, String>>, selectedKey: String, 
 @Composable
 private fun AddSubtitleDialog(
     detectedSubtitles: List<DetectedVideo>,
+    onSubmitResource: ((playbridge.SubtitleResource) -> Unit)? = null,
     onAddResource: (playbridge.SubtitleResource) -> Boolean,
     onAddLocalUrl: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -1859,6 +1831,7 @@ private fun AddSubtitleDialog(
     }
 
     fun addResource(resource: playbridge.SubtitleResource) {
+        if (onSubmitResource != null) { onSubmitResource(resource); return }
         if (!onAddResource(resource)) {
             android.widget.Toast.makeText(
                 context, "Could not add subtitle. Check the TV connection or update the receiver.",

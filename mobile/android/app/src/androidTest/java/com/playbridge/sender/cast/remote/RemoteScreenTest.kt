@@ -8,6 +8,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import com.playbridge.sender.model.CastProtocol
+import com.playbridge.sender.model.EndpointKey
+import android.os.SystemClock
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -43,6 +51,34 @@ import org.junit.Test
 
 class RemoteScreenTest {
     @get:Rule val compose = createComposeRule()
+
+    @Composable
+    private fun screenFixture(
+        context: String, name: String = "TV", image: Boolean = false, desktop: Boolean = false,
+        position: Long = 0L, duration: Long = 0L, media: String = "fixture", onSeek: (Long) -> Unit = {},
+    ): Pair<RemoteUiState, (RemoteAction) -> Unit> {
+        val reducer = remember { RemoteStateReducer(SystemClock::uptimeMillis) }
+        val session = remember { RemoteSessionId(EndpointKey(CastProtocol.PLAYBRIDGE, "fixture"), 1L) }
+        val profile = if (desktop) RemoteProfile.Desktop else RemoteProfile.AndroidTv
+        val kind = if (image) RemoteMediaKind.Image else RemoteMediaKind.Video
+        val typed = remoteContextFromWire(context)
+        val snapshot = RemoteReceiverSnapshot(RemoteUiState(
+            sessionId = session, receiver = RemoteReceiver(session.endpoint, name, profile),
+            context = typed, connection = RemoteConnection.Connected(name),
+            capabilities = nativeRemoteCapabilities(profile, typed, kind),
+            playback = RemotePlayback(mediaId = RemoteMediaId(session, null, media, 0L), title = "Fixture", mediaKind = kind, reportedState = RemotePlaybackState.Paused, reportedPositionMs = position, durationMs = duration, seekable = Support.Supported),
+        ))
+        var state by remember { mutableStateOf(reducer.observe(snapshot)) }
+        LaunchedEffect(context, name, image, desktop, position, duration, media) { state = reducer.observe(snapshot) }
+        return state to { action ->
+            val resolved = when (action) {
+                is RemoteAction.SeekBy -> RemoteAction.SeekTo(relativeRemoteSeek(state.playback?.displayedPositionMs ?: 0L, action.deltaMs, duration))
+                else -> action
+            }
+            state = if (resolved is RemoteAction.SeekTo) reducer.begin(resolved) else reducer.local(resolved)
+            if (resolved is RemoteAction.SeekTo) onSeek(resolved.positionMs)
+        }
+    }
 
     @Test fun trackChipsShowNamesAndAccessibleLabelsWithoutDisplacingMore() {
         val audio = mutableStateOf(listOf(MediaTrack("en", "English", true), MediaTrack("fr", "French", false)))
@@ -143,14 +179,14 @@ class RemoteScreenTest {
     @Test fun desktopVideoHasNoDeadTabsAndImageKeepsPointerAndMore() {
         val image = mutableStateOf(false)
         compose.setContent {
-            val input = nativeRemoteInputAvailability(listOf("internal_mpv"), setOf("subtitle_resource_add_v1"), image.value)
+            val fixture = screenFixture("player", image = image.value, desktop = true)
             MaterialTheme {
                 RemoteControlScreen(
                     activeContext = "player", onBack = {}, onRemoteKey = {},
                     onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
                     playbackState = "paused", receiverConnected = true,
                     mediaKind = if (image.value) "image" else "video",
-                    nativeRemoteSupported = input.remote, nativeTouchpadSupported = input.touchpad,
+                    managedState = fixture.first, onRemoteUiAction = fixture.second,
                 )
             }
         }
@@ -176,8 +212,10 @@ class RemoteScreenTest {
         var libraries = 0
         var browsers = 0
         compose.setContent {
+            val fixture = screenFixture(context.value, name = "Hisense")
             MaterialTheme {
                 RemoteControlScreen(
+                    managedState = fixture.first, onRemoteUiAction = fixture.second,
                     activeContext = context.value, onBack = {}, onRemoteKey = {},
                     onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
                     playbackState = "paused", receiverConnected = true, tvName = "Hisense",
@@ -224,12 +262,14 @@ class RemoteScreenTest {
         val seeks = mutableListOf<Long>()
         compose.mainClock.autoAdvance = false
         compose.setContent {
+            val fixture = screenFixture("player", position = position.value, duration = 120_000L, media = media.value, onSeek = { seeks += it })
             MaterialTheme {
                 RemoteControlScreen(
+                    managedState = fixture.first, onRemoteUiAction = fixture.second,
                     activeContext = "player", onBack = {}, onRemoteKey = {},
                     onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
                     playbackState = "paused", receiverConnected = true,
-                    positionMs = position.value, durationMs = 120_000, remoteMediaKey = media.value,
+                    positionMs = position.value, durationMs = 120_000,
                     onSeekTo = { seeks += it },
                 )
             }

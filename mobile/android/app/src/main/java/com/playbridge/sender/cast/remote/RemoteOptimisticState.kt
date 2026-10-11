@@ -14,6 +14,8 @@ internal data class RemoteOptimisticState private constructor(
     private data class PendingPlaying(val playing: Boolean, val sentAt: Long)
 
     val hasPending: Boolean get() = pendingSeek != null || pendingPlaying != null
+    val hasPendingSeek: Boolean get() = pendingSeek != null
+    val hasPendingPlaying: Boolean get() = pendingPlaying != null
     fun position(reportedMs: Long): Long = pendingSeek?.targetMs ?: reportedMs
     fun playing(reported: Boolean): Boolean = pendingPlaying?.playing ?: reported
 
