@@ -2,7 +2,9 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.15.1+33] — 2026-10-11
+
+> **Works best together**: Use PlayBridge browser extension 0.15.0 or later to choose the playback device from the browser and to let websites play through PlayBridge.
 
 ### Added
 - **Website playback API**: Linked browser sessions control This computer and PlayBridge TV queues, with lazy item supply, progress events, destination checks and a Controlled by / Unlink banner and tray action. External receivers support single-item playback with explicit queue/subtitle limits.
