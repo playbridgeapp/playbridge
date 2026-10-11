@@ -573,6 +573,11 @@ class BrowserActivity : ComponentActivity() {
                     }
                     engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
                 }
+                "home" -> {
+                    // Home always exits the browser, fullscreen or not.
+                    runOnUiThread { exitGeckoFullscreen() }
+                    closeBrowser()
+                }
                 "dpad_center" -> {
                     showCursorAndResetTimer()
                     simulateClickOnActiveView(cursorX, cursorY)
