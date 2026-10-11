@@ -61,6 +61,7 @@ class BrowserActivity : ComponentActivity() {
     private var currentUrl: String? = null
     private var explicitlyClosing = false
     private var replacedByAnotherMode = false
+    private var browserResumed = false
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -677,6 +678,10 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun handleBrowserControlCommand(action: String?) {
+        if (action == "announce_context") {
+            announceExternalBrowserContext()
+            return
+        }
         if (action == "dismiss") {
             // The replacement owns the context; teardown must not announce idle.
             replacedByAnotherMode = true
@@ -812,10 +817,24 @@ class BrowserActivity : ComponentActivity() {
         super.onStop()
     }
 
+    private fun announceExternalBrowserContext() {
+        if (!browserResumed || isFinishing || isDestroyed || replacedByAnotherMode) return
+        sendBroadcast(Intent("com.playbridge.player.ACTION_CONTEXT_BROWSER_EXTERNAL").apply {
+            setPackage("com.playbridge.player")
+        }, BROWSER_CONTROL_PERMISSION)
+    }
+
+    override fun onPause() {
+        browserResumed = false
+        super.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
+        browserResumed = true
         if (isFinishing || replacedByAnotherMode) return
         engine?.resumeAfterBackground()
+        announceExternalBrowserContext()
     }
 
     override fun onDestroy() {

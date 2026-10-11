@@ -14,6 +14,7 @@ import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.player.player.MpvProcess
 import com.playbridge.player.player.RendererProcessSupervisor
+import com.playbridge.player.player.RendererProcessPrewarmer
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
 import com.playbridge.player.mirror.ScreenMirrorActivity
@@ -70,11 +71,20 @@ class ServerService : Service() {
     // Track what is currently active on the TV. @Volatile: written by main-thread
     // lifecycle setters and the broadcast receiver, read by the IO-dispatcher command
     // collector (handleMessage routes Remote/Mouse/BrowserControl on it).
+    private val contextLock = Any()
     @Volatile
-    private var activeContext: String = "idle" // "player", "browser", or "idle"
+    private var activeContext: String = "idle"
+        set(value) = synchronized(contextLock) {
+            field = value
+            // Both browser engines own their playback process; warming MPV/Exo there only
+            // consumes memory. Cover every command and lifecycle context transition here.
+            RendererProcessPrewarmer.setBrowserActive(value == "browser" || value == "browser_external")
+        }
+    private var activityLaunchesInFlight = 0
     @Volatile
     private var activePlayerEngine: String? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile
     private var pendingPlayerLaunchAfterMpvExit: Runnable? = null
     private var pendingPlayerLaunchGeneration = 0L
     private val pendingCommandIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -100,6 +110,21 @@ class ServerService : Service() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             if (intent.action == ACTION_CONTEXT_IDLE) {
                 setContextIdleInternal(setOf("browser", "browser_external"))
+            }
+        }
+    }
+
+    private val externalBrowserContextReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_CONTEXT_BROWSER_EXTERNAL) return
+            synchronized(contextLock) {
+                if (!canRecoverExternalBrowserContext(
+                        activeContext,
+                        activityLaunchesInFlight > 0 || pendingPlayerLaunchAfterMpvExit != null,
+                    )) return
+                activeContext = "browser_external"
+                activePlayerEngine = null
+                broadcastContext()
             }
         }
     }
@@ -144,6 +169,11 @@ class ServerService : Service() {
     }
 
     private fun launchAfterMpvProcessExit(intent: Intent, reason: String) {
+        // Reserve ownership throughout the async exit wait, including private-process launches
+        // received by a freshly recreated service whose context was initially idle.
+        setContextPlayerInternal(intent.getStringExtra(
+            com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER,
+        ))
         MpvProcess.terminateRunningProcess(this)
         val generation = RendererProcessSupervisor.nextGeneration(
             RendererProcessSupervisor.Kind.MPV,
@@ -251,6 +281,26 @@ class ServerService : Service() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(playerProcessEventReceiver, playerProcessFilter)
         }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, externalBrowserContextReceiver,
+            android.content.IntentFilter(ACTION_CONTEXT_BROWSER_EXTERNAL), browserControlPermission,
+            null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+        )
+        // A surviving, resumed plugin can restore context after lmkd kills this process.
+        // Older plugins simply ignore this command. Require the permission in both directions.
+        sendBroadcast(Intent(ACTION_BROWSER_CONTROL).apply {
+            setPackage("com.playbridge.geckoview.plugin")
+            putExtra(EXTRA_BROWSER_ACTION, "announce_context")
+        }, browserControlPermission)
+        // If this Service was recreated without process death, prewarm may still be suspended
+        // from its previous browser context. Reconcile after giving the reply a startup turn.
+        mainHandler.postDelayed({
+            if (_staticInstance === this) {
+                RendererProcessPrewarmer.setBrowserActive(
+                    activeContext == "browser" || activeContext == "browser_external",
+                )
+            }
+        }, 1_500L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1120,36 +1170,41 @@ class ServerService : Service() {
     }
 
     private fun launchActivityFromBackground(intent: Intent, description: String) {
-        // Attempt 1: direct startActivity using the visible-overlay BAL exemption.
+        synchronized(contextLock) { activityLaunchesInFlight++ }
         try {
-            startActivity(intent)
-            FileLogger.i(TAG, "startActivity succeeded for: $description")
-            return // startActivity worked — do not also fire the notification, which would
-                   // deliver a second intent to the already-running activity via onNewIntent.
-        } catch (e: Exception) {
-            FileLogger.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
+            // Attempt 1: direct startActivity using the visible-overlay BAL exemption.
+            try {
+                startActivity(intent)
+                FileLogger.i(TAG, "startActivity succeeded for: $description")
+                return // startActivity worked — do not also fire the notification, which would
+                       // deliver a second intent to the already-running activity via onNewIntent.
+            } catch (e: Exception) {
+                FileLogger.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
+            }
+
+            // Attempt 2: fullScreenIntent notification — only reached if startActivity threw.
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                intent.component.hashCode(), // unique request code per activity
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID_LAUNCH)
+                .setContentTitle("PlayBridge")
+                .setContentText(description)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setFullScreenIntent(pendingIntent, true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setAutoCancel(true)
+                .build()
+
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID_LAUNCH, notification)
+        } finally {
+            synchronized(contextLock) { activityLaunchesInFlight-- }
         }
-
-        // Attempt 2: fullScreenIntent notification — only reached if startActivity threw.
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            intent.component.hashCode(), // unique request code per activity
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID_LAUNCH)
-            .setContentTitle("PlayBridge")
-            .setContentText(description)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setFullScreenIntent(pendingIntent, true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(true)
-            .build()
-
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID_LAUNCH, notification)
     }
 
     private fun createNotificationChannel() {
@@ -1262,6 +1317,7 @@ class ServerService : Service() {
         // stops receiving routed calls and doesn't leak as a retained Context. Identity
         // check: a replacement instance may already have registered itself in onCreate.
         if (_staticInstance === this) _staticInstance = null
+        try { unregisterReceiver(externalBrowserContextReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(browserVideoStatusReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(playerProcessEventReceiver) } catch (_: Exception) {}
@@ -1348,6 +1404,8 @@ class ServerService : Service() {
         const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
         // Brings MainActivity forward so the TV owner can approve a phone-pushed script.
         const val ACTION_OPEN_SCRIPT_APPROVAL = "com.playbridge.player.ACTION_OPEN_SCRIPT_APPROVAL"
+        const val ACTION_CONTEXT_BROWSER_EXTERNAL = "com.playbridge.player.ACTION_CONTEXT_BROWSER_EXTERNAL"
+
         // Signature-protected periodic video feedback from the Gecko plugin.
         const val ACTION_BROWSER_VIDEO_STATUS = "com.playbridge.player.ACTION_BROWSER_VIDEO_STATUS"
         const val EXTRA_BROWSER_VIDEO_STATUS_JSON = "status_json"
@@ -1551,6 +1609,9 @@ class ServerService : Service() {
         fun launchPlayerFromPrivateProcess(context: Context, intent: Intent) {
             val instance = _staticInstance
             if (instance != null) {
+                instance.setContextPlayerInternal(intent.getStringExtra(
+                    com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER,
+                ))
                 instance.launchActivityFromBackground(intent, "Launching replacement player")
             } else {
                 sendPlayerProcessEvent(

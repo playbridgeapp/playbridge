@@ -8,100 +8,77 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import com.playbridge.player.logging.FileLogger
-import java.util.EnumMap
 
 /**
- * Keeps the isolated renderer processes lightly warmed without creating a player or decoder.
- *
- * Binding loads the process, Application, service class, and Binder endpoint. The renderer
- * engines remain lazy until [IRendererService.prepare], so the idle bindings do not retain a
- * MediaCodec instance. `BIND_WAIVE_PRIORITY` lets Android reclaim either process under memory
- * pressure; a killed/crashed renderer is rebound after a short cooldown.
+ * Warms isolated Binder endpoints without allocating a player or decoder. Browser contexts
+ * release both bindings/processes and suppress rebinds so Gecko/WebView can use the memory.
  */
 internal object RendererProcessPrewarmer {
     private const val TAG = "RendererPrewarmer"
-    private const val REBIND_DELAY_MS = 1_500L
-
-    private data class BindingState(
-        var connection: ServiceConnection? = null,
-        var pendingRebind: Runnable? = null,
-    )
-
-    private val mainHandler by lazy(LazyThreadSafetyMode.NONE) {
-        Handler(Looper.getMainLooper())
-    }
-    private val bindings = EnumMap<RendererProcessSupervisor.Kind, BindingState>(
-        RendererProcessSupervisor.Kind::class.java,
-    ).apply {
-        RendererProcessSupervisor.Kind.entries.forEach { put(it, BindingState()) }
-    }
-    private var applicationContext: Context? = null
+    private val mainHandler by lazy(LazyThreadSafetyMode.NONE) { Handler(Looper.getMainLooper()) }
+    private var controller: RendererPrewarmController? = null
+    @Volatile private var browserActive = false
 
     fun start(context: Context) {
-        if (applicationContext != null) return
-        applicationContext = context.applicationContext
-        RendererProcessSupervisor.Kind.entries.forEach(::bind)
+        if (controller != null) return
+        val app = context.applicationContext
+        controller = RendererPrewarmController(
+            platform = object : RendererPrewarmController.Platform {
+                override fun bind(
+                    kind: RendererProcessSupervisor.Kind,
+                    connected: () -> Unit,
+                    disconnected: () -> Unit,
+                ): (() -> Unit)? {
+                    val serviceClass = when (kind) {
+                        RendererProcessSupervisor.Kind.MPV -> MpvRendererService::class.java
+                        RendererProcessSupervisor.Kind.EXO -> ExoRendererService::class.java
+                    }
+                    val connection = object : ServiceConnection {
+                        override fun onServiceConnected(name: ComponentName?, service: IBinder?) = connected()
+                        override fun onServiceDisconnected(name: ComponentName?) = disconnected()
+                        override fun onBindingDied(name: ComponentName?) = disconnected()
+                        override fun onNullBinding(name: ComponentName?) = disconnected()
+                    }
+                    val flags = Context.BIND_AUTO_CREATE or Context.BIND_WAIVE_PRIORITY
+                    if (!app.bindService(Intent(app, serviceClass), connection, flags)) return null
+                    return { runCatching { app.unbindService(connection) } }
+                }
+
+                override fun schedule(delayMs: Long, action: () -> Unit): () -> Unit {
+                    val callback = Runnable(action)
+                    mainHandler.postDelayed(callback, delayMs)
+                    return { mainHandler.removeCallbacks(callback) }
+                }
+
+                override fun releaseProcess(kind: RendererProcessSupervisor.Kind) {
+                    releaseProcessWhenUnused(app, kind)
+                }
+            },
+            onWarm = { FileLogger.d(TAG, "$it renderer process is warm") },
+            onDisconnected = { FileLogger.w(TAG, "$it renderer process disconnected; scheduling prewarm") },
+        ).also { it.setBrowserActive(browserActive) }
     }
 
-    private fun bind(kind: RendererProcessSupervisor.Kind) {
-        val context = applicationContext ?: return
-        val state = bindings.getValue(kind)
-        if (state.connection != null) return
-        state.pendingRebind?.let(mainHandler::removeCallbacks)
-        state.pendingRebind = null
-
-        val serviceClass = when (kind) {
-            RendererProcessSupervisor.Kind.MPV -> MpvRendererService::class.java
-            RendererProcessSupervisor.Kind.EXO -> ExoRendererService::class.java
-        }
-        lateinit var newConnection: ServiceConnection
-        newConnection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                if (state.connection !== newConnection) return
-                FileLogger.d(TAG, "$kind renderer process is warm")
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                recycleBinding(kind, newConnection)
-            }
-
-            override fun onBindingDied(name: ComponentName?) {
-                recycleBinding(kind, newConnection)
-            }
-
-            override fun onNullBinding(name: ComponentName?) {
-                recycleBinding(kind, newConnection)
-            }
-        }
-        state.connection = newConnection
-        val flags = Context.BIND_AUTO_CREATE or Context.BIND_WAIVE_PRIORITY
-        if (!context.bindService(Intent(context, serviceClass), newConnection, flags)) {
-            state.connection = null
-            scheduleRebind(kind)
+    private fun releaseProcessWhenUnused(context: Context, kind: RendererProcessSupervisor.Kind) {
+        if (!browserActive) return
+        // The stop broadcast and context write can arrive in different main-loop turns. Do not
+        // turn an intentional browser handoff into renderer-failure/failover in a retiring host.
+        if (PlayerHostActivity.isActive()) {
+            mainHandler.postDelayed({ releaseProcessWhenUnused(context, kind) }, 50L)
+        } else {
+            RendererProcessSupervisor.terminate(context, kind)
         }
     }
 
-    private fun recycleBinding(
-        kind: RendererProcessSupervisor.Kind,
-        disconnected: ServiceConnection,
-    ) {
-        val context = applicationContext ?: return
-        val state = bindings.getValue(kind)
-        if (state.connection !== disconnected) return
-        state.connection = null
-        runCatching { context.unbindService(disconnected) }
-        FileLogger.w(TAG, "$kind renderer process disconnected; scheduling prewarm")
-        scheduleRebind(kind)
-    }
-
-    private fun scheduleRebind(kind: RendererProcessSupervisor.Kind) {
-        val state = bindings.getValue(kind)
-        if (state.pendingRebind != null) return
-        val rebind = Runnable {
-            state.pendingRebind = null
-            bind(kind)
+    /** Context writes can originate in the IO command collector; Binder operations stay on main. */
+    fun setBrowserActive(active: Boolean) {
+        browserActive = active
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            controller?.setBrowserActive(browserActive)
+        } else {
+            // Read the latest state when applied: an obsolete browser transition must not kill
+            // a renderer after a newer player command has already taken ownership.
+            mainHandler.post { controller?.setBrowserActive(browserActive) }
         }
-        state.pendingRebind = rebind
-        mainHandler.postDelayed(rebind, REBIND_DELAY_MS)
     }
 }

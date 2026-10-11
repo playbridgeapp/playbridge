@@ -67,8 +67,9 @@ class PlayBridgeApplication : Application() {
 
         installCrashHandler()
 
-        // Warm both isolated Binder endpoints without allocating either player/decoder. This
-        // makes first playback and MPV<->Exo failover avoid cold process startup.
+        // Warm both Binder endpoints after a short startup cooldown, allowing ServerService
+        // to recover a surviving browser first. Browser contexts release/suspend prewarm;
+        // actual playback can always bind directly through the existing cold path.
         RendererProcessPrewarmer.start(this)
 
         // Preload AdBlocker in background so filters are ready
