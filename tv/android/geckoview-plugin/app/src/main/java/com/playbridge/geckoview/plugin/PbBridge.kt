@@ -22,6 +22,21 @@ object PbBridge {
     private var port: WebExtension.Port? = null
     private val pending = ArrayDeque<String>()
 
+    // One active engine owns video delivery. Detach by identity on destroy so Activity
+    // recreation cannot retain an old engine or clear a replacement engine's listener.
+    var onVideoMessage: ((JSONObject) -> Unit)? = null
+
+    /** Commands are never queued: a disconnected frame/document must not receive a stale action. */
+    fun videoCommand(tabId: Int, frameId: Int, documentId: String, cmd: String) {
+        val p = port ?: return
+        try {
+            p.postMessage(JSONObject().put("type", "video_cmd").put("tabId", tabId)
+                .put("frameId", frameId).put("documentId", documentId).put("cmd", cmd))
+        } catch (_: Exception) {
+            Log.w(TAG, "video command delivery failed")
+        }
+    }
+
     /** Register on the extension returned by `ensureBuiltIn`. Idempotent. */
     fun register(ext: WebExtension) {
         ext.setMessageDelegate(
@@ -30,7 +45,10 @@ object PbBridge {
                     Log.i(TAG, "bridge port connected")
                     port = p
                     p.setDelegate(object : WebExtension.PortDelegate {
-                        override fun onPortMessage(message: Any, port: WebExtension.Port) {}
+                        override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                            val json = message as? JSONObject ?: return
+                            if (json.optString("type") == "video") onVideoMessage?.invoke(json)
+                        }
                         override fun onDisconnect(disconnected: WebExtension.Port) {
                             if (port === disconnected) port = null
                         }

@@ -100,3 +100,11 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+// Package the player's controller verbatim: one source for WebView and Gecko video behavior.
+val sharedVideoAssets = layout.buildDirectory.dir("generated/pbVideoAssets")
+val copyVideoController by tasks.registering(Copy::class) {
+    from(project(":player:app").file("src/main/assets/pb-video-control.js"))
+    into(sharedVideoAssets.map { it.dir("extensions/pb_bridge") })
+}
+android.sourceSets.getByName("main").assets.directories.add(sharedVideoAssets.get().asFile.absolutePath)
+tasks.named("preBuild").configure { dependsOn(copyVideoController) }

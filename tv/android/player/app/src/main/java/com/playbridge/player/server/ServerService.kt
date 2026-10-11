@@ -104,6 +104,21 @@ class ServerService : Service() {
         }
     }
 
+    // Signature-protected plugin -> player channel. Only the external browser owns these
+    // statuses; late messages after switching modes must not overwrite the phone scrubber.
+    private val browserVideoStatusReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_BROWSER_VIDEO_STATUS || activeContext != "browser_external") return
+            val json = intent.getStringExtra(EXTRA_BROWSER_VIDEO_STATUS_JSON) ?: return
+            if (json.length > MAX_BROWSER_VIDEO_STATUS_BYTES ||
+                json.toByteArray(Charsets.UTF_8).size > MAX_BROWSER_VIDEO_STATUS_BYTES) return
+            try {
+                if (org.json.JSONObject(json).optString("type") != "status") return
+            } catch (_: Exception) { return }
+            broadcastPlaylistStatusInternal(json)
+        }
+    }
+
     private val playerProcessEventReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             if (intent.action != ACTION_PLAYER_PROCESS_EVENT) return
@@ -215,6 +230,18 @@ class ServerService : Service() {
             )
         } else {
             registerReceiver(contextIdleReceiver, filter, contextIdlePermission, null)
+        }
+
+        val browserVideoFilter = android.content.IntentFilter(ACTION_BROWSER_VIDEO_STATUS)
+        val browserControlPermission = "com.playbridge.permission.BROWSER_CONTROL"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(browserVideoStatusReceiver, browserVideoFilter, browserControlPermission,
+                null, RECEIVER_EXPORTED)
+        } else {
+            androidx.core.content.ContextCompat.registerReceiver(
+                this, browserVideoStatusReceiver, browserVideoFilter, browserControlPermission,
+                null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+            )
         }
 
         val playerProcessFilter = android.content.IntentFilter(ACTION_PLAYER_PROCESS_EVENT)
@@ -1235,6 +1262,7 @@ class ServerService : Service() {
         // stops receiving routed calls and doesn't leak as a retained Context. Identity
         // check: a replacement instance may already have registered itself in onCreate.
         if (_staticInstance === this) _staticInstance = null
+        try { unregisterReceiver(browserVideoStatusReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(playerProcessEventReceiver) } catch (_: Exception) {}
         pendingPlayerLaunchAfterMpvExit?.let(mainHandler::removeCallbacks)
@@ -1320,8 +1348,12 @@ class ServerService : Service() {
         const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
         // Brings MainActivity forward so the TV owner can approve a phone-pushed script.
         const val ACTION_OPEN_SCRIPT_APPROVAL = "com.playbridge.player.ACTION_OPEN_SCRIPT_APPROVAL"
-        // Sent (as an explicit broadcast to this package) by the tv/browser app when its
-        // BrowserActivity is destroyed, so ServerService can reset activeContext to "idle".
+        // Signature-protected periodic video feedback from the Gecko plugin.
+        const val ACTION_BROWSER_VIDEO_STATUS = "com.playbridge.player.ACTION_BROWSER_VIDEO_STATUS"
+        const val EXTRA_BROWSER_VIDEO_STATUS_JSON = "status_json"
+        private const val MAX_BROWSER_VIDEO_STATUS_BYTES = 4 * 1024
+
+        // Sent by the Gecko plugin on close, so ServerService can reset its context to idle.
         const val ACTION_CONTEXT_IDLE = "com.playbridge.player.ACTION_CONTEXT_IDLE"
         const val ACTION_PLAYER_PROCESS_EVENT = "com.playbridge.player.ACTION_PLAYER_PROCESS_EVENT"
         const val EXTRA_PLAYER_PROCESS_EVENT = "player_process_event"

@@ -16,6 +16,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import com.playbridge.shared.browser.VideoTargetSelector
 import com.playbridge.player.logging.DebugNetworkLogger
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
@@ -158,20 +159,8 @@ class SystemWebViewEngine(
     /** Callback for custom overlays: (visible, text, style, bgColor, textColor, autoDismissMs). */
     var onVideoOverlay: ((Boolean, String, String, String?, String?, Long) -> Unit)? = null
 
-    // Every frame (main + iframes) reporting a screen-dominating video, keyed by its
-    // reply proxy. `score` is the absolute on-screen video area (comparable across
-    // frames); `playing` and `isMain` feed target selection. Unified pathway: the main
-    // frame reports here too now, over the same channel as iframes.
-    private data class FrameVideo(val score: Double, val playing: Boolean, val isMain: Boolean)
-    private val activeFrames = LinkedHashMap<JavaScriptReplyProxy, FrameVideo>()
-
-    // Target selection. By default the D-pad auto-follows the best frame (see
-    // [pickBestProxy]); [stickyProxy] is the current auto pick, kept across reports
-    // with hysteresis so a flickering score can't bounce the target. The user can pin
-    // a specific frame via [cycleVideoTarget] ("switch source"); [overrideProxy] holds
-    // that pin until its frame goes inactive or the user cycles again.
-    private var stickyProxy: JavaScriptReplyProxy? = null
-    private var overrideProxy: JavaScriptReplyProxy? = null
+    // Shared with Gecko; reply proxies identify frames in this engine.
+    private val videoTargets = VideoTargetSelector<JavaScriptReplyProxy>()
 
     /**
      * Drop all video-control state. Called on top-level navigation, where the previous
@@ -179,10 +168,8 @@ class SystemWebViewEngine(
      * active:false report — leaving them here would strand the D-pad on a dead frame.
      */
     private fun resetVideoControlState() {
-        val hadFrames = activeFrames.isNotEmpty() || videoControlActiveFallback
-        activeFrames.clear()
-        stickyProxy = null
-        overrideProxy = null
+        val hadFrames = videoTargets.isActive || videoControlActiveFallback
+        videoTargets.reset()
         videoControlActiveFallback = false
         activeVideoMuted = null
         autoUnmuteDone = false
@@ -196,11 +183,7 @@ class SystemWebViewEngine(
 
     /** Manual override: pin the D-pad to the next active frame in round-robin order. */
     fun cycleVideoTarget() {
-        if (activeFrames.isEmpty()) { overrideProxy = null; return }
-        val keys = activeFrames.keys.toList()
-        val current = overrideProxy ?: currentProxy()
-        val nextIndex = (keys.indexOf(current) + 1).mod(keys.size)
-        overrideProxy = keys[nextIndex]
+        videoTargets.cycle()
     }
 
     // Main-frame activation flag for the LEGACY path, set via the PBVideoNative bridge
@@ -209,7 +192,7 @@ class SystemWebViewEngine(
     private var videoControlActiveFallback = false
 
     fun isVideoControlActive(): Boolean =
-        if (multiFrame) activeFrames.isNotEmpty() else videoControlActiveFallback
+        if (multiFrame) videoTargets.isActive else videoControlActiveFallback
 
     // Last-known muted state of the active/target video, parsed from its status pushes.
     // null = unknown.
@@ -248,46 +231,7 @@ class SystemWebViewEngine(
         } catch (_: Exception) { /* ignore non-status JSON */ }
     }
 
-    /**
-     * Which frame the D-pad drives. A manual pin wins while its frame stays active;
-     * otherwise auto-pick by **on-screen size first** (the big player the user is looking
-     * at), using "playing" only to break ties between comparably-sized frames. Size-first
-     * is deliberate: a tiny autoplaying ad or background clip must NOT steal control from
-     * a large player that happens to be paused (the common iframe-embed case). Hysteresis
-     * keeps the incumbent unless a challenger is clearly bigger or newly starts playing.
-     */
-    private fun currentProxy(): JavaScriptReplyProxy? {
-        if (activeFrames.isEmpty()) { stickyProxy = null; overrideProxy = null; return null }
-        overrideProxy?.let { if (activeFrames.containsKey(it)) return it else overrideProxy = null }
-        val incumbent = stickyProxy?.takeIf { activeFrames.containsKey(it) }
-        val best = pickBestProxy(incumbent)
-        stickyProxy = best
-        return best
-    }
-
-    private fun pickBestProxy(incumbent: JavaScriptReplyProxy?): JavaScriptReplyProxy? {
-        // Largest on-screen video wins by default.
-        val largest = activeFrames.entries.maxByOrNull { it.value.score } ?: return incumbent
-        // Only let a *playing* frame override the largest one if it's comparably big
-        // (≥60% of the top score). This favours real playback without letting a small
-        // playing ad outrank a large paused player.
-        val best = if (!largest.value.playing) {
-            activeFrames.entries
-                .filter { it.value.playing && it.value.score >= largest.value.score * 0.6 }
-                .maxByOrNull { it.value.score } ?: largest
-        } else largest
-        if (incumbent != null && best.key !== incumbent) {
-            val inc = activeFrames[incumbent]
-            // Keep the incumbent unless the challenger is clearly bigger (≥25%) or it has
-            // started playing while the incumbent hasn't — avoids thrashing on near-ties.
-            val clearlyBigger = inc != null && best.value.score >= inc.score * 1.25
-            val newlyPlaying = inc != null && best.value.playing && !inc.playing
-            if (inc != null && !clearlyBigger && !newlyPlaying) {
-                return incumbent
-            }
-        }
-        return best.key
-    }
+    private fun currentProxy(): JavaScriptReplyProxy? = videoTargets.current()
 
     fun videoToggle() = sendVideoCommand("toggle")
     fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
@@ -307,9 +251,7 @@ class SystemWebViewEngine(
                 proxy.postMessage(cmd)
             } catch (e: Exception) {
                 Log.w(TAG, "postMessage to a stale frame proxy failed; dropping it", e)
-                activeFrames.remove(proxy)
-                if (proxy === overrideProxy) overrideProxy = null
-                if (proxy === stickyProxy) stickyProxy = null
+                videoTargets.remove(proxy)
             }
             return
         }
@@ -334,8 +276,7 @@ class SystemWebViewEngine(
     /** Parse a frame -> native message (activation change, command result, or status). */
     private fun handleFrameMessage(
         data: String,
-        proxy: JavaScriptReplyProxy,
-        isMainFrame: Boolean
+        proxy: JavaScriptReplyProxy
     ) {
         // Unified pathway: the main frame reports over the channel too now, so we no
         // longer ignore it — every frame is a candidate target.
@@ -344,15 +285,9 @@ class SystemWebViewEngine(
             when (o.optString("type")) {
                 "active" -> {
                     if (o.optBoolean("active")) {
-                        activeFrames[proxy] = FrameVideo(
-                            score = o.optDouble("score", 0.0),
-                            playing = o.optBoolean("playing"),
-                            isMain = isMainFrame
-                        )
+                        videoTargets.update(proxy, o.optDouble("score", 0.0), o.optBoolean("playing"))
                     } else {
-                        activeFrames.remove(proxy)
-                        if (proxy === overrideProxy) overrideProxy = null
-                        if (proxy === stickyProxy) stickyProxy = null
+                        videoTargets.remove(proxy)
                     }
                 }
                 "result" -> {
@@ -718,8 +653,8 @@ class SystemWebViewEngine(
             if (multiFrame && videoControlScript.isNotEmpty()) {
                 WebViewCompat.addWebMessageListener(
                     this, "pbVideoChannel", setOf("*")
-                ) { _, message, _, isMainFrame, replyProxy ->
-                    message.data?.let { handleFrameMessage(it, replyProxy, isMainFrame) }
+                ) { _, message, _, _, replyProxy ->
+                    message.data?.let { handleFrameMessage(it, replyProxy) }
                 }
                 WebViewCompat.addDocumentStartJavaScript(this, videoControlScript, setOf("*"))
             }

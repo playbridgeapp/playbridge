@@ -37,6 +37,13 @@
         android:protectionLevel="signature" />
     <uses-permission android:name="com.playbridge.permission.CONTEXT_IDLE" />
 
+    <!-- Player and Gecko plugin must ship together and use the same signing key.
+         New plugins require a player that holds BROWSER_CONTROL. -->
+    <permission
+        android:name="com.playbridge.permission.BROWSER_CONTROL"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.playbridge.permission.BROWSER_CONTROL" />
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
