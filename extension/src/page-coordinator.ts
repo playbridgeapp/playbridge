@@ -1,6 +1,6 @@
 import browser from "./browser";
 import * as bridge from "./native-bridge";
-import { normalizeOrigin } from "./core/page-origin";
+import { normalizeOrigin, originFromUrl } from "./core/page-origin";
 import {
   getOrCreateInstallSecret,
   formatPlaybackDestination,
@@ -47,6 +47,9 @@ export class PageCoordinator {
       windowId?: number;
     }
   >();
+  private fallbackTabMap = new Map<string, number>();
+  private portFallbackTabMap = new WeakMap<object, number>();
+  private nextFallbackTabId = 1_000_000;
   private unsubscribeBridgeState?: () => void;
   private unsubscribeLinkedEvents?: () => void;
 
@@ -136,6 +139,7 @@ export class PageCoordinator {
     this.unsubscribeBridgeState?.();
     this.unsubscribeLinkedEvents?.();
     this.endActiveSession("unlinked", false);
+    this.fallbackTabMap.clear();
   }
 
   public getActiveSession(): ActiveWebsiteSession | null {
@@ -145,6 +149,34 @@ export class PageCoordinator {
   public isLinkedPlaybackAvailable(): boolean {
     const state = bridge.getState();
     return Boolean(state.desktopConnected && state.capabilities?.linkedPlayback === 1);
+  }
+
+  private resolveTabId(sender: any, port: any): number {
+    if (typeof sender?.tab?.id === "number" && sender.tab.id >= 0) {
+      return sender.tab.id;
+    }
+    const key =
+      (typeof sender?.documentId === "string" && sender.documentId) ||
+      (typeof sender?.url === "string" && sender.url) ||
+      (typeof sender?.tab?.url === "string" && sender.tab.url) ||
+      "";
+    if (key) {
+      let id = this.fallbackTabMap.get(key);
+      if (id === undefined) {
+        id = this.nextFallbackTabId++;
+        this.fallbackTabMap.set(key, id);
+      }
+      return id;
+    }
+    if (port && typeof port === "object") {
+      let id = this.portFallbackTabMap.get(port);
+      if (id === undefined) {
+        id = this.nextFallbackTabId++;
+        this.portFallbackTabMap.set(port, id);
+      }
+      return id;
+    }
+    return -1;
   }
 
   private broadcastCapabilities(): void {
@@ -164,7 +196,7 @@ export class PageCoordinator {
 
   private handlePagePortConnect(port: any): void {
     const sender = port.sender;
-    if (sender?.frameId !== 0) {
+    if (sender?.frameId != null && sender.frameId !== 0) {
       port.disconnect();
       return;
     }
@@ -187,28 +219,73 @@ export class PageCoordinator {
       if (this.activeSession && this.activeSession.port === port) {
         this.endActiveSession("navigation", true);
       }
+      const key =
+        (typeof sender?.documentId === "string" && sender.documentId) ||
+        (typeof sender?.url === "string" && sender.url) ||
+        (typeof sender?.tab?.url === "string" && sender.tab.url) ||
+        "";
+      if (key) {
+        this.fallbackTabMap.delete(key);
+      }
     });
 
     port.onMessage.addListener(async (raw: unknown) => {
       if (!raw || typeof raw !== "object") return;
       const msg = raw as Record<string, unknown>;
 
-      const tabId = sender.tab?.id ?? -1;
-      const url = sender.url ?? sender.tab?.url ?? "";
-      const origin = normalizeOrigin(url);
-
-      if (tabId < 0 || !origin) return;
+      const tabId = this.resolveTabId(sender, port);
+      const url = sender?.url ?? sender?.tab?.url ?? "";
+      const origin = originFromUrl(url);
 
       if (msg.type === "cast") {
+        if (tabId < 0 || !origin) return;
         await this.handleLegacyCast(msg, origin);
         return;
       }
 
       if (msg.type === "linked") {
-        const pageRequestId = String(msg.pageRequestId ?? "");
-        if (!validPageRequestId(pageRequestId)) return;
+        const rawPageRequestId = msg.pageRequestId;
+        if (rawPageRequestId !== undefined && !validPageRequestId(rawPageRequestId)) {
+          try {
+            port.postMessage({
+              type: "response",
+              pageRequestId: String(rawPageRequestId ?? ""),
+              response: { ok: false, error: "invalid_request" },
+            });
+          } catch {
+            // Port disconnected
+          }
+          return;
+        }
 
-        const response = await this.handleLinkedRequest(msg, origin, tabId, port);
+        if (!validPageRequestId(rawPageRequestId)) {
+          return;
+        }
+
+        const pageRequestId = rawPageRequestId;
+
+        if (tabId < 0 || !origin) {
+          try {
+            port.postMessage({
+              type: "response",
+              pageRequestId,
+              response: { ok: false, error: "unavailable" },
+            });
+          } catch {
+            // Port disconnected
+          }
+          return;
+        }
+
+        let response: Record<string, unknown>;
+        try {
+          response = await this.handleLinkedRequest(msg, origin, tabId, port);
+        } catch {
+          response = { ok: false, error: "unavailable" };
+        }
+
+
+
         try {
           port.postMessage({
             type: "response",
@@ -253,7 +330,7 @@ export class PageCoordinator {
   }
 
   public async promptConsent(origin: string): Promise<boolean> {
-    const norm = normalizeOrigin(origin);
+    const norm = originFromUrl(origin);
     if (!norm) return false;
 
     const existing = this.pendingConsentPrompts.get(norm);
@@ -290,13 +367,13 @@ export class PageCoordinator {
   }
 
   public getPendingConsentPromptWindowId(origin: string): number | undefined {
-    const norm = normalizeOrigin(origin);
+    const norm = originFromUrl(origin);
     if (!norm) return undefined;
     return this.pendingConsentPrompts.get(norm)?.windowId;
   }
 
   public resolveConsentPrompt(origin: string, allowed: boolean): void {
-    const norm = normalizeOrigin(origin);
+    const norm = originFromUrl(origin);
     if (!norm) return;
     const entry = this.pendingConsentPrompts.get(norm);
     if (entry) {
@@ -306,7 +383,7 @@ export class PageCoordinator {
   }
 
   public async openPicker(origin: string): Promise<void> {
-    const norm = normalizeOrigin(origin) ?? origin;
+    const norm = originFromUrl(origin) ?? origin;
     try {
       const popupUrl = browser.runtime.getURL(
         `ui/page-access.html?origin=${encodeURIComponent(norm)}&mode=picker`,

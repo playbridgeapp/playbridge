@@ -1,5 +1,5 @@
 import browser from "../browser";
-import { displayOrigin, normalizeOrigin } from "../core/page-origin";
+import { displayOrigin, normalizeOrigin, originFromUrl } from "../core/page-origin";
 import {
   protocolChips,
   defaultProtocol,
@@ -14,7 +14,7 @@ import {
 const urlParams = new URLSearchParams(window.location.search);
 const rawOrigin = urlParams.get("origin") || "";
 const mode = urlParams.get("mode") || "consent";
-const origin = normalizeOrigin(rawOrigin) || rawOrigin;
+const origin = originFromUrl(rawOrigin) || normalizeOrigin(rawOrigin) || rawOrigin;
 
 const consentView = document.getElementById("consent-view");
 const pickerView = document.getElementById("picker-view");

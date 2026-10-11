@@ -22,6 +22,23 @@ export function normalizeOrigin(value: unknown): string | null {
   }
 }
 
+/**
+ * Compute canonical origin from a full URL (with path, query, hash),
+ * requiring http/https and no credentials, then normalizing.
+ */
+export function originFromUrl(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+    return normalizeOrigin(url.origin);
+  } catch {
+    return null;
+  }
+}
+
+
 export function displayOrigin(origin: string): string {
   try {
     const url = new URL(origin);

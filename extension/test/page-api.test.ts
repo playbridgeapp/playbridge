@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -68,6 +68,7 @@ import {
   getApprovedPrivateOrigins,
   PAGE_CONSENT_KEY,
 } from "../src/core/page-consent";
+import { normalizeOrigin, originFromUrl } from "../src/core/page-origin";
 import {
   pageCastHasSenderOnlyFields,
   normalizeLinkedPageCastPayload,
@@ -81,6 +82,8 @@ import {
   FIXED_PAGE_CHANNEL_BOOT,
   type PageChannel,
 } from "../src/core/page-channel";
+const { default: browser } = await import("../src/browser");
+const { bindPageChannel } = await import("../src/page-content");
 const {
   PageCoordinator,
   isExtensionPageSender,
@@ -869,4 +872,476 @@ test("initDesktopPageBridge pairs with listenForPageChannelBoot to expose window
     host.window = prevWindow;
   }
 });
+
+test("PageCoordinator handles Brave/Chrome missing tab: uses sender.url or documentId fallback and answers getPlaybackDestination", async (t) => {
+  const coord = new PageCoordinator();
+  t.after(() => coord.destroy());
+  (coord as any).isLinkedPlaybackAvailable = () => true;
+
+  let postedResponse: any = null;
+  const messageListeners: Array<(msg: any) => void> = [];
+  const bravePort = {
+    name: "playbridge:page-api",
+    sender: {
+      frameId: 0,
+      url: "https://streams.playbridge.app/watch",
+      documentId: "doc-uuid-1234",
+      // Notice: sender.tab is missing (like on Brave)
+    },
+    postMessage: (m: any) => { postedResponse = m; },
+    onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
+    onDisconnect: { addListener: () => {} },
+    disconnect: () => {},
+  };
+  (coord as any).handlePagePortConnect(bravePort);
+
+  // Send destination query (getPlaybackDestination)
+  for (const fn of messageListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "req-brave-1",
+      operation: "destination",
+    });
+  }
+
+  assert.ok(postedResponse !== null, "Brave port request must be answered");
+  assert.equal(postedResponse.type, "response");
+  assert.equal(postedResponse.pageRequestId, "req-brave-1");
+  assert.equal(postedResponse.response?.ok, true);
+});
+
+
+test("PageCoordinator never returns silently for linked requests: replies unavailable on missing origin or tabId < 0, invalid_request on invalid pageRequestId, unavailable on thrown exception", async (t) => {
+  const coord = new PageCoordinator();
+  t.after(() => coord.destroy());
+
+  const postedInvalid: any[] = [];
+  const invalidOriginListeners: Array<(msg: any) => void> = [];
+  const invalidOriginPort = {
+    name: "playbridge:page-api",
+    sender: {
+      frameId: 0,
+      url: "invalid-url-no-origin",
+    },
+    postMessage: (m: any) => postedInvalid.push(m),
+    onMessage: { addListener: (fn: any) => invalidOriginListeners.push(fn) },
+    onDisconnect: { addListener: () => {} },
+    disconnect: () => {},
+  };
+  (coord as any).handlePagePortConnect(invalidOriginPort);
+
+  // 1. Missing origin with valid pageRequestId -> replies unavailable
+  postedInvalid.length = 0;
+  for (const fn of invalidOriginListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "req-no-origin",
+      operation: "destination",
+    });
+  }
+  assert.equal(postedInvalid.length, 1);
+  assert.deepEqual(postedInvalid[0], {
+    type: "response",
+    pageRequestId: "req-no-origin",
+    response: { ok: false, error: "unavailable" },
+  });
+
+  // 2. Invalid pageRequestId when one is present -> replies invalid_request
+  postedInvalid.length = 0;
+  for (const fn of invalidOriginListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "",
+      operation: "destination",
+    });
+  }
+  assert.equal(postedInvalid.length, 1);
+  assert.deepEqual(postedInvalid[0], {
+    type: "response",
+    pageRequestId: "",
+    response: { ok: false, error: "invalid_request" },
+  });
+
+  // 3. Exception in handleLinkedRequest -> catches and replies unavailable
+  const postedValid: any[] = [];
+  const validPortListeners: Array<(msg: any) => void> = [];
+  const validPort = {
+    name: "playbridge:page-api",
+    sender: {
+      frameId: 0,
+      url: "https://example.com",
+      tab: { id: 99 },
+    },
+    postMessage: (m: any) => postedValid.push(m),
+    onMessage: { addListener: (fn: any) => validPortListeners.push(fn) },
+    onDisconnect: { addListener: () => {} },
+    disconnect: () => {},
+  };
+  (coord as any).handlePagePortConnect(validPort);
+
+  // Force handleLinkedRequest to throw
+  const origHandle = (coord as any).handleLinkedRequest;
+  (coord as any).handleLinkedRequest = async () => {
+    throw new Error("Simulated unexpected crash");
+  };
+
+  postedValid.length = 0;
+  for (const fn of validPortListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "req-crash-1",
+      operation: "destination",
+    });
+  }
+  (coord as any).handleLinkedRequest = origHandle;
+
+  assert.equal(postedValid.length, 1);
+  assert.deepEqual(postedValid[0], {
+    type: "response",
+    pageRequestId: "req-crash-1",
+    response: { ok: false, error: "unavailable" },
+  });
+});
+
+test("bindPageChannel times out non-play/open requests after 10s with unavailable, but keeps long timeouts for play/open", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const origConnect = browser.runtime.connect;
+
+  try {
+    let portMessageListener: ((msg: any) => void) | null = null;
+    const postedToPort: any[] = [];
+    const fakePort = {
+      onMessage: { addListener: (fn: any) => { portMessageListener = fn; } },
+      onDisconnect: { addListener: () => {} },
+      postMessage: (m: any) => postedToPort.push(m),
+    };
+
+    browser.runtime.connect = (() => fakePort) as any;
+
+    const channelMessages: any[] = [];
+    let channelHandler: ((msg: any) => void) | null = null;
+    const channel: PageChannel = {
+      post: (m: any) => channelMessages.push(m),
+      onMessage: (fn: any) => { channelHandler = fn; },
+      close: () => {},
+    };
+
+    bindPageChannel(channel);
+
+    // 1. Send non-play/open request (destination)
+    channelMessages.length = 0;
+    channelHandler!({
+      channel: "linked",
+      pageRequestId: "req-dest-timeout",
+      operation: "destination",
+      sessionId: null,
+      payload: {},
+    });
+
+    assert.equal(postedToPort.length, 1);
+    assert.equal(channelMessages.length, 0);
+
+    // Advance 5s: should NOT time out yet
+    mock.timers.tick(5_000);
+    assert.equal(channelMessages.length, 0);
+
+    // Advance another 5s (total 10s): should time out with unavailable
+    mock.timers.tick(5_000);
+    assert.equal(channelMessages.length, 1);
+    assert.deepEqual(channelMessages[0], {
+      channel: "linked",
+      type: "response",
+      pageRequestId: "req-dest-timeout",
+      response: { ok: false, error: "unavailable" },
+    });
+
+    // Late response from port should be swallowed
+    portMessageListener!({
+      type: "response",
+      pageRequestId: "req-dest-timeout",
+      response: { ok: true, destination: null },
+    });
+    assert.equal(channelMessages.length, 1, "late response must not produce a second reply");
+
+    // 2. Play/open request does NOT time out after 10s
+    channelMessages.length = 0;
+    channelHandler!({
+      channel: "linked",
+      pageRequestId: "req-play-timeout",
+      operation: "play",
+      sessionId: null,
+      payload: {
+        destinationId: "this-device",
+        items: [{ url: "https://example.com/v.mp4" }],
+      },
+    });
+    mock.timers.tick(15_000);
+    assert.equal(channelMessages.length, 0, "play request must keep long timeout and not time out at 10s");
+  } finally {
+    mock.timers.reset();
+    browser.runtime.connect = origConnect;
+  }
+});
+
+test("bindPageChannel: when runtime.connect throws or port disconnects, answers outstanding & new requests with unavailable and broadcasts capabilities playback 0", async () => {
+  const origConnect = browser.runtime.connect;
+
+  try {
+    let disconnectListener: (() => void) | null = null;
+    const fakePort = {
+      onMessage: { addListener: () => {} },
+      onDisconnect: { addListener: (fn: any) => { disconnectListener = fn; } },
+      postMessage: () => {},
+    };
+
+    browser.runtime.connect = (() => fakePort) as any;
+
+    const channelMessages: any[] = [];
+    let channelHandler: ((msg: any) => void) | null = null;
+    const channel: PageChannel = {
+      post: (m: any) => channelMessages.push(m),
+      onMessage: (fn: any) => { channelHandler = fn; },
+      close: () => {},
+    };
+
+    bindPageChannel(channel);
+
+    // Send a request while connected
+    channelMessages.length = 0;
+    channelHandler!({
+      channel: "linked",
+      pageRequestId: "req-in-flight",
+      operation: "destination",
+      sessionId: null,
+      payload: {},
+    });
+    assert.equal(channelMessages.length, 0);
+
+    // 1. Port disconnects (e.g. extension reloaded)
+    disconnectListener!();
+
+    // Must answer outstanding request with unavailable AND broadcast capabilities playback 0
+    const outResponse = channelMessages.find(
+      (m) => m.type === "response" && m.pageRequestId === "req-in-flight"
+    );
+    assert.deepEqual(outResponse, {
+      channel: "linked",
+      type: "response",
+      pageRequestId: "req-in-flight",
+      response: { ok: false, error: "unavailable" },
+    });
+
+    const capBroadcast = channelMessages.find((m) => m.type === "capabilities");
+    assert.deepEqual(capBroadcast, {
+      channel: "linked",
+      type: "capabilities",
+      capabilities: { playback: 0 },
+    });
+
+    // 2. New request after disconnect is answered with unavailable immediately
+    channelMessages.length = 0;
+    channelHandler!({
+      channel: "linked",
+      pageRequestId: "req-new-after-disconnect",
+      operation: "destination",
+      sessionId: null,
+      payload: {},
+    });
+
+    assert.equal(channelMessages.length, 1);
+    assert.deepEqual(channelMessages[0], {
+      channel: "linked",
+      type: "response",
+      pageRequestId: "req-new-after-disconnect",
+      response: { ok: false, error: "unavailable" },
+    });
+
+    // 3. When runtime.connect throws initially (Extension context invalidated)
+    browser.runtime.connect = () => {
+      throw new Error("Extension context invalidated.");
+    };
+
+    const channelMessages2: any[] = [];
+    let channelHandler2: ((msg: any) => void) | null = null;
+    const channel2: PageChannel = {
+      post: (m: any) => channelMessages2.push(m),
+      onMessage: (fn: any) => { channelHandler2 = fn; },
+      close: () => {},
+    };
+
+    bindPageChannel(channel2);
+
+    // Initial connect failure broadcasts capabilities playback 0
+    const capInit = channelMessages2.find((m) => m.type === "capabilities");
+    assert.deepEqual(capInit, {
+      channel: "linked",
+      type: "capabilities",
+      capabilities: { playback: 0 },
+    });
+
+    // New request also gets unavailable
+    channelMessages2.length = 0;
+    channelHandler2!({
+      channel: "linked",
+      pageRequestId: "req-throw-connect",
+      operation: "destination",
+      sessionId: null,
+      payload: {},
+    });
+    assert.equal(channelMessages2.length, 1);
+    assert.deepEqual(channelMessages2[0], {
+      channel: "linked",
+      type: "response",
+      pageRequestId: "req-throw-connect",
+      response: { ok: false, error: "unavailable" },
+    });
+  } finally {
+    browser.runtime.connect = origConnect;
+  }
+});
+
+test("originFromUrl extracts canonical origin from URLs with paths, queries, and hash routes", () => {
+  // Hash route (like streams.playbridge.app/#/movie/tt32261958)
+  assert.equal(
+    originFromUrl("https://streams.playbridge.app/#/movie/tt32261958"),
+    "https://streams.playbridge.app"
+  );
+
+  // Path with query parameters
+  assert.equal(
+    originFromUrl("https://streams.playbridge.app/watch?v=123&t=45"),
+    "https://streams.playbridge.app"
+  );
+
+  // Path + query + hash combined
+  assert.equal(
+    originFromUrl("https://streams.playbridge.app/player/item?id=abc#t=10s"),
+    "https://streams.playbridge.app"
+  );
+
+  // Bare origin (with or without trailing slash)
+  assert.equal(
+    originFromUrl("https://streams.playbridge.app"),
+    "https://streams.playbridge.app"
+  );
+  assert.equal(
+    originFromUrl("https://streams.playbridge.app/"),
+    "https://streams.playbridge.app"
+  );
+
+  // Custom port
+  assert.equal(
+    originFromUrl("http://localhost:8080/app#/dashboard"),
+    "http://localhost:8080"
+  );
+
+  // Default port stripped
+  assert.equal(
+    originFromUrl("http://localhost:80/app"),
+    "http://localhost"
+  );
+  assert.equal(
+    originFromUrl("https://localhost:443/app"),
+    "https://localhost"
+  );
+
+  // Rejections: credentials, invalid protocols, malformed
+  assert.equal(originFromUrl("https://user:pass@example.com/movie"), null);
+  assert.equal(originFromUrl("javascript:alert(1)"), null);
+  assert.equal(originFromUrl("file:///home/user/index.html"), null);
+  assert.equal(originFromUrl("data:text/html,test"), null);
+  assert.equal(originFromUrl(""), null);
+  assert.equal(originFromUrl(null), null);
+  assert.equal(originFromUrl(undefined), null);
+  assert.equal(originFromUrl("not a valid url"), null);
+});
+
+test("normalizeOrigin stays strict for stored/explicit origin strings and rejects URLs with path, query, or hash", () => {
+  assert.equal(
+    normalizeOrigin("https://streams.playbridge.app"),
+    "https://streams.playbridge.app"
+  );
+  assert.equal(
+    normalizeOrigin("https://streams.playbridge.app/"),
+    "https://streams.playbridge.app"
+  );
+
+  // Strictly rejected when path, query, or hash present
+  assert.equal(
+    normalizeOrigin("https://streams.playbridge.app/#/movie/tt32261958"),
+    null
+  );
+  assert.equal(
+    normalizeOrigin("https://streams.playbridge.app/watch"),
+    null
+  );
+  assert.equal(
+    normalizeOrigin("https://streams.playbridge.app/?query=1"),
+    null
+  );
+});
+
+test("PageCoordinator handles sender URLs with paths, queries, and hash routes without dropping requests", async (t) => {
+  const coord = new PageCoordinator();
+  t.after(() => coord.destroy());
+  (coord as any).isLinkedPlaybackAvailable = () => true;
+
+  // 1. Hash route URL (e.g. streams.playbridge.app/#/movie/tt32261958)
+  let postedHash: any = null;
+  const hashListeners: Array<(msg: any) => void> = [];
+  const hashPort = {
+    name: "playbridge:page-api",
+    sender: {
+      frameId: 0,
+      url: "https://streams.playbridge.app/#/movie/tt32261958",
+      documentId: "doc-hash-1",
+    },
+    postMessage: (m: any) => { postedHash = m; },
+    onMessage: { addListener: (fn: any) => hashListeners.push(fn) },
+    onDisconnect: { addListener: () => {} },
+    disconnect: () => {},
+  };
+  (coord as any).handlePagePortConnect(hashPort);
+
+  for (const fn of hashListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "req-hash-1",
+      operation: "destination",
+    });
+  }
+  assert.ok(postedHash !== null, "Hash-route page request must not be dropped");
+  assert.equal(postedHash.pageRequestId, "req-hash-1");
+  assert.equal(postedHash.response?.ok, true);
+
+  // 2. Path and query URL (e.g. example.com/watch?v=movie123&autoplay=1)
+  let postedQuery: any = null;
+  const queryListeners: Array<(msg: any) => void> = [];
+  const queryPort = {
+    name: "playbridge:page-api",
+    sender: {
+      frameId: 0,
+      url: "https://example.com/watch?v=movie123&autoplay=1",
+      documentId: "doc-query-1",
+    },
+    postMessage: (m: any) => { postedQuery = m; },
+    onMessage: { addListener: (fn: any) => queryListeners.push(fn) },
+    onDisconnect: { addListener: () => {} },
+    disconnect: () => {},
+  };
+  (coord as any).handlePagePortConnect(queryPort);
+
+  for (const fn of queryListeners) {
+    await fn({
+      type: "linked",
+      pageRequestId: "req-query-1",
+      operation: "destination",
+    });
+  }
+  assert.ok(postedQuery !== null, "Path-and-query page request must not be dropped");
+  assert.equal(postedQuery.pageRequestId, "req-query-1");
+  assert.equal(postedQuery.response?.ok, true);
+});
+
+
 
