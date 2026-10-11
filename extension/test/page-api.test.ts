@@ -1003,7 +1003,19 @@ test("PageCoordinator never returns silently for linked requests: replies unavai
   });
 });
 
+// Node 20 (CI) has no global navigator; the page channel reads navigator.userActivation.
+function ensureNavigator(): void {
+  if (typeof (globalThis as { navigator?: unknown }).navigator === "undefined") {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { userActivation: { isActive: false } },
+      configurable: true,
+      writable: true,
+    });
+  }
+}
+
 test("bindPageChannel times out non-play/open requests after 10s with unavailable, but keeps long timeouts for play/open", async () => {
+  ensureNavigator();
   mock.timers.enable({ apis: ["setTimeout"] });
   const origConnect = browser.runtime.connect;
 
@@ -1084,6 +1096,7 @@ test("bindPageChannel times out non-play/open requests after 10s with unavailabl
 });
 
 test("bindPageChannel: when runtime.connect throws or port disconnects, answers outstanding & new requests with unavailable and broadcasts capabilities playback 0", async () => {
+  ensureNavigator();
   const origConnect = browser.runtime.connect;
 
   try {
