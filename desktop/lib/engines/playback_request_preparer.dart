@@ -83,8 +83,10 @@ class PlaybackRequestPreparer {
       );
       final subtitles = await _preparePageSubtitles(item, headers);
 
-      stdout.writeln(
-          '[request-preparer] Routing stream through proxy: ${uri.host} -> loopback');
+      if (!item.enforcePageNetworkPolicy) {
+        stdout.writeln(
+            '[request-preparer] Routing stream through proxy: ${uri.host} -> loopback');
+      }
 
       // Return a new QueueItem with the loopback URL and empty headers
       // so the media player doesn't forward browser headers to localhost.

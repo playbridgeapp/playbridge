@@ -22,6 +22,19 @@
       "match_about_blank": true,
       "match_origin_as_fallback": true,
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["page-content.js"],
+      "all_frames": false,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["page-main.js"],
+      "all_frames": false,
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "permissions": [

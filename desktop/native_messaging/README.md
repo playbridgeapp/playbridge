@@ -81,7 +81,7 @@ State fields are additive; older extensions ignore the new fields:
   "target": "tv",
   "state": "connected",
   "activeTv": "Living Room",
-  "capabilities": { "selectDevice": 1 },
+  "capabilities": { "selectDevice": 1, "linkedPlayback": 1 },
   "selection": { "kind": "tv", "id": "playBridge:receiver-uuid",
     "name": "Living Room", "status": "connected" },
   "devices": [{ "id": "playBridge:receiver-uuid", "uuid": "receiver-uuid",
@@ -144,3 +144,85 @@ relay with the app's `hello` and `state`. Failure sends
 `{"type":"error","code":"launch_failed","error":"Could not launch PlayBridge"}`;
 the browser port stays open for retry until stdin closes. App shutdown returns
 the stub to the same disconnected state.
+
+
+## 7. Website linked playback
+
+`capabilities.linkedPlayback:1` advertises the desktop half of the website API.
+The authenticated extension owns website consent, gesture attestation, per-origin
+private-network grants, document binding and opaque destination IDs. The app
+validates media again and owns one linked session across native ports. Endpoint
+keys and origins in these messages are private extension/app data, never page
+responses. Native host stubs relay these frames verbatim.
+
+Linked requests use `type`, not `cmd`, and each carries a unique
+`bridgeRequestId` (1–128 characters). They do not join the legacy command FIFO.
+Every request receives exactly one response:
+
+```json
+{"type":"linked_result","bridgeRequestId":"request-1","ok":true,"sessionId":"session-uuid"}
+{"type":"linked_result","bridgeRequestId":"request-2","ok":false,"error":"destination_offline"}
+```
+
+Only open/play results create a `sessionId`. Subsequent operations are bound to
+that session and the native connection that opened it. Errors use the shared
+page API codes; malformed or stale supplies return `invalid_request`.
+
+| Request type | Fields besides `bridgeRequestId` |
+| --- | --- |
+| `linked_play` | `origin`, `destination:"local"` or selected `protocol:uuid`, `payload:{items,startIndex,metadata?,skipPreplay?}`, `allowedPrivateOrigins:[]` |
+| `linked_open` | Same as play, with destination omitted; uses the current selection |
+| `linked_replace` | `sessionId`, `payload:{items,startIndex,metadata?,skipPreplay?}`, `allowedPrivateOrigins:[]` |
+| `linked_append` | `sessionId`, `payload:{items}`, `allowedPrivateOrigins:[]` |
+| `linked_jump` | `sessionId`, `payload:{index}` |
+| `linked_supply` | `sessionId`, `payload:{requestId,items,endOfList}`, `allowedPrivateOrigins:[]` |
+| `linked_ping` | `sessionId`; the page is ready for progress and demand events |
+| `linked_unlink` | `sessionId`, optional `reason:"unlinked"|"navigation"|"permission_reset"` |
+
+Items carry a unique `id`, HTTP(S) `url`, optional allow-listed `headers`, `title`,
+`contentType`, `startPositionMs`, `subtitles`, `subtitleResources` and `metadata`.
+Subtitle resources carry `url`, optional independent `headers`, `label` and
+`language`. `progressWebhook` is rejected at the envelope, payload and item
+levels, even when null or false. Metadata remains ordinary visual metadata;
+no webhook or other sender-only fields are inherited into outgoing playlists.
+Private-origin grants are exact HTTP(S) origins, never wildcard network access.
+Local playback and external receiver streams go through the existing proxy
+policy; PlayBridge TVs receive `detectedBy:"linked_page"` and the exact grants.
+Website URLs, headers and origins are never written to diagnostic logs.
+
+This computer uses the native PlayerController queue. PlayBridge TVs receive
+`playlist`, `queue_add` and `playlist_jump` commands with progress from receiver
+status. External receivers (DLNA, Google Cast, Roku and Web Browser) support one
+current item and reject queued operations with `unsupported_queue`, jumps with
+`unsupported_operation`, and subtitles
+with `unsupported_subtitles`. They do not emit item demand.
+
+The app emits events to the opening native connection:
+
+```json
+{"type":"linked_event","sessionId":"session-uuid","event":"needitems","detail":{"requestId":"need-uuid","afterIndex":0,"afterItemId":"episode-1","count":3}}
+{"type":"linked_event","sessionId":"session-uuid","event":"statechange","detail":{"state":"playing","positionMs":12000,"durationMs":24000,"title":"Episode 1","currentIndex":0,"totalCount":1,"items":[{"index":0,"id":"episode-1","title":"Episode 1"}]}}
+{"type":"linked_event","sessionId":"session-uuid","event":"ended","detail":{"reason":"unlinked"}}
+```
+
+States are `connecting`, `playing`, `paused`, `buffering`, `idle`, `ended` or
+`error`. Progress is throttled to one event per second, with immediate state/index
+changes. At the last resolved item, one outstanding demand requests up to three
+items; retries reuse the request ID after five seconds. Supplies are idempotent
+for the last accepted request. Local playback can wait at the end and resume
+when a late supply arrives. `endOfList:true` suppresses further demand.
+
+Unlink releases website control and keeps delivered playback/queue running.
+The app banner and tray show `Controlled by <origin>` with an Unlink action.
+Changing selection ends control with `receiver_changed`; a new linked play ends
+the old session with `superseded`. Other endings are `navigation`,
+`permission_reset`, `receiver_stopped`, `session_expired` and
+`queue_update_failed`. A native-port disconnect releases control as navigation.
+Destination identity/availability is checked again after asynchronous preparation;
+changes return `destination_changed`/`destination_offline` without local fallback.
+
+Limits: 50 items/request, 200 delivered items/session, 64 KiB/request, 16
+allow-listed headers (16 KiB total), 16 subtitles, 16 private origins, 16 KiB
+metadata, eight in-flight linked requests and one active session. Playback
+operations time out after 20 seconds; late preparation cannot commit to an ended
+session. Sessions expire after more than 30 minutes without page ping/operations.

@@ -78,6 +78,26 @@ class _FakeSender extends Fake implements TvSenderController {
 }
 
 void main() {
+  test('linked session exposes controller origin and Unlink in the tray', () {
+    final menu = buildTrayMenu(
+        senderStatus: 'Disconnected',
+        receiverStatus: 'Playing',
+        savedDevices: const [],
+        nearbyDeviceKeys: const {},
+        activeDeviceKey: null,
+        canDisconnect: false,
+        routeThroughDesktop: false,
+        launchAtLogin: false,
+        hasRemotePlayback: false,
+        remoteTitle: null,
+        remotePlaybackState: '',
+        controllerOrigin: 'https://streams.example');
+    expect(
+        menu.items!.any(
+            (item) => item.label == 'Controlled by https://streams.example'),
+        true);
+    expect(menu.getMenuItem('linked_unlink')!.label, 'Unlink');
+  });
   test('menu separates sender and receiver and handles empty saved list', () {
     final menu = buildTrayMenu(
       senderStatus: 'Disconnected',

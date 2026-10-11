@@ -869,11 +869,14 @@ class ReceiverServer extends ChangeNotifier {
 /// Convert wire media without losing per-cast history policy.
 QueueItem receiverQueueItemFromPayload(PlayPayload payload,
     {bool skipPreplay = false}) {
-  debugLogNetworkRequest(
-    source: 'receiver',
-    url: payload.url,
-    headers: payload.headersOrNull,
-  );
+  if (payload.detectedByOrNull != 'linked_page' &&
+      payload.detectedByOrNull != 'page_cast') {
+    debugLogNetworkRequest(
+      source: 'receiver',
+      url: payload.url,
+      headers: payload.headersOrNull,
+    );
+  }
   return QueueItem(
     url: payload.url,
     progressIdentity: payload.hasProgressIdentity()
@@ -887,7 +890,10 @@ QueueItem receiverQueueItemFromPayload(PlayPayload payload,
               'episode': payload.progressIdentity.episode,
           })
         : null,
-    title: payload.titleOrNull ?? payload.url,
+    title: payload.titleOrNull ??
+        (payload.detectedByOrNull == 'linked_page'
+            ? 'Website media'
+            : payload.url),
     headers: payload.headersOrNull,
     subtitles: payload.subtitlesOrNull,
     subtitleResources: payload.subtitleResources

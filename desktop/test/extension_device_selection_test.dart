@@ -505,7 +505,8 @@ void main() {
           send({'token': info['token']});
           await next('hello');
           final initial = await next('state');
-          expect(initial['capabilities'], {'selectDevice': 1});
+          expect(initial['capabilities'],
+              {'selectDevice': 1, 'linkedPlayback': 1});
           expect(initial['selection'], {'kind': 'local'});
           send({'cmd': 'select_device', 'id': 'playBridge:tv'});
           expect((await next('result'))['targetName'], 'Living Room');

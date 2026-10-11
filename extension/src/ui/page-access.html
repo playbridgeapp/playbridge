@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PlayBridge</title>
+  <link rel="stylesheet" href="fonts/outfit.css">
+  <link rel="stylesheet" href="page-access.css">
+</head>
+<body>
+  <div class="page-access-container">
+    <header class="page-access-header">
+      <div class="header-logo-row">
+        <img src="../icon.png" alt="PlayBridge" class="header-icon">
+        <h1 class="header-title">PlayBridge</h1>
+      </div>
+    </header>
+
+    <main class="page-access-main">
+      <!-- Consent View -->
+      <section id="consent-view" class="view-panel hidden">
+        <div class="consent-content">
+          <div class="consent-icon-badge">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>
+            </svg>
+          </div>
+          <h2 id="consent-prompt-title" class="consent-title">Allow website to use your PlayBridge devices?</h2>
+          <p id="consent-prompt-subtitle" class="consent-subtitle">
+            This website will be able to start and control playback on your connected PlayBridge devices.
+          </p>
+        </div>
+        <div class="consent-actions">
+          <button id="consent-deny-btn" type="button" class="action-btn secondary-btn">Don't allow</button>
+          <button id="consent-allow-btn" type="button" class="action-btn primary-btn">Allow</button>
+        </div>
+      </section>
+
+      <!-- Device Picker View -->
+      <section id="picker-view" class="view-panel hidden">
+        <div class="picker-header">
+          <h2 class="picker-title">Choose playback device</h2>
+          <p id="picker-origin-label" class="picker-subtitle">Select where casts from this website play</p>
+        </div>
+        <div id="devices-list" class="saved-connections-list"></div>
+        <div class="picker-actions">
+          <button id="picker-done-btn" type="button" class="action-btn primary-btn">Done</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="page-access.js"></script>
+</body>
+</html>

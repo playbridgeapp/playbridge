@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Website Page API**: Added desktop browser support for `window.playbridge` in top-level frames (`getPlaybackDestination`, `choosePlaybackDestination`, `play`, `linkCast`, `cast`, and linked sessions with `replace`, `append`, `jump`, `provideItems`, `unlink`, and events `needitems`, `statechange`, `ended`).
+- **Website Access & Consent**: Extension-owned consent prompt and device picker window (`ui/page-access.html`) for website casting permissions, WebCrypto HMAC destination privacy, user gesture attestation, automatic navigation unlinking, and popup Website Access management.
 - **Device Selection**: Choose the playback device (a paired TV or This computer) from the popup or from a device chip beside the in-page cast button. Requires a PlayBridge desktop app with device selection; older apps keep the read-only list.
 - **Open PlayBridge**: When the desktop app is not running, casting offers to launch it.
 

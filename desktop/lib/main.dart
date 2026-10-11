@@ -16,6 +16,7 @@ import 'context_menu_installer.dart';
 import 'discovery.dart';
 import 'engines/mpv_engine.dart';
 import 'extension_bridge.dart';
+import 'linked_playback_banner.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
@@ -391,13 +392,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       deviceId: widget.store.deviceId,
     );
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
-    _tray = TrayController(
-      player: _player,
-      server: _server,
-      store: widget.store,
-      sender: _sender,
-      showSender: _showSenderScreen,
-    );
     _extBridge = ExtensionBridge(
       _sender,
       _player,
@@ -421,6 +415,14 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           }
         }
       },
+    );
+    _tray = TrayController(
+      linkedPlayback: _extBridge.linkedPlayback,
+      player: _player,
+      server: _server,
+      store: widget.store,
+      sender: _sender,
+      showSender: _showSenderScreen,
     );
     _mediaSession = MediaSessionBridge(
       _player,
@@ -1312,6 +1314,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                     ),
                                   ),
                                 ),
+                              LinkedPlaybackBanner(
+                                  coordinator: _extBridge.linkedPlayback),
                               Expanded(
                                 child: Row(
                                   crossAxisAlignment:

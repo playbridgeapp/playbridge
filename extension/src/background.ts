@@ -26,6 +26,7 @@ import {
   type HlsRole,
 } from "./core/media-candidate";
 import * as bridge from "./native-bridge";
+import { initPageCoordinator, handlePrivilegedRuntimeMessage } from "./page-coordinator";
 import {
   getVideoCastOverlayPreferences,
   siteKeyFromUrl,
@@ -2173,6 +2174,15 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (
+    msg.action === "pageAccessConsentResponse" ||
+    msg.action === "getPageConsentOrigins" ||
+    msg.action === "revokePageConsentOrigin"
+  ) {
+    handlePrivilegedRuntimeMessage(msg, sender, sendResponse);
+    return true;
+  }
+
   // Unhandled. The polyfill's onMessage listener type requires every path to
   // return `true` or a Promise (not `boolean`/void), so return true; nothing
   // here calls sendResponse, and the unused port is harmless.
@@ -2251,3 +2261,4 @@ menusApi.onClicked.addListener((info, tab) => {
 // Connect to the desktop app on startup; the bridge auto-reconnects if the app
 // isn't running yet.
 bridge.connect();
+initPageCoordinator();

@@ -16,6 +16,8 @@ const TARGETS = [
       "src/background.ts",
       "src/content.ts",
       "src/ui/popup.ts",
+      "src/page-content.ts",
+      "src/ui/page-access.ts",
     ],
     copyAndroid: false,
   },
@@ -29,6 +31,9 @@ const TARGETS = [
       "src/content.ts",
       "src/ui/popup.ts",
       "src/ui/consent.ts",
+      "src/page-content.ts",
+      "src/page-main.ts",
+      "src/ui/page-access.ts",
     ],
     copyAndroid: false,
   },
@@ -80,6 +85,8 @@ function copyStatics(outDir, manifest, includeConsentPage) {
     ["src/ui/popup.css", `${outDir}/ui/popup.css`],
     ["src/ui/outfit.css", `${outDir}/ui/outfit.css`],
     ["src/icon.png", `${outDir}/icon.png`],
+    ["src/ui/page-access.html", `${outDir}/ui/page-access.html`],
+    ["src/ui/page-access.css", `${outDir}/ui/page-access.css`],
   ];
   if (includeConsentPage) {
     statics.push(
