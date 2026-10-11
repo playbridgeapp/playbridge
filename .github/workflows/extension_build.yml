@@ -190,25 +190,34 @@ jobs:
       - name: Submit to the Chrome Web Store
         env:
           VERSION: ${{ needs.build-extension.outputs.version }}
-          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
-          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
-          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
           CWS_ITEM_ID: gofdcnocpnieoonficfnfccolcocoaim
         run: |
           set -euo pipefail
-          for name in CWS_CLIENT_ID CWS_CLIENT_SECRET CWS_REFRESH_TOKEN CWS_PUBLISHER_ID; do
+          for name in CWS_SERVICE_ACCOUNT_JSON CWS_PUBLISHER_ID; do
             if [ -z "${!name}" ]; then
               echo "::error::$name secret is not configured."
               exit 1
             fi
           done
 
+          # Service-account JWT exchanged for an access token. The account
+          # must be added under Account in the Chrome Web Store dashboard.
+          b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          email=$(jq -r '.client_email' <<<"$CWS_SERVICE_ACCOUNT_JSON")
+          key_file=$(umask 077 && mktemp)
+          trap 'rm -f "$key_file"' EXIT
+          jq -r '.private_key' <<<"$CWS_SERVICE_ACCOUNT_JSON" > "$key_file"
+          now=$(date +%s)
+          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
+          claims=$(jq -nc --arg iss "$email" --argjson iat "$now" --argjson exp "$((now + 600))" \
+            '{iss: $iss, scope: "https://www.googleapis.com/auth/chromewebstore", aud: "https://oauth2.googleapis.com/token", iat: $iat, exp: $exp}' | b64url)
+          signature=$(printf '%s.%s' "$header" "$claims" | openssl dgst -sha256 -sign "$key_file" | b64url)
+          rm -f "$key_file"
           token=$(curl -fsS https://oauth2.googleapis.com/token \
-            --data-urlencode "client_id=$CWS_CLIENT_ID" \
-            --data-urlencode "client_secret=$CWS_CLIENT_SECRET" \
-            --data-urlencode "refresh_token=$CWS_REFRESH_TOKEN" \
-            --data-urlencode "grant_type=refresh_token" | jq -r '.access_token // empty')
+            --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
+            --data-urlencode "assertion=$header.$claims.$signature" | jq -r '.access_token // empty')
           if [ -z "$token" ]; then
             echo "::error::Could not get a Chrome Web Store access token."
             exit 1

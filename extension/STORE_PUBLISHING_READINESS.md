@@ -29,8 +29,9 @@ release until those actions are complete.
 > uploads and submits the Chrome package through the Chrome Web Store API v2
 > (published automatically after review). CI no longer signs unlisted XPIs, and
 > `playbridge.app/firefox` redirects to the AMO listing. Required secrets:
-> `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`, `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`,
-> `CWS_REFRESH_TOKEN` and `CWS_PUBLISHER_ID`. The original audit notes follow.
+> `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`, `CWS_SERVICE_ACCOUNT_JSON` (a service
+> account added under Account in the Chrome Web Store dashboard) and
+> `CWS_PUBLISHER_ID`. The original audit notes follow.
 
 Update `.github/workflows/extension_build.yml` before merging the release
 version. The current workflow:
