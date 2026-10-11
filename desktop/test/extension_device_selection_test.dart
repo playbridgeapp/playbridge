@@ -161,7 +161,7 @@ class LocalPlayer extends ChangeNotifier implements PlayerController {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class BridgeFiles extends IOOverrides {
+base class BridgeFiles extends IOOverrides {
   BridgeFiles(this.directory);
   final Directory directory;
   @override
@@ -488,14 +488,14 @@ void main() {
               jsonDecode(await File(bridgeFilePath()).readAsString()) as Map;
           socket = await Socket.connect(
               InternetAddress.loopbackIPv4, info['port'] as int);
-          frames = StreamIterator(socket
+          final lines = StreamIterator(socket
               .cast<List<int>>()
               .transform(utf8.decoder)
               .transform(const LineSplitter()));
+          frames = lines;
           Future<Map> next(String type) async {
-            while (
-                await frames!.moveNext().timeout(const Duration(seconds: 3))) {
-              final value = jsonDecode(frames.current) as Map;
+            while (await lines.moveNext().timeout(const Duration(seconds: 3))) {
+              final value = jsonDecode(lines.current) as Map;
               if (value['type'] == type) return value;
             }
             throw StateError('Missing $type');
