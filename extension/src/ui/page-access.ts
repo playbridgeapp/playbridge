@@ -181,7 +181,7 @@ function renderDevices(): void {
   localItem.className = `saved-connection-item${isThisComputerActive ? " active" : ""}`;
   localItem.addEventListener("click", (e) => {
     if (!e.isTrusted) return;
-    browser.runtime.sendMessage({ action: "wsSelectLocal" }).then(() => {
+    browser.runtime.sendMessage({ action: "selectLocal" }).then(() => {
       loadDevices();
     });
   });
@@ -253,7 +253,7 @@ function renderDevices(): void {
       pairBtn.addEventListener("click", (e) => {
         if (!e.isTrusted) return;
         e.stopPropagation();
-        browser.runtime.sendMessage({ action: "wsShowApp", pairId: d.id || d.uuid });
+        browser.runtime.sendMessage({ action: "showApp", pairId: d.id || d.uuid });
       });
       actions.appendChild(pairBtn);
     }
@@ -270,7 +270,7 @@ function renderDevices(): void {
           .catch(() => {});
       }
       browser.runtime
-        .sendMessage({ action: "wsSelectDevice", id: d.id || d.uuid })
+        .sendMessage({ action: "selectDevice", id: d.id || d.uuid })
         .then(() => {
           loadDevices();
         });

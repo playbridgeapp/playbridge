@@ -1345,3 +1345,16 @@ test("PageCoordinator handles sender URLs with paths, queries, and hash routes w
 
 
 
+
+test("every runtime action sent by extension UI and content scripts has a background handler", () => {
+  const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
+  const handled = new Set(
+    [...read("src/background.ts").matchAll(/msg\.action === "([A-Za-z]+)"/g)].map((m) => m[1]),
+  );
+  for (const file of ["src/ui/page-access.ts", "src/ui/popup.ts", "src/content.ts"]) {
+    const sent = [...read(file).matchAll(/action: ["']([A-Za-z]+)["']/g)].map((m) => m[1]);
+    for (const action of sent) {
+      assert.ok(handled.has(action), `${file} sends "${action}" but background.ts has no handler`);
+    }
+  }
+});
