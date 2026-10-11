@@ -58,13 +58,11 @@ assert(
   Number.parseInt(gecko?.strict_min_version, 10) >= 140,
   "Firefox minimum version must support built-in data consent",
 );
+// Desktop only: Firefox for Android has no native messaging host, and AMO
+// marks a version Android-compatible when gecko_android is present.
 assert(
-  Number.parseInt(
-    firefoxSource.browser_specific_settings?.gecko_android
-      ?.strict_min_version,
-    10,
-  ) >= 142,
-  "Firefox Android minimum version must support built-in data consent",
+  !firefoxSource.browser_specific_settings?.gecko_android,
+  "Firefox manifest must not declare gecko_android (desktop-only add-on)",
 );
 const firefoxData = gecko?.data_collection_permissions?.required ?? [];
 assert(
