@@ -3,6 +3,19 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.15.1] — 2026-10-11 (versionCode 232)
+
+> **Works best together**: Install this before GeckoView Plugin 0.15.0. The new plugin only accepts commands from a player that holds the new browser-control permission.
+
+### Fixed
+- **GeckoView browser on the phone**: Report the GeckoView browser to senders as "browser", so the phone shows the browser remote, title and scrubber instead of "Nothing playing".
+- **Low-memory TVs**: While a browser is open, release the preloaded MPV/ExoPlayer renderers instead of restarting them, and stay as important as the visible GeckoView browser so Android doesn't kill the phone connection first.
+- **Connection recovery**: If the player is restarted while the GeckoView browser is still on screen, reconnect phones immediately and resume routing remote and touchpad input to the browser.
+- **GeckoView video status**: Relay the plugin's playback status to the phone, only while the GeckoView browser is open.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open or control the GeckoView plugin or send it status, through a new signature permission and a protected bound service.
+
 ## Player [0.15.0] — 2026-10-09 (versionCode 231)
 
 ### Added
