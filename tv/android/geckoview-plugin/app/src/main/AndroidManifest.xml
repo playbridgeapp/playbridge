@@ -17,6 +17,12 @@
         android:protectionLevel="signature" />
     <uses-permission android:name="com.playbridge.permission.BROWSER_CONTROL" />
 
+    <!-- Android 11+ package visibility: without this the player's PluginBridgeService is
+         invisible and bindService fails with "not found". -->
+    <queries>
+        <package android:name="com.playbridge.player" />
+    </queries>
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
