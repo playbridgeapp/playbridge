@@ -40,6 +40,17 @@ abstract class GeckoPortDisconnectGuardFactory : AsmClassVisitorFactory<Instrume
         GeckoPortDisconnectGuard(nextClassVisitor)
 }
 
+val geckoGuardAar by configurations.creating { isTransitive = false }
+dependencies { geckoGuardAar(libs.geckoview.omni) }
+
+// isInstrumentable cannot detect a class removed from a future GeckoView release.
+// Check the pinned AAR separately so every flavor fails before silently losing the guard.
+val verifyGeckoPortDisconnectGuard by tasks.registering {
+    inputs.files(geckoGuardAar)
+    doLast { GeckoPortDisconnectGuard.verifyAar(geckoGuardAar.singleFile) }
+}
+tasks.named("preBuild") { dependsOn(verifyGeckoPortDisconnectGuard) }
+
 @CacheableTask
 abstract class StripGeckoViewWebRtcClasses : DefaultTask() {
     @get:InputFiles
@@ -136,7 +147,8 @@ android {
         buildConfig = true
     }
     compileSdk {
-        version = release(37)
+        // GeckoView 157's AAR requires Android 37.1.
+        version = release(37) { minorApiLevel = 1 }
     }
 
     lint {

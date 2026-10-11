@@ -10,6 +10,10 @@ import java.util.Map;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.file.Files;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.objectweb.asm.ClassReader;
@@ -102,6 +106,34 @@ public class GeckoPortDisconnectGuardTest {
             fail("Dependency changes must require a guard review");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage().contains("review"));
+        }
+    }
+
+    @Test public void pinnedAarContainsGuardTarget() throws Exception {
+        GeckoPortDisconnectGuard.verifyAar(new File(System.getProperty("gecko.fixture.aar")));
+    }
+
+    @Test public void absentPortClassFailsClosed() throws Exception {
+        var file = Files.createTempFile("gecko-without-port", ".aar");
+        try {
+            ByteArrayOutputStream emptyJar = new ByteArrayOutputStream();
+            try (ZipOutputStream jar = new ZipOutputStream(emptyJar)) {
+                jar.putNextEntry(new ZipEntry("unrelated.txt"));
+                jar.closeEntry();
+            }
+            try (ZipOutputStream aar = new ZipOutputStream(Files.newOutputStream(file))) {
+                aar.putNextEntry(new ZipEntry("classes.jar"));
+                aar.write(emptyJar.toByteArray());
+                aar.closeEntry();
+            }
+            try {
+                GeckoPortDisconnectGuard.verifyAar(file.toFile());
+                fail("Removing the target class must not silently disable instrumentation");
+            } catch (IllegalStateException expected) {
+                assertTrue(expected.getMessage().contains("WebExtension$Port missing"));
+            }
+        } finally {
+            Files.deleteIfExists(file);
         }
     }
 

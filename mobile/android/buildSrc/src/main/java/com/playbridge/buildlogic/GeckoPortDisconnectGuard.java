@@ -1,13 +1,19 @@
 package com.playbridge.buildlogic;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
+import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 /**
- * M150 Port.disconnect() checks disconnected, but disconnectFromExtension() and
+ * M157 Port.disconnect() checks disconnected, but disconnectFromExtension() and
  * disconnected() do not. Queued extension callbacks can therefore shut down an
  * already disposed native EventDispatcher. Guard both entry points, marking the
  * port closed BEFORE native cleanup. No exceptions or first-time failures are swallowed.
@@ -18,6 +24,26 @@ public final class GeckoPortDisconnectGuard extends ClassVisitor {
     private int guardedMethods;
 
     public GeckoPortDisconnectGuard(ClassVisitor next) { super(Opcodes.ASM9, next); }
+
+    /** Validate the dependency before instrumentation, which skips absent target classes. */
+    public static void verifyAar(File file) throws IOException {
+        try (ZipFile aar = new ZipFile(file)) {
+            var classes = aar.getEntry("classes.jar");
+            if (classes == null) {
+                throw new IllegalStateException("GeckoView classes.jar missing: review disconnect guard");
+            }
+            try (ZipInputStream jar = new ZipInputStream(aar.getInputStream(classes))) {
+                for (java.util.zip.ZipEntry entry; (entry = jar.getNextEntry()) != null;) {
+                    if (entry.getName().equals(PORT + ".class")) {
+                        new ClassReader(jar.readAllBytes()).accept(
+                            new GeckoPortDisconnectGuard(new ClassWriter(0)), 0);
+                        return;
+                    }
+                }
+            }
+        }
+        throw new IllegalStateException("GeckoView WebExtension$Port missing: review disconnect guard");
+    }
 
     @Override public FieldVisitor visitField(int access, String name, String descriptor,
             String signature, Object value) {
