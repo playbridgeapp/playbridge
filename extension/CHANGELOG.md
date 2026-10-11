@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.1] — 2026-10-11
+
+### Fixed
+- **Firefox for Android**: The add-on is no longer offered for Firefox for Android, which cannot run the desktop app's native messaging host.
+
 ## [0.15.0] — 2026-10-11
 
 > **Works best together**: Device selection and the website playback API need PlayBridge Desktop 0.15.1 or later. With older desktop apps the extension keeps its read-only device list and websites see playback as unavailable.
