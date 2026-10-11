@@ -27,7 +27,7 @@ object PbBridge {
     var onVideoMessage: ((JSONObject) -> Unit)? = null
 
     /** Commands are never queued: a disconnected frame/document must not receive a stale action. */
-    fun videoCommand(tabId: Int, frameId: Int, documentId: String, cmd: String) {
+    fun videoCommand(tabId: Long, frameId: Long, documentId: String, cmd: String) {
         val p = port ?: return
         try {
             p.postMessage(JSONObject().put("type", "video_cmd").put("tabId", tabId)

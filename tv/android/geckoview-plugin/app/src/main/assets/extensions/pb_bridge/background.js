@@ -13,8 +13,9 @@ function forwardVideo(tabId, frameId, documentId, data) {
 }
 
 browser.runtime.onMessage.addListener((message, sender) => {
+    // GeckoView reports tab.active = false for the plugin's single session, so don't filter
+    // on it: the plugin only ever has one tab, and frame identity still comes from `sender`.
     if (message.type !== "video" || !sender.tab || typeof message.data !== "string") return;
-    if (!sender.tab.active) return;
     const tabId = sender.tab.id;
     const frameId = sender.frameId;
     const key = `${tabId}:${frameId}`;
@@ -64,7 +65,9 @@ async function handleMessage(message) {
         }
     } else if (message.type === "eval") {
         try {
-            const tabs = await browser.tabs.query({ active: true });
+            // Not {active: true}: GeckoView doesn't mark its session's tab active, so that
+            // query returned nothing and every eval (text input, maximize) failed.
+            const tabs = await browser.tabs.query({});
             if (tabs.length > 0) {
                 // Every frame receives eval; only the frame with the focused input acts.
                 const result = await browser.tabs.sendMessage(tabs[0].id, {

@@ -124,15 +124,27 @@ test('pagehide retires video and BFCache restore resumes reporting', () => {
     assert.equal(JSON.parse(c.sent.at(-1).data).active, true);
 });
 
-test('background adds trusted frame identity and only forwards active tabs', () => {
+test('background adds trusted frame identity and forwards GeckoView tabs reported inactive', () => {
     const b = background();
     b.send(2, { type: 'active', active: true, score: 100, playing: false });
     assert.equal(b.sent[0].type, 'video');
     assert.equal(b.sent[0].tabId, 7);
     assert.equal(b.sent[0].frameId, 2);
     assert.equal(b.sent[0].documentId, 'doc-1');
+    // GeckoView reports tab.active = false for the plugin's only session (seen on device).
     b.send(3, { type: 'status' }, 'other-doc', false);
-    assert.equal(b.sent.length, 1);
+    assert.equal(b.sent.length, 2);
+    assert.equal(b.sent[1].frameId, 3);
+});
+
+test('eval reaches the session tab even though GeckoView reports no active tab', async () => {
+    const b = background();
+    const queries = [];
+    b.context.browser.tabs.query = async filter => { queries.push(filter); return filter.active ? [] : [{ id: 7 }]; };
+    await b.events.native({ type: 'eval', code: '1+2' });
+    assert.equal(JSON.stringify(queries), "[{}]");
+    assert.equal(b.delivered[0][0], 7);
+    assert.equal(b.delivered[0][1].type, 'eval');
 });
 
 test('background targets native commands to one frame and keeps all-frame eval', async () => {

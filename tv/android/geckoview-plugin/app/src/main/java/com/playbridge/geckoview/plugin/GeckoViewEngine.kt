@@ -29,7 +29,9 @@ class GeckoViewEngine(
 
     private var _canGoBack: Boolean = false
 
-    private data class FrameKey(val tabId: Int, val frameId: Int)
+    // Gecko frame ids are 64-bit: out-of-process (cross-origin) iframes get ids far above
+    // Int.MAX_VALUE, and getInt() saturated them, so commands targeted a frame that didn't exist.
+    private data class FrameKey(val tabId: Long, val frameId: Long)
     private val videoTargets = VideoTargetSelector<FrameKey>()
     private val documents = mutableMapOf<FrameKey, String>()
     private var mutedTarget: FrameKey? = null
@@ -86,8 +88,8 @@ class GeckoViewEngine(
 
     private fun handleVideoMessage(message: JSONObject) {
         try {
-            val tabId = message.getInt("tabId")
-            val frameId = message.getInt("frameId")
+            val tabId = message.getLong("tabId")
+            val frameId = message.getLong("frameId")
             if (tabId < 0 || frameId < 0) return
             val key = FrameKey(tabId, frameId)
             val document = message.getString("documentId")
