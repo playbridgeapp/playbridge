@@ -10,6 +10,7 @@ import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.cast.proxy.JniUpstreamHttpClient
+import com.playbridge.sender.cast.remote.ExternalRemoteObservation
 import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.cast.routing.ExternalLoadEventGate
 import com.playbridge.sender.connection.ConnectionCoordinator
@@ -45,6 +46,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -220,6 +222,9 @@ class CastSessionManager(
     private val _activeExternalDevice = MutableStateFlow<TvDevice?>(null)
     val activeExternalDevice: StateFlow<TvDevice?> = _activeExternalDevice.asStateFlow()
 
+    private val _externalControlFailureVersion = MutableStateFlow(0L)
+    val externalControlFailureVersion: StateFlow<Long> = _externalControlFailureVersion.asStateFlow()
+
     private val _externalStatus = MutableStateFlow<PlaybackStatus?>(null)
     val externalStatus: StateFlow<PlaybackStatus?> = _externalStatus.asStateFlow()
 
@@ -268,7 +273,24 @@ class CastSessionManager(
     val phonePathActive: StateFlow<Boolean> = _phonePathActive.asStateFlow()
 
     /** Generation token so stale callbacks cannot overwrite a newer load. */
-    private var externalLoadGeneration: Long = 0L
+    @Volatile private var externalLoadGeneration: Long = 0L
+    private val _remoteExternalPlayback = MutableStateFlow(ExternalRemoteObservation())
+    val remoteExternalPlayback: StateFlow<ExternalRemoteObservation> = _remoteExternalPlayback.asStateFlow()
+
+    /** Authoritative ownership, checked before combined route/target flows can catch up. */
+    val remoteExternalTarget: CastTarget? get() = _externalTarget.value
+    fun isCurrentRemoteExternal(target: Any, generation: Long): Boolean {
+        val route = _route.value as? Route.External ?: return false
+        return route.endpointKey == _activeExternalDevice.value?.endpointKey &&
+            _externalTarget.value === target && externalLoadGeneration == generation
+    }
+
+    private fun publishExternalStatus(status: PlaybackStatus?, generation: Long = externalLoadGeneration) {
+        if (generation != externalLoadGeneration) return
+        _externalStatus.value = status
+        val at = android.os.SystemClock.uptimeMillis()
+        _remoteExternalPlayback.update { it.copy(status = status, loadGeneration = generation, sequence = it.sequence + 1L, atMs = at) }
+    }
 
     /** Library identity of what's loaded on an external target (null = untracked content). */
     private val _externalNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
@@ -346,13 +368,15 @@ class CastSessionManager(
             "volume_down" -> "VolumeDown"
             else -> return
         }
-        (_externalTarget.value as? RokuCastTarget)?.sendKeypress(rokuKey)
+        val target = _externalTarget.value as? RokuCastTarget ?: return
+        val generation = externalLoadGeneration
+        target.sendKeypress(rokuKey) { isCurrentRemoteExternal(target, generation) }
     }
 
     fun selectGoogleCastTarget(device: TvDevice) {
         val target = GoogleCastTarget(device, scope, context)
         selectExternalTarget(device, target)
-        _externalStatus.value = PlaybackStatus(PlaybackState.BUFFERING)
+        publishExternalStatus(PlaybackStatus(PlaybackState.BUFFERING))
         target.connectReady()
     }
 
@@ -1040,7 +1064,7 @@ class CastSessionManager(
         externalTargetSlot.replace(target)
         _externalTarget.value = externalTargetSlot.target
         _activeExternalDevice.value = device
-        _externalStatus.value = PlaybackStatus(PlaybackState.IDLE)
+        publishExternalStatus(PlaybackStatus(PlaybackState.IDLE))
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
@@ -1068,7 +1092,7 @@ class CastSessionManager(
                     Log.v(TAG, "Ignoring stale ${target.kind} status epoch=${status.loadEpoch}")
                     return@collect
                 }
-                _externalStatus.value = status
+                publishExternalStatus(status, generation)
                 if (target.kind == TargetKind.GOOGLE_CAST &&
                     status.failure is com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException
                 ) {
@@ -1124,7 +1148,7 @@ class CastSessionManager(
         val detached = externalTargetSlot.take()
         _externalTarget.value = null
         _activeExternalDevice.value = null
-        _externalStatus.value = null
+        publishExternalStatus(null)
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
@@ -1244,10 +1268,10 @@ class CastSessionManager(
         JniUpstreamHttpClient.setDiagnosticAttempt(castAttemptDiagnostics, attemptId)
         castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.BUFFERING)
         val epochMedia = media.copy(loadEpoch = generation)
-        _externalStatus.value = PlaybackStatus(
+        publishExternalStatus(PlaybackStatus(
             state = PlaybackState.BUFFERING,
             loadEpoch = generation,
-        )
+        ), generation)
         val loadTarget = target
         externalLoadJob = scope.launch {
             val incomingLease = com.playbridge.sender.cast.proxy.PhoneSenderServices.get()?.retainMedia(media.url)
@@ -1285,11 +1309,11 @@ class CastSessionManager(
                 if (error is CancellationException) return@onFailure
                 if (generation == externalLoadGeneration && _externalTarget.value === loadTarget) {
                     castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.FAILED, error)
-                    _externalStatus.value = PlaybackStatus(
+                    publishExternalStatus(PlaybackStatus(
                         PlaybackState.ERROR,
                         failure = error,
                         loadEpoch = generation,
-                    )
+                    ), generation)
                     _externalMediaLoaded.value = false
                     _phonePathActive.value = false
                     if (loadTarget is BrowserCastTarget) {
@@ -1323,24 +1347,15 @@ class CastSessionManager(
     fun setVolume(percent: Int) = controlExternal("volume") { it.setVolume(percent) }
 
     fun adjustVolume(up: Boolean) {
-        when (val target = _externalTarget.value) {
-            is GoogleCastTarget -> scope.launch {
-                suspendRunCatchingLogged(TAG, "Google Cast volume adjustment failed") {
-                    target.adjustVolume(if (up) 0.05f else -0.05f)
-                }
+        val generation = externalLoadGeneration
+        controlExternal("volume adjustment", reportFailure = false) { target ->
+            when (target) {
+                is GoogleCastTarget -> target.adjustVolume(if (up) 0.05f else -0.05f)
+                is RokuCastTarget -> target.sendKeypress(if (up) "VolumeUp" else "VolumeDown") { isCurrentRemoteExternal(target, generation) }
+                is DlnaCastTarget -> target.adjustVolume(if (up) 0.05f else -0.05f)
+                is BrowserCastTarget -> target.adjustVolume(if (up) 0.05 else -0.05)
+                else -> Unit
             }
-            is RokuCastTarget -> target.sendKeypress(if (up) "VolumeUp" else "VolumeDown")
-            is DlnaCastTarget -> scope.launch {
-                suspendRunCatchingLogged(TAG, "DLNA volume adjustment failed") {
-                    target.adjustVolume(if (up) 0.05f else -0.05f)
-                }
-            }
-            is BrowserCastTarget -> scope.launch {
-                suspendRunCatchingLogged(TAG, "Browser volume adjustment failed") {
-                    target.adjustVolume(if (up) 0.05 else -0.05)
-                }
-            }
-            else -> Unit
         }
     }
 
@@ -1357,14 +1372,30 @@ class CastSessionManager(
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalNowPlayingMeta.value = null
-        _externalStatus.value = PlaybackStatus(PlaybackState.STOPPED)
+        publishExternalStatus(PlaybackStatus(PlaybackState.STOPPED))
     }
 
-    private fun controlExternal(operation: String, block: suspend (CastTarget) -> Unit) {
+    private fun controlExternal(operation: String, reportFailure: Boolean = true, block: suspend (CastTarget) -> Unit) {
         val target = _externalTarget.value ?: return
+        val generation = externalLoadGeneration
         scope.launch {
+            if (!isCurrentRemoteExternal(target, generation)) return@launch
             suspendRunCatchingLogged(TAG, "${target.kind} $operation failed") {
-                block(target)
+                val current = { isCurrentRemoteExternal(target, generation) }
+                if (target is RokuCastTarget) {
+                    when (operation) {
+                        "play" -> target.play(current)
+                        "pause" -> target.pause(current)
+                        "stop" -> target.stop(current)
+                        else -> block(target)
+                    }
+                } else block(target)
+            }.onFailure { error ->
+                if (reportFailure && error !is CancellationException && _externalTarget.value === target &&
+                    generation == externalLoadGeneration) {
+                    _externalControlFailureVersion.value++
+                    _remoteExternalPlayback.update { it.copy(controlFailureVersion = _externalControlFailureVersion.value) }
+                }
             }
         }
     }
@@ -1621,9 +1652,12 @@ class CastSessionManager(
             externalLoadJob?.cancel()
             externalLoadJob = null
             _externalTarget.value?.let { target ->
+                val generation = externalLoadGeneration
                 scope.launch {
+                    if (!isCurrentRemoteExternal(target, generation)) return@launch
                     suspendRunCatchingLogged(TAG, "${target.kind} mirror stop failed") {
-                        target.stop()
+                        if (target is RokuCastTarget) target.stop { isCurrentRemoteExternal(target, generation) }
+                        else target.stop()
                     }
                 }
             }
@@ -1631,10 +1665,10 @@ class CastSessionManager(
             _phonePathActive.value = false
             _externalMediaTitle.value = null
             _externalNowPlayingMeta.value = null
-            _externalStatus.value = PlaybackStatus(
+            publishExternalStatus(PlaybackStatus(
                 PlaybackState.STOPPED,
                 loadEpoch = externalLoadGeneration,
-            )
+            ))
         }
     }
 

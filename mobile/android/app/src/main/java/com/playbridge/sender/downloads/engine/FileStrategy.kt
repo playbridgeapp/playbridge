@@ -1,6 +1,7 @@
 package com.playbridge.sender.downloads.engine
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,7 +72,7 @@ class FileStrategy(
         val head = probe(request.url, request.headers)
         Log.d(
             TAG,
-            "probe url=${request.url} len=${head.length} ranges=${head.acceptsRanges} " +
+            "probe url=${redactUrlForLog(request.url)} len=${head.length} ranges=${head.acceptsRanges} " +
                 "hasCookie=${request.headers.keys.any { it.equals("Cookie", true) }}",
         )
 

@@ -6,9 +6,14 @@ import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
+import com.playbridge.sender.cast.remote.RemoteQueueItem
+import com.playbridge.sender.cast.remote.RemoteQueueState
 import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.player.AutoPickPrefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -50,6 +55,17 @@ class ExternalQueueCoordinator(
         ADVANCING,
     }
 
+    private val _remoteQueue = MutableStateFlow<RemoteQueueState?>(null)
+    val remoteQueue: StateFlow<RemoteQueueState?> = _remoteQueue.asStateFlow()
+    private fun publishQueueLocked() {
+        val current = plan
+        _remoteQueue.value = current?.let {
+            RemoteQueueState(currentIndex = currentIndex, phoneOwned = true, items = it.items.mapIndexed { index, entry ->
+                val metadata = entry.template.visual_metadata
+                RemoteQueueItem(index, entry.template.title.orEmpty(), season = metadata?.season, episode = metadata?.episode, imdbId = metadata?.imdb_id, bingeGroup = current.bingeGroup, tmdbId = metadata?.tmdb_id)
+            })
+        }
+    }
     private var plan: TvEpisodeQueuePlan? = null
     private var currentIndex = 0
     private var phase = Phase.IDLE
@@ -99,6 +115,7 @@ class ExternalQueueCoordinator(
                 lastDur = 0L
                 advanceStartedAt = System.currentTimeMillis()
                 autoPick = AutoPickPrefs.fromContext(context)
+                publishQueueLocked()
             }
             Log.d(TAG, "Started: ${newPlan.items.size} episodes, start=${newPlan.startIndex}, bingeGroup=${newPlan.bingeGroup}")
             castSessionManager.playOnExternalFromQueue(
@@ -122,6 +139,7 @@ class ExternalQueueCoordinator(
         plan = null
         currentIndex = 0
         phase = Phase.IDLE
+        publishQueueLocked()
         lastPos = 0L
         lastDur = 0L
     }
@@ -191,6 +209,7 @@ class ExternalQueueCoordinator(
                 val stillCurrent = mutex.withLock {
                     if (plan !== p) return
                     currentIndex = next
+                    publishQueueLocked()
                     advanceStartedAt = System.currentTimeMillis() // resolution took time; re-arm timeout
                     true
                 }

@@ -119,6 +119,7 @@ class ConnectionViewModel(
 
     // --- Cast target state (owned by CastSessionManager so a cast survives this VM) ---
     val activeExternalDevice: StateFlow<TvDevice?> = castSessionManager.activeExternalDevice
+    val externalControlFailureVersion: StateFlow<Long> = castSessionManager.externalControlFailureVersion
     val externalStatus: StateFlow<PlaybackStatus?> = castSessionManager.externalStatus
     val externalMediaTitle: StateFlow<String?> = castSessionManager.externalMediaTitle
     val castSessionState = castSessionManager.sessionState

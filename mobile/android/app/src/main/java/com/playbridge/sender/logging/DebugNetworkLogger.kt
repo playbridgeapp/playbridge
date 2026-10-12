@@ -2,6 +2,8 @@ package com.playbridge.sender.logging
 
 import android.util.Log
 import com.playbridge.sender.BuildConfig
+import com.playbridge.shared.logging.redactLogText
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -29,11 +31,11 @@ object DebugNetworkLogger {
         headers: Map<String, String>?,
     ) {
         if (!BuildConfig.DEBUG) return
-        Log.d(LOGCAT_TAG, "[$tag] $label URL: $url")
+        Log.d(LOGCAT_TAG, "[$tag] $label URL: ${redactUrlForLog(url)}")
         val fields = headers.orEmpty()
         Log.d(LOGCAT_TAG, "[$tag] $label headers (${fields.size}):")
         fields.forEach { (name, value) ->
-            Log.d(LOGCAT_TAG, "[$tag] $label $name: $value")
+            Log.d(LOGCAT_TAG, redactLogText("[$tag] $label $name: $value"))
         }
     }
 
@@ -60,7 +62,7 @@ object DebugNetworkLogger {
         }.onFailure {
             Log.d(
                 LOGCAT_TAG,
-                "[$tag] Unable to decode outbound media command for debug logging: ${it.message}",
+                redactLogText("[$tag] Unable to decode outbound media command for debug logging: ${it.message}"),
             )
         }
     }

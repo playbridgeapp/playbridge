@@ -18,6 +18,8 @@ import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist as Media3HlsMedia
 import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist as Media3HlsMultivariantPlaylist
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser as Media3HlsPlaylistParser
 import com.playbridge.sender.BuildConfig
+import com.playbridge.shared.logging.redactLogText
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -529,7 +531,7 @@ object VideoDetector {
      * Debug builds only — never emit on release (see AGENTS.md logging rules).
      */
     private fun debugLog(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
+        if (BuildConfig.DEBUG) Log.d(TAG, redactLogText(message))
     }
 
     private val detectorDebugJson = Json {
@@ -552,8 +554,7 @@ object VideoDetector {
                 message.toString()
             }
         }
-        Log.d(TAG, "$label — payload:")
-        pretty.lineSequence().forEach { line ->
+        redactLogText(pretty).lineSequence().forEach { line ->
             if (line.isNotEmpty()) Log.d(TAG, line)
         }
     }
@@ -1422,7 +1423,7 @@ object VideoDetector {
                 // Avoid logging the stream URL in release; message alone is enough for failures.
                 Log.e(TAG, "Error fetching HLS qualities: ${e.message}")
                 if (BuildConfig.DEBUG) {
-                    Log.e(TAG, "HLS qualities URL was: ${video.url}")
+                    Log.e(TAG, "HLS qualities URL was: ${redactUrlForLog(video.url)}")
                 }
                 // Transport/parser exceptions are inconclusive, not proof the stream is invalid.
                 video.qualitiesChecked = false

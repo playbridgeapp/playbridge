@@ -876,7 +876,7 @@ object Components {
                     val tabId = jsonObject["tabId"]?.jsonPrimitive?.content
                     // Status-only in release; full URL only in debug builds.
                     if (BuildConfig.DEBUG) {
-                        Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for $url (Tab: $tabId)")
+                        Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for ${com.playbridge.shared.logging.redactUrlForLog(url)} (Tab: $tabId)")
                     } else {
                         Log.e(TAG, "HTTP ERROR detected via extension: $statusCode (Tab: $tabId)")
                     }

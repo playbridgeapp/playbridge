@@ -82,16 +82,16 @@ class RokuCastTarget(
         }
     }
 
-    override suspend fun play() {
-        sendKeypress("Play")
-    }
+    override suspend fun play() = play { true }
+    suspend fun play(current: () -> Boolean) { sendKeypress("Play", current) }
 
-    override suspend fun pause() {
-        sendKeypress("Pause")
-    }
+    override suspend fun pause() = pause { true }
+    suspend fun pause(current: () -> Boolean) { sendKeypress("Pause", current) }
 
-    override suspend fun stop() {
-        sendKeypress("Stop")
+    override suspend fun stop() = stop { true }
+    suspend fun stop(current: () -> Boolean) {
+        if (!current()) return
+        sendKeypress("Stop", current)
         stopPolling()
         _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
@@ -102,8 +102,9 @@ class RokuCastTarget(
 
     override suspend fun setVolume(percent: Int) = Unit
 
-    fun sendKeypress(key: String) {
+    fun sendKeypress(key: String, current: () -> Boolean = { true }) {
         scope.launch(Dispatchers.IO) {
+            if (!current()) return@launch
             client.sendKeypress(
                 host = device.ip,
                 port = device.port.takeIf { it > 0 } ?: 8060,

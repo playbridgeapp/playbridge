@@ -4,11 +4,16 @@ import android.util.Log
 import com.playbridge.sender.cast.MediaTrack
 import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.sender.cast.TvPlayerSettings
+import com.playbridge.sender.cast.remote.RemoteObservation
+import android.os.SystemClock
 import com.playbridge.sender.library.PlaylistEpisode
 import com.playbridge.sender.library.PlaylistUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
@@ -45,11 +50,37 @@ data class TvUserAgentState(
  * Coordinates WebSocket connection state parsing, TV playback updates, and command execution.
  * Extracts message processing out of BrowserActivity for better separation of concerns.
  */
-class ConnectionCoordinator(
-    private val webSocketClient: WebSocketClient,
-    private val scope: CoroutineScope
+class ConnectionCoordinator internal constructor(
+    private val messages: Flow<String>,
+    private val webSocketClient: WebSocketClient?,
+    private val scope: CoroutineScope,
+    private val clock: () -> Long,
 ) {
+    constructor(webSocketClient: WebSocketClient, scope: CoroutineScope) : this(
+        messages = webSocketClient.messages,
+        webSocketClient = webSocketClient,
+        scope = scope,
+        clock = { SystemClock.uptimeMillis() },
+    )
+
     private val TAG = "ConnectionCoordinator"
+
+    /** android.util.Log is not mocked in pure JVM unit tests. */
+    private fun logd(message: String) {
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // unit tests
+        }
+    }
+
+    private fun loge(message: String, error: Throwable) {
+        try {
+            Log.e(TAG, message, error)
+        } catch (_: RuntimeException) {
+            // unit tests
+        }
+    }
 
     // TV Playback & Playlist States synced from WebSocket
     val tvActiveContext = MutableStateFlow("idle")
@@ -59,6 +90,8 @@ class ConnectionCoordinator(
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
+    private val mutableRemoteObservation = MutableStateFlow(RemoteObservation())
+    val remoteObservation = mutableRemoteObservation.asStateFlow()
     private val pendingQueueCommands = ConcurrentHashMap<String, CompletableDeferred<QueueCommandResult>>()
     private val pendingLogRequests = ConcurrentHashMap<String, CompletableDeferred<TvLogsResult.Logs>>()
     
@@ -74,23 +107,45 @@ class ConnectionCoordinator(
     val nowPlayingSeason = MutableStateFlow<Int?>(null)
     val nowPlayingEpisodeStart = MutableStateFlow(1)
 
+    /**
+     * Player snapshots that arrived while the TV was not in the player (the paused
+     * player keeps broadcasting behind the browser). They are not shown until the
+     * context returns to "player". A new local playback session discards them.
+     */
+    private var heldPlayerSnapshots = HeldPlayerSnapshots()
+    // The phone starts idle, so a player snapshot that arrives before any context
+    // frame is held until the TV actually reports "player".
+    private var holdingPlayerSnapshots = true
+
     init {
         startListening()
     }
 
     private fun startListening() {
         scope.launch {
-            webSocketClient.messages.collect { message ->
+            messages.collect { message ->
                 try {
                     val json = org.json.JSONObject(message)
                     when (json.optString("type")) {
                         "context" -> {
                             val active = json.optString("active", "idle")
+                            val previous = tvActiveContext.value
+                            // Publish the new context before clearing so watch-progress
+                            // sees a non-player surface and does not judge the old item.
                             tvActiveContext.value = active
-                            Log.d(TAG, "TV Active Context updated: $active")
-                            // Clear playlist and playback states when TV goes idle
-                            if (active == "idle") {
+                            mutableRemoteObservation.update { it.copy(contextSequence = it.contextSequence + 1L) }
+                            logd("TV Active Context updated: $active")
+                            // Idle always drops the player snapshots. So does every other
+                            // exit from the player. Repeating the same context does not.
+                            if (active == "idle" || (previous == "player" && active != "player")) {
                                 clearPlayerStates()
+                                heldPlayerSnapshots = HeldPlayerSnapshots()
+                            }
+                            if (active == "player") {
+                                holdingPlayerSnapshots = false
+                                applyHeldPlayerSnapshots()
+                            } else {
+                                holdingPlayerSnapshots = true
                             }
                         }
                         "playlist_status" -> {
@@ -117,7 +172,7 @@ class ConnectionCoordinator(
                                     }
                                 }
                             }
-                            tvPlaylistState.value = PlaylistUiState(
+                            val playlist = PlaylistUiState(
                                 currentIndex = json.optInt("currentIndex", 0),
                                 totalCount = json.optInt("totalCount", 0),
                                 items = episodes,
@@ -125,11 +180,19 @@ class ConnectionCoordinator(
                                 queueRevision = json.optLong("queueRevision", 0),
                                 currentItemId = json.optString("currentItemId", "").ifEmpty { null },
                             )
-                            Log.d(
-                                TAG,
-                                "TV playlist_status index=${json.optInt("currentIndex", 0)} " +
-                                    "total=${json.optInt("totalCount", 0)} items=${episodes.size}",
-                            )
+                            if (holdingPlayerSnapshots) {
+                                heldPlayerSnapshots.playlist = playlist
+                                logd(
+                                    "TV playlist_status held while context=${tvActiveContext.value} " +
+                                        "index=${playlist.currentIndex} total=${playlist.totalCount} items=${episodes.size}",
+                                )
+                            } else {
+                                tvPlaylistState.value = playlist
+                                logd(
+                                    "TV playlist_status index=${playlist.currentIndex} " +
+                                        "total=${playlist.totalCount} items=${episodes.size}",
+                                )
+                            }
                         }
                         "status" -> {
                             // Perf: dedupe identical ticks — the TV status cadence (~1/s)
@@ -145,7 +208,25 @@ class ConnectionCoordinator(
                                     .takeIf { it in setOf("video", "audio", "image") }
                                     ?: "video",
                             )
-                            if (next != tvPlayback.value) tvPlayback.value = next
+                            // Player status carries mediaKind, playbackId, or currentItemId
+                            // (createStatusJson). Browser status never does: active frames add
+                            // title, muted, and suppressUnmute; idle frames are only
+                            // type/state/position/duration. Hold the player frame so the
+                            // paused player behind the browser cannot repaint the card.
+                            if (isBrowserSurface(tvActiveContext.value) && isPlayerOwnedStatus(json)) {
+                                heldPlayerSnapshots.playback = next
+                            } else {
+                                val mediaChanged = tvPlayback.value?.let { it.title != next.title || it.mediaKind != next.mediaKind } == true
+                                if (next != tvPlayback.value) tvPlayback.value = next
+                                mutableRemoteObservation.update { previous ->
+                                    previous.copy(
+                                        playbackSequence = previous.playbackSequence + 1L,
+                                        mediaGeneration = previous.mediaGeneration + if (mediaChanged) 1L else 0L,
+                                        playbackAtMs = clock(),
+                                        browserMuted = if (json.has("muted")) json.optBoolean("muted") else null,
+                                    )
+                                }
+                            }
                         }
                         "command_result" -> {
                             val requestId = json.optString("requestId", "")
@@ -187,17 +268,27 @@ class ConnectionCoordinator(
                                         }
                                     }
                                 }
-                            tvVideoTracks.value = parseTracks(json.optJSONArray("video"))
-                            tvAudioTracks.value = parseTracks(json.optJSONArray("audio"))
-                            tvSubtitleTracks.value = parseTracks(json.optJSONArray("subtitle"))
-                            Log.d(TAG, "TV Audio/Subtitle tracks updated")
+                            val video = parseTracks(json.optJSONArray("video"))
+                            val audio = parseTracks(json.optJSONArray("audio"))
+                            val subtitles = parseTracks(json.optJSONArray("subtitle"))
+                            if (holdingPlayerSnapshots) {
+                                heldPlayerSnapshots.videoTracks = video
+                                heldPlayerSnapshots.audioTracks = audio
+                                heldPlayerSnapshots.subtitleTracks = subtitles
+                                logd("TV Audio/Subtitle tracks held while context=${tvActiveContext.value}")
+                            } else {
+                                tvVideoTracks.value = video
+                                tvAudioTracks.value = audio
+                                tvSubtitleTracks.value = subtitles
+                                logd("TV Audio/Subtitle tracks updated")
+                            }
                         }
                         "user_scripts" -> {
                             val arr = json.optJSONArray("names")
                             installedUserScripts.value = buildList {
                                 if (arr != null) for (i in 0 until arr.length()) add(arr.optString(i))
                             }
-                            Log.d(TAG, "TV user scripts: ${installedUserScripts.value}")
+                            logd("TV user scripts: ${installedUserScripts.value}")
                         }
                         "user_agents" -> {
                             val active = json.optString("active", "")
@@ -211,10 +302,10 @@ class ConnectionCoordinator(
                                 }
                             }
                             tvUserAgentState.value = TvUserAgentState(active, entries)
-                            Log.d(TAG, "TV user agents updated: active=$active, ${entries.size} saved")
+                            logd("TV user agents updated: active=$active, ${entries.size} saved")
                         }
                         "player_settings" -> {
-                            tvPlayerSettings.value = TvPlayerSettings(
+                            val settings = TvPlayerSettings(
                                 speed = json.optDouble("speed", 1.0).toFloat(),
                                 scaling = json.optString("scaling", "Fit"),
                                 audioBoost = json.optBoolean("audioBoost", false),
@@ -229,11 +320,26 @@ class ConnectionCoordinator(
                                 audioBoostAvailable = json.optBoolean("audioBoostAvailable", true),
                                 qualityAvailable = json.optBoolean("qualityAvailable", false),
                             )
-                            Log.d(TAG, "TV Player settings updated")
+                            val fields = json.keys().asSequence().toSet()
+                            if (holdingPlayerSnapshots) {
+                                heldPlayerSnapshots.settings = settings
+                                heldPlayerSnapshots.settingsFields = fields
+                                logd("TV Player settings held while context=${tvActiveContext.value}")
+                            } else {
+                                tvPlayerSettings.value = settings
+                                logd("TV Player settings updated")
+                                mutableRemoteObservation.update { it.copy(settingsReported = true, settingsFields = fields) }
+                            }
                         }
                     }
+                    val type = json.optString("type")
+                    val heldPlayerStatus = type == "status" && isBrowserSurface(tvActiveContext.value) && isPlayerOwnedStatus(json)
+                    val heldPlayerSnapshot = holdingPlayerSnapshots && type in setOf("playlist_status", "tracks", "player_settings")
+                    if (!heldPlayerStatus && !heldPlayerSnapshot && type in setOf("context", "playlist_status", "status", "tracks", "player_settings")) {
+                        mutableRemoteObservation.update { it.copy(sequence = it.sequence + 1L, atMs = clock()) }
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing WebSocket message: ${e.message}", e)
+                    loge("Error parsing WebSocket message: ${e.message}", e)
                 }
             }
         }
@@ -241,10 +347,11 @@ class ConnectionCoordinator(
 
     /** TV logs travel only over the authenticated connection, answered to this phone alone. */
     suspend fun requestTvLogs(clear: Boolean, timeoutMs: Long = 20_000L): TvLogsResult {
-        if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+        val client = webSocketClient ?: return TvLogsResult.Unavailable
+        if (client.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
             return TvLogsResult.Unavailable
         }
-        if ("diagnostic_logs_v1" !in webSocketClient.tvCapabilitiesState.value.features) {
+        if ("diagnostic_logs_v1" !in client.tvCapabilitiesState.value.features) {
             return TvLogsResult.Unsupported
         }
         val requestId = java.util.UUID.randomUUID().toString()
@@ -256,7 +363,7 @@ class ConnectionCoordinator(
             } else {
                 com.playbridge.shared.protocol.createLogsQueryJson(requestId)
             }
-            if (!webSocketClient.send(message)) return TvLogsResult.Unavailable
+            if (!client.send(message)) return TvLogsResult.Unavailable
             withTimeoutOrNull(timeoutMs) { deferred.await() } ?: TvLogsResult.Unavailable
         } finally {
             pendingLogRequests.remove(requestId, deferred)
@@ -268,12 +375,13 @@ class ConnectionCoordinator(
         command: String,
         timeoutMs: Long = 8_000L,
     ): QueueCommandResult? {
+        val client = webSocketClient ?: return null
         val deferred = CompletableDeferred<QueueCommandResult>()
         check(pendingQueueCommands.putIfAbsent(requestId, deferred) == null) {
             "duplicate queue request id"
         }
         return try {
-            if (!webSocketClient.send(command)) return null
+            if (!client.send(command)) return null
             withTimeoutOrNull(timeoutMs) { deferred.await() }
         } finally {
             pendingQueueCommands.remove(requestId, deferred)
@@ -293,6 +401,9 @@ class ConnectionCoordinator(
         nowPlayingSeason.value = season
         nowPlayingEpisodeStart.value = episodeStart ?: 1
         clearPlaybackSnapshots()
+        // The paused player behind the browser must not become this new session.
+        heldPlayerSnapshots = HeldPlayerSnapshots()
+        holdingPlayerSnapshots = false
         tvActiveContext.value = "player"
     }
 
@@ -300,6 +411,7 @@ class ConnectionCoordinator(
     fun clearPlaybackSnapshots() {
         tvPlayback.value = null
         tvPlaylistState.value = null
+        mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L) }
     }
 
     /**
@@ -311,6 +423,28 @@ class ConnectionCoordinator(
         tvActiveContext.value = "idle"
     }
 
+    private fun applyHeldPlayerSnapshots() {
+        val held = heldPlayerSnapshots
+        heldPlayerSnapshots = HeldPlayerSnapshots()
+        if (held.playlist == null && held.playback == null && held.videoTracks == null &&
+            held.audioTracks == null && held.subtitleTracks == null && held.settings == null) return
+        held.playlist?.let { tvPlaylistState.value = it }
+        held.playback?.let { tvPlayback.value = it }
+        held.videoTracks?.let { tvVideoTracks.value = it }
+        held.audioTracks?.let { tvAudioTracks.value = it }
+        held.subtitleTracks?.let { tvSubtitleTracks.value = it }
+        held.settings?.let { tvPlayerSettings.value = it }
+        mutableRemoteObservation.update { previous ->
+            previous.copy(
+                playbackSequence = previous.playbackSequence + if (held.playback != null) 1L else 0L,
+                playbackAtMs = if (held.playback != null) clock() else previous.playbackAtMs,
+                mediaGeneration = previous.mediaGeneration + if (held.playback != null || held.playlist != null) 1L else 0L,
+                settingsReported = held.settings != null || previous.settingsReported,
+                settingsFields = held.settingsFields ?: previous.settingsFields,
+            )
+        }
+    }
+
     private fun clearPlayerStates() {
         tvPlaylistState.value = null
         tvPlayback.value = null
@@ -318,9 +452,33 @@ class ConnectionCoordinator(
         tvAudioTracks.value = emptyList()
         tvSubtitleTracks.value = emptyList()
         tvPlayerSettings.value = TvPlayerSettings()
+        mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L, settingsReported = false, settingsFields = emptySet(), browserMuted = null) }
         nowPlayingTvId.value = null
         nowPlayingSeason.value = null
         nowPlayingEpisodeStart.value = 1
-        Log.d(TAG, "TV Player states cleared as TV is idle")
+        logd("TV player snapshots cleared")
     }
+
+    /**
+     * Player `status` is [com.playbridge.shared.protocol.createStatusJson]: it includes
+     * `mediaKind`, `playbackId`, and/or `currentItemId` whenever the player has them.
+     * Browser status never has those keys (title, muted, and suppressUnmute, or an idle
+     * frame of type/state/position/duration). `optString("mediaKind", "video")` is not a
+     * discriminator — the default fills in when the key is absent.
+     */
+    private fun isPlayerOwnedStatus(json: org.json.JSONObject): Boolean =
+        json.has("mediaKind") || json.has("playbackId") || json.has("currentItemId")
+
+    private fun isBrowserSurface(active: String): Boolean =
+        active == "browser" || active == "browser_external"
+
+    private data class HeldPlayerSnapshots(
+        var playlist: PlaylistUiState? = null,
+        var playback: TvPlaybackStatus? = null,
+        var videoTracks: List<MediaTrack>? = null,
+        var audioTracks: List<MediaTrack>? = null,
+        var subtitleTracks: List<MediaTrack>? = null,
+        var settings: TvPlayerSettings? = null,
+        var settingsFields: Set<String>? = null,
+    )
 }

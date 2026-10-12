@@ -1,5 +1,8 @@
 package com.playbridge.sender.browser
 
+import com.playbridge.sender.cast.remote.ui.UserScriptsSheet
+import com.playbridge.sender.cast.remote.ui.TvUserAgentSheet
+
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
@@ -1011,220 +1014,32 @@ fun AppNavHost(
                 }
                 Screen.Remote -> {
                     BackHandler(onBack = onRemoteBack)
-                    // Perf: high-frequency TV tickers collected locally so per-second
-                    // position updates recompose only this branch, not the whole host.
-                    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
-                    val tvPlaylistState by connectionCoordinator.tvPlaylistState.collectAsStateWithLifecycle()
-                    val tvPlayback by connectionCoordinator.tvPlayback.collectAsStateWithLifecycle()
-                    val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsStateWithLifecycle()
-                    val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsStateWithLifecycle()
-                    val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsStateWithLifecycle()
-                    val detectorRevision = VideoDetector.processingVersion
-                    val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsStateWithLifecycle()
-                    val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
-                    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
-                    val external = activeExternalDevice
-                    val remoteTimeline = resolveRemoteTimeline(
-                        activeContext = tvActiveContext,
-                        playback = tvPlayback,
-                        playerSettings = tvPlayerSettings,
-                    )
-                    val externalCapabilities by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
-                    if (external != null) {
-                        RemoteControlScreen(
-                            activeContext = "player",
-                            onBack = onRemoteBack,
-                            linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
-                            onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
-                            onRemoteKey = { key ->
-                                when {
-                                    key == "volume_up" -> connectionViewModel.externalAdjustVolume(true)
-                                    key == "volume_down" -> connectionViewModel.externalAdjustVolume(false)
-                                    external.resolvedProtocol == com.playbridge.sender.model.CastProtocol.ROKU ->
-                                        connectionViewModel.rokuKeypress(key)
-                                }
-                            },
-                            onMouseMove = { _, _ -> },
-                            onMouseClick = {},
-                            onMouseScroll = { _, _ -> },
-                            onPlayerControl = { cmd ->
-                                when (cmd) {
-                                    "play" -> connectionViewModel.externalPlay()
-                                    "pause" -> connectionViewModel.externalPause()
-                                    "stop" -> connectionViewModel.externalStop()
-                                    "seek_back" -> connectionViewModel.externalSeek(
-                                        ((externalStatus?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L),
-                                    )
-                                    "seek_forward" -> connectionViewModel.externalSeek(
-                                        (externalStatus?.positionMs ?: 0L) + 10_000L,
-                                    )
-                                }
-                            },
-                            playbackState = when (externalStatus?.state) {
-                                PlaybackState.PLAYING -> "playing"
-                                PlaybackState.BUFFERING -> "buffering"
-                                PlaybackState.PAUSED -> "paused"
-                                else -> "paused"
-                            },
-                            externalProtocolLabel = external.resolvedProtocol.displayName,
-                            externalCapabilities = externalCapabilities.capabilities,
-                            isLive = externalStatus?.isLive == true,
-                            positionMs = externalStatus?.positionMs ?: 0L,
-                            durationMs = externalStatus?.durationMs ?: 0L,
-                            mediaTitle = externalMediaTitle ?: external.name,
-                            onSeekTo = { connectionViewModel.externalSeek(it) },
-                            tvName = external.name,
-                        )
-                    } else RemoteControlScreen(
-                        activeContext = tvActiveContext,
-                        playbackState = tvPlayback?.state,
-                        isLive = remoteTimeline.isLive,
-                        isSeekable = remoteTimeline.isSeekable,
-                        positionMs = tvPlayback?.positionMs ?: 0L,
-                        durationMs = tvPlayback?.durationMs ?: 0L,
-                        mediaTitle = tvPlayback?.title,
-                        mediaKind = tvPlayback?.mediaKind ?: "video",
-                        episodes = tvPlaylistState?.items ?: emptyList(),
-                        currentEpisodeIndex = tvPlaylistState?.currentIndex ?: 0,
-                        videoTracks = tvVideoTracks,
-                        audioTracks = tvAudioTracks,
-                        subtitleTracks = tvSubtitleTracks,
-                        detectedSubtitles = remember(remoteCastSourceTabId, remoteCastTitle, tvPlayback?.title, detectorRevision) {
-                            if (remoteCastSourceTabId != null && remoteCastTitle == tvPlayback?.title) {
+                    com.playbridge.sender.cast.remote.RemoteRoute(
+                        subtitleSourceKey = Triple(remoteCastSourceTabId, remoteCastTitle, VideoDetector.processingVersion),
+                        detectedSubtitles = { title ->
+                            if (remoteCastSourceTabId != null && remoteCastTitle == title) {
                                 VideoDetector.getVideosForTab(remoteCastSourceTabId).filter { it.isSubtitle }
                             } else emptyList()
                         },
-                        onSeekTo = { positionMs ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("seek_to:$positionMs"))
-                        },
-                        onJumpToEpisode = { index ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistJumpCommandJson(index))
-                        },
-                        onSelectAudio = { id ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_track:$id"))
-                        },
-                        onSelectSubtitle = { id ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_track:$id"))
-                        },
-                        onSetVideoQuality = { maxHeight ->
-                            val value = maxHeight.takeIf { it > 0 }?.toString() ?: "auto"
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("video_quality:$value"))
-                        },
-                        playerSettings = tvPlayerSettings,
-                        onSetSpeed = { speed ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("speed:$speed"))
-                        },
-                        onSetScaling = { mode ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("scaling:$mode"))
-                        },
-                        onToggleAudioBoost = {
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("audio_boost"))
-                        },
-                        onAdjustSubtitleOffset = { delta ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_offset:$delta"))
-                        },
-                        onSwitchEngine = { engineId ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("switch_player:$engineId"))
-                        },
-                        onAddSubtitleUrl = { url ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:$url"))
-                        },
-                        onAddSubtitleResource = { resource ->
-                            val features = connectionViewModel.webSocketClient.tvCapabilitiesState.value.features
-                            when {
-                                connectionState !is WebSocketClient.ConnectionState.Connected -> false
-                                "subtitle_resource_add_v1" in features -> {
-                                    val requestId = java.util.UUID.randomUUID().toString()
-                                    scope.launch {
-                                        val result = connectionCoordinator.sendConfirmedQueueCommand(
-                                            requestId,
-                                            com.playbridge.shared.protocol.createAddSubtitleCommandJson(
-                                                resource, requestId,
-                                            ),
-                                            timeoutMs = 30_000L,
-                                        )
-                                        if (result?.ok != true) {
-                                            val message = when (result?.error) {
-                                                "no_active_playback" -> "No video is playing on the TV"
-                                                "invalid_command" -> "The TV rejected this subtitle"
-                                                "subtitle_unavailable" -> "The TV could not load this subtitle"
-                                                else -> "The TV did not confirm the subtitle"
-                                            }
-                                            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                    true
+                        onEffect = { effect ->
+                            when (effect) {
+                                is com.playbridge.sender.cast.remote.RemoteEffect.Navigate -> when (effect.destination) {
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Origin -> onRemoteBack()
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Connections -> showDevicePicker = true
                                 }
-                                resource.headers.isEmpty() ->
-                                    connectionViewModel.webSocketClient.send(
-                                        com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:${resource.url}")
-                                    )
-                                else -> false
+                                is com.playbridge.sender.cast.remote.RemoteEffect.OpenManager -> when (effect.manager) {
+                                    com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserScripts -> showUserScripts = true
+                                    com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserAgent -> showTvUserAgent = true
+                                }
+                                com.playbridge.sender.cast.remote.RemoteEffect.UnlinkWebsite -> linkedPageCastCoordinator.unlink("unlinked")
+                                com.playbridge.sender.cast.remote.RemoteEffect.RetryConnection -> {
+                                    if (castRoute is CastSessionManager.Route.External || tvDevice == null) {
+                                        showDevicePicker = true
+                                    } else tvDevice?.let { connectionViewModel.connect(it) }
+                                }
+                                is com.playbridge.sender.cast.remote.RemoteEffect.Notice -> if (effect.subtitle) Toast.makeText(appContext, effect.message, Toast.LENGTH_LONG).show()
                             }
                         },
-                        onBack = onRemoteBack,
-                        linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
-                        onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
-                        onRemoteKey = { key ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
-                        },
-                        onMouseMove = { dx, dy ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("move", dx, dy)
-                        },
-                        onMouseClick = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("click", 0f, 0f)
-                        },
-                        onMouseScroll = { dx, dy ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("scroll", dx, dy)
-                        },
-                        onPinchZoom = { factor ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("zoom", factor, 0f)
-                        },
-                        onRotateImage = { degrees ->
-                            connectionViewModel.webSocketClient.sendMouseCommand("rotate", degrees, 0f)
-                        },
-                        onTransformAnchor = { x, y ->
-                            connectionViewModel.webSocketClient.sendMouseCommand(
-                                "transform_anchor",
-                                x,
-                                y,
-                            )
-                        },
-                        onResetZoom = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("reset", 0f, 0f)
-                        },
-                        onMouseDown = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)
-                        },
-                        onMouseUp = {
-                            connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
-                        },
-                        onPointerGestureEnd = {
-                            connectionViewModel.webSocketClient.endPointerGesture()
-                        },
-                        onBrowserControl = { action ->
-                            when (action) {
-                                // Phone-side actions: open a manager sheet and ask the TV for
-                                // its current state — not a browser command.
-                                "manage_user_scripts" -> {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createUserScriptQueryJson())
-                                    showUserScripts = true
-                                }
-                                "manage_user_agent" -> {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createUserAgentQueryJson())
-                                    showTvUserAgent = true
-                                }
-                                else -> connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createBrowserControlCommandJson(action))
-                            }
-                        },
-                        onPlayerControl = { command ->
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson(command))
-                            if (command == "stop") { connectionCoordinator.tvActiveContext.value = "idle" }
-                        },
-                        // Connected-device status pill (switching/disconnecting lives in the Library cast picker).
-                        tvName = activeExternalDevice?.name
-                            ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
-                        connectionState = connectionState
                     )
                 }
                 Screen.Home -> {
@@ -2076,216 +1891,4 @@ private fun NowPlayingBarHost(
         accentColor = accentColor,
         modifier = modifier,
     )
-}
-
-/**
- * Manage the user scripts installed on the TV: list them, remove one, or install another
- * from a file on the phone. The app ships no scripts — the user supplies the .js files.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun UserScriptsSheet(
-    scripts: List<String>,
-    onInstall: () -> Unit,
-    onRemove: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Text(
-            "User scripts on TV",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-        )
-        if (scripts.isEmpty()) {
-            Text(
-                "None installed.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-            )
-        } else {
-            scripts.forEach { name ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 24.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { onRemove(name) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Remove $name", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        TextButton(onClick = onInstall, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Install from file…")
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-/**
- * Manage the TV browser's User-Agent remotely: pick a built-in preset, reselect something
- * already saved on the TV, or add a new custom one. Mirrors [UserScriptsSheet]'s remote
- * pattern — the TV is the source of truth for [active]/[savedEntries]; this sheet just
- * sends `user_agent` messages and waits for the next `user_agents` reply to refresh.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TvUserAgentSheet(
-    active: String,
-    savedEntries: List<Pair<String, String>>,
-    onSelectDefault: () -> Unit,
-    onSelectPreset: (name: String, value: String) -> Unit,
-    onApplyNamed: (name: String, value: String) -> Unit,
-    onRemove: (name: String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var showAddDialog by remember { mutableStateOf(false) }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 16.dp)) {
-            Text(
-                "User Agent (TV Browser)",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 2.dp),
-            )
-            Text(
-                "Changes what sites think the TV's browser is.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            HorizontalDivider()
-
-            TvUserAgentRow(
-                label = "Default (Mobile)",
-                selected = active.isBlank(),
-                onClick = onSelectDefault,
-            )
-            com.playbridge.sender.browser.UserAgentPresets.presets
-                .filter { it.value != null }
-                .forEach { preset ->
-                    TvUserAgentRow(
-                        label = preset.label,
-                        selected = active == preset.label,
-                        onClick = { onSelectPreset(preset.label, preset.value!!) },
-                    )
-                }
-
-            if (savedEntries.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Saved on TV",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-                savedEntries.forEach { (name, value) ->
-                    TvUserAgentRow(
-                        label = name,
-                        selected = active == name,
-                        onClick = { onApplyNamed(name, value) },
-                        trailing = {
-                            IconButton(onClick = { onRemove(name) }, modifier = Modifier.size(32.dp)) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Remove $name",
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            TextButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Add custom user agent")
-            }
-        }
-    }
-
-    if (showAddDialog) {
-        var name by remember { mutableStateOf("") }
-        var value by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { Text("Add custom user agent") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Name") },
-                        placeholder = { Text("e.g. My Custom UA") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = value,
-                        onValueChange = { value = it },
-                        label = { Text("User agent string") },
-                        placeholder = { Text("Mozilla/5.0 (...) ...") },
-                        singleLine = false,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onApplyNamed(name.trim(), value.trim())
-                        showAddDialog = false
-                    },
-                    enabled = name.isNotBlank() && value.isNotBlank(),
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
-            },
-        )
-    }
-}
-
-@Composable
-private fun TvUserAgentRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (selected) {
-            Icon(
-                Icons.Default.Check,
-                contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        trailing?.invoke()
-    }
 }
