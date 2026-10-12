@@ -100,25 +100,19 @@ impl ControlSession {
             .await;
             let _ = terminal_tx.send(Some(error));
         });
+        // Own the task before awaiting readiness so dropping a connecting future
+        // (FFI cancellation or replacement) also closes the pending connection.
+        let session = Self {
+            commands: commands_tx,
+            state: state_rx,
+            terminal: terminal_rx,
+            task,
+        };
         match tokio::time::timeout(timeouts.handshake, ready_rx).await {
-            Ok(Ok(Ok(()))) => Ok(Self {
-                commands: commands_tx,
-                state: state_rx,
-                terminal: terminal_rx,
-                task,
-            }),
-            Ok(Ok(Err(error))) => {
-                task.abort();
-                Err(error)
-            }
-            Ok(Err(_)) => {
-                task.abort();
-                Err(AtvError::Closed)
-            }
-            Err(_) => {
-                task.abort();
-                Err(AtvError::Timeout)
-            }
+            Ok(Ok(Ok(()))) => Ok(session),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err(AtvError::Closed),
+            Err(_) => Err(AtvError::Timeout),
         }
     }
 

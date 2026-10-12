@@ -12,6 +12,7 @@ typedef struct DiscoveryScanner DiscoveryScanner;
 typedef struct CastSession CastSession;
 typedef struct SenderServices SenderServices;
 typedef struct ReceiverRuntime ReceiverRuntime;
+typedef struct AtvRemote AtvRemote;
 
 /* Increment when the stable C ABI or its JSON event contract changes. */
 uint32_t pb_cast_core_abi_version(void);
@@ -46,6 +47,62 @@ bool pb_session_submit_json(const CastSession *session, const char *command_json
 char *pb_session_next_json(const CastSession *session, uint64_t wait_ms);
 void pb_session_cancel(const CastSession *session);
 void pb_session_free(const CastSession *session);
+
+/*
+ * Android TV Remote v2 ABI v1 (independent of Cast/session/sender-services ABI).
+ * One pairing and one control session per handle. No network activity at start.
+ * All commands carry "command" and a nonempty string (<=128 bytes), number or
+ * bool "request_id". IDs are caller correlation tokens; never put secrets in IDs.
+ *
+ * Commands (additional fields):
+ * discover: timeout_ms (0 skips mDNS; capped at 60000).
+ * generate_identity: client_name.
+ * start_pairing: host, port? (6467), cert_pem, key_pem, client_name.
+ * finish_pairing: code. A failed finish consumes pairing; restart to retry.
+ * cancel_pairing: aborts a pending or started pairing only.
+ * connect: host, port? (6466), cert_pem, key_pem, pin_sha256_hex (64 hex chars).
+ * key: exactly one of code (Android enum) or name; direction defaults to
+ *      "short", also "start_long" and "end_long".
+ * volume: action "up"|"down"|"mute". text: text.
+ * launch_app: uri_or_package (packages become market://launch?id=...).
+ * power: short POWER key. disconnect: abort pending/active control only.
+ * A new start_pairing/connect replaces the previous session of that kind.
+ *
+ * Events: devices {devices}, identity {cert_pem,key_pem,fingerprint},
+ * pairing_started {server_name,fingerprint,mac}, paired
+ * {server_cert_der_b64,fingerprint,mac,server_name}, connected, state {state},
+ * operation {operation,ok:true}, error {kind,message}, closed {kind}.
+ * Each carries request_id; state/closed use the establishing connect ID.
+ * Fingerprints are lowercase SHA-256 of full certificate DER.
+ * State: is_on, volume_level/max (nullable), volume_muted, volume_revision,
+ * current_app/model/vendor (nullable). IME text, label and counters are excluded.
+ * State uses latest-value watch semantics; rapid pushes may coalesce.
+ * Error/closed kind: unreachable, tls_handshake, not_trusted, pin_mismatch,
+ * bad_code, protocol, timeout, closed. Errors never include command values.
+ * Successful key/volume/text/app/power operation means the frame was written,
+ * not that the TV executed it. Volume observations arrive through state events.
+ *
+ * submit is nonblocking: false for malformed JSON/ID, >1 MiB command, full
+ * command queue (32), or stopped worker. Invalid input also queues a protocol
+ * error if capacity permits (null request_id when unrecoverable).
+ * Events have capacity 64 with cancellable backpressure, as pb_session_*.
+ * Additional identity/discovery jobs are bounded to 32. Credentials are only
+ * returned by explicit identity/paired payloads; consumers must store them
+ * privately and must not log these payloads or submitted credential commands.
+ *
+ * next_json returns null on timeout/end (wait_ms=0 polls). Caller releases
+ * every returned string via pb_string_free. Calls may run on different threads;
+ * next_json consumers serialize. cancel/free never join a worker or wait on TV.
+ * cancel is terminal; later submits fail. Cancellation's closed event is best
+ * effort if full. Free exactly once, after all concurrent calls have ended.
+ * Null handles are accepted. A freed handle must never be reused.
+ */
+uint32_t pb_atv_abi_version(void);
+AtvRemote *pb_atv_start(void);
+bool pb_atv_submit_json(const AtvRemote *handle, const char *command_json);
+char *pb_atv_next_json(const AtvRemote *handle, uint64_t wait_ms);
+void pb_atv_cancel(const AtvRemote *handle);
+void pb_atv_free(const AtvRemote *handle);
 
 /*
  * Optional sender-services ABI. Build with `sender-services` (Desktop: reqwest

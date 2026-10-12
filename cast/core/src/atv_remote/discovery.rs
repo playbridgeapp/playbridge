@@ -37,6 +37,9 @@ pub async fn discover(timeout: Duration) -> Result<Vec<AtvDevice>, AtvError> {
     }
     let daemon = ServiceDaemon::new()
         .map_err(|error| AtvError::Unreachable(format!("mDNS browse failed: {error}")))?;
+    // FFI cancellation drops this future. Explicit shutdown is needed even
+    // when it never reaches the normal timeout/error cleanup below.
+    let _shutdown = DiscoveryShutdown(&daemon);
     let receiver = daemon
         .browse(SERVICE_TYPE)
         .map_err(|error| AtvError::Unreachable(format!("mDNS browse failed: {error}")))?;
@@ -73,8 +76,6 @@ pub async fn discover(timeout: Duration) -> Result<Vec<AtvDevice>, AtvError> {
             }
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
-                let _ = daemon.stop_browse(SERVICE_TYPE);
-                let _ = daemon.shutdown();
                 return Err(AtvError::Unreachable(format!(
                     "mDNS browse failed: {error}"
                 )));
@@ -82,11 +83,18 @@ pub async fn discover(timeout: Duration) -> Result<Vec<AtvDevice>, AtvError> {
             Err(_) => break,
         }
     }
-    let _ = daemon.stop_browse(SERVICE_TYPE);
-    let _ = daemon.shutdown();
     let mut devices: Vec<_> = found.into_values().collect();
     devices.sort_by(|left, right| left.name.cmp(&right.name).then(left.host.cmp(&right.host)));
     Ok(devices)
+}
+
+struct DiscoveryShutdown<'a>(&'a ServiceDaemon);
+
+impl Drop for DiscoveryShutdown<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.stop_browse(SERVICE_TYPE);
+        let _ = self.0.shutdown();
+    }
 }
 
 pub(crate) fn assemble_device(
