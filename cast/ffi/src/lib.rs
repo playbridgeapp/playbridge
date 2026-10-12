@@ -24,6 +24,10 @@ use serde_json::Value;
 
 uniffi::setup_scaffolding!();
 
+mod atv_remote;
+#[cfg(test)]
+mod atv_tests;
+
 #[cfg(test)]
 mod dlna_tests;
 mod receiver_runtime;

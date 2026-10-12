@@ -2300,6 +2300,7 @@ dependencies = [
  "uniffi",
  "url",
  "wiremock",
+ "x509-parser",
 ]
 
 [[package]]
