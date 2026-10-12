@@ -71,6 +71,7 @@ enum JsonLine<'a> {
     },
 }
 
+mod atv;
 mod credentials;
 mod google_cast;
 mod json_session;
@@ -82,6 +83,7 @@ mod ui;
 mod update;
 mod update_installer;
 
+use atv::run_atv;
 use google_cast::run_google_cast;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -101,6 +103,13 @@ impl RunError {
     fn failed() -> Self {
         Self {
             message: String::new(),
+            show_usage: false,
+        }
+    }
+
+    fn operation(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
             show_usage: false,
         }
     }
@@ -128,6 +137,8 @@ async fn main() -> ExitCode {
                 eprintln!("error: {}", error.message);
                 eprintln!();
                 eprintln!("{}", usage());
+            } else if !error.message.is_empty() {
+                eprintln!("error: {}", error.message);
             }
             ExitCode::from(2)
         }
@@ -406,6 +417,7 @@ async fn run(arguments: Vec<String>) -> Result<(), RunError> {
         "google-cast" | "googlecast" => run_google_cast(&arguments[1..])
             .await
             .map_err(RunError::from),
+        "atv" => run_atv(&arguments[1..]).await,
         "preferred" => {
             if let Some(sub) = arguments.get(1)
                 && sub == "clear"
@@ -916,6 +928,13 @@ Machine Commands:
   discover --json-lines             Stream discovery events
   google-cast status [options]      Query Google Cast status without launching
   google-cast launch [options]      Launch or join a Google Cast receiver
+  atv discover [--json]             List Android TV Remote v2 devices
+  atv pair <host>                   Pair with an Android TV; prompts for the code
+  atv status <host> [--json]        Print Android TV remote status
+  atv key <host> <KEY> [--long]     Send a remote key such as DPAD_UP or HOME
+  atv volume <host> up|down|mute    Send a volume key and print the TV volume
+  atv text <host> <text>            Type text into the focused field
+  atv app <host> <package|uri>      Launch an app; a package id is preferred
   config <path|check>               Locate or validate UI configuration
   config skip-history [on|off]      Show or change the cast history default
 
@@ -1154,6 +1173,23 @@ mod tests {
         let error = run(strings(&["send", "--json"])).await.unwrap_err();
         assert!(!error.show_usage);
         assert!(error.message.is_empty());
+    }
+
+    #[test]
+    fn usage_lists_android_tv_remote() {
+        assert!(usage().contains("atv pair <host>"));
+        assert!(usage().contains("google-cast status"));
+    }
+
+    #[tokio::test]
+    async fn atv_unknown_command_shows_usage() {
+        let error = run(strings(&["atv", "nope"])).await.unwrap_err();
+        assert!(error.show_usage);
+        assert!(
+            error
+                .message
+                .contains("discover|pair|status|key|volume|text|app")
+        );
     }
 
     #[tokio::test]

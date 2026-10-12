@@ -5,6 +5,7 @@
 //! concepts so a later production crate can expose them through multiple FFI
 //! frontends.
 
+pub mod atv_remote;
 pub mod browser;
 pub mod castv2;
 pub mod dial;
