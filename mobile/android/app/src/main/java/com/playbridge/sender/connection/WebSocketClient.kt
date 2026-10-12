@@ -1,6 +1,7 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
+import com.playbridge.sender.BuildConfig
 import com.playbridge.sender.cast.CastHistorySettings
 import com.playbridge.sender.cast.applyCastHistoryPreference
 import com.playbridge.sender.cast.proxy.NativePlaybackLeases
@@ -10,6 +11,7 @@ import com.playbridge.sender.diagnostics.isNativePlaybackStartCommand
 import com.playbridge.sender.history.CastReplayStore
 import com.playbridge.sender.history.replaySourceFromNativeCommand
 import com.playbridge.sender.logging.DebugNetworkLogger
+import com.playbridge.sender.logging.WireFrameLog
 import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createContextQueryJson
 import com.playbridge.shared.protocol.createPairingCommitJson
@@ -281,7 +283,7 @@ class WebSocketClient(
                                 deviceName = conn?.deviceName ?: "Android Phone",
                                 deviceUUID = conn?.deviceUUID ?: ""
                             )
-                            Log.d(TAG, "Sending pairing_commit: $json")
+                            logWireFrame("Sending", json)
                             webSocket.send(json)
                         } else {
                             // Reconnect with saved token.
@@ -303,7 +305,7 @@ class WebSocketClient(
                     Log.d(TAG, "Ignoring onMessage for stale socket")
                     return
                 }
-                Log.d(TAG, "Received: $text")
+                logWireFrame("Received", text)
 
                 // Route on the exact envelope `type` rather than substring matching, so a
                 // value that merely contains "pairing_approved" etc. can't be misrouted.
@@ -334,7 +336,7 @@ class WebSocketClient(
                             val sas = SasCrypto.generateSAS(sharedSecret, transcript)
                             calculatedSas = sas
 
-                            Log.d(TAG, "Calculated SAS: $sas. Sending reveal and prompting user...")
+                            Log.d(TAG, "Calculated SAS. Sending reveal and prompting user...")
 
                             val senderEphPubB64 = Base64.getEncoder().encodeToString(senderKeyPair!!.publicKey)
                             val nonceSB64 = Base64.getEncoder().encodeToString(nonceS!!)
@@ -562,7 +564,7 @@ class WebSocketClient(
                 val mac = Base64.getEncoder().encodeToString(macBytes)
 
                 val confirmationJson = createPairingConfirmationJson(mac)
-                Log.d(TAG, "Sending pairing_confirmation: $confirmationJson")
+                logWireFrame("Sending", confirmationJson)
                 ws.send(confirmationJson)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send confirmation", e)
@@ -626,6 +628,15 @@ class WebSocketClient(
             .build()
     }
 
+    /**
+     * Release logcat gets the envelope type and size. A debug build may also log the
+     * frame after URLs and auth-like fields are removed.
+     */
+    private fun logWireFrame(direction: String, frame: String) {
+        Log.d(TAG, "$direction ${WireFrameLog.summary(frame)}")
+        if (BuildConfig.DEBUG) Log.d(TAG, "$direction frame ${WireFrameLog.redact(frame)}")
+    }
+
     @Synchronized
     fun send(message: String): Boolean {
         val startsPlayback = isNativePlaybackStartCommand(message)
@@ -638,6 +649,7 @@ class WebSocketClient(
         val outgoing = applyCastHistoryPreference(
             message, castHistorySettings.preventHistory.value,
         )
+        logWireFrame("Sending", outgoing)
         DebugNetworkLogger.command(TAG, outgoing)
         val sent = playbackLeases.send(outgoing) {
             ws === webSocket && ws.send(outgoing)

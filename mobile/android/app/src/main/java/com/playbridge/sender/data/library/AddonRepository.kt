@@ -1,6 +1,7 @@
 package com.playbridge.sender.data.library
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import java.io.File
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
@@ -759,7 +760,7 @@ class AddonRepository(
             try {
                 val reqType = addon.mapToSupportedType(type)
                 val url = "${addon.baseUrl}/subtitles/$reqType/$id.json"
-                Log.d(TAG, "Fetching subtitles from ${addon.name}: $url")
+                Log.d(TAG, "Fetching subtitles from ${addon.name}: ${redactUrlForLog(url)}")
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
@@ -1135,7 +1136,7 @@ class AddonRepository(
                 if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                     url += "?src=${android.net.Uri.encode(forcedSource)}"
                 }
-                Log.d(TAG, "Fetching streams from ${addon.name}: $url")
+                Log.d(TAG, "Fetching streams from ${addon.name}: ${redactUrlForLog(url)}")
 
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()

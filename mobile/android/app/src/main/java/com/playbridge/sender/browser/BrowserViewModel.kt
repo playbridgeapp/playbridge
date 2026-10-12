@@ -2,6 +2,7 @@ package com.playbridge.sender.browser
 
 import android.app.Application
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.history.BookmarkDao
@@ -80,9 +81,9 @@ class BrowserViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 historyDao.insert(HistoryEntity(url = url, title = title ?: "Cast Video"))
-                Log.d(TAG, "Successfully logged history for url: $url")
+                Log.d(TAG, "Successfully logged history for url: ${redactUrlForLog(url)}")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to log history for url: $url", e)
+                Log.e(TAG, "Failed to log history for url: ${redactUrlForLog(url)}", e)
             }
         }
     }

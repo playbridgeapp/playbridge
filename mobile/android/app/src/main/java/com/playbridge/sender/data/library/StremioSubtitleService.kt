@@ -1,6 +1,7 @@
 package com.playbridge.sender.data.library
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -210,7 +211,7 @@ class StremioSubtitleService(
                     val subtitleResponse = json.decodeFromString<StremioStreamResponse>(body)
                     subtitleResponse.subtitles ?: subtitleResponse.streams ?: emptyList()
                 } else {
-                    Log.e(TAG, "Subtitle request failed: ${response.code} for $url")
+                    Log.e(TAG, "Subtitle request failed: ${response.code} for ${redactUrlForLog(url)}")
                     emptyList()
                 }
             } catch (e: Exception) {

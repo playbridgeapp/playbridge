@@ -2,6 +2,7 @@ package com.playbridge.sender.player
 
 import android.app.Activity
 import android.content.Context
+import com.playbridge.shared.logging.redactUrlForLog
 import androidx.core.net.toUri
 import androidx.core.graphics.createBitmap
 import android.content.Intent
@@ -171,12 +172,6 @@ private fun isPlaybackStuck(player: ExoPlayer, hasRenderedFrame: Boolean): Boole
         player.playWhenReady &&
         !player.isPlaying &&
         player.bufferedPosition > 500
-}
-
-private fun safeUrl(url: String): String {
-    val cut = url.indexOf('?').let { if (it < 0) url.length else it }
-    val base = url.substring(0, cut.coerceAtMost(180))
-    return if (url.length > cut) "$base?…" else base
 }
 
 /** TV-style audio recovery (discontinuity / decoder-init). Never mutes as first response. */
@@ -374,7 +369,7 @@ class PlayerActivity : ComponentActivity() {
         Log.i(
             PB_PLAYER,
             "start title=${title?.take(80)} mime=$contentType " +
-                "url=${url?.let { safeUrl(it) }}",
+                "url=${redactUrlForLog(url)}",
         )
 
         val exo = buildPlayer(this, headers)

@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import android.widget.EditText
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemGestures
@@ -362,13 +363,13 @@ fun SessionObserverSetup(
                 openInApp: Boolean,
                 response: Response?
             ) {
-                Log.d(TAG, "Download intercepted: $url, type: $contentType, file: $fileName")
+                Log.d(TAG, "Download intercepted: ${redactUrlForLog(url)}, type: $contentType, file: $fileName")
 
                 if (com.playbridge.sender.browser.isExtensionDownload(url, contentType, fileName)) {
                     Log.d(TAG, "Extension download requires native approval")
                     onXpiDetected(url)
                 } else if (url.endsWith(".torrent") || contentType == "application/x-bittorrent") {
-                    Log.d(TAG, ".torrent file detected: $url")
+                    Log.d(TAG, ".torrent file detected: ${redactUrlForLog(url)}")
                     scope.launch(Dispatchers.IO) {
                         try {
                             // Simple URL connection to download the small .torrent file into memory
@@ -384,7 +385,7 @@ fun SessionObserverSetup(
                     // Stash GeckoView's already-fetched stream (it carries the browser session,
                     // unlike our own re-fetch) so the engine can consume it directly for
                     // session-gated hosts like gofile.
-                    Log.d(TAG, "Download response present=${response != null} for $url")
+                    Log.d(TAG, "Download response present=${response != null} for ${redactUrlForLog(url)}")
                     response?.let { com.playbridge.sender.downloads.engine.BrowserResponseStore.put(url, it) }
                     scope.launch(Dispatchers.Main) {
                         if (pendingDownload.value?.url != url) {
