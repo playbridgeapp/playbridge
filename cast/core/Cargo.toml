@@ -25,7 +25,10 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 m3u8-rs = "6"
 mdns-sd = { version = "0.20", default-features = false, features = ["async"] }
+rcgen = "0.14"
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
+rand_core = "0.6"
+rsa = "0.9"
 rupnp = { version = "3", default-features = false, features = ["tokio"] }
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
@@ -34,7 +37,8 @@ sha2 = "0.10"
 socket2 = "0.6"
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+time = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 url = "2"
@@ -51,7 +55,6 @@ tokio-native-tls = "0.3"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
-rcgen = "0.14"
 wiremock = "0.6"
 
 [[example]]
