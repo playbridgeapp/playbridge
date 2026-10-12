@@ -38,6 +38,7 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val image = playback?.mediaKind == RemoteMediaKind.Image
     val audio = playback?.mediaKind == RemoteMediaKind.Audio
     val keys = state.capabilities.keys
+    val whole = state.capabilities.keyScope == ControlScope.WholeDevice
     val hasPad = state.hasPadRoute()
     val pointer = !external && (browser || player && image) && state.capabilities.pointer.move == Support.Supported
     val modes = buildList {
@@ -62,9 +63,12 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
         modes = modes, selectedMode = state.inputMode.takeIf { it in modes && it != RemoteInputMode.Keyboard } ?: defaultMode,
         showModeRow = modes.size > 1,
         nav = RemoteNavSpec(
-            enabled(RemoteKey.Back in keys && (!idle || external), "TV Back unavailable: no remote route"),
-            enabled(RemoteKey.Home in keys && (browser || external), "TV Home unavailable: no Home route; full TV control is coming later"),
-            enabled(!external && browser && state.capabilities.text.replace == Support.Supported, "Keys unavailable: text input requires the TV browser"),
+            enabled(RemoteKey.Back in keys && (!idle || external || whole), "TV Back unavailable: no remote route"),
+            enabled(RemoteKey.Home in keys && (browser || external || whole), "TV Home unavailable: no Home route; full TV control is coming later"),
+            enabled(
+                state.capabilities.text.replace == Support.Supported && ((!external && browser) || (whole && state.capabilities.text.delete == Support.Supported)),
+                "Keys unavailable: text input requires the TV browser",
+            ),
             enabled(state.capabilities.volume.adjust == Support.Supported, "TV volume unavailable: no volume route"),
         ),
         transport = RemoteTransportSpec(

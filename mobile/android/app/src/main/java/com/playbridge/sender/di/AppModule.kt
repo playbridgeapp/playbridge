@@ -21,9 +21,13 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
+import com.playbridge.sender.cast.atv.toAtvTarget
 import com.playbridge.sender.data.settings.SettingsRepository
 
 val appModule = module {
@@ -276,7 +280,33 @@ val appModule = module {
             get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
         )
     }
-    single<com.playbridge.sender.cast.remote.TvRemoteChannel> { com.playbridge.sender.cast.remote.UnavailableTvRemoteChannel() }
+    single {
+        com.playbridge.sender.cast.atv.AtvCredentialStore(
+            com.playbridge.sender.cast.atv.FilesAtvSecretFile(androidContext()),
+            com.playbridge.sender.cast.atv.AndroidAtvCipher(),
+        )
+    }
+    single<com.playbridge.sender.cast.atv.AtvControlSession> {
+        com.playbridge.sender.cast.atv.AtvRemoteClient(
+            com.playbridge.sender.cast.atv.RustAtvBoundary(),
+            CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        )
+    }
+    single {
+        val sessions = get<com.playbridge.sender.cast.CastSessionManager>()
+        val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val receivers = sessions.sessionState
+            .map { state -> state.device?.toAtvTarget() }
+            .stateIn(receiverScope, SharingStarted.Eagerly, sessions.sessionState.value.device?.toAtvTarget())
+        com.playbridge.sender.cast.atv.AtvTvRemoteChannel(
+            session = get(),
+            credentials = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+            receivers = receivers,
+        )
+    }
+    single<com.playbridge.sender.cast.remote.TvRemoteChannel> { get<com.playbridge.sender.cast.atv.AtvTvRemoteChannel>() }
+    single<com.playbridge.sender.cast.atv.AtvPairingController> { get<com.playbridge.sender.cast.atv.AtvTvRemoteChannel>() }
     single { com.playbridge.sender.cast.remote.RemoteInputRouter(get()) }
     single {
         com.playbridge.sender.cast.remote.RemoteControllerRegistry.create(
@@ -284,7 +314,15 @@ val appModule = module {
         )
     }
     single<com.playbridge.sender.cast.remote.RemoteQueueProgressSource> { com.playbridge.sender.cast.remote.LibraryRemoteQueueProgressSource(get(), get()) }
-    viewModel { com.playbridge.sender.cast.remote.RemoteViewModel(get(), get(), presentationPreferences = com.playbridge.sender.cast.remote.RemotePresentationPreferences(androidContext()), queueProgressSource = get()) }
+    viewModel {
+        com.playbridge.sender.cast.remote.RemoteViewModel(
+            get(),
+            get(),
+            presentationPreferences = com.playbridge.sender.cast.remote.RemotePresentationPreferences(androidContext()),
+            queueProgressSource = get(),
+            tvRemote = get(),
+        )
+    }
 
     // 6. ViewModels
     viewModel {

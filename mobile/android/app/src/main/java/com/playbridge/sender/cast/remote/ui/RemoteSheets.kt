@@ -744,7 +744,9 @@ internal fun RemoteSheets(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                 onButtonPad = { dispatch(RemoteAction.SetButtonPad(it)) },
                 onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
             )
-            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close)
+            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close, imeKeys = state.fullControl?.connected == true)
+            RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
+            RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
             RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close)
             RemoteSheet.Subtitles -> if (!image && !audio) SubtitlesBottomSheet(
                 tracks = state.tracks.subtitles.map { it.screenTrack() },

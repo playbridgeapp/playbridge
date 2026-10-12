@@ -5,6 +5,7 @@ import playbridge.SubtitleResource
 enum class RemoteKey(val wireValue: String) {
     Up("dpad_up"), Down("dpad_down"), Left("dpad_left"), Right("dpad_right"), Ok("dpad_center"),
     Back("back"), Home("home"), Enter("key_enter"), Delete("key_delete"), Mute("mute"), Power("power"),
+    Menu("menu"),
 }
 enum class BrowserAction(val wireValue: String) { Forward("forward"), Reload("refresh"), CycleSource("video_target_cycle"), Unmute("video_unmute") }
 enum class PlayerSetting { Quality, Speed, Scaling, AudioBoost, SubtitleOffset, Engine, Loop }
@@ -58,6 +59,8 @@ sealed interface RemoteAction {
     data object ManageUserAgent : RemoteAction
     data object UnlinkWebsite : RemoteAction
     data object RequestWholeTvControl : RemoteAction
+    data class LaunchTvApp(val packageId: String) : RemoteAction
+    data object PowerTv : RemoteAction
     data class SetTimeDisplay(val display: RemoteTimeDisplay) : RemoteAction
     data class SetButtonPad(val enabled: Boolean) : RemoteAction
     data class MarkGestureLearned(val gesture: String) : RemoteAction

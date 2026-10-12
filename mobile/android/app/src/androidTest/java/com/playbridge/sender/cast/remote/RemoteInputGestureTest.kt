@@ -28,7 +28,7 @@ import org.junit.Test
 class RemoteInputGestureTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun gesturePadTapSendsOkAndSwipeSendsOneArrow() {
+    @Test fun gesturePadTapSendsOkAndFastFortyDpSwipeSendsOneArrow() {
         val actions = mutableListOf<RemoteAction>()
         val (state, layout) = fixture(buttonPad = false, wholeDevice = true)
         compose.setContent {
@@ -41,8 +41,9 @@ class RemoteInputGestureTest {
         assertEquals(listOf(RemoteAction.Key(RemoteKey.Ok)), actions.toList())
 
         actions.clear()
+        val swipeDistance = with(compose.density) { 40.dp.toPx() }
         compose.onNodeWithTag("remote.gesturePad").performTouchInput {
-            swipe(center, Offset(center.x, center.y - 160f), durationMillis = 240)
+            swipe(center, Offset(center.x, center.y - swipeDistance), durationMillis = 40)
         }
         compose.waitForIdle()
         assertEquals(listOf(RemoteAction.Key(RemoteKey.Up)), actions.toList())

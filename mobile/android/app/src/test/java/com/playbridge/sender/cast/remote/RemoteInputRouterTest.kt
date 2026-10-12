@@ -22,6 +22,8 @@ class RemoteInputRouterTest {
         override suspend fun adjustVolume(steps: Int) = send(RemoteAction.AdjustVolume(steps))
         override suspend fun replaceText(text: String) = send(RemoteAction.ReplaceText(text))
         override suspend fun deleteText() = send(RemoteAction.DeleteText)
+        override suspend fun launchApp(packageId: String) = send(RemoteAction.LaunchTvApp(packageId))
+        override suspend fun power() = send(RemoteAction.PowerTv)
     }
     private val inputs = listOf(RemoteAction.Key(RemoteKey.Home), RemoteAction.AdjustVolume(1), RemoteAction.ReplaceText("hello"), RemoteAction.DeleteText)
 
@@ -60,5 +62,26 @@ class RemoteInputRouterTest {
         router.execute(controller, inputs[2])
         assertEquals(listOf(inputs[2]), controller.actions)
         assertEquals(inputs.take(2), channel.actions)
+    }
+    @Test fun launchPowerAndMenuStayOnTheChannelWhenMatched() = runTest {
+        val controller = CastController(); val channel = Channel(); val router = RemoteInputRouter(channel)
+        channel.state.value = channel.state.value.copy(keys = setOf(RemoteKey.Home, RemoteKey.Menu))
+        assertEquals(RemoteCommandResult.Submitted, router.execute(controller, RemoteAction.LaunchTvApp("com.google.android.youtube.tv")))
+        assertEquals(RemoteCommandResult.Submitted, router.execute(controller, RemoteAction.PowerTv))
+        assertEquals(RemoteCommandResult.Submitted, router.execute(controller, RemoteAction.Key(RemoteKey.Menu)))
+        assertEquals(listOf(RemoteAction.LaunchTvApp("com.google.android.youtube.tv"), RemoteAction.PowerTv, RemoteAction.Key(RemoteKey.Menu)), channel.actions)
+        assertTrue(controller.actions.isEmpty())
+        channel.result = RemoteCommandResult.Failed("Connection lost after submission")
+        assertEquals(channel.result, router.execute(controller, RemoteAction.LaunchTvApp("com.netflix.ninja")))
+        assertTrue(controller.actions.isEmpty())
+    }
+    @Test fun unmatchedLaunchAndPowerDoNotReachTheCastController() = runTest {
+        val controller = CastController(); val channel = Channel(); val router = RemoteInputRouter(channel)
+        channel.state.value = channel.state.value.copy(connected = false)
+        assertEquals(RemoteCommandResult.Unsupported("Full control is not connected"), router.execute(controller, RemoteAction.LaunchTvApp("com.google.android.youtube.tv")))
+        assertEquals(RemoteCommandResult.Unsupported("Full control is not connected"), router.execute(controller, RemoteAction.PowerTv))
+        assertEquals(RemoteCommandResult.Unsupported("Full control is not connected"), router.execute(controller, RemoteAction.Key(RemoteKey.Menu)))
+        assertTrue(controller.actions.isEmpty())
+        assertTrue(channel.actions.isEmpty())
     }
 }

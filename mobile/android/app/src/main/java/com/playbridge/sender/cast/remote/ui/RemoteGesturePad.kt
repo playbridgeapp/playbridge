@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -43,7 +44,6 @@ import com.playbridge.sender.cast.remote.input.PadGesturePolicy
 import com.playbridge.sender.cast.remote.input.PadStep
 import com.playbridge.sender.cast.remote.input.PadStepKind
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -64,7 +64,8 @@ internal fun RemoteGesturePad(
     val enabledState = rememberUpdatedState(enabled)
     val motion = rememberUpdatedState(LocalRemoteMotionPolicy.current)
     val clock = remember { GestureClock() }
-    val policy = remember { PadGesturePolicy(clock = { clock.now }) }
+    val density = LocalDensity.current.density
+    val policy = remember(density) { PadGesturePolicy.forDensity(clock = { clock.now }, density = density) }
     var flash by remember { mutableStateOf<PadDirection?>(null) }
     var flashNonce by remember { mutableIntStateOf(0) }
 
@@ -120,27 +121,25 @@ internal fun RemoteGesturePad(
                 if (!enabled) disabled()
                 customActions = actions
             }
-            .pointerInput(enabled) {
+            .pointerInput(enabled, policy) {
                 if (!enabled) return@pointerInput
                 coroutineScope {
-                    var flick: Job? = null
                     try {
                         awaitEachGesture {
-                            flick?.cancel()
                             val down = awaitFirstDown()
                             down.consume()
                             clock.observe(down.uptimeMillis)
                             policy.down(down.position.x, down.position.y)
                             val hold = launch {
                                 while (isActive) {
-                                    if (!policy.isArmed()) {
+                                    val deadline = policy.holdDeadline()
+                                    if (deadline == null) {
                                         delay(16)
                                         continue
                                     }
-                                    val deadline = policy.holdDeadline()
                                     val wait = deadline - clock.now
                                     if (wait > 0) delay(wait)
-                                    if (!isActive || !policy.isArmed()) continue
+                                    if (!isActive) continue
                                     clock.advanceTo(deadline)
                                     val steps = policy.tick()
                                     if (steps.isEmpty()) delay(16) else emit(steps)
@@ -161,23 +160,8 @@ internal fun RemoteGesturePad(
                             } finally {
                                 hold.cancel()
                             }
-                            flick = launch {
-                                while (isActive && policy.hasPendingFlick()) {
-                                    val deadline = policy.flickDeadline()
-                                    val wait = deadline - clock.now
-                                    if (wait > 0) {
-                                        delay(wait)
-                                        clock.advanceTo(deadline)
-                                    }
-                                    if (!isActive) break
-                                    val steps = policy.tick()
-                                    if (steps.isEmpty()) break
-                                    emit(steps)
-                                }
-                            }
                         }
                     } finally {
-                        flick?.cancel()
                         policy.cancel()
                     }
                 }
@@ -209,7 +193,7 @@ internal fun RemoteGesturePad(
     }
 }
 
-/** Event timestamps drive recognition. The hold and flick loops only move time forward to a deadline. */
+/** Event timestamps drive recognition. The hold loop only moves time forward to a deadline. */
 private class GestureClock {
     var now: Long = 0L
         private set

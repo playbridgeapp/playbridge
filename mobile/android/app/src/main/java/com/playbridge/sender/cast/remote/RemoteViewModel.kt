@@ -24,6 +24,7 @@ class RemoteViewModel(
     scope: CoroutineScope? = null,
     private val presentationPreferences: RemotePresentationPreferenceStore? = null,
     private val queueProgressSource: RemoteQueueProgressSource? = null,
+    private val tvRemote: TvRemoteChannel? = null,
 ) : ViewModel() {
     private val scope = scope ?: viewModelScope
     private val reducer = RemoteStateReducer(clock)
@@ -49,6 +50,13 @@ class RemoteViewModel(
                 }
             }
         }
+        tvRemote?.let { channel ->
+            this.scope.launch {
+                channel.state.collect { snapshot ->
+                    mutableState.value = reducer.applyChannel(snapshot)
+                }
+            }
+        }
         queueProgressSource?.let { source ->
             this.scope.launch {
                 state.map { it.queue.progressKeys() }.distinctUntilChanged().collectLatest { keys ->
@@ -61,8 +69,16 @@ class RemoteViewModel(
         }
     }
 
-    fun activate() { active = true }
+    fun activate() {
+        active = true
+        tvRemote?.setRemoteVisible(true)
+        tvRemote?.let { mutableState.value = reducer.applyChannel(it.state.value) }
+    }
     fun deactivate() {
+        tvRemote?.let { channel ->
+            channel.setRemoteVisible(false)
+            reducer.applyChannel(channel.state.value)
+        }
         val controller = registry.controller.value
         scope.launch(start = CoroutineStart.UNDISPATCHED) { controller?.execute(RemoteAction.PointerGestureEnd) }
         active = false

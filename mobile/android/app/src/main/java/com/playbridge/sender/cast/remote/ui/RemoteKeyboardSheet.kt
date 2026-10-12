@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteKey
+import com.playbridge.sender.cast.remote.atvKeyboardEdits
 
 /**
  * Keyboard sheet opened from nav ⌨:
@@ -55,10 +56,11 @@ import com.playbridge.sender.cast.remote.RemoteKey
 internal fun RemoteKeyboardSheet(
     dispatch: (RemoteAction) -> Unit,
     onDismiss: () -> Unit = { dispatch(RemoteAction.CloseSheet) },
+    imeKeys: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         RemoteDialogVolumeKeys()
-        KeyboardSheetContent(dispatch = dispatch)
+        KeyboardSheetContent(dispatch = dispatch, imeKeys = imeKeys)
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -66,13 +68,18 @@ internal fun RemoteKeyboardSheet(
 @Composable
 internal fun KeyboardSheetContent(
     dispatch: (RemoteAction) -> Unit,
+    imeKeys: Boolean = false,
 ) {
     var textFieldValue by remember { mutableStateOf(TextFieldValue("")) }
     var lastCommittedText by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
 
     fun commitText(newText: String) {
-        if (newText != lastCommittedText) {
+        if (newText == lastCommittedText) return
+        if (imeKeys) {
+            atvKeyboardEdits(lastCommittedText, newText).forEach(dispatch)
+            lastCommittedText = newText
+        } else {
             lastCommittedText = newText
             dispatch(RemoteAction.ReplaceText(newText))
         }
@@ -84,8 +91,13 @@ internal fun KeyboardSheetContent(
             val newLength = current.offsetByCodePoints(current.length, -1)
             val shortened = current.substring(0, newLength)
             textFieldValue = TextFieldValue(shortened, selection = TextRange(shortened.length))
-            commitText(shortened)
-            dispatch(RemoteAction.DeleteText)
+            if (imeKeys) {
+                lastCommittedText = shortened
+                dispatch(RemoteAction.DeleteText)
+            } else {
+                commitText(shortened)
+                dispatch(RemoteAction.DeleteText)
+            }
         }
     }
 

@@ -8,7 +8,7 @@ enum class RemoteInputMode { Context, Pad, Pointer, Keyboard }
 enum class RemoteMediaKind { Video, Audio, Image }
 enum class RemotePlaybackState { Idle, Playing, Paused, Buffering, Error, Unknown }
 enum class RemoteBrowserEngine { WebView, Gecko, Unknown }
-enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue, InputPreferences }
+enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue, InputPreferences, OpenTvApp }
 enum class RemoteTimeDisplay { Duration, Remaining }
 
 data class RemoteSessionId(val endpoint: EndpointKey, val generation: Long)
@@ -114,5 +114,6 @@ data class RemoteUiState(
     val linkedWebsite: LinkedWebsiteState? = null, val preferences: RemotePreferences = RemotePreferences(),
     val pending: RemotePendingState = RemotePendingState(), val sheet: RemoteSheet? = null,
     val notice: RemoteNotice? = null,
+    val fullControl: FullControlStatus? = null,
 )
 data class RemoteReceiverSnapshot(val state: RemoteUiState = RemoteUiState(), val observation: RemoteObservation = RemoteObservation())

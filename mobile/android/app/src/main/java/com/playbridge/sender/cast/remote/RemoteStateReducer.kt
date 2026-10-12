@@ -13,6 +13,9 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     private var sentAt = 0L
     /** Last fullscreen command the TV accepted. A receiver report replaces it; a null report does not. */
     private var localBrowserFullscreen = false
+    /** Receiver capabilities before the Full control overlay. Disconnect restores this snapshot. */
+    private var baseCapabilities = RemoteCapabilities()
+    private var channelState: TvRemoteChannelState? = null
 
     fun observe(snapshot: RemoteReceiverSnapshot): RemoteUiState {
         var incoming = snapshot.state
@@ -38,6 +41,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         val preferences = if (browserBecameActive) old.preferences.copy(modesByContext = old.preferences.modesByContext + (RemoteContext.Browser to RemoteInputMode.Context)) else old.preferences
         val inputMode = if (identityChanged || browserBecameActive) preferred else old.inputMode
         val progressKeys = incoming.queue.progressKeys().map(RemoteProgressKey::contentKey).toSet()
+        baseCapabilities = incoming.capabilities
         state = incoming.copy(
             inputMode = inputMode,
             preferences = preferences, sheet = if (reset || old.sheet == RemoteSheet.BrowserMore && inputMode != old.inputMode) null else old.sheet,
@@ -91,6 +95,10 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         val keys = state.queue.progressKeys().map(RemoteProgressKey::contentKey).toSet()
         state = state.copy(queueProgress = progress.filterKeys { it in keys })
         return state
+    }
+    fun applyChannel(channel: TvRemoteChannelState?): RemoteUiState {
+        channelState = channel
+        return display()
     }
     fun local(action: RemoteAction): RemoteUiState {
         state = when (action) {
@@ -153,6 +161,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
             pending = state.pending.copy(seek = optimistic.hasPendingSeek, playing = optimistic.hasPendingPlaying),
             browser = state.browser?.copy(fullscreen = showFullscreen),
         )
+        state = projectFullControl(state, baseCapabilities, channelState)
         return state
     }
 }

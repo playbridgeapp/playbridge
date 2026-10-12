@@ -23,6 +23,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -224,6 +226,48 @@ fun TVSettingsScreen(
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 modifier = Modifier.padding(horizontal = 0.dp)
             )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text("Paired TVs", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
+            val pairedTvs by atvCredentials.records.collectAsState()
+            var pendingForget by remember { mutableStateOf<com.playbridge.sender.cast.atv.AtvTvRecord?>(null) }
+            if (pairedTvs.isEmpty()) {
+                Text(
+                    "No paired TVs",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            pairedTvs.forEach { tv ->
+                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
+                ListItem(
+                    headlineContent = { Text(label) },
+                    trailingContent = {
+                        TextButton(
+                            onClick = { pendingForget = tv },
+                            modifier = Modifier.semantics { contentDescription = "Forget $label" },
+                        ) { Text("Forget") }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                )
+            }
+            pendingForget?.let { tv ->
+                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
+                AlertDialog(
+                    onDismissRequest = { pendingForget = null },
+                    title = { Text("Forget $label?") },
+                    text = { Text("PlayBridge will need a new pairing code to control this TV.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            atvCredentials.forget(tv.fingerprint)
+                            pendingForget = null
+                        }) { Text("Forget") }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingForget = null }) { Text("Cancel") } },
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
