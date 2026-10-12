@@ -36,6 +36,9 @@ import 'subtitle_delay.dart';
 import 'video_scaling.dart';
 import 'player_chrome_policy.dart';
 import 'player_control_visibility.dart';
+import 'player_mini_bar.dart';
+import 'playback_surface.dart'
+    show subtitleBottomFull, subtitleBottomHidden, subtitleBottomMini;
 import 'player_controller.dart';
 import 'player_surface_click.dart';
 import 'player_engine.dart';
@@ -244,8 +247,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   // switch; both mutate this notifier and the change is persisted via the store.
   late final ValueNotifier<bool> _showStats;
 
-  // Controls visibility: paused or pinned (menu / playlist / scrub).
-  bool _chromeVisible = false;
+  // Full while paused, not started, or pinned. Mini while playing.
+  // Fullscreen hides mini after the pointer stays still.
+  PlayerChromeMode _chromeMode = PlayerChromeMode.full;
+  Timer? _chromeIdleTimer;
+  bool _pointerIdle = false;
   int _menusOpen = 0;
   bool _playlistDrawerOpen = false;
   bool _scrubbing = false;
@@ -287,15 +293,47 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   (String?, int) get _currentItem => (_player.playbackId, _player.currentIndex);
   bool get _started => _startedItem == _currentItem;
 
+  bool _canHideChrome(bool playing) =>
+      _isFullScreen && playing && _started && !_chromePinned;
+
+  void _armChromeIdleTimer({bool? playing}) {
+    _chromeIdleTimer?.cancel();
+    if (!_canHideChrome(playing ?? _playing)) return;
+    _chromeIdleTimer = Timer(PlayerChromePolicy.fullscreenIdleDuration, () {
+      if (!mounted || !_canHideChrome(_playing)) return;
+      _pointerIdle = true;
+      _applyChrome();
+    });
+  }
+
+  void _onPlayerHover(PointerHoverEvent _) {
+    if (_pointerIdle) {
+      _pointerIdle = false;
+      _applyChrome();
+      return;
+    }
+    if (_canHideChrome(_playing)) _armChromeIdleTimer();
+  }
+
   void _applyChrome({bool? playing}) {
     if (!mounted) return;
-    final visible = PlayerChromePolicy.resolve(
-      playing: playing ?? _playing,
+    final playingNow = playing ?? _playing;
+    final canHide = _canHideChrome(playingNow);
+    if (!canHide) {
+      _chromeIdleTimer?.cancel();
+      _pointerIdle = false;
+    } else if (!_pointerIdle && !(_chromeIdleTimer?.isActive ?? false)) {
+      _armChromeIdleTimer(playing: playingNow);
+    }
+    final mode = PlayerChromePolicy.resolve(
+      playing: playingNow,
       pinned: _chromePinned,
       started: _started,
-    ).visible;
-    if (visible != _chromeVisible) {
-      setState(() => _chromeVisible = visible);
+      fullscreen: _isFullScreen,
+      pointerIdle: _pointerIdle,
+    ).mode;
+    if (mode != _chromeMode) {
+      setState(() => _chromeMode = mode);
     }
   }
 
@@ -777,12 +815,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   @override
   void onWindowEnterFullScreen() {
-    if (mounted) setState(() => _isFullScreen = true);
+    if (!mounted) return;
+    setState(() => _isFullScreen = true);
+    _applyChrome();
   }
 
   @override
   void onWindowLeaveFullScreen() {
-    if (mounted) setState(() => _isFullScreen = false);
+    if (!mounted) return;
+    setState(() => _isFullScreen = false);
+    _applyChrome();
   }
 
   Future<void> _toggleFullScreen() async {
@@ -1009,6 +1051,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   void dispose() {
     _memoryDiagnostics.dispose();
     _osdTimer?.cancel();
+    _chromeIdleTimer?.cancel();
     _keyboardFocusNode.dispose();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
@@ -1345,220 +1388,243 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                         onDragExited: (_) => setState(
                                             () => _mainDragging = false),
                                         onDragDone: _onMainDrop,
-                                        child: Stack(
-                                          fit: StackFit.expand,
-                                          children: [
-                                            // Video is always in the tree (Offstage) so
-                                            // mpv is never torn down on screen switch.
-                                            Positioned.fill(
-                                              child: Offstage(
-                                                offstage: !_showingVideo ||
-                                                    !hasMedia ||
-                                                    screenMirroring,
-                                                child: Container(
-                                                  color: Colors.black,
-                                                  child:
-                                                      MediaPresentationSurface(
-                                                    controller: _player,
-                                                    controlsVisible:
-                                                        _chromeVisible,
+                                        child: MouseRegion(
+                                          cursor: _chromeMode ==
+                                                  PlayerChromeMode.hidden
+                                              ? SystemMouseCursors.none
+                                              : MouseCursor.defer,
+                                          onHover: _showingVideo && hasMedia
+                                              ? _onPlayerHover
+                                              : null,
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              // Video is always in the tree (Offstage) so
+                                              // mpv is never torn down on screen switch.
+                                              Positioned.fill(
+                                                child: Offstage(
+                                                  offstage: !_showingVideo ||
+                                                      !hasMedia ||
+                                                      screenMirroring,
+                                                  child: Container(
+                                                    color: Colors.black,
+                                                    child:
+                                                        MediaPresentationSurface(
+                                                      controller: _player,
+                                                      subtitleBottomInset:
+                                                          switch (_chromeMode) {
+                                                        PlayerChromeMode.full =>
+                                                          subtitleBottomFull,
+                                                        PlayerChromeMode.mini =>
+                                                          subtitleBottomMini,
+                                                        PlayerChromeMode
+                                                              .hidden =>
+                                                          subtitleBottomHidden,
+                                                      },
+                                                    ),
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                            // Tap / double-tap video (not controls).
-                                            // Below overlays so buttons/menus keep hits.
-                                            if (_showingVideo && hasMedia)
-                                              Positioned.fill(
-                                                child: Listener(
-                                                  behavior: HitTestBehavior
-                                                      .translucent,
-                                                  onPointerDown: (event) {
-                                                    if (event.buttons !=
-                                                        kPrimaryButton) {
-                                                      return;
-                                                    }
-                                                    _onVideoSurfaceClick();
-                                                  },
-                                                  onPointerUp: (_) {
-                                                    if (!_fullScreenOnRelease) {
-                                                      return;
-                                                    }
-                                                    _fullScreenOnRelease =
-                                                        false;
-                                                    final entering =
-                                                        !_isFullScreen;
-                                                    unawaited(
-                                                        _toggleFullScreen());
-                                                    _showOsd(entering
-                                                        ? 'Fullscreen'
-                                                        : 'Windowed');
-                                                  },
-                                                  onPointerCancel: (_) =>
+                                              // Tap / double-tap video (not controls).
+                                              // Below overlays so buttons/menus keep hits.
+                                              if (_showingVideo && hasMedia)
+                                                Positioned.fill(
+                                                  child: Listener(
+                                                    behavior: HitTestBehavior
+                                                        .translucent,
+                                                    onPointerDown: (event) {
+                                                      if (event.buttons !=
+                                                          kPrimaryButton) {
+                                                        return;
+                                                      }
+                                                      _onVideoSurfaceClick();
+                                                    },
+                                                    onPointerUp: (_) {
+                                                      if (!_fullScreenOnRelease) {
+                                                        return;
+                                                      }
                                                       _fullScreenOnRelease =
-                                                          false,
+                                                          false;
+                                                      final entering =
+                                                          !_isFullScreen;
+                                                      unawaited(
+                                                          _toggleFullScreen());
+                                                      _showOsd(entering
+                                                          ? 'Fullscreen'
+                                                          : 'Windowed');
+                                                    },
+                                                    onPointerCancel: (_) =>
+                                                        _fullScreenOnRelease =
+                                                            false,
+                                                  ),
                                                 ),
-                                              ),
-                                            if (!_showingVideo &&
-                                                !screenMirroring)
-                                              Positioned.fill(
-                                                  child: _buildScreen()),
-                                            if (screenMirroring)
-                                              Positioned.fill(
-                                                child: ScreenMirrorSurface(
-                                                  receiver:
-                                                      _server.screenMirror,
+                                              if (!_showingVideo &&
+                                                  !screenMirroring)
+                                                Positioned.fill(
+                                                    child: _buildScreen()),
+                                              if (screenMirroring)
+                                                Positioned.fill(
+                                                  child: ScreenMirrorSurface(
+                                                    receiver:
+                                                        _server.screenMirror,
+                                                  ),
                                                 ),
-                                              ),
-                                            if (_showingVideo &&
-                                                hasMedia &&
-                                                _showStats.value &&
-                                                _player.currentMediaKind ==
-                                                    MediaKind.video &&
-                                                _player.engine is MpvEngine)
-                                              Positioned(
-                                                top: 16,
-                                                left: 16,
-                                                child: StatsOverlay(
-                                                  engine: _player.engine
-                                                      as MpvEngine,
-                                                  player: _player,
+                                              if (_showingVideo &&
+                                                  hasMedia &&
+                                                  _showStats.value &&
+                                                  _player.currentMediaKind ==
+                                                      MediaKind.video &&
+                                                  _player.engine is MpvEngine)
+                                                Positioned(
+                                                  top: 16,
+                                                  left: 16,
+                                                  child: StatsOverlay(
+                                                    engine: _player.engine
+                                                        as MpvEngine,
+                                                    player: _player,
+                                                  ),
                                                 ),
-                                              ),
-                                            if (_showingVideo && hasMedia)
-                                              Positioned(
-                                                left: 0,
-                                                right: 0,
-                                                bottom: 0,
-                                                child: _PlayerControlsBar(
-                                                  player: _player,
-                                                  store: widget.store,
-                                                  visible: _chromeVisible,
-                                                  showQueueControls: hasQueue,
-                                                  onTogglePlaylist: () {
-                                                    setState(() =>
-                                                        _playlistDrawerOpen =
-                                                            !_playlistDrawerOpen);
-                                                    _applyChrome();
+                                              if (_showingVideo && hasMedia)
+                                                Positioned(
+                                                  left: 0,
+                                                  right: 0,
+                                                  bottom: 0,
+                                                  child: _PlayerControlsBar(
+                                                    player: _player,
+                                                    store: widget.store,
+                                                    mode: _chromeMode,
+                                                    showQueueControls: hasQueue,
+                                                    onTogglePlaylist: () {
+                                                      setState(() =>
+                                                          _playlistDrawerOpen =
+                                                              !_playlistDrawerOpen);
+                                                      _applyChrome();
+                                                    },
+                                                    playlistOpen:
+                                                        _playlistDrawerOpen,
+                                                    onMenuOpened: () {
+                                                      setState(
+                                                          () => _menusOpen++);
+                                                      _applyChrome();
+                                                    },
+                                                    onMenuClosed: () {
+                                                      setState(
+                                                        () => _menusOpen =
+                                                            (_menusOpen - 1)
+                                                                .clamp(0, 99),
+                                                      );
+                                                      _applyChrome();
+                                                    },
+                                                    onScrubbing: (value) {
+                                                      _scrubbing = value;
+                                                      _applyChrome();
+                                                    },
+                                                    isFullScreen: _isFullScreen,
+                                                    onToggleFullScreen:
+                                                        _toggleFullScreen,
+                                                    onToggleProxy: () async {
+                                                      final wasProxied = _player
+                                                          .isCurrentItemProxied;
+                                                      final switched =
+                                                          await _player
+                                                              .toggleProxy();
+                                                      if (switched && mounted) {
+                                                        _showOsd(wasProxied
+                                                            ? 'Direct playback'
+                                                            : 'Proxied playback');
+                                                      }
+                                                    },
+                                                  ),
+                                                ),
+                                              if (_showingVideo &&
+                                                  hasQueue &&
+                                                  _playlistDrawerOpen)
+                                                Positioned(
+                                                  right: 0,
+                                                  top: 0,
+                                                  bottom: 0,
+                                                  width: 360,
+                                                  child: _PlaylistDrawer(
+                                                    player: _player,
+                                                    onClose: () {
+                                                      setState(() =>
+                                                          _playlistDrawerOpen =
+                                                              false);
+                                                      _applyChrome();
+                                                    },
+                                                  ),
+                                                ),
+                                              // Title scrim along the top. Full chrome only —
+                                              // the mini bar has no title.
+                                              if (_showingVideo && hasMedia)
+                                                Positioned(
+                                                  left: 0,
+                                                  right: 0,
+                                                  top: 0,
+                                                  child: _TitleOverlay(
+                                                    player: _player,
+                                                    visible: _chromeMode ==
+                                                        PlayerChromeMode.full,
+                                                  ),
+                                                ),
+                                              if (_showingVideo &&
+                                                  hasMedia &&
+                                                  _prePlayItem == null)
+                                                Positioned(
+                                                  right: 24,
+                                                  bottom: switch (_chromeMode) {
+                                                    PlayerChromeMode.full =>
+                                                      120,
+                                                    PlayerChromeMode.mini => 64,
+                                                    PlayerChromeMode.hidden =>
+                                                      28,
                                                   },
-                                                  playlistOpen:
-                                                      _playlistDrawerOpen,
-                                                  onMenuOpened: () {
-                                                    setState(
-                                                        () => _menusOpen++);
-                                                    _applyChrome();
-                                                  },
-                                                  onMenuClosed: () {
-                                                    setState(
-                                                      () => _menusOpen =
-                                                          (_menusOpen - 1)
-                                                              .clamp(0, 99),
-                                                    );
-                                                    _applyChrome();
-                                                  },
-                                                  onScrubbing: (value) {
-                                                    _scrubbing = value;
-                                                    _applyChrome();
-                                                  },
-                                                  isFullScreen: _isFullScreen,
-                                                  onToggleFullScreen:
-                                                      _toggleFullScreen,
-                                                  onToggleProxy: () async {
-                                                    final wasProxied = _player
-                                                        .isCurrentItemProxied;
-                                                    final switched =
-                                                        await _player
-                                                            .toggleProxy();
-                                                    if (switched && mounted) {
-                                                      _showOsd(wasProxied
-                                                          ? 'Direct playback'
-                                                          : 'Proxied playback');
-                                                    }
-                                                  },
+                                                  child: _SkipSegmentButton(
+                                                    player: _player,
+                                                    segments: _skipSegments,
+                                                    lastSkipped: _lastSkipped,
+                                                    autoPrefs: _skipAutoPrefs,
+                                                    onSkip: _performSkip,
+                                                  ),
                                                 ),
-                                              ),
-                                            if (_showingVideo &&
-                                                hasQueue &&
-                                                _playlistDrawerOpen)
-                                              Positioned(
-                                                right: 0,
-                                                top: 0,
-                                                bottom: 0,
-                                                width: 360,
-                                                child: _PlaylistDrawer(
-                                                  player: _player,
-                                                  onClose: () {
-                                                    setState(() =>
-                                                        _playlistDrawerOpen =
-                                                            false);
-                                                    _applyChrome();
-                                                  },
+                                              // Pre-play screen for casts with
+                                              // metadata; sits above everything.
+                                              if (_showingVideo &&
+                                                  _prePlayItem != null)
+                                                Positioned.fill(
+                                                  child: PrePlayOverlay(
+                                                    key: ValueKey(
+                                                        _prePlayItem!.url),
+                                                    item: _prePlayItem!,
+                                                    onStart: _dismissPrePlay,
+                                                  ),
                                                 ),
-                                              ),
-                                            // Title scrim along the top — same
-                                            // visibility as the controls bar, so
-                                            // the title is reachable in fullscreen.
-                                            if (_showingVideo && hasMedia)
-                                              Positioned(
-                                                left: 0,
-                                                right: 0,
-                                                top: 0,
-                                                child: _TitleOverlay(
-                                                  player: _player,
-                                                  visible: _chromeVisible,
+                                              if (_osdMessage != null)
+                                                PlaybackOsd(
+                                                    message: _osdMessage!),
+                                              if (_mainDragging)
+                                                Positioned.fill(
+                                                  child: _MainDropOverlay(
+                                                    targetName: _sender
+                                                            .isConnected
+                                                        ? _sender.activeTv?.name
+                                                        : null,
+                                                  ),
                                                 ),
-                                              ),
-                                            if (_showingVideo &&
-                                                hasMedia &&
-                                                _prePlayItem == null)
-                                              Positioned(
-                                                right: 24,
-                                                bottom: 120,
-                                                child: _SkipSegmentButton(
-                                                  player: _player,
-                                                  segments: _skipSegments,
-                                                  lastSkipped: _lastSkipped,
-                                                  autoPrefs: _skipAutoPrefs,
-                                                  onSkip: _performSkip,
+                                              if (_stillWatching.isPrompting)
+                                                Positioned.fill(
+                                                  child: StillWatchingPrompt(
+                                                    remainingSeconds:
+                                                        _stillWatching
+                                                            .remainingSeconds,
+                                                    title: _player.currentTitle,
+                                                    onContinue: () => unawaited(
+                                                        _stillWatching
+                                                            .continueWatching()),
+                                                  ),
                                                 ),
-                                              ),
-                                            // Pre-play screen for casts with
-                                            // metadata; sits above everything.
-                                            if (_showingVideo &&
-                                                _prePlayItem != null)
-                                              Positioned.fill(
-                                                child: PrePlayOverlay(
-                                                  key: ValueKey(
-                                                      _prePlayItem!.url),
-                                                  item: _prePlayItem!,
-                                                  onStart: _dismissPrePlay,
-                                                ),
-                                              ),
-                                            if (_osdMessage != null)
-                                              PlaybackOsd(
-                                                  message: _osdMessage!),
-                                            if (_mainDragging)
-                                              Positioned.fill(
-                                                child: _MainDropOverlay(
-                                                  targetName: _sender
-                                                          .isConnected
-                                                      ? _sender.activeTv?.name
-                                                      : null,
-                                                ),
-                                              ),
-                                            if (_stillWatching.isPrompting)
-                                              Positioned.fill(
-                                                child: StillWatchingPrompt(
-                                                  remainingSeconds:
-                                                      _stillWatching
-                                                          .remainingSeconds,
-                                                  title: _player.currentTitle,
-                                                  onContinue: () => unawaited(
-                                                      _stillWatching
-                                                          .continueWatching()),
-                                                ),
-                                              ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -2097,7 +2163,7 @@ class _PlayerControlsBar extends StatefulWidget {
   const _PlayerControlsBar({
     required this.player,
     required this.store,
-    required this.visible,
+    required this.mode,
     required this.showQueueControls,
     required this.onTogglePlaylist,
     required this.playlistOpen,
@@ -2111,7 +2177,7 @@ class _PlayerControlsBar extends StatefulWidget {
 
   final PlayerController player;
   final PairingStore store;
-  final bool visible;
+  final PlayerChromeMode mode;
   final bool showQueueControls;
   final VoidCallback onTogglePlaylist;
   final bool playlistOpen;
@@ -2128,6 +2194,31 @@ class _PlayerControlsBar extends StatefulWidget {
 
 class _PlayerControlsBarState extends State<_PlayerControlsBar> {
   double? _dragValue;
+
+  /// Layout locked for the duration of a scrub so the slider under the pointer
+  /// is not replaced when scrubbing pins chrome to full.
+  PlayerChromeMode? _scrubLayout;
+
+  /// Survives the mini → full swap when a track menu pins chrome.
+  final _audioMenuKey = GlobalKey(debugLabel: 'audio-menu');
+  final _subtitleMenuKey = GlobalKey(debugLabel: 'subtitle-menu');
+
+  void _beginSeek(double value) {
+    _scrubLayout ??= widget.mode == PlayerChromeMode.full
+        ? PlayerChromeMode.full
+        : PlayerChromeMode.mini;
+    if (_dragValue == null) widget.onScrubbing(true);
+    setState(() => _dragValue = value);
+  }
+
+  void _endSeek(double value) {
+    widget.player.seek(Duration(milliseconds: value.toInt()));
+    setState(() {
+      _dragValue = null;
+      _scrubLayout = null;
+    });
+    widget.onScrubbing(false);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2151,9 +2242,13 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final hasDuration = dur > 0;
     final mediaKind = p.currentMediaKind ?? MediaKind.video;
     final isImage = mediaKind == MediaKind.image;
-    final keepCompactMusicProgress = mediaKind == MediaKind.audio;
-    final barVisible = widget.visible || keepCompactMusicProgress;
-    final showExpandedControls = widget.visible;
+    final layout = _scrubLayout ??
+        (widget.mode == PlayerChromeMode.full
+            ? PlayerChromeMode.full
+            : PlayerChromeMode.mini);
+    final showFull = layout == PlayerChromeMode.full;
+    final interactive =
+        widget.mode != PlayerChromeMode.hidden || _scrubLayout != null;
     final vis = PlayerControlVisibility.resolve(
       realAudioCount: realTrackCount(p.tracks.audio),
       realSubtitleCount: realTrackCount(p.tracks.subtitle),
@@ -2164,21 +2259,60 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       isImage: isImage,
     );
 
+    if (!showFull) {
+      final trackMenus = p.engineType == EngineType.mpvInternal;
+      return IgnorePointer(
+        ignoring: !interactive,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 150),
+          opacity: interactive ? 1.0 : 0.0,
+          child: PlayerMiniBar(
+            mediaKind: mediaKind,
+            realAudioCount: realTrackCount(p.tracks.audio),
+            realSubtitleCount: realTrackCount(p.tracks.subtitle),
+            playing: p.state == 'playing',
+            hasDuration: hasDuration,
+            positionMs: pos.toInt(),
+            durationMs: p.durationMs,
+            isFullScreen: widget.isFullScreen,
+            onPlayPause: () => p.state == 'playing' ? p.pause() : p.resume(),
+            onStop: () => p.stop(),
+            onToggleFullScreen: widget.onToggleFullScreen,
+            onSeekChanged: _beginSeek,
+            onSeekEnd: _endSeek,
+            audioMenu: trackMenus
+                ? _AudioMenuButton(
+                    player: p,
+                    onOpened: widget.onMenuOpened,
+                    onClosed: widget.onMenuClosed,
+                    compact: true,
+                    menuKey: _audioMenuKey,
+                  )
+                : null,
+            subtitleMenu: trackMenus
+                ? _SubtitleMenuButton(
+                    player: p,
+                    onOpened: widget.onMenuOpened,
+                    onClosed: widget.onMenuClosed,
+                    compact: true,
+                    menuKey: _subtitleMenuKey,
+                  )
+                : null,
+          ),
+        ),
+      );
+    }
+
     return IgnorePointer(
-      ignoring: !barVisible,
+      ignoring: false,
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 150),
-        opacity: barVisible ? 1.0 : 0.0,
+        opacity: 1.0,
         child: ClipRect(
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: Container(
-              padding: EdgeInsets.fromLTRB(
-                12,
-                showExpandedControls ? 18 : 10,
-                12,
-                showExpandedControls ? 8 : 10,
-              ),
+              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.4),
                 border: Border(
@@ -2195,7 +2329,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         SizedBox(
                           width: 56,
                           child: Text(
-                            _fmt(Duration(milliseconds: pos.toInt())),
+                            formatControlElapsed(pos.toInt()),
                             textAlign: TextAlign.right,
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.white70),
@@ -2215,22 +2349,10 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                 min: 0,
                                 max: hasDuration ? dur : 1,
                                 value: pos,
-                                onChanged: hasDuration && !isImage
-                                    ? (v) {
-                                        if (_dragValue == null) {
-                                          widget.onScrubbing(true);
-                                        }
-                                        setState(() => _dragValue = v);
-                                      }
-                                    : null,
-                                onChangeEnd: hasDuration && !isImage
-                                    ? (v) {
-                                        p.seek(
-                                            Duration(milliseconds: v.toInt()));
-                                        setState(() => _dragValue = null);
-                                        widget.onScrubbing(false);
-                                      }
-                                    : null,
+                                onChanged:
+                                    hasDuration && !isImage ? _beginSeek : null,
+                                onChangeEnd:
+                                    hasDuration && !isImage ? _endSeek : null,
                               ),
                             ),
                           ),
@@ -2245,147 +2367,144 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         ),
                       ],
                     ),
-                  // Music collapses to the progress surface instead of disappearing.
-                  if (showExpandedControls)
-                    Row(
-                      children: [
-                        if (widget.showQueueControls)
-                          IconButton(
-                            tooltip: 'Previous',
-                            icon: const Icon(Icons.skip_previous),
-                            onPressed:
-                                p.hasPrevious ? () => p.previous() : null,
-                          ),
+                  Row(
+                    children: [
+                      if (widget.showQueueControls)
                         IconButton(
-                          tooltip: p.state == 'playing' ? 'Pause' : 'Play',
-                          icon: Icon(
-                            p.state == 'playing'
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                          ),
-                          onPressed: !isImage || hasDuration
-                              ? () =>
-                                  p.state == 'playing' ? p.pause() : p.resume()
-                              : null,
+                          tooltip: 'Previous',
+                          icon: const Icon(Icons.skip_previous),
+                          onPressed: p.hasPrevious ? () => p.previous() : null,
                         ),
+                      IconButton(
+                        tooltip: p.state == 'playing' ? 'Pause' : 'Play',
+                        icon: Icon(
+                          p.state == 'playing' ? Icons.pause : Icons.play_arrow,
+                        ),
+                        onPressed: !isImage || hasDuration
+                            ? () =>
+                                p.state == 'playing' ? p.pause() : p.resume()
+                            : null,
+                      ),
+                      IconButton(
+                        tooltip: 'Stop',
+                        icon: const Icon(Icons.stop),
+                        onPressed: () => p.stop(),
+                      ),
+                      if (widget.showQueueControls)
                         IconButton(
-                          tooltip: 'Stop',
-                          icon: const Icon(Icons.stop),
-                          onPressed: () => p.stop(),
+                          tooltip: 'Next',
+                          icon: const Icon(Icons.skip_next),
+                          onPressed: p.hasNext ? () => p.next() : null,
                         ),
-                        if (widget.showQueueControls)
-                          IconButton(
-                            tooltip: 'Next',
-                            icon: const Icon(Icons.skip_next),
-                            onPressed: p.hasNext ? () => p.next() : null,
+                      const SizedBox(width: 12),
+                      if (widget.showQueueControls)
+                        Text(
+                          '${p.currentIndex + 1} / ${p.queue.length}',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      const Spacer(),
+                      if (p.engineType == EngineType.mpvInternal &&
+                          !isImage) ...[
+                        if (vis.videoRenderer)
+                          _VideoOutputMenuButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
                           ),
-                        const SizedBox(width: 12),
-                        if (widget.showQueueControls)
-                          Text(
-                            '${p.currentIndex + 1} / ${p.queue.length}',
-                            style: const TextStyle(color: Colors.white70),
+                        if (vis.audioMenu)
+                          _AudioMenuButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                            menuKey: _audioMenuKey,
                           ),
-                        const Spacer(),
-                        if (p.engineType == EngineType.mpvInternal &&
-                            !isImage) ...[
-                          if (vis.videoRenderer)
-                            _VideoOutputMenuButton(
-                              player: p,
-                              onOpened: widget.onMenuOpened,
-                              onClosed: widget.onMenuClosed,
-                            ),
-                          if (vis.audioMenu)
-                            _AudioMenuButton(
-                              player: p,
-                              onOpened: widget.onMenuOpened,
-                              onClosed: widget.onMenuClosed,
-                            ),
-                          if (vis.subtitleMenu)
-                            _SubtitleMenuButton(
-                              player: p,
-                              onOpened: widget.onMenuOpened,
-                              onClosed: widget.onMenuClosed,
-                            ),
-                          if (vis.speedMenu)
-                            _SpeedMenuButton(
-                              player: p,
-                              enabled: hasMedia,
-                              onOpened: widget.onMenuOpened,
-                              onClosed: widget.onMenuClosed,
-                            ),
-                          if ((p.playbackRate - 1.0).abs() > 0.001)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: Text(
-                                playbackSpeedChip(p.playbackRate),
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.tealAccent,
-                                ),
+                        if (vis.subtitleMenu)
+                          _SubtitleMenuButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                            menuKey: _subtitleMenuKey,
+                          ),
+                        if (vis.speedMenu)
+                          _SpeedMenuButton(
+                            player: p,
+                            enabled: hasMedia,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                          ),
+                        if ((p.playbackRate - 1.0).abs() > 0.001)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Text(
+                              playbackSpeedChip(p.playbackRate),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.tealAccent,
                               ),
                             ),
-                          if (vis.playbackSettings)
-                            _PlaybackSettingsButton(
-                              player: p,
-                              onOpened: widget.onMenuOpened,
-                              onClosed: widget.onMenuClosed,
-                            ),
-                        ],
-                        if (vis.proxyToggle)
-                          IconButton(
-                            tooltip: p.isCurrentItemProxied
-                                ? 'Switch to direct playback'
-                                : 'Route through proxy',
-                            icon: Icon(
-                              p.isCurrentItemProxied
-                                  ? Icons.shield
-                                  : Icons.shield_outlined,
-                              color: p.isCurrentItemProxied
-                                  ? Colors.tealAccent
-                                  : null,
-                            ),
-                            onPressed: p.proxyToggleInProgress
-                                ? null
-                                : widget.onToggleProxy,
                           ),
-                        if (widget.showQueueControls)
-                          IconButton(
-                            tooltip: widget.playlistOpen
-                                ? 'Hide playlist'
-                                : 'Show playlist',
-                            icon: Icon(
-                              widget.playlistOpen
-                                  ? Icons.playlist_remove
-                                  : Icons.playlist_play,
-                            ),
-                            onPressed: widget.onTogglePlaylist,
+                        if (vis.playbackSettings)
+                          _PlaybackSettingsButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
                           ),
-                        if (vis.externalPlayer)
-                          IconButton(
-                            tooltip: 'Play in external player (mpv/VLC)',
-                            icon: const Icon(Icons.open_in_new),
-                            onPressed: () async {
-                              if (p.state == 'playing') {
-                                p.pause();
-                              }
-                              final currentItem = p.queue[p.currentIndex];
-                              await _openInExternalPlayer(context, currentItem);
-                            },
-                          ),
-                        IconButton(
-                          tooltip: widget.isFullScreen
-                              ? 'Exit fullscreen'
-                              : 'Fullscreen',
-                          icon: Icon(
-                            widget.isFullScreen
-                                ? Icons.fullscreen_exit
-                                : Icons.fullscreen,
-                          ),
-                          onPressed: widget.onToggleFullScreen,
-                        ),
                       ],
-                    ),
+                      if (vis.proxyToggle)
+                        IconButton(
+                          tooltip: p.isCurrentItemProxied
+                              ? 'Switch to direct playback'
+                              : 'Route through proxy',
+                          icon: Icon(
+                            p.isCurrentItemProxied
+                                ? Icons.shield
+                                : Icons.shield_outlined,
+                            color: p.isCurrentItemProxied
+                                ? Colors.tealAccent
+                                : null,
+                          ),
+                          onPressed: p.proxyToggleInProgress
+                              ? null
+                              : widget.onToggleProxy,
+                        ),
+                      if (widget.showQueueControls)
+                        IconButton(
+                          tooltip: widget.playlistOpen
+                              ? 'Hide playlist'
+                              : 'Show playlist',
+                          icon: Icon(
+                            widget.playlistOpen
+                                ? Icons.playlist_remove
+                                : Icons.playlist_play,
+                          ),
+                          onPressed: widget.onTogglePlaylist,
+                        ),
+                      if (vis.externalPlayer)
+                        IconButton(
+                          tooltip: 'Play in external player (mpv/VLC)',
+                          icon: const Icon(Icons.open_in_new),
+                          onPressed: () async {
+                            if (p.state == 'playing') {
+                              p.pause();
+                            }
+                            final currentItem = p.queue[p.currentIndex];
+                            await _openInExternalPlayer(context, currentItem);
+                          },
+                        ),
+                      IconButton(
+                        tooltip: widget.isFullScreen
+                            ? 'Exit fullscreen'
+                            : 'Fullscreen',
+                        icon: Icon(
+                          widget.isFullScreen
+                              ? Icons.fullscreen_exit
+                              : Icons.fullscreen,
+                        ),
+                        onPressed: widget.onToggleFullScreen,
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -2393,14 +2512,6 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
         ),
       ),
     );
-  }
-
-  static String _fmt(Duration d) {
-    if (d.inMilliseconds <= 0) return '--:--';
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
   Future<void> _openInExternalPlayer(
@@ -2954,18 +3065,27 @@ class _PlaybackSettingsDialog extends StatelessWidget {
   }
 }
 
-// ─── Audio track menu ─────────────────────────────────────────────────────────
+final _compactMenuStyle = IconButton.styleFrom(
+  minimumSize: const Size(32, 32),
+  padding: const EdgeInsets.all(4),
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  visualDensity: VisualDensity.compact,
+);
 
 class _AudioMenuButton extends StatelessWidget {
   const _AudioMenuButton({
     required this.player,
     required this.onOpened,
     required this.onClosed,
+    this.compact = false,
+    this.menuKey,
   });
 
   final PlayerController player;
   final VoidCallback onOpened;
   final VoidCallback onClosed;
+  final bool compact;
+  final Key? menuKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2973,8 +3093,12 @@ class _AudioMenuButton extends StatelessWidget {
         .where((t) => t.id != 'no' && t.id != 'auto')
         .toList(growable: false);
     return PopupMenuButton<AudioTrack>(
+      key: menuKey,
       tooltip: 'Audio track',
       icon: const Icon(Icons.audiotrack),
+      iconSize: compact ? 18 : null,
+      padding: compact ? const EdgeInsets.all(4) : const EdgeInsets.all(8),
+      style: compact ? _compactMenuStyle : null,
       enabled: real.length >= 2,
       onOpened: onOpened,
       onCanceled: onClosed,
@@ -3061,11 +3185,15 @@ class _SubtitleMenuButton extends StatelessWidget {
     required this.player,
     required this.onOpened,
     required this.onClosed,
+    this.compact = false,
+    this.menuKey,
   });
 
   final PlayerController player;
   final VoidCallback onOpened;
   final VoidCallback onClosed;
+  final bool compact;
+  final Key? menuKey;
 
   @override
   Widget build(BuildContext context) {
@@ -3073,8 +3201,12 @@ class _SubtitleMenuButton extends StatelessWidget {
         .where((t) => t.id != 'no' && t.id != 'auto')
         .toList(growable: false);
     return PopupMenuButton<SubtitleTrack>(
+      key: menuKey,
       tooltip: 'Subtitles',
       icon: const Icon(Icons.subtitles),
+      iconSize: compact ? 18 : null,
+      padding: compact ? const EdgeInsets.all(4) : const EdgeInsets.all(8),
+      style: compact ? _compactMenuStyle : null,
       onOpened: onOpened,
       onCanceled: onClosed,
       onSelected: (t) {

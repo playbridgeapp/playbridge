@@ -10,6 +10,12 @@ String formatPlaybackClock(int ms) {
   return '$m:$s';
 }
 
+/// Elapsed label on the desktop control bar. Non-positive values stay `--:--`.
+String formatControlElapsed(int ms) {
+  if (ms <= 0) return '--:--';
+  return formatPlaybackClock(ms);
+}
+
 /// TV-style remaining label: `-M:SS` (or `-H:MM:SS`).
 String formatRemainingClock(int positionMs, int durationMs) {
   final remaining =

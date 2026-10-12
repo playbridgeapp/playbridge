@@ -13,11 +13,11 @@ class MediaPresentationSurface extends StatelessWidget {
   const MediaPresentationSurface({
     super.key,
     required this.controller,
-    this.controlsVisible = false,
+    this.subtitleBottomInset = subtitleBottomHidden,
   });
 
   final PlayerController controller;
-  final bool controlsVisible;
+  final double subtitleBottomInset;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -31,7 +31,7 @@ class MediaPresentationSurface extends StatelessWidget {
               // image presentations are opaque layers above it.
               PlaybackSurface(
                 controller: controller,
-                controlsVisible: controlsVisible,
+                subtitleBottomInset: subtitleBottomInset,
               ),
               if (item?.mediaKind == MediaKind.audio)
                 _MusicPresentation(item: item!),

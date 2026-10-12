@@ -4,15 +4,22 @@ import 'player_controller.dart';
 import 'engines/mpv_engine.dart';
 import 'video_scaling.dart';
 
-const _kSubtitleBottomDefault = 24.0;
-const _kSubtitleBottomWithControls = 138.0; // clears ~114px controls bar
+const subtitleBottomHidden = 24.0;
+const subtitleBottomMini = 64.0;
+const subtitleBottomFull = 138.0; // clears ~114px full controls bar
 
 class PlaybackSurface extends StatefulWidget {
-  const PlaybackSurface(
-      {super.key, required this.controller, this.controlsVisible = false});
+  const PlaybackSurface({
+    super.key,
+    required this.controller,
+    this.subtitleBottomInset = subtitleBottomHidden,
+  });
 
   final PlayerController controller;
-  final bool controlsVisible;
+
+  /// Lifts burned-in / libass subtitles clear of the overlay bar. The video
+  /// frame itself does not move.
+  final double subtitleBottomInset;
 
   @override
   State<PlaybackSurface> createState() => _PlaybackSurfaceState();
@@ -84,11 +91,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
       children: [
         // Keep Video mounted so the texture stays bound; mask hides stale pixels.
         TweenAnimationBuilder<double>(
-          tween: Tween(
-            end: widget.controlsVisible
-                ? _kSubtitleBottomWithControls
-                : _kSubtitleBottomDefault,
-          ),
+          tween: Tween(end: widget.subtitleBottomInset),
           duration: const Duration(milliseconds: 150),
           builder: (context, bottomPad, _) => Video(
             controller: _mpvVideo!,
