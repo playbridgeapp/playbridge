@@ -22,12 +22,12 @@ import playbridge.SubtitleResource
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RemoteViewModelTest {
-    private class Fixture(val scope: TestScope, features: Set<String> = emptySet(), initial: RemoteReceiverSnapshot = testSnapshot(), profile: RemoteProfile = RemoteProfile.AndroidTv) {
+    private class Fixture(val scope: TestScope, features: Set<String> = emptySet(), initial: RemoteReceiverSnapshot = testSnapshot(), profile: RemoteProfile = RemoteProfile.AndroidTv, preferenceStore: RemotePresentationPreferenceStore? = null, progressSource: RemoteQueueProgressSource? = null) {
         val transport = FakeNativeRemoteTransport(initial)
         val target = MutableStateFlow<RemoteNativeTarget?>(RemoteNativeTarget(testConfiguration(profile, features), "connection-1"))
         val registry = RemoteControllerRegistry(target, transport, scope.backgroundScope)
         var now = 10L
-        val vm = RemoteViewModel(registry, RemoteInputRouter(), { now }, scope.backgroundScope)
+        val vm = RemoteViewModel(registry, RemoteInputRouter(), { now }, scope.backgroundScope, preferenceStore, progressSource)
         val effects = mutableListOf<RemoteEffect>()
         init { scope.backgroundScope.launch(UnconfinedTestDispatcher(scope.testScheduler)) { vm.effects.collect { effects += it } } }
         fun tick(position: Long = 10_000L, playing: Boolean = true, fresh: Boolean = true, title: String? = "Episode", generation: Long = 0L) {
@@ -173,10 +173,10 @@ class RemoteViewModelTest {
     }
     @Test fun effectsPreserveOriginNavigationUnlinkAndPhoneManagersEvenWhenQueryFails() = runTest {
         val f = Fixture(this, initial = testSnapshot(RemoteContext.Browser)); runCurrent()
-        f.vm.dispatch(RemoteAction.BackToOrigin); f.vm.dispatch(RemoteAction.BrowseLibrary)
-        f.vm.dispatch(RemoteAction.OpenPhoneBrowser); f.vm.dispatch(RemoteAction.UnlinkWebsite)
+        f.vm.dispatch(RemoteAction.BackToOrigin); f.vm.dispatch(RemoteAction.OpenConnections)
+        f.vm.dispatch(RemoteAction.UnlinkWebsite)
         f.vm.dispatch(RemoteAction.ManageUserScripts); f.vm.dispatch(RemoteAction.ManageUserAgent); runCurrent()
-        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Origin), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.PhoneBrowser), RemoteEffect.UnlinkWebsite, RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserScripts), RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserAgent)), f.effects)
+        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Origin), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Connections), RemoteEffect.UnlinkWebsite, RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserScripts), RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserAgent)), f.effects)
         f.transport.accepted = false; f.vm.execute(RemoteAction.ManageUserScripts); runCurrent()
         assertEquals(RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserScripts), f.effects.last())
     }
@@ -246,8 +246,8 @@ class RemoteViewModelTest {
         val effects = mutableListOf<RemoteEffect>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.effects.collect { effects += it } }
         assertTrue(effects.isEmpty())
-        vm.dispatch(RemoteAction.BrowseLibrary)
-        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library)), effects)
+        vm.dispatch(RemoteAction.OpenConnections)
+        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Connections)), effects)
     }
 
     @Test fun reentryResetsNativePresentationLikeStageOneWhileKeepingTheConnection() = runTest {
@@ -285,6 +285,88 @@ class RemoteViewModelTest {
         assertEquals(RemoteCommandResult.Confirmed, operation.await()); runCurrent()
         assertEquals(RemoteSheet.More, f.vm.state.value.sheet)
         assertTrue(f.vm.state.value.pending.subtitleRequests.isEmpty())
+    }
+
+    @Test fun buttonPadIsLocalPersistedAndRestoredWithoutReceiverCommands() = runTest {
+        val store = Preferences()
+        val f = Fixture(this, preferenceStore = store); runCurrent()
+        assertFalse(f.vm.state.value.preferences.buttonPad)
+        val before = resolveInputPresentation(f.vm.state.value)
+        assertEquals(RemoteCommandResult.Submitted, f.vm.execute(RemoteAction.SetButtonPad(true)))
+        assertTrue(store.value.buttonPad)
+        assertEquals(before, resolveInputPresentation(f.vm.state.value))
+        assertEquals(RemoteInputPresentation.Absent, resolveInputPresentation(f.vm.state.value))
+        val recreated = Fixture(this, preferenceStore = store); runCurrent()
+        assertTrue(recreated.vm.state.value.preferences.buttonPad)
+        recreated.vm.dispatch(RemoteAction.SetButtonPad(false)); runCurrent()
+        assertFalse(store.value.buttonPad)
+        assertTrue(f.transport.commands.isEmpty())
+        assertTrue(recreated.transport.commands.isEmpty())
+    }
+    @Test fun libraryProgressFlowsIntoStateAndSurvivesTicksButClearsOnQueueReplacement() = runTest {
+        val updates = MutableStateFlow<Map<String, RemoteQueueProgress>>(emptyMap())
+        val requests = mutableListOf<Set<RemoteProgressKey>>()
+        val source = RemoteQueueProgressSource { keys ->
+            requests += keys
+            if (keys.isEmpty()) kotlinx.coroutines.flow.flowOf(emptyMap()) else updates
+        }
+        val raw = testSnapshot()
+        val identified = raw.state.queue!!.items.mapIndexed { index, item -> item.copy(tmdbId = "100", season = 1, episode = index + 1) }
+        val initial = raw.copy(state = raw.state.copy(queue = raw.state.queue.copy(items = identified)))
+        val f = Fixture(this, initial = initial, progressSource = source); runCurrent()
+        val resume = com.playbridge.sender.data.library.PlaybackResumeEntity("tmdb:100:1:2", 100, "tv", 1, 2, positionMs = 50_000, durationMs = 100_000)
+        updates.value = mapOf(resume.contentKey to RemoteQueueProgress(resume = resume)); runCurrent()
+        assertEquals(resume, f.vm.state.value.queueProgress[resume.contentKey]?.resume)
+        val requestCount = requests.size
+        f.tick(position = 11_000); runCurrent()
+        assertEquals(requestCount, requests.size)
+        assertEquals(resume, f.vm.state.value.queueProgress[resume.contentKey]?.resume)
+        val changed = f.transport.snapshot.value
+        f.transport.snapshot.value = changed.copy(state = changed.state.copy(queue = changed.state.queue!!.copy(items = listOf(identified.first().copy(tmdbId = "200")))))
+        runCurrent()
+        assertTrue(f.vm.state.value.queueProgress.isEmpty())
+        updates.value = mapOf(resume.contentKey to RemoteQueueProgress(resume = resume)); runCurrent()
+        assertTrue(f.vm.state.value.queueProgress.isEmpty())
+        f.target.value = null; runCurrent()
+        assertTrue(f.vm.state.value.queueProgress.isEmpty())
+        assertEquals(emptySet<RemoteProgressKey>(), requests.last())
+        assertTrue(f.transport.commands.isEmpty())
+    }
+
+    private class Preferences : RemotePresentationPreferenceStore {
+        var value = RemotePreferences()
+        override fun load() = value
+        override fun save(preferences: RemotePreferences) { value = preferences }
+    }
+    @Test fun successfulWaveGesturesPersistWhileFailuresAndOrdinaryVolumeDoNotTeach() = runTest {
+        val store = Preferences()
+        val f = Fixture(this, preferenceStore = store); runCurrent()
+        f.transport.accepted = false
+        assertTrue(f.vm.execute(RemoteAction.SeekTo(30_000, RemoteLearnedGesture.SEEK)) is RemoteCommandResult.Failed)
+        assertTrue(f.vm.execute(RemoteAction.TogglePlayPause) is RemoteCommandResult.Failed)
+        assertTrue(store.value.learnedGestures.isEmpty())
+        f.transport.accepted = true
+        f.vm.execute(RemoteAction.AdjustVolume(1))
+        assertTrue(store.value.learnedGestures.isEmpty())
+        f.vm.execute(RemoteAction.SeekTo(30_000, RemoteLearnedGesture.SEEK))
+        f.vm.execute(RemoteAction.TogglePlayPause)
+        f.vm.execute(RemoteAction.AdjustVolume(1, RemoteLearnedGesture.VOLUME))
+        assertEquals(setOf("seek", "tap", "volume"), store.value.learnedGestures)
+        f.vm.dispatch(RemoteAction.SetTimeDisplay(RemoteTimeDisplay.Remaining))
+        f.vm.deactivate(); f.vm.activate()
+        assertEquals(RemoteTimeDisplay.Remaining, f.vm.state.value.preferences.timeDisplay)
+        assertEquals(store.value.learnedGestures, f.vm.state.value.preferences.learnedGestures)
+        val recreated = Fixture(this, preferenceStore = store); runCurrent()
+        assertEquals(store.value.learnedGestures, recreated.vm.state.value.preferences.learnedGestures)
+        assertEquals(RemoteTimeDisplay.Remaining, recreated.vm.state.value.preferences.timeDisplay)
+    }
+    @Test fun canceledGestureCommandCannotPersistLearning() = runTest {
+        val store = Preferences()
+        val f = Fixture(this, preferenceStore = store); runCurrent()
+        f.vm.dispatch(RemoteAction.SeekTo(50_000, RemoteLearnedGesture.SEEK))
+        f.vm.deactivate(); runCurrent()
+        assertTrue(store.value.learnedGestures.isEmpty())
+        assertTrue(f.transport.commands.isEmpty())
     }
 
 }

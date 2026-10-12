@@ -283,7 +283,8 @@ val appModule = module {
             get(), get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
         )
     }
-    viewModel { com.playbridge.sender.cast.remote.RemoteViewModel(get(), get()) }
+    single<com.playbridge.sender.cast.remote.RemoteQueueProgressSource> { com.playbridge.sender.cast.remote.LibraryRemoteQueueProgressSource(get(), get()) }
+    viewModel { com.playbridge.sender.cast.remote.RemoteViewModel(get(), get(), presentationPreferences = com.playbridge.sender.cast.remote.RemotePresentationPreferences(androidContext()), queueProgressSource = get()) }
 
     // 6. ViewModels
     viewModel {

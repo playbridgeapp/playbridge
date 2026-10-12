@@ -10,33 +10,33 @@ class RemoteModePolicyTest {
             for (image in listOf(false, true)) {
                 for (players in listOf(listOf("avplayer", "mpv"), listOf("internal_mpv"), emptyList())) {
                     val input = nativeRemoteInputAvailability(players, emptySet(), image)
-                    assertEquals(listOf(RemoteMode.CONTEXT), availableRemoteModes(context, false, input.remote, input.touchpad))
+                    assertEquals(if (context == RemoteContext.IDLE) listOf(RemoteMode.CONTEXT) else emptyList<RemoteMode>(), availableRemoteModes(context, false, input.remote, input.touchpad))
                 }
                 val desktop = nativeRemoteInputAvailability(listOf("internal_mpv"), setOf("subtitle_resource_add_v1"), image)
-                val expected = if (image && context != RemoteContext.IDLE) listOf(RemoteMode.CONTEXT, RemoteMode.TOUCHPAD) else listOf(RemoteMode.CONTEXT)
+                val expected = when {
+                    context == RemoteContext.IDLE -> listOf(RemoteMode.CONTEXT)
+                    image -> listOf(RemoteMode.TOUCHPAD)
+                    else -> emptyList()
+                }
                 assertEquals(expected, availableRemoteModes(context, false, desktop.remote, desktop.touchpad))
             }
         }
     }
 
-    @Test fun `native idle exposes no dead pad or pointer`() {
+    @Test fun `idle uses an available pad route or idle content`() {
         assertEquals(listOf(RemoteMode.CONTEXT), availableRemoteModes(RemoteContext.IDLE, false, true))
+        assertEquals(listOf(RemoteMode.CONTEXT), availableRemoteModes(RemoteContext.IDLE, false, false))
     }
     @Test fun `Roku idle keeps its working pad`() {
-        assertEquals(listOf(RemoteMode.CONTEXT, RemoteMode.DPAD), availableRemoteModes(RemoteContext.IDLE, true, true))
+        assertEquals(listOf(RemoteMode.DPAD), availableRemoteModes(RemoteContext.IDLE, true, true))
         assertEquals(listOf(RemoteMode.CONTEXT), availableRemoteModes(RemoteContext.IDLE, true, false))
     }
 
 
     @Test
-    fun `native browser includes keyboard mode`() {
+    fun `native browser is pointer only until whole-device control`() {
         assertEquals(
-            listOf(
-                RemoteMode.CONTEXT,
-                RemoteMode.DPAD,
-                RemoteMode.TOUCHPAD,
-                RemoteMode.KEYBOARD,
-            ),
+            listOf(RemoteMode.TOUCHPAD),
             availableRemoteModes(
                 remoteContext = RemoteContext.BROWSER,
                 externalMode = false,
@@ -46,13 +46,9 @@ class RemoteModePolicyTest {
     }
 
     @Test
-    fun `native player excludes keyboard mode`() {
+    fun `native player video has no input until whole-device control`() {
         assertEquals(
-            listOf(
-                RemoteMode.CONTEXT,
-                RemoteMode.DPAD,
-                RemoteMode.TOUCHPAD,
-            ),
+            emptyList<RemoteMode>(),
             availableRemoteModes(
                 remoteContext = RemoteContext.PLAYER,
                 externalMode = false,
@@ -65,7 +61,6 @@ class RemoteModePolicyTest {
     fun `external receiver excludes native touch and keyboard modes`() {
         assertEquals(
             listOf(
-                RemoteMode.CONTEXT,
                 RemoteMode.DPAD,
             ),
             availableRemoteModes(

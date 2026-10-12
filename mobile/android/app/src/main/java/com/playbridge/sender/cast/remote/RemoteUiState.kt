@@ -8,7 +8,7 @@ enum class RemoteInputMode { Context, Pad, Pointer, Keyboard }
 enum class RemoteMediaKind { Video, Audio, Image }
 enum class RemotePlaybackState { Idle, Playing, Paused, Buffering, Error, Unknown }
 enum class RemoteBrowserEngine { WebView, Gecko, Unknown }
-enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue }
+enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue, InputPreferences }
 enum class RemoteTimeDisplay { Duration, Remaining }
 
 data class RemoteSessionId(val endpoint: EndpointKey, val generation: Long)
@@ -73,6 +73,7 @@ data class RemotePlayerSettings(
 data class RemoteBrowserState(
     val engine: RemoteBrowserEngine = RemoteBrowserEngine.Unknown,
     val fullscreen: Boolean? = null, val muted: Boolean? = null, val selectedVideoId: String? = null,
+    val url: String? = null,
 )
 data class RemoteMirrorState(
     val active: Boolean = false, val sessionId: String? = null, val phase: String = "IDLE",
@@ -81,7 +82,7 @@ data class RemoteMirrorState(
 )
 data class LinkedWebsiteState(val active: Boolean = false, val controllerName: String? = null)
 data class RemotePreferences(
-    val buttonPad: Boolean = true, val timeDisplay: RemoteTimeDisplay = RemoteTimeDisplay.Duration,
+    val buttonPad: Boolean = false, val timeDisplay: RemoteTimeDisplay = RemoteTimeDisplay.Duration,
     val learnedGestures: Set<String> = emptySet(),
     val modesByContext: Map<RemoteContext, RemoteInputMode> = mapOf(
         RemoteContext.Player to RemoteInputMode.Context, RemoteContext.Browser to RemoteInputMode.Pointer,
@@ -106,6 +107,7 @@ data class RemoteUiState(
     val context: RemoteContext = RemoteContext.Unknown,
     val capabilities: RemoteCapabilities = RemoteCapabilities(),
     val playback: RemotePlayback? = null, val queue: RemoteQueueState? = null,
+    val queueProgress: Map<String, RemoteQueueProgress> = emptyMap(),
     val tracks: RemoteTracks = RemoteTracks(), val settings: RemotePlayerSettings = RemotePlayerSettings(),
     val browser: RemoteBrowserState? = null, val mirror: RemoteMirrorState? = null,
     val inputMode: RemoteInputMode = RemoteInputMode.Context,

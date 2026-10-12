@@ -26,7 +26,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -40,16 +40,23 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import com.playbridge.sender.cast.RemoteControlScreen
+import com.playbridge.sender.cast.remote.ui.RemoteScreen
 import com.playbridge.sender.cast.MediaTrack
-import com.playbridge.sender.cast.SeekVolumeBar
-import com.playbridge.sender.cast.TrackChipsRow
+import com.playbridge.sender.cast.remote.ui.SeekVolumeBar
+import com.playbridge.sender.cast.remote.ui.TrackChipsRow
+import com.playbridge.sender.cast.remote.ui.DpadArea
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 class RemoteScreenTest {
+    private fun performWaveAction(label: String) {
+        val action = compose.onNodeWithContentDescription("Playback seek and volume").fetchSemanticsNode()
+            .config[SemanticsActions.CustomActions].first { it.label == label }
+        compose.runOnIdle { assertTrue(action.action()) }
+    }
+
     @get:Rule val compose = createComposeRule()
 
     @Composable
@@ -181,79 +188,66 @@ class RemoteScreenTest {
         compose.setContent {
             val fixture = screenFixture("player", image = image.value, desktop = true)
             MaterialTheme {
-                RemoteControlScreen(
-                    activeContext = "player", onBack = {}, onRemoteKey = {},
-                    onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
-                    playbackState = "paused", receiverConnected = true,
-                    mediaKind = if (image.value) "image" else "video",
-                    managedState = fixture.first, onRemoteUiAction = fixture.second,
-                )
+                RemoteScreen(state = fixture.first, dispatch = fixture.second)
             }
         }
         compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithText("D-Pad").assertDoesNotExist()
         compose.onNodeWithText("Touchpad").assertDoesNotExist()
-        compose.onNodeWithContentDescription("TV Back", substring = true).assertIsNotEnabled()
-        compose.onNodeWithContentDescription("TV Home", substring = true).assertIsNotEnabled()
+        compose.onNodeWithTag("remote.input").assertDoesNotExist()
+        compose.onNodeWithContentDescription("TV Back", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("TV Home", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("TV volume down").assertIsDisplayed()
+        compose.onNodeWithContentDescription("TV volume up").assertIsDisplayed()
         compose.onNodeWithContentDescription("More player controls").assertDoesNotExist()
         compose.onNodeWithText("More").performClick()
         compose.onNodeWithText("Stop playback").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
         compose.runOnIdle { image.value = true }
-        compose.onNodeWithText("Context").assertIsDisplayed()
+        compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithText("D-Pad").assertDoesNotExist()
-        compose.onNodeWithText("Touchpad").performClick()
+        compose.onNodeWithTag("remote.input").assertIsDisplayed()
+        compose.onNodeWithTag("remote.pointer").assertIsDisplayed()
         compose.onNodeWithText("More").performClick()
         compose.onNodeWithText("Stop playback").assertIsDisplayed()
     }
 
-    @Test fun navPersistsAcrossModesAndContextsAndIdleNavigates() {
+    @Test fun navPersistsAcrossModesAndContextsAndIdleSaysNothingPlaying() {
         val context = mutableStateOf("player")
-        var libraries = 0
-        var browsers = 0
         compose.setContent {
             val fixture = screenFixture(context.value, name = "Hisense")
-            MaterialTheme {
-                RemoteControlScreen(
-                    managedState = fixture.first, onRemoteUiAction = fixture.second,
-                    activeContext = context.value, onBack = {}, onRemoteKey = {},
-                    onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
-                    playbackState = "paused", receiverConnected = true, tvName = "Hisense",
-                    onBrowseLibrary = { libraries++ }, onOpenBrowser = { browsers++ },
-                )
-            }
+            MaterialTheme { RemoteScreen(state = fixture.first, dispatch = fixture.second) }
         }
-        fun assertNav() {
-            compose.onNodeWithContentDescription("TV Back", substring = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("TV Home", substring = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("Keys", substring = true).assertIsDisplayed()
-            compose.onNodeWithContentDescription("TV volume down").assertIsDisplayed()
-            compose.onNodeWithContentDescription("TV volume up").assertIsDisplayed()
+        fun shown(vararg labels: String) {
+            labels.forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed() }
         }
-        assertNav()
-        for (mode in listOf("D-Pad", "Touchpad", "Context")) {
-            compose.onNodeWithText(mode).performClick()
-            assertNav()
-            compose.onNodeWithText("More").assertIsDisplayed()
+        fun hidden(vararg labels: String) {
+            labels.forEach { compose.onNodeWithContentDescription(it, substring = true).assertDoesNotExist() }
         }
-        compose.onNodeWithContentDescription("TV Home", substring = true).assertIsNotEnabled()
+        shown("TV Back", "TV volume down", "TV volume up")
+        hidden("TV Home", "Keys")
+        compose.onNodeWithText("Context").assertDoesNotExist()
+        compose.onNodeWithTag("remote.input").assertDoesNotExist()
+        compose.onNodeWithText("More").assertIsDisplayed()
         compose.runOnIdle { context.value = "browser" }
-        assertNav()
-        compose.onNodeWithText("Keyboard").performClick()
-        compose.onNodeWithText("Enter").assertIsDisplayed()
-        androidx.test.espresso.Espresso.pressBack()
+        shown("TV Back", "TV Home", "Keys", "TV volume down", "TV volume up")
+        compose.onNodeWithText("Context").assertDoesNotExist()
+        compose.onNodeWithText("Pad").assertDoesNotExist()
+        compose.onNodeWithTag("remote.pointer").assertIsDisplayed()
+        compose.onNodeWithText("Keyboard").assertDoesNotExist()
         compose.onNodeWithContentDescription("Keys").performClick()
         compose.onNodeWithText("Enter").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
         compose.runOnIdle { context.value = "idle" }
-        assertNav()
+        shown("TV volume down", "TV volume up")
+        hidden("TV Back", "TV Home", "Keys")
         compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithText("D-Pad").assertDoesNotExist()
         compose.onNodeWithText("Touchpad").assertDoesNotExist()
         compose.onNodeWithText("Nothing playing on Hisense").assertIsDisplayed()
-        compose.onNodeWithText("Browse Library").performClick()
-        compose.onNodeWithText("Open browser").performClick()
-        compose.runOnIdle { assertEquals(1, libraries); assertEquals(1, browsers) }
+        compose.onNodeWithText("Browse Library").assertDoesNotExist()
+        compose.onNodeWithText("Open browser").assertDoesNotExist()
+        compose.onNodeWithText("Controlling the TV home screen needs full TV control, coming later.").assertDoesNotExist()
     }
 
     @Test fun releasedWaveAndTransportSeekUsePendingPositionThenIdentityResets() {
@@ -264,14 +258,7 @@ class RemoteScreenTest {
         compose.setContent {
             val fixture = screenFixture("player", position = position.value, duration = 120_000L, media = media.value, onSeek = { seeks += it })
             MaterialTheme {
-                RemoteControlScreen(
-                    managedState = fixture.first, onRemoteUiAction = fixture.second,
-                    activeContext = "player", onBack = {}, onRemoteKey = {},
-                    onMouseMove = { _, _ -> }, onMouseClick = {}, onMouseScroll = { _, _ -> },
-                    playbackState = "paused", receiverConnected = true,
-                    positionMs = position.value, durationMs = 120_000,
-                    onSeekTo = { seeks += it },
-                )
+                RemoteScreen(state = fixture.first, dispatch = fixture.second)
             }
         }
         compose.mainClock.advanceTimeByFrame()
@@ -280,7 +267,7 @@ class RemoteScreenTest {
         compose.mainClock.advanceTimeBy(200)
         val released = seeks.last()
         wave.assert(SemanticsMatcher.expectValue(SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(released.toFloat(), 0f..120_000f)))
-        compose.onNodeWithContentDescription("Seek forward 10 seconds").performClick()
+        performWaveAction("Seek forward 10 seconds")
         compose.mainClock.advanceTimeByFrame()
         compose.runOnIdle { assertEquals((released + 10_000).coerceAtMost(120_000), seeks.last()) }
         compose.runOnIdle { media.value = "second"; position.value = 3_000 }

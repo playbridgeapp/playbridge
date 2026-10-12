@@ -1,5 +1,8 @@
 package com.playbridge.sender.browser
 
+import com.playbridge.sender.cast.remote.ui.UserScriptsSheet
+import com.playbridge.sender.cast.remote.ui.TvUserAgentSheet
+
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
@@ -1022,16 +1025,18 @@ fun AppNavHost(
                             when (effect) {
                                 is com.playbridge.sender.cast.remote.RemoteEffect.Navigate -> when (effect.destination) {
                                     com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Origin -> onRemoteBack()
-                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Connections -> onScreenChange(Screen.Connection)
-                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Library -> onScreenChange(Screen.Library)
-                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.PhoneBrowser -> onScreenChange(Screen.Browser)
+                                    com.playbridge.sender.cast.remote.RemoteEffect.Navigate.Destination.Connections -> showDevicePicker = true
                                 }
                                 is com.playbridge.sender.cast.remote.RemoteEffect.OpenManager -> when (effect.manager) {
                                     com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserScripts -> showUserScripts = true
                                     com.playbridge.sender.cast.remote.RemoteEffect.OpenManager.Manager.UserAgent -> showTvUserAgent = true
                                 }
                                 com.playbridge.sender.cast.remote.RemoteEffect.UnlinkWebsite -> linkedPageCastCoordinator.unlink("unlinked")
-                                com.playbridge.sender.cast.remote.RemoteEffect.RetryConnection -> tvDevice?.let { connectionViewModel.connect(it) }
+                                com.playbridge.sender.cast.remote.RemoteEffect.RetryConnection -> {
+                                    if (castRoute is CastSessionManager.Route.External || tvDevice == null) {
+                                        showDevicePicker = true
+                                    } else tvDevice?.let { connectionViewModel.connect(it) }
+                                }
                                 is com.playbridge.sender.cast.remote.RemoteEffect.Notice -> if (effect.subtitle) Toast.makeText(appContext, effect.message, Toast.LENGTH_LONG).show()
                             }
                         },
@@ -1886,218 +1891,4 @@ private fun NowPlayingBarHost(
         accentColor = accentColor,
         modifier = modifier,
     )
-}
-
-/**
- * Manage the user scripts installed on the TV: list them, remove one, or install another
- * from a file on the phone. The app ships no scripts — the user supplies the .js files.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun UserScriptsSheet(
-    scripts: List<String>,
-    onInstall: () -> Unit,
-    onRemove: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys()
-        Text(
-            "User scripts on TV",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-        )
-        if (scripts.isEmpty()) {
-            Text(
-                "None installed.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-            )
-        } else {
-            scripts.forEach { name ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 24.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { onRemove(name) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Remove $name", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        TextButton(onClick = onInstall, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Install from file…")
-        }
-        Spacer(Modifier.height(16.dp))
-    }
-}
-
-/**
- * Manage the TV browser's User-Agent remotely: pick a built-in preset, reselect something
- * already saved on the TV, or add a new custom one. Mirrors [UserScriptsSheet]'s remote
- * pattern — the TV is the source of truth for [active]/[savedEntries]; this sheet just
- * sends `user_agent` messages and waits for the next `user_agents` reply to refresh.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TvUserAgentSheet(
-    active: String,
-    savedEntries: List<Pair<String, String>>,
-    onSelectDefault: () -> Unit,
-    onSelectPreset: (name: String, value: String) -> Unit,
-    onApplyNamed: (name: String, value: String) -> Unit,
-    onRemove: (name: String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var showAddDialog by remember { mutableStateOf(false) }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys()
-        Column(modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 16.dp)) {
-            Text(
-                "User Agent (TV Browser)",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 2.dp),
-            )
-            Text(
-                "Changes what sites think the TV's browser is.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            HorizontalDivider()
-
-            TvUserAgentRow(
-                label = "Default (Mobile)",
-                selected = active.isBlank(),
-                onClick = onSelectDefault,
-            )
-            com.playbridge.sender.browser.UserAgentPresets.presets
-                .filter { it.value != null }
-                .forEach { preset ->
-                    TvUserAgentRow(
-                        label = preset.label,
-                        selected = active == preset.label,
-                        onClick = { onSelectPreset(preset.label, preset.value!!) },
-                    )
-                }
-
-            if (savedEntries.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Saved on TV",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-                savedEntries.forEach { (name, value) ->
-                    TvUserAgentRow(
-                        label = name,
-                        selected = active == name,
-                        onClick = { onApplyNamed(name, value) },
-                        trailing = {
-                            IconButton(onClick = { onRemove(name) }, modifier = Modifier.size(32.dp)) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Remove $name",
-                                    tint = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            TextButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Add custom user agent")
-            }
-        }
-    }
-
-    if (showAddDialog) {
-        var name by remember { mutableStateOf("") }
-        var value by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys(); Text("Add custom user agent") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Name") },
-                        placeholder = { Text("e.g. My Custom UA") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = value,
-                        onValueChange = { value = it },
-                        label = { Text("User agent string") },
-                        placeholder = { Text("Mozilla/5.0 (...) ...") },
-                        singleLine = false,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onApplyNamed(name.trim(), value.trim())
-                        showAddDialog = false
-                    },
-                    enabled = name.isNotBlank() && value.isNotBlank(),
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
-            },
-        )
-    }
-}
-
-@Composable
-private fun TvUserAgentRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (selected) {
-            Icon(
-                Icons.Default.Check,
-                contentDescription = "Selected",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        trailing?.invoke()
-    }
 }

@@ -42,9 +42,9 @@ class RemoteAvailabilityTest {
         assertFalse(nativeRemoteVolumeSupported(listOf("internal_mpv"), emptySet()))
         assertTrue(nativeRemoteVolumeSupported(listOf("internal_mpv"), setOf("subtitle_resource_add_v1")))
     }
-    @Test fun transportUsesValidNativeNeighboursAndNeverBrowser() {
+    @Test fun removedTransportKeepsSeekAndNativeNeighbourMetadata() {
         fun transport(context: String = "player", external: Boolean = false, seekable: Boolean = true, live: Boolean = false, image: Boolean = false, indices: List<Int> = listOf(3, 8, 9), index: Int = 8) = remoteTransportAvailability(context, external, seekable, live, image, indices, index)
-        assertEquals(RemoteTransportAvailability(true, true, 3, 9), transport())
+        assertEquals(RemoteTransportAvailability(false, true, 3, 9), transport())
         assertNull(transport(index = 3).previous)
         assertNull(transport(index = 9).next)
         assertNull(transport(index = 5).previous)

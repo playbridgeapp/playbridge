@@ -94,13 +94,13 @@ class RemoteExternalViewModelTest {
         f.vm.deactivate(); assertFalse(f.vm.state.value.pending.playing)
         assertTrue(f.external.owner.active)
     }
-    @Test fun externalIdleEffectsKeepOriginReturnWebsiteUnlinkAndPhoneNavigation() = runTest {
+    @Test fun externalIdleEffectsKeepOriginReturnAndWebsiteUnlink() = runTest {
         val f = Fixture(this, TargetKind.ROKU)
         f.external.linked = LinkedWebsiteState(true, "Linked app"); f.tick(state = PlaybackState.IDLE); runCurrent()
         assertEquals("Linked app", f.vm.state.value.linkedWebsite?.controllerName)
-        f.vm.dispatch(RemoteAction.BackToOrigin); f.vm.dispatch(RemoteAction.BrowseLibrary)
-        f.vm.dispatch(RemoteAction.OpenPhoneBrowser); f.vm.dispatch(RemoteAction.UnlinkWebsite); runCurrent()
-        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Origin), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.PhoneBrowser), RemoteEffect.UnlinkWebsite), f.effects)
+        f.vm.dispatch(RemoteAction.BackToOrigin); f.vm.dispatch(RemoteAction.OpenConnections)
+        f.vm.dispatch(RemoteAction.UnlinkWebsite); runCurrent()
+        assertEquals(listOf(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Origin), RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Connections), RemoteEffect.UnlinkWebsite), f.effects)
         assertTrue(f.external.owner.calls.isEmpty())
     }
     @Test fun externalReadOnlyQueueDoesNotCreateNativeNeighborsOrQueueActionRoutes() = runTest {

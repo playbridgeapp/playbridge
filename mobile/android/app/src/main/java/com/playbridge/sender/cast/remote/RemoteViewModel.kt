@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -21,6 +22,8 @@ class RemoteViewModel(
     private val router: RemoteInputRouter,
     clock: () -> Long = ::remoteMonotonicTime,
     scope: CoroutineScope? = null,
+    private val presentationPreferences: RemotePresentationPreferenceStore? = null,
+    private val queueProgressSource: RemoteQueueProgressSource? = null,
 ) : ViewModel() {
     private val scope = scope ?: viewModelScope
     private val reducer = RemoteStateReducer(clock)
@@ -36,12 +39,23 @@ class RemoteViewModel(
     private var activation = 0L
 
     init {
+        presentationPreferences?.let { reducer.restorePreferences(it.load()) }
         mutableState.value = reducer.observe(registry.controller.value?.snapshot?.value ?: RemoteReceiverSnapshot())
         this.scope.launch {
             registry.controller.collectLatest { controller ->
                 if (controller == null) mutableState.value = reducer.observe(RemoteReceiverSnapshot())
                 else controller.snapshot.collect { snapshot ->
                     if (registry.controller.value === controller) mutableState.value = reducer.observe(snapshot)
+                }
+            }
+        }
+        queueProgressSource?.let { source ->
+            this.scope.launch {
+                state.map { it.queue.progressKeys() }.distinctUntilChanged().collectLatest { keys ->
+                    mutableState.value = reducer.queueProgress(emptyMap())
+                    source.observe(keys).collect { progress ->
+                        mutableState.value = reducer.queueProgress(progress)
+                    }
                 }
             }
         }
@@ -77,22 +91,21 @@ class RemoteViewModel(
         val effect = when (action) {
             RemoteAction.BackToOrigin -> RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Origin)
             RemoteAction.OpenConnections -> RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Connections)
-            RemoteAction.BrowseLibrary -> RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library)
-            RemoteAction.OpenPhoneBrowser -> RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.PhoneBrowser)
             RemoteAction.UnlinkWebsite -> RemoteEffect.UnlinkWebsite
             RemoteAction.RetryConnection -> RemoteEffect.RetryConnection
             else -> null
         }
         if (effect != null) { emit(effect); return true }
         if (action is RemoteAction.SelectInputMode || action is RemoteAction.OpenSheet || action == RemoteAction.CloseSheet ||
-            action is RemoteAction.SetTimeDisplay || action is RemoteAction.MarkGestureLearned || action == RemoteAction.RequestWholeTvControl) {
+            action is RemoteAction.SetTimeDisplay || action is RemoteAction.SetButtonPad || action is RemoteAction.MarkGestureLearned || action == RemoteAction.RequestWholeTvControl) {
             mutableState.value = reducer.local(action)
+            if (action is RemoteAction.SetTimeDisplay || action is RemoteAction.SetButtonPad || action is RemoteAction.MarkGestureLearned) presentationPreferences?.save(mutableState.value.preferences)
             return true
         }
         return false
     }
 
-    private data class Ticket(val controller: RemoteController, val action: RemoteAction, val version: Long, val media: RemoteMediaId?, val token: String, val subtitleConfirmation: Boolean, val activation: Long)
+    private data class Ticket(val controller: RemoteController, val action: RemoteAction, val version: Long, val media: RemoteMediaId?, val token: String, val subtitleConfirmation: Boolean, val activation: Long, val learnedGesture: String?)
     private fun prepare(action: RemoteAction): Ticket? {
         if (!active) return null
         val controller = registry.controller.value ?: return null
@@ -101,11 +114,17 @@ class RemoteViewModel(
         val resolved = when (action) {
             RemoteAction.TogglePlayPause -> RemoteAction.SetPlaying(playback?.displayedPlaying != true)
             is RemoteAction.SeekBy -> RemoteAction.SeekTo(relativeRemoteSeek(playback?.displayedPositionMs ?: 0L, action.deltaMs, playback?.durationMs ?: 0L))
-            is RemoteAction.SeekTo -> RemoteAction.SeekTo(boundedSeek(action.positionMs, playback?.durationMs ?: 0L))
+            is RemoteAction.SeekTo -> action.copy(positionMs = boundedSeek(action.positionMs, playback?.durationMs ?: 0L))
             else -> action
         }
         mutableState.value = reducer.begin(resolved)
-        val ticket = Ticket(controller, resolved, reducer.intentVersion, playback?.mediaId, (++sequence).toString(), state.value.connection.ready && state.value.capabilities.tracks.addResource == Support.Supported, activation)
+        val learnedGesture = when (action) {
+            RemoteAction.TogglePlayPause -> RemoteLearnedGesture.TAP
+            is RemoteAction.SeekTo -> action.learnedGesture
+            is RemoteAction.AdjustVolume -> action.learnedGesture
+            else -> null
+        }
+        val ticket = Ticket(controller, resolved, reducer.intentVersion, playback?.mediaId, (++sequence).toString(), state.value.connection.ready && state.value.capabilities.tracks.addResource == Support.Supported, activation, learnedGesture)
         if (resolved is RemoteAction.AddSubtitle) {
             mutableState.value = reducer.subtitlePending(ticket.token, true)
             if (resolved.legacyUrlOnly || ticket.subtitleConfirmation) mutableState.value = reducer.local(RemoteAction.CloseSheet)
@@ -131,6 +150,11 @@ class RemoteViewModel(
         val failureVersion = if (playbackFailure) ticket.version else -1L
         when (result) {
             RemoteCommandResult.Submitted, RemoteCommandResult.Confirmed -> {
+                ticket.learnedGesture?.let {
+                    mutableState.value = reducer.local(RemoteAction.MarkGestureLearned(it))
+                    presentationPreferences?.save(mutableState.value.preferences)
+                }
+                mutableState.value = reducer.browserCommandAccepted(ticket.action)
                 if (ticket.action == RemoteAction.StopPlayback && state.value.receiver?.profile != RemoteProfile.External) mutableState.value = reducer.stopped()
                 if (subtitle != null && !ticket.subtitleConfirmation && !subtitle.legacyUrlOnly && state.value.sheet == RemoteSheet.AddSubtitle) mutableState.value = reducer.local(RemoteAction.CloseSheet)
             }

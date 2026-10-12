@@ -12,8 +12,10 @@ import com.playbridge.sender.library.PlaylistUiState
 import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.shared.logging.suspendRunCatchingLogged
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -64,21 +66,43 @@ internal fun isExternalPlaybackFailure(status: com.playbridge.sender.cast.Playba
  * on a title mismatch (another phone's content), never regresses progress, and dedups
  * via an in-session marked set so the 1s status stream writes each fact once.
  */
-class PlaybackProgressTracker(
+class PlaybackProgressTracker internal constructor(
     private val watchlistDao: WatchlistDao,
     private val resumeDao: PlaybackResumeDao,
-    private val tmdb: TmdbRepository,
-    settingsRepository: SettingsRepository,
+    private val tmdb: TmdbRepository?,
+    enabledSource: Flow<Boolean>,
+    autoAddSource: Flow<Boolean>,
     private val connectionCoordinator: ConnectionCoordinator,
-    private val castSessionManager: com.playbridge.sender.cast.CastSessionManager,
+    externalStatus: Flow<com.playbridge.sender.cast.PlaybackStatus?>,
+    externalNowPlayingMeta: Flow<playbridge.VisualMetadata?>,
+    externalTargetActive: Flow<Boolean>,
     private val scope: CoroutineScope,
 ) {
+    constructor(
+        watchlistDao: WatchlistDao,
+        resumeDao: PlaybackResumeDao,
+        tmdb: TmdbRepository,
+        settingsRepository: SettingsRepository,
+        connectionCoordinator: ConnectionCoordinator,
+        castSessionManager: com.playbridge.sender.cast.CastSessionManager,
+        scope: CoroutineScope,
+    ) : this(
+        watchlistDao = watchlistDao,
+        resumeDao = resumeDao,
+        tmdb = tmdb,
+        enabledSource = settingsRepository.trackWatchProgress,
+        autoAddSource = settingsRepository.autoAddToWatching,
+        connectionCoordinator = connectionCoordinator,
+        externalStatus = castSessionManager.externalStatus,
+        externalNowPlayingMeta = castSessionManager.externalNowPlayingMeta,
+        externalTargetActive = castSessionManager.activeExternalDevice.map { it != null },
+        scope = scope,
+    )
+
     private val TAG = "ProgressTracker"
 
-    private val enabled = settingsRepository.trackWatchProgress
-        .stateIn(scope, SharingStarted.Eagerly, true)
-    private val autoAdd = settingsRepository.autoAddToWatching
-        .stateIn(scope, SharingStarted.Eagerly, true)
+    private val enabled = enabledSource.stateIn(scope, SharingStarted.Eagerly, true)
+    private val autoAdd = autoAddSource.stateIn(scope, SharingStarted.Eagerly, true)
 
     /** Keys ("tmdbId:s:e" / "movie:tmdbId") already written this session. */
     private val markedKeys = mutableSetOf<String>()
@@ -174,17 +198,20 @@ class PlaybackProgressTracker(
         // visual_metadata the phone attached to the loaded MediaItem.
         scope.launch {
             combine(
-                castSessionManager.externalStatus,
-                castSessionManager.externalNowPlayingMeta,
-                castSessionManager.activeExternalDevice,
-            ) { status, meta, target -> Triple(status, meta, target) }
-                .collect { (status, meta, target) -> onDlnaTick(status, meta, target != null) }
+                externalStatus,
+                externalNowPlayingMeta,
+                externalTargetActive,
+            ) { status, meta, active -> Triple(status, meta, active) }
+                .collect { (status, meta, active) -> onDlnaTick(status, meta, active) }
         }
     }
 
     private suspend fun onTick(t: Tick) {
         if (!enabled.value) return
-        if (t.context == "idle") {
+        // Idle, the browser, and every other non-player surface are not library playback.
+        // Drop the in-memory session the way idle always has: no watched mark and no
+        // resume delete. Context is published before the old snapshots are cleared.
+        if (t.context != "player") {
             resetSession()
             receiverPlaybackId = null
             return
@@ -640,10 +667,11 @@ class PlaybackProgressTracker(
      * mirroring what [markMovieWatched] does for movies.
      */
     private fun maybeCompleteSeries(tmdbId: Int, season: Int, episode: Int) {
-        if (!tmdb.isConfigured()) return
+        val catalog = tmdb ?: return
+        if (!catalog.isConfigured()) return
         scope.launch {
             suspendRunCatchingLogged(TAG, "Series-completion check failed") {
-                val details = tmdb.getTvDetails(tmdbId) ?: return@suspendRunCatchingLogged
+                val details = catalog.getTvDetails(tmdbId) ?: return@suspendRunCatchingLogged
                 if (details.nextEpisodeToAir != null) return@suspendRunCatchingLogged // still airing
                 val lastSeason = details.seasons
                     .filter { it.seasonNumber > 0 && it.episodeCount > 0 }
@@ -689,11 +717,12 @@ class PlaybackProgressTracker(
 
     /** Insert an untracked item as WATCHING with TMDB metadata; null when disabled/unavailable. */
     private suspend fun autoAddEntity(tmdbId: Int, mediaType: String): WatchlistEntity? {
-        if (!autoAdd.value || !tmdb.isConfigured()) return null
+        val catalog = tmdb ?: return null
+        if (!autoAdd.value || !catalog.isConfigured()) return null
         val now = System.currentTimeMillis()
         val entity = runCatching {
             if (mediaType == "tv") {
-                tmdb.getTvDetails(tmdbId)?.let {
+                catalog.getTvDetails(tmdbId)?.let {
                     WatchlistEntity(
                         tmdbId = tmdbId, mediaType = "tv", title = it.name,
                         posterUrl = it.posterUrl, year = it.year, rating = it.rating,
@@ -701,7 +730,7 @@ class PlaybackProgressTracker(
                     )
                 }
             } else {
-                tmdb.getMovieDetails(tmdbId)?.let {
+                catalog.getMovieDetails(tmdbId)?.let {
                     WatchlistEntity(
                         tmdbId = tmdbId, mediaType = "movie", title = it.title,
                         posterUrl = it.posterUrl, year = it.year, rating = it.rating,

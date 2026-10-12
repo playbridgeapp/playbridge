@@ -20,15 +20,16 @@ data class RemoteLayoutSpec(
     val nav: RemoteNavSpec, val transport: RemoteTransportSpec,
     val idle: Boolean, val info: Boolean, val wave: Boolean, val tracks: RemoteTrackChipSpec,
     val browserRow: Boolean, val showQueue: Boolean, val columns: Int = 1,
-)
+    val inputPresentation: RemoteInputPresentation = RemoteInputPresentation.Full,
+) {
+    val input: Boolean get() = inputPresentation != RemoteInputPresentation.Absent
+}
 
-/** Stage-1 geometry and affordances, including its Android player pointer tab, remain unchanged.
- * Granular execution capabilities are separate: a displayed legacy affordance is not proof of a route.
- * Viewport is deliberately not used to introduce the stage-3 adaptive layout early. */
+/** Only input modes with a body and an implemented receiver route belong in INPUT.
+ * Geometry is resolved separately by RemoteAdaptiveLayout. */
 @Suppress("UNUSED_PARAMETER")
 fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteLayoutSpec {
     val external = state.receiver?.profile == RemoteProfile.External
-    val android = state.receiver?.profile == RemoteProfile.AndroidTv
     val context = state.context
     val player = context == RemoteContext.Player
     val browser = context == RemoteContext.Browser
@@ -37,14 +38,19 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val image = playback?.mediaKind == RemoteMediaKind.Image
     val audio = playback?.mediaKind == RemoteMediaKind.Audio
     val keys = state.capabilities.keys
-    val padKeys = setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok)
-    val hasPad = keys.containsAll(padKeys)
-    val pointer = !external && (!idle && android || !idle && image && state.capabilities.pointer.move == Support.Supported)
+    val hasPad = state.hasPadRoute()
+    val pointer = !external && (browser || player && image) && state.capabilities.pointer.move == Support.Supported
     val modes = buildList {
-        add(RemoteInputMode.Context)
-        if (hasPad && (!idle || external)) add(RemoteInputMode.Pad)
+        if (idle && !hasPad) add(RemoteInputMode.Context)
+        if (hasPad) add(RemoteInputMode.Pad)
         if (pointer) add(RemoteInputMode.Pointer)
-        if (!external && browser && state.capabilities.text.replace == Support.Supported) add(RemoteInputMode.Keyboard)
+    }
+    val defaultMode = when {
+        idle && !hasPad -> RemoteInputMode.Context
+        (browser || image) && RemoteInputMode.Pointer in modes -> RemoteInputMode.Pointer
+        RemoteInputMode.Pad in modes -> RemoteInputMode.Pad
+        RemoteInputMode.Pointer in modes -> RemoteInputMode.Pointer
+        else -> RemoteInputMode.Context // Sentinel when INPUT is absent, never an empty body.
     }
     fun enabled(route: Boolean, reason: String): RemoteControlAvailability =
         RemoteControlAvailability(state.connection.ready && route, if (state.connection.ready && route) null else reason)
@@ -52,7 +58,8 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val indices = queue?.items.orEmpty().map { it.index }
     val current = indices.indexOf(queue?.currentIndex)
     return RemoteLayoutSpec(
-        modes = modes, selectedMode = state.inputMode.takeIf { it in modes } ?: RemoteInputMode.Context,
+        inputPresentation = resolveInputPresentation(state),
+        modes = modes, selectedMode = state.inputMode.takeIf { it in modes && it != RemoteInputMode.Keyboard } ?: defaultMode,
         showModeRow = modes.size > 1,
         nav = RemoteNavSpec(
             enabled(RemoteKey.Back in keys && (!idle || external), "TV Back unavailable: no remote route"),
@@ -61,18 +68,26 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
             enabled(state.capabilities.volume.adjust == Support.Supported, "TV volume unavailable: no volume route"),
         ),
         transport = RemoteTransportSpec(
-            visible = player, enabled = state.connection.ready,
+            visible = false, enabled = state.connection.ready,
             seek = player && !image && playback?.isLive != true && playback?.seekable == Support.Supported,
             playPause = player && (!image || playback.durationMs > 0L),
             previous = if (!external && current > 0) indices[current - 1] else null,
             next = if (!external && current >= 0) indices.getOrNull(current + 1) else null,
         ),
-        idle = idle, info = player || browser && playback?.active == true,
-        wave = player && (!image || playback.durationMs > 0L) || browser && playback?.active == true,
+        idle = idle, info = player || browserTitle(browser, playback) != null,
+        wave = player && (!image || playback.durationMs > 0L) || browserVideo(browser, playback),
         tracks = RemoteTrackChipSpec(player && !external && !image && state.tracks.audio.isNotEmpty(), player && !external && !image && !audio, player),
         browserRow = browser, showQueue = player && !external && indices.size > 1,
     )
 }
+
+/** A browser page title is worth an info card. A blank title must not fall back to "Playing on TV". */
+private fun browserTitle(browser: Boolean, playback: RemotePlayback?): String? =
+    if (browser) RemoteTitlePolicy.browserHeading(playback?.title) else null
+
+/** Seek belongs on a browser page only while that page reports a real video. */
+private fun browserVideo(browser: Boolean, playback: RemotePlayback?): Boolean =
+    browser && playback?.let { it.active && it.durationMs > 0L } == true
 
 /** Compatibility inputs for the stage-1/external entry while 2b migrates its state source. */
 internal fun stage1PolicyState(
@@ -89,6 +104,7 @@ internal fun stage1PolicyState(
         context = typedContext, connection = if (connected) RemoteConnection.Connected("TV") else RemoteConnection.Disconnected,
         capabilities = RemoteCapabilities(
             keys = if (remote) RemoteKey.entries.toSet() else emptySet(),
+            keyScope = when { external && remote -> ControlScope.WholeDevice; remote -> ControlScope.PlayBridgeActivity; else -> ControlScope.None },
             pointer = PointerCapabilities(move = if (pointer) yes else no),
             text = TextCapabilities(replace = if (remote) yes else no),
             volume = VolumeCapabilities(adjust = if (volume) yes else no),

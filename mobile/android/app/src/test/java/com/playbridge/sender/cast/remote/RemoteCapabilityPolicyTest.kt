@@ -25,19 +25,19 @@ class RemoteCapabilityPolicyTest {
         assertEquals(RemoteProfile.Unknown, detectRemoteProfile(listOf("internal_mpv"), emptySet()))
         assertEquals(RemoteProfile.Unknown, detectRemoteProfile(emptyList(), emptySet()))
     }
-    @Test fun nativeTruthTablePreservesStageOneModesAndPermanentLayers() {
+    @Test fun nativeTruthTableExposesOnlyUsefulInputBodiesAndPermanentLayers() {
         for (profile in nativeProfiles) for (context in RemoteContext.entries) for (kind in RemoteMediaKind.entries) {
             val layout = resolveRemoteLayout(state(profile, context, kind), RemoteViewport())
             val active = context in setOf(RemoteContext.Player, RemoteContext.Browser)
             val expected = buildList {
-                add(RemoteInputMode.Context)
-                if (profile == RemoteProfile.AndroidTv && active) { add(RemoteInputMode.Pad); add(RemoteInputMode.Pointer) }
+                if (!active) add(RemoteInputMode.Context)
+                if (profile == RemoteProfile.AndroidTv && (context == RemoteContext.Browser || context == RemoteContext.Player && kind == RemoteMediaKind.Image)) add(RemoteInputMode.Pointer)
                 if (profile == RemoteProfile.Desktop && context == RemoteContext.Player && kind == RemoteMediaKind.Image) add(RemoteInputMode.Pointer)
-                if (profile == RemoteProfile.AndroidTv && context == RemoteContext.Browser) add(RemoteInputMode.Keyboard)
             }
             assertEquals("$profile/$context/$kind", expected, layout.modes)
+            assertEquals(expected.isNotEmpty(), layout.input)
             assertTrue(layout.header && layout.navLayer)
-            assertEquals(context == RemoteContext.Player, layout.transport.visible)
+            assertFalse(layout.transport.visible)
             assertEquals(!active, layout.idle)
             assertEquals(context == RemoteContext.Browser, layout.browserRow)
             assertEquals(profile == RemoteProfile.AndroidTv && active, layout.nav.back.enabled)
@@ -122,8 +122,13 @@ class RemoteCapabilityPolicyTest {
             val layout = resolveRemoteLayout(state, RemoteViewport())
             val player = playback in setOf(PlaybackState.PLAYING, PlaybackState.PAUSED, PlaybackState.BUFFERING)
             assertEquals(if (player) RemoteContext.Player else RemoteContext.Idle, state.context)
-            assertEquals(if (kind == TargetKind.ROKU) listOf(RemoteInputMode.Context, RemoteInputMode.Pad) else listOf(RemoteInputMode.Context), layout.modes)
-            assertEquals(player, layout.transport.visible)
+            val expected = buildList {
+                if (!player && kind != TargetKind.ROKU) add(RemoteInputMode.Context)
+                if (kind == TargetKind.ROKU) add(RemoteInputMode.Pad)
+            }
+            assertEquals(expected, layout.modes)
+            assertEquals(!player || kind == TargetKind.ROKU, layout.input)
+            assertFalse(layout.transport.visible)
             assertEquals(player && kind != TargetKind.ROKU, layout.transport.seek)
             assertEquals(kind == TargetKind.ROKU && playback != PlaybackState.ERROR, layout.nav.home.enabled)
             assertFalse(layout.nav.keys.enabled || layout.showQueue || layout.tracks.audio || layout.tracks.subtitles)
@@ -157,6 +162,38 @@ class RemoteCapabilityPolicyTest {
             transport.phase = SessionPhase.CONNECTED; transport.tick(state = PlaybackState.ERROR)
             assertFalse(transport.snapshot.value.receiverSnapshot.state.connection.ready)
         }
+    }
+
+    @Test fun playerVideoHasNoPadBrowserIsPointerAndIdleIsContext() {
+        val player = resolveRemoteLayout(state(RemoteProfile.AndroidTv, RemoteContext.Player, RemoteMediaKind.Video), RemoteViewport())
+        assertFalse(player.input)
+        assertTrue(player.modes.isEmpty())
+        val browser = resolveRemoteLayout(state(RemoteProfile.AndroidTv, RemoteContext.Browser, RemoteMediaKind.Video).copy(inputMode = RemoteInputMode.Context), RemoteViewport())
+        assertEquals(RemoteInputMode.Pointer, browser.selectedMode)
+        assertEquals(listOf(RemoteInputMode.Pointer), browser.modes)
+        val idle = resolveRemoteLayout(state(RemoteProfile.AndroidTv, RemoteContext.Idle, RemoteMediaKind.Video), RemoteViewport())
+        assertEquals(RemoteInputMode.Context, idle.selectedMode)
+        assertEquals(listOf(RemoteInputMode.Context), idle.modes)
+    }
+
+    @Test fun validUserInputPreferenceSurvivesAndLostPointerRouteFallsBackToPad() {
+        val raw = state(RemoteProfile.AndroidTv, RemoteContext.Browser, RemoteMediaKind.Video)
+        assertEquals(RemoteInputMode.Pointer, resolveRemoteLayout(raw.copy(inputMode = RemoteInputMode.Pad), RemoteViewport()).selectedMode)
+        val whole = raw.copy(capabilities = raw.capabilities.copy(keyScope = ControlScope.WholeDevice))
+        assertEquals(RemoteInputMode.Pad, resolveRemoteLayout(whole.copy(inputMode = RemoteInputMode.Pad), RemoteViewport()).selectedMode)
+        val lost = whole.copy(inputMode = RemoteInputMode.Pointer, capabilities = whole.capabilities.copy(pointer = PointerCapabilities()))
+        val layout = resolveRemoteLayout(lost, RemoteViewport())
+        assertFalse(RemoteInputMode.Pointer in layout.modes)
+        assertEquals(RemoteInputMode.Pad, layout.selectedMode)
+    }
+
+    @Test fun keyboardSheetAffordanceAloneCannotCreateAnEmptyInputBody() {
+        val raw = state(RemoteProfile.AndroidTv, RemoteContext.Browser, RemoteMediaKind.Video)
+        val layout = resolveRemoteLayout(raw.copy(capabilities = raw.capabilities.copy(keys = emptySet(), pointer = PointerCapabilities())), RemoteViewport())
+        assertTrue(layout.modes.isEmpty())
+        assertFalse(layout.input)
+        assertTrue(layout.nav.keys.enabled)
+        assertEquals(RemoteInputMode.Pointer, resolveRemoteLayout(raw.copy(inputMode = RemoteInputMode.Keyboard), RemoteViewport()).selectedMode)
     }
 
 }

@@ -2,11 +2,14 @@ package com.playbridge.sender.cast.remote
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -29,6 +32,12 @@ import org.junit.Rule
 import org.junit.Test
 
 class RemoteRouteTest {
+    private fun performWaveAction(label: String) {
+        val action = compose.onNodeWithContentDescription("Playback seek and volume").fetchSemanticsNode()
+            .config[SemanticsActions.CustomActions].first { it.label == label }
+        compose.runOnIdle { assertTrue(action.action()) }
+    }
+
     @get:Rule val compose = createComposeRule()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     @After fun dispose() { scope.cancel() }
@@ -51,14 +60,13 @@ class RemoteRouteTest {
         val endpoint = EndpointKey(CastProtocol.PLAYBRIDGE, "fixture")
         val targets = MutableStateFlow<RemoteNativeTarget?>(RemoteNativeTarget(NativeRemoteConfiguration(RemoteReceiver(endpoint, "Fixture TV", RemoteProfile.AndroidTv), listOf("exo"))))
         val vm = RemoteViewModel(RemoteControllerRegistry(targets, transport, scope), RemoteInputRouter(), scope = scope)
-        val effects = mutableListOf<RemoteEffect>()
-        compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, vm) } }
-        compose.onNodeWithText("Context").assertIsDisplayed()
-        compose.onNodeWithText("D-Pad").assertIsDisplayed()
-        compose.onNodeWithText("Touchpad").assertIsDisplayed()
-        compose.onNodeWithContentDescription("TV Home", substring = true).assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Pause").performClick()
-        compose.onNodeWithContentDescription("Play").assertIsDisplayed()
+        compose.setContent { MaterialTheme { RemoteRoute({}, Unit, { emptyList() }, vm) } }
+        compose.onNodeWithText("Context").assertDoesNotExist()
+        compose.onNodeWithTag("remote.input").assertDoesNotExist()
+        compose.onNodeWithText("Touchpad").assertDoesNotExist()
+        compose.onNodeWithContentDescription("TV Home", substring = true).assertDoesNotExist()
+        performWaveAction("Pause")
+        compose.onNodeWithContentDescription("Playback seek and volume").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Paused"))
         compose.runOnIdle { vm.dispatch(RemoteAction.SeekBy(10_000L)); vm.dispatch(RemoteAction.SeekBy(10_000L)) }
         compose.onNodeWithContentDescription("Playback seek and volume").assert(SemanticsMatcher.expectValue(
             SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(30_000f, 0f..120_000f),
@@ -72,8 +80,8 @@ class RemoteRouteTest {
         compose.runOnIdle { assertEquals(RemoteSheet.More, vm.state.value.sheet) }
         compose.onNodeWithText("Stop playback").performClick()
         compose.onNodeWithText("Nothing playing on Fixture TV").assertIsDisplayed()
-        compose.onNodeWithText("Browse Library").performClick()
-        compose.runOnIdle { assertEquals(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library), effects.last()) }
+        compose.onNodeWithText("Browse Library").assertDoesNotExist()
+        compose.onNodeWithText("Open browser").assertDoesNotExist()
     }
     private class ExternalTransport(val kind: TargetKind) : ExternalRemoteTransport {
         val identity = Any()
@@ -115,24 +123,24 @@ class RemoteRouteTest {
         compose.onNodeWithText("Touchpad").assertDoesNotExist()
         compose.onNodeWithContentDescription("Previous episode").assertDoesNotExist()
         compose.onNodeWithContentDescription("Next episode").assertDoesNotExist()
-        compose.onNodeWithContentDescription("TV Home", substring = true).assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Pause").performClick()
-        compose.onNodeWithContentDescription("Play").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Seek forward 10 seconds").performClick()
+        compose.onNodeWithContentDescription("TV Home", substring = true).assertDoesNotExist()
+        performWaveAction("Pause")
+        compose.onNodeWithContentDescription("Playback seek and volume").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Paused"))
+        performWaveAction("Seek forward 10 seconds")
         compose.onNodeWithContentDescription("Playback seek and volume").assert(SemanticsMatcher.expectValue(
             SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(20_000f, 0f..120_000f),
         ))
         compose.onNodeWithContentDescription("TV volume down").performClick()
         compose.onNodeWithText("Unlink").performClick()
         compose.runOnIdle {
-            assertEquals(listOf(RemoteAction.SetPlaying(false), RemoteAction.SeekTo(20_000L), RemoteAction.AdjustVolume(-1)), external.commands)
+            assertEquals(listOf(RemoteAction.SetPlaying(false), RemoteAction.SeekTo(20_000L, RemoteLearnedGesture.SEEK), RemoteAction.AdjustVolume(-1)), external.commands)
             assertEquals(RemoteEffect.UnlinkWebsite, effects.last())
         }
         compose.onNodeWithText("More").performClick()
         compose.onNodeWithText("Stop playback").performClick()
         compose.onNodeWithText("Nothing playing on External TV").assertIsDisplayed()
-        compose.onNodeWithText("Browse Library").performClick()
-        compose.runOnIdle { assertEquals(RemoteEffect.Navigate(RemoteEffect.Navigate.Destination.Library), effects.last()) }
+        compose.onNodeWithText("Browse Library").assertDoesNotExist()
+        compose.onNodeWithText("Open browser").assertDoesNotExist()
     }
     @Test fun rokuIdleAdapterKeepsPadAndHomeWithoutSeekOrNativeSocketCommands() {
         val external = ExternalTransport(TargetKind.ROKU)
@@ -142,8 +150,8 @@ class RemoteRouteTest {
         val effects = mutableListOf<RemoteEffect>()
         compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, vm) } }
         compose.onNodeWithText("Roku").assertIsDisplayed()
-        compose.onNodeWithText("Nothing playing on External TV").assertIsDisplayed()
-        compose.onNodeWithText("D-Pad").performClick()
+        // Roku idle is whole-device, so the pad fills INPUT instead of the empty sentence.
+        compose.runOnIdle { vm.dispatch(RemoteAction.SetButtonPad(true)) }
         compose.onNodeWithContentDescription("TV Left").performClick()
         compose.onNodeWithContentDescription("TV Home").performClick()
         compose.onNodeWithContentDescription("Seek forward 10 seconds").assertDoesNotExist()
