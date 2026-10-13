@@ -2271,6 +2271,10 @@ class BrowserActivity : ComponentActivity() {
             }
 
             PlayBridgeTheme {
+                // Bridged Apps and chrome-hidden browsing hide this bar. The engine then
+                // takes the keyboard inset itself (see browserBottomSpace).
+                val browserBottomToolbarVisible =
+                    currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden
                 bookmarkRemovalUrl?.let { url ->
                     AlertDialog(
                         onDismissRequest = { bookmarkRemovalUrl = null },
@@ -2489,7 +2493,7 @@ class BrowserActivity : ComponentActivity() {
                         }
                     },
                         bottomBar = {
-                            if (currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden) {
+                            if (browserBottomToolbarVisible) {
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     color = MaterialTheme.colorScheme.surfaceContainer,
@@ -2499,7 +2503,10 @@ class BrowserActivity : ComponentActivity() {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .windowInsetsPadding(WindowInsets.navigationBars)
+                                            // max(navigation bar, keyboard): closed keyboard matches
+                                            // the previous nav-bar padding; an open keyboard lifts
+                                            // the buttons onto the keyboard and shortens the engine.
+                                            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                                             .padding(horizontal = 16.dp, vertical = 2.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
@@ -2784,7 +2791,11 @@ class BrowserActivity : ComponentActivity() {
                         suggestions = suggestions,
                         onHandleBookmarkClick = { handleBookmarkClick() },
                         browserViewContent = { s, onLongPress ->
-                            BrowserView(session = s, onLongPressLink = onLongPress)
+                            BrowserView(
+                                session = s,
+                                onLongPressLink = onLongPress,
+                                bottomToolbarVisible = browserBottomToolbarVisible,
+                            )
                         },
                         isTabsSearchVisible = isTabsSearchVisible,
                         onTabsSearchVisibleChange = { isTabsSearchVisible = it },
@@ -3568,25 +3579,32 @@ class BrowserActivity : ComponentActivity() {
     }
 
     @Composable
-    fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
+    fun BrowserView(
+        session: EngineSession,
+        onLongPressLink: (String) -> Unit,
+        bottomToolbarVisible: Boolean,
+    ) {
         // Isolated so parent recompositions (browserState/currentUrl/isEditing ticks)
-        // don't re-measure the full-screen Gecko view: this subtree reads nothing
-        // but the persistent store. See GeckoBrowserView below.
-        GeckoBrowserView()
+        // don't recreate the Gecko view. Keyboard insets are observed by the modifier
+        // when the bottom toolbar is hidden. See GeckoBrowserView below.
+        GeckoBrowserView(bottomToolbarVisible)
     }
 
     @Composable
-    private fun GeckoBrowserView() {
+    private fun GeckoBrowserView(bottomToolbarVisible: Boolean) {
         // ONE persistent GeckoEngineView for all tabs (Fenix-style):
         // SessionFeature/EngineViewPresenter observes the store and renders
         // whatever tab is selected — creating engine sessions on demand,
         // releasing the view for crashed tabs, and re-rendering on session
         // changes. No more per-tab view recreation (the old `key(session)`
         // AndroidView), which caused surface churn on every tab switch.
+        // The view is measured to its constraints (no fixed height). A keyboard
+        // open shortens those constraints so Gecko scrolls the focused field in.
         val featureHolder = remember { arrayOfNulls<mozilla.components.feature.session.SessionFeature>(1) }
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
+                .browserEngineImePadding(bottomToolbarVisible)
                 .pointerInput(Unit) {
                     // Observe (never consume) downs so a Gecko long-press can later be
                     // suppressed when it started inside a system gesture edge zone.

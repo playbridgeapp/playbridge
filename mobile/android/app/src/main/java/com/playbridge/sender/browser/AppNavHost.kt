@@ -525,7 +525,7 @@ fun AppNavHost(
                             BoxWithConstraints(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                                    .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime))
                             ) {
                                 val density = LocalDensity.current
                                 val handleSizePx = with(density) { 48.dp.toPx() }
