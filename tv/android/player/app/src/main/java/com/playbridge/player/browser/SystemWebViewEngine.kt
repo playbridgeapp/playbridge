@@ -16,7 +16,15 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import com.playbridge.shared.browser.FullscreenFlags
+import com.playbridge.shared.browser.MaximizeRoute
 import com.playbridge.shared.browser.VideoTargetSelector
+import com.playbridge.shared.browser.focusResultToken
+import com.playbridge.shared.browser.focusTextPayload
+import com.playbridge.shared.browser.applyMaximizeSignal
+import com.playbridge.shared.browser.maximizeResultToken
+import com.playbridge.shared.browser.maximizeRoute
+import com.playbridge.shared.browser.maximizeSignal
 import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.player.logging.DebugNetworkLogger
 import androidx.webkit.JavaScriptReplyProxy
@@ -163,6 +171,12 @@ class SystemWebViewEngine(
     // Shared with Gecko; reply proxies identify frames in this engine.
     private val videoTargets = VideoTargetSelector<JavaScriptReplyProxy>()
 
+    /** Every frame that has reported, including ones with no video, so text can reach a focused field. */
+    private val frameProxies = LinkedHashSet<JavaScriptReplyProxy>()
+    private var focusKind: String? = null
+    private var focusSawOk = false
+    private var focusSawOther = false
+
     /**
      * Drop all video-control state. Called on top-level navigation, where the previous
      * document's frames (and their reply proxies) are destroyed without a final
@@ -174,6 +188,11 @@ class SystemWebViewEngine(
         videoControlActiveFallback = false
         activeVideoMuted = null
         autoUnmuteDone = false
+        maximizeProxy = null
+        acceptingMaximize = false
+        frameProxies.clear()
+        focusKind = null
+        setFullscreenFlags(FullscreenFlags())
         // The destroyed frames can't send their own final idle status, so the phone's
         // now-playing strip/scrubber would stay frozen on the old video. Push one idle
         // status here so the phone clears it on navigation.
@@ -242,6 +261,161 @@ class SystemWebViewEngine(
     /** JS unmute — only reliable after native has established a user gesture (a real tap). */
     fun videoUnmute() = sendVideoCommand("unmute")
 
+    /** In-frame CSS fill is on. Native chrome is tracked separately by the activity. */
+    fun isFrameFillActive(): Boolean = fullscreenFlags.frameFill
+
+    /** requestFullscreen was accepted, or the page was already fullscreen, before chrome appears. */
+    fun isNativeClaimActive(): Boolean = fullscreenFlags.nativeClaim
+
+    var onFullscreenFlagsChanged: (() -> Unit)? = null
+
+    private var fullscreenFlags = FullscreenFlags()
+    private var maximizeProxy: JavaScriptReplyProxy? = null
+    private var acceptingMaximize = false
+
+    /** Enter fullscreen for the selected frame. A repeat while already on does not re-request it. */
+    fun videoMaximize(nativeChrome: Boolean) {
+        when (maximizeRoute(multiFrame && currentProxy() != null, nativeChrome || fullscreenFlags.frameFill || fullscreenFlags.nativeClaim)) {
+            MaximizeRoute.Hold -> applyMaximizeResult("maximize", "ok_held")
+            MaximizeRoute.TargetFrame, MaximizeRoute.MainFrameFallback -> {
+                acceptingMaximize = true
+                dispatchFit("maximize")
+            }
+        }
+    }
+
+    /** Exit the in-frame fill and any fullscreen element our script owns. */
+    fun videoRestore() {
+        acceptingMaximize = false
+        setFullscreenFlags(FullscreenFlags())
+        dispatchFit("restore")
+        maximizeProxy = null
+    }
+
+    /**
+     * Replace the focused field in whichever frame holds it. [b64] is the phone's base64
+     * payload. An invalid payload is dropped. With no live frame channel, the main frame runs.
+     */
+    fun injectFocusedText(b64: String) {
+        val safe = focusTextPayload(b64)
+        if (safe == null) {
+            Log.d(TAG, "injectFocusedText: err")
+            return
+        }
+        beginFocus("text")
+        if (broadcastFocus("""{"type":"text","b64":"$safe"}""")) return
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.applyText('$safe'))||'no_focus'") { raw ->
+            noteFocusResult("text", raw?.trim()?.removeSurrounding("\"") ?: "no_focus")
+        }
+    }
+
+    /** Enter in the frame that holds the focused field. */
+    fun submitFocusedInput() {
+        beginFocus("enter")
+        if (broadcastFocus("""{"type":"enter"}""")) return
+        webView.evaluateJavascript("(window.__pbvc&&window.__pbvc.submitFocused())||'no_focus'") { raw ->
+            noteFocusResult("enter", raw?.trim()?.removeSurrounding("\"") ?: "no_focus")
+        }
+    }
+
+    private fun beginFocus(kind: String) {
+        focusKind = kind
+        focusSawOk = false
+        focusSawOther = false
+    }
+
+    private fun noteFocusResult(kind: String, value: String) {
+        if (kind != focusKind) return
+        val token = focusResultToken(value)
+        val label = if (kind == "text") "injectFocusedText" else "submitFocusedInput"
+        if (token == "ok") {
+            if (!focusSawOk) Log.d(TAG, "$label: ok")
+            focusSawOk = true
+            return
+        }
+        if (!focusSawOk && !focusSawOther) {
+            Log.d(TAG, "$label: $token")
+            focusSawOther = true
+        }
+    }
+
+    /** @return true when at least one frame accepted the payload. */
+    private fun broadcastFocus(payload: String): Boolean {
+        if (!multiFrame || frameProxies.isEmpty()) return false
+        val dead = mutableListOf<JavaScriptReplyProxy>()
+        var delivered = false
+        for (proxy in frameProxies) {
+            try {
+                proxy.postMessage(payload)
+                delivered = true
+            } catch (e: Exception) {
+                Log.w(TAG, "postMessage to a stale frame proxy failed; dropping it", e)
+                dead.add(proxy)
+            }
+        }
+        if (dead.isNotEmpty()) {
+            frameProxies.removeAll(dead.toSet())
+            dead.forEach { videoTargets.remove(it) }
+            val pinned = maximizeProxy
+            if (pinned != null && pinned in dead) maximizeProxy = null
+        }
+        return delivered
+    }
+
+    /** Native chrome went away. The CSS fill stays until [videoRestore]. */
+    fun noteChromeHidden() {
+        setFullscreenFlags(fullscreenFlags.copy(nativeClaim = false))
+    }
+
+    private fun dispatchFit(cmd: String) {
+        if (multiFrame) {
+            val proxy = if (cmd == "restore") maximizeProxy ?: currentProxy() else currentProxy()
+            if (proxy != null && postFit(proxy, cmd)) return
+            if (cmd == "restore") {
+                val fallback = currentProxy()
+                if (fallback != null && fallback !== proxy && postFit(fallback, cmd)) return
+            }
+        }
+        val call = if (cmd == "restore") {
+            "(window.__pbvc&&window.__pbvc.restore())||'not_maximized'"
+        } else {
+            "(window.__pbvc&&window.__pbvc.maximize())||'no_video'"
+        }
+        webView.evaluateJavascript(call) { raw ->
+            val value = raw?.trim()?.removeSurrounding("\"") ?: return@evaluateJavascript
+            if (value == "pending") return@evaluateJavascript
+            val kind = if (cmd == "restore") "restore" else "maximize"
+            if (kind == "maximize" && !acceptingMaximize) return@evaluateJavascript
+            applyMaximizeResult(kind, value)
+        }
+    }
+
+    private fun postFit(proxy: JavaScriptReplyProxy, cmd: String): Boolean {
+        if (cmd == "maximize") maximizeProxy = proxy
+        return try {
+            proxy.postMessage(cmd)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "postMessage to a stale frame proxy failed; dropping it", e)
+            videoTargets.remove(proxy)
+            if (maximizeProxy === proxy) maximizeProxy = null
+            false
+        }
+    }
+
+    private fun applyMaximizeResult(kind: String, value: String) {
+        if (kind != "maximize" && kind != "restore") return
+        val token = maximizeResultToken(value)
+        Log.d(TAG, if (kind == "restore") "restore_video result: $token" else "maximize_video result: $token")
+        setFullscreenFlags(applyMaximizeSignal(fullscreenFlags, maximizeSignal(kind, token)))
+    }
+
+    private fun setFullscreenFlags(next: FullscreenFlags) {
+        if (next == fullscreenFlags) return
+        fullscreenFlags = next
+        onFullscreenFlagsChanged?.invoke()
+    }
+
     private fun sendVideoCommand(cmd: String) {
         if (multiFrame) {
             // Unified channel pathway: post to the current target frame (main or iframe);
@@ -294,6 +468,16 @@ class SystemWebViewEngine(
                 "result" -> {
                     val kind = o.optString("kind")
                     val value = o.optString("value")
+                    if (kind == "text" || kind == "enter") {
+                        noteFocusResult(kind, value)
+                        return
+                    }
+                    if (kind == "maximize" || kind == "restore") {
+                        if (kind == "maximize" && !acceptingMaximize) return
+                        if (kind == "maximize" && maximizeProxy != null && proxy !== maximizeProxy) return
+                        applyMaximizeResult(kind, value)
+                        return
+                    }
                     if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
                 }
                 "overlay" -> {
@@ -315,7 +499,7 @@ class SystemWebViewEngine(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Bad frame message: $data", e)
+            Log.w(TAG, "Bad frame message", e)
         }
     }
 
@@ -335,6 +519,11 @@ class SystemWebViewEngine(
             // Legacy path is main-frame only, so there's no other target to guard against.
             trackMutedFromStatus(json)
             onVideoStatus?.invoke(json)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun onControlResult(kind: String, value: String) {
+            webView.post { applyMaximizeResult(kind, value) }
         }
     }
 
@@ -655,6 +844,7 @@ class SystemWebViewEngine(
                 WebViewCompat.addWebMessageListener(
                     this, "pbVideoChannel", setOf("*")
                 ) { _, message, _, _, replyProxy ->
+                    frameProxies.add(replyProxy)
                     message.data?.let { handleFrameMessage(it, replyProxy) }
                 }
                 WebViewCompat.addDocumentStartJavaScript(this, videoControlScript, setOf("*"))
