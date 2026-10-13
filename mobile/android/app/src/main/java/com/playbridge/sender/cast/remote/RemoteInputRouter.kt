@@ -36,6 +36,23 @@ class RemoteInputRouter(private val channel: TvRemoteChannel = UnavailableTvRemo
     suspend fun execute(controller: RemoteController, action: RemoteAction, expectedMedia: RemoteMediaId? = controller.snapshot.value.state.playback?.mediaId): RemoteCommandResult {
         val state = channel.state.value
         val matched = state.readyFor(controller.sessionId.endpoint)
+        if (action is RemoteAction.KeyboardInput) {
+            val receiver = controller.snapshot.value.state
+            if (action.context != receiver.context || action.route != receiver.keyboardRoute(matched)) {
+                return RemoteCommandResult.Failed("Keyboard context changed. Reopen the keyboard.")
+            }
+            return when (action.route) {
+                RemoteKeyboardRoute.PlayBridge -> when (val input = action.action) {
+                    is RemoteAction.ReplaceText, RemoteAction.DeleteText -> controller.execute(input, expectedMedia)
+                    is RemoteAction.Key -> if (input.key == RemoteKey.Enter) controller.execute(input, expectedMedia)
+                        else RemoteCommandResult.Unsupported("Unsupported keyboard input")
+                    else -> RemoteCommandResult.Unsupported("Unsupported keyboard input")
+                }
+                RemoteKeyboardRoute.FullControl -> if (action.action is RemoteAction.EditTvText)
+                    execute(controller, action.action, expectedMedia)
+                    else RemoteCommandResult.Unsupported("Unsupported keyboard input")
+            }
+        }
         // Choose once, before sending. An ambiguous failure is never resent on the other channel.
         return when {
             action is RemoteAction.EditTvText -> if (matched && state.text.replace == Support.Supported && state.text.delete == Support.Supported) channel.editText(action.deletes, action.text, action.enter) else RemoteCommandResult.Unsupported("Full control is not connected")

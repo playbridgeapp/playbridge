@@ -49,7 +49,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
             notice = if (reset) null else old.notice,
             queueProgress = old.queueProgress.filterKeys { it in progressKeys },
         )
-        return display()
+        return displayWithKeyboardRoute(old)
     }
 
     fun begin(action: RemoteAction): RemoteUiState {
@@ -97,8 +97,9 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         return state
     }
     fun applyChannel(channel: TvRemoteChannelState?): RemoteUiState {
+        val old = state
         channelState = channel
-        return display()
+        return displayWithKeyboardRoute(old)
     }
     fun local(action: RemoteAction): RemoteUiState {
         state = when (action) {
@@ -148,6 +149,15 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         val before = previous?.trim()?.takeIf { it.isNotEmpty() }
         val after = next?.trim()?.takeIf { it.isNotEmpty() }
         return before != null && after != null && before != after
+    }
+
+    /** Closing drops local drafts and disposes the ATV worker; reopening establishes a new baseline. */
+    private fun displayWithKeyboardRoute(previous: RemoteUiState): RemoteUiState {
+        display()
+        if (previous.sheet == RemoteSheet.Keyboard && previous.keyboardRoute() != state.keyboardRoute()) {
+            state = state.copy(sheet = null)
+        }
+        return state
     }
 
     private fun display(): RemoteUiState {

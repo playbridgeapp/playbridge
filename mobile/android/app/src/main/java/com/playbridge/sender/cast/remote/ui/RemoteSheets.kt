@@ -77,12 +77,14 @@ import com.playbridge.sender.cast.remote.RemoteCallbackActions
 import com.playbridge.sender.cast.remote.RemoteCommandResult
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteMediaKind
+import com.playbridge.sender.cast.remote.RemoteKeyboardRoute
 import com.playbridge.sender.cast.remote.RemoteProfile
 import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
 import com.playbridge.sender.cast.remote.RemoteViewport
 import com.playbridge.sender.cast.remote.ScalingMode
 import com.playbridge.sender.cast.remote.fullControlReady
+import com.playbridge.sender.cast.remote.keyboardRoute
 import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.resolveRemoteLayout
 import com.playbridge.sender.cast.subtitleOffIds
@@ -755,7 +757,16 @@ internal fun RemoteSheets(
                 showAddSubtitle = !external && !image && !audio,
                 onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
             )
-            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close, imeKeys = state.fullControlReady, execute = execute)
+            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) {
+                val route = remember { state.keyboardRoute() }
+                val context = remember { state.context }
+                RemoteKeyboardSheet(
+                    dispatch = { dispatch(RemoteAction.KeyboardInput(it, route, context)) },
+                    onDismiss = close,
+                    imeKeys = route == RemoteKeyboardRoute.FullControl,
+                    execute = { execute(RemoteAction.KeyboardInput(it, route, context)) },
+                )
+            }
             RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
             RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
             RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close)

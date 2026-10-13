@@ -38,6 +38,8 @@ sealed interface RemoteAction {
     data object DeleteText : RemoteAction
     /** One ordered, acknowledged Full control edit. Never falls back to receiver text replacement. */
     data class EditTvText(val deletes: Int, val text: String, val enter: Boolean = false) : RemoteAction
+    /** A keyboard session keeps one authority; stale edits are rejected rather than redirected. */
+    data class KeyboardInput(val action: RemoteAction, val route: RemoteKeyboardRoute, val context: RemoteContext) : RemoteAction
     data class PointerMove(val dx: Float, val dy: Float) : RemoteAction
     data object PointerClick : RemoteAction
     data class PointerScroll(val dx: Float, val dy: Float) : RemoteAction
