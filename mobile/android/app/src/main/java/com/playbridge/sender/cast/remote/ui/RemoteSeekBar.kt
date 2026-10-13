@@ -97,7 +97,7 @@ import com.playbridge.sender.cast.remote.RemoteSeekAxis
 import com.playbridge.sender.cast.remote.RemoteSeekGesturePolicy
 import com.playbridge.sender.cast.remote.RemoteTimeDisplay
 import com.playbridge.sender.cast.remote.RemoteUiState
-import com.playbridge.sender.cast.remote.crossedSeekBound
+import com.playbridge.sender.cast.remote.scrubFeedback
 import com.playbridge.sender.cast.remote.remotePressFeedback
 import com.playbridge.sender.cast.remote.relativeRemoteSeek
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
@@ -220,6 +220,7 @@ internal fun SeekVolumeBar(
                     var appliedY = 0f
                     var volumeAccum = 0f
                     var released = false
+                    var lastScrubTickMs: Long? = null
                     dragMs = currentPosition.toFloat()
                     directScrub = policy.direct
                     try {
@@ -243,10 +244,14 @@ internal fun SeekVolumeBar(
                             if (axis == RemoteSeekAxis.Horizontal && hasDuration) {
                                 change.consume()
                                 activeAxis = axis
+                                val started = !dragging
                                 dragging = true
                                 val previous = dragMs
                                 dragMs = policy.positionAt(change.position.x).toFloat()
-                                if (crossedSeekBound(previous, dragMs, durationMs)) haptics.perform(RemoteFeedback.SEEK_BOUND)
+                                scrubFeedback(previous, dragMs, durationMs, started, change.uptimeMillis, lastScrubTickMs)?.let { feedback ->
+                                    haptics.perform(feedback)
+                                    lastScrubTickMs = change.uptimeMillis
+                                }
                             } else if (axis == RemoteSeekAxis.Vertical && enableVolume) {
                                 change.consume()
                                 activeAxis = axis
@@ -254,10 +259,10 @@ internal fun SeekVolumeBar(
                                 appliedY = dy
                                 val stepPx = if (fastVolume) volumeStepPx / 2.5f else volumeStepPx
                                 while (volumeAccum >= stepPx) {
-                                    latestVolumeUp(); volumeAccum -= stepPx; volumeDirection = "up"
+                                    latestVolumeUp(); haptics.perform(RemoteFeedback.VOLUME); volumeAccum -= stepPx; volumeDirection = "up"
                                 }
                                 while (volumeAccum <= -stepPx) {
-                                    latestVolumeDown(); volumeAccum += stepPx; volumeDirection = "down"
+                                    latestVolumeDown(); haptics.perform(RemoteFeedback.VOLUME); volumeAccum += stepPx; volumeDirection = "down"
                                 }
                             }
                         }

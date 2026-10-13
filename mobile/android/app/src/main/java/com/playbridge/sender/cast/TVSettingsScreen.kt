@@ -11,6 +11,7 @@ import com.playbridge.sender.data.settings.SettingsRepository
 import android.os.Environment
 import android.widget.Toast
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -23,6 +24,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -31,6 +34,9 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.playbridge.sender.cast.remote.RemoteHapticLevel
+import com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore
+import com.playbridge.sender.cast.remote.rememberRemoteHapticEmitter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -227,6 +233,53 @@ fun TVSettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            val remotePreferences: RemotePresentationPreferenceStore = koinInject()
+            RemoteSettingsGroup(remotePreferences)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text("Paired TVs", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
+            val pairedTvs by atvCredentials.records.collectAsState()
+            var pendingForget by remember { mutableStateOf<com.playbridge.sender.cast.atv.AtvTvRecord?>(null) }
+            if (pairedTvs.isEmpty()) {
+                Text(
+                    "No paired TVs",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            pairedTvs.forEach { tv ->
+                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
+                ListItem(
+                    headlineContent = { Text(label) },
+                    trailingContent = {
+                        TextButton(
+                            onClick = { pendingForget = tv },
+                            modifier = Modifier.semantics { contentDescription = "Forget $label" },
+                        ) { Text("Forget") }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                )
+            }
+            pendingForget?.let { tv ->
+                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
+                AlertDialog(
+                    onDismissRequest = { pendingForget = null },
+                    title = { Text("Forget $label?") },
+                    text = { Text("PlayBridge will need a new pairing code to control this TV.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            atvCredentials.forget(tv.fingerprint)
+                            pendingForget = null
+                        }) { Text("Forget") }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingForget = null }) { Text("Cancel") } },
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 
             if (!isTvAvailable) {
@@ -276,6 +329,50 @@ fun TVSettingsScreen(
                 )
             ) {
                 Text(if (isClearing) "Clearing…" else "Clear TV Logs")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun RemoteSettingsGroup(
+    store: RemotePresentationPreferenceStore,
+    sample: (RemoteHapticLevel) -> Unit = rememberRemoteHapticEmitter(),
+) {
+    val preferences by store.state.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Remote", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        ListItem(
+            headlineContent = { Text("Haptic feedback") },
+            trailingContent = {
+                Switch(
+                    checked = preferences.hapticsEnabled,
+                    onCheckedChange = { enabled -> store.update { it.copy(hapticsEnabled = enabled) } },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                        .semantics { contentDescription = "Haptic feedback" },
+                )
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Intensity", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RemoteHapticLevel.entries.forEach { level ->
+                    FilterChip(
+                        selected = preferences.hapticsLevel == level,
+                        enabled = preferences.hapticsEnabled,
+                        onClick = {
+                            // Read the shared store at click time, including when another screen just disabled feedback.
+                            if (store.load().hapticsEnabled) {
+                                val updated = store.update { it.copy(hapticsLevel = level) }
+                                if (updated.hapticsEnabled) sample(level)
+                            }
+                        },
+                        label = { Text(level.name) },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .semantics { contentDescription = "Haptic intensity ${level.name}" },
+                    )
+                }
             }
         }
     }

@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +20,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -26,8 +33,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteContext
+import com.playbridge.sender.cast.remote.RemoteKey
 import com.playbridge.sender.cast.remote.RemoteMediaKind
 import com.playbridge.sender.cast.remote.RemoteProfile
+import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
 import com.playbridge.sender.cast.remote.ready
 
@@ -71,10 +80,11 @@ internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                         modifier = Modifier.semantics { contentDescription = title },
                         style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (!state.connection.ready) Text(name, style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
                         Text(state.receiver?.endpoint?.protocol?.displayName ?: "Receiver", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary)
+                        FullControlTag(state, dispatch)
                     }
                 }
             }
@@ -82,6 +92,80 @@ internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
         if (!state.connection.ready) {
             TextButton(onClick = { dispatch(RemoteAction.RetryConnection) }) { Text("Retry") }
         }
-        // The stage-4 Open app menu is hidden until it has an executable item.
+        FullControlMenu(state, dispatch)
+    }
+}
+
+@Composable
+private fun FullControlTag(state: RemoteUiState, dispatch: (RemoteAction) -> Unit) {
+    val control = state.fullControl ?: return
+    val powerOff = control.connected && control.powerOn == false
+    when {
+        control.connected -> Surface(
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier.testTag("remote.fullControl").semantics { contentDescription = "Full control connected" },
+        ) {
+            Text("Full control", modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+        }
+        control.needsRepair || control.pinMismatch -> Surface(
+            onClick = { dispatch(RemoteAction.RequestWholeTvControl) },
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            modifier = Modifier.testTag("remote.repair"),
+        ) {
+            Text("Re-pair", modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+        }
+        control.available && !control.paired -> Surface(
+            onClick = { dispatch(RemoteAction.RequestWholeTvControl) },
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier.testTag("remote.getFullControl"),
+        ) {
+            Text("Get full control", modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+        }
+    }
+    if (powerOff) {
+        Text(
+            "Off",
+            modifier = Modifier.testTag("remote.powerOff").semantics { contentDescription = "TV is off" },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+@Composable
+private fun FullControlMenu(state: RemoteUiState, dispatch: (RemoteAction) -> Unit) {
+    val control = state.fullControl
+    if (control?.connected != true) return
+    var expanded by remember { mutableStateOf(false) }
+    IconButton(onClick = { expanded = true }, modifier = Modifier.semantics { contentDescription = "More TV controls" }) {
+        Icon(Icons.Default.MoreVert, "More TV controls")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text("Open app…") },
+            onClick = {
+                expanded = false
+                dispatch(RemoteAction.OpenSheet(RemoteSheet.OpenTvApp))
+            },
+        )
+        DropdownMenuItem(
+            text = { Text("TV menu") },
+            onClick = {
+                expanded = false
+                dispatch(RemoteAction.Key(RemoteKey.Menu))
+            },
+        )
+        if (control.powerOn == false) {
+            DropdownMenuItem(
+                text = { Text("Power") },
+                onClick = {
+                    expanded = false
+                    dispatch(RemoteAction.PowerTv)
+                },
+            )
+        }
     }
 }

@@ -94,7 +94,7 @@ class RemoteControllerRegistry(
                 if (route != CastSessionManager.Route.NativeTv) return null
                 val active = sessions.activeTarget.value
                 if (active != null && active.kind != TargetKind.NATIVE) return null
-                val device = sessions.sessionState.value.device?.takeIf { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
+                val device = sessions.remoteDevice.value?.takeIf { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
                 val endpoint = device?.endpointKey ?: active?.let { EndpointKey(CastProtocol.PLAYBRIDGE, it.id) } ?: return null
                 val advertised = if (client.connectionState.value is WebSocketClient.ConnectionState.Connected) client.tvCapabilitiesState.value else WebSocketClient.TvCapabilities(emptyList(), emptyList())
                 val players = advertised.players.ifEmpty { device?.players.orEmpty() }
@@ -104,7 +104,7 @@ class RemoteControllerRegistry(
                 )
                 return RemoteNativeTarget(config, active)
             }
-            val targets = combine(sessions.route, sessions.activeTarget, sessions.sessionState, client.tvCapabilitiesState, client.connectionState) { _, _, _, _, _ -> target() }
+            val targets = combine(sessions.route, sessions.activeTarget, sessions.remoteDevice, client.tvCapabilitiesState, client.connectionState) { _, _, _, _, _ -> target() }
                 .stateIn(scope, SharingStarted.Eagerly, target())
             return RemoteControllerRegistry(targets, transport, scope, external, { target ->
                 val route = sessions.route.value as? CastSessionManager.Route.External

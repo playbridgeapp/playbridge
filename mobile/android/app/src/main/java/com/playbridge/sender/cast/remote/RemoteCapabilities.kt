@@ -20,7 +20,11 @@ data class QueueCapabilities(
     val remove: Support = Support.Unknown, val move: Support = Support.Unknown, val phoneOwned: Boolean = false,
 )
 data class TrackCapabilities(val audio: Support = Support.Unknown, val subtitle: Support = Support.Unknown, val addUrl: Support = Support.Unknown, val addResource: Support = Support.Unknown)
-data class VolumeCapabilities(val adjust: Support = Support.Unknown, val absolute: Support = Support.Unknown, val scope: VolumeScope = VolumeScope.None, val reportedPercent: Int? = null)
+data class VolumeCapabilities(
+    val adjust: Support = Support.Unknown, val absolute: Support = Support.Unknown,
+    val scope: VolumeScope = VolumeScope.None, val reportedPercent: Int? = null,
+    val level: Int? = null, val maximum: Int? = null, val muted: Boolean? = null,
+)
 
 data class RemoteCapabilities(
     val transport: TransportCapabilities = TransportCapabilities(), val keys: Set<RemoteKey> = emptySet(),
