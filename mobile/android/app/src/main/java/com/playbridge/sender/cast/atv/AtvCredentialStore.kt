@@ -1,6 +1,7 @@
 package com.playbridge.sender.cast.atv
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
@@ -21,7 +22,14 @@ internal data class AtvTvRecord(
 internal interface AtvCipher {
     fun encrypt(plain: ByteArray): ByteArray
     fun decrypt(blob: ByteArray): ByteArray
+    /** Only after verified re-pairing of an unreadable store. No plaintext fallback. */
+    fun rotateKey() { throw AtvStorageException() }
 }
+
+internal const val ATV_SAVE_ERROR = "Couldn't save the pairing"
+internal const val ATV_REMOVE_ERROR = "Couldn't remove the TV"
+internal class AtvStorageException : Exception(ATV_SAVE_ERROR)
+internal class AtvKeyUnavailableException : Exception("Pair again")
 
 /** App-private file. Bytes are ciphertext. */
 internal interface AtvSecretFile {
@@ -36,28 +44,49 @@ internal class AtvCredentialStore(
     private val lock = Any()
     private var identity: AtvClientIdentity? = null
     private var tvs: List<AtvTvRecord> = emptyList()
+    private var readBlocked = false
     private val recordsState = MutableStateFlow<List<AtvTvRecord>>(emptyList())
     val records: StateFlow<List<AtvTvRecord>> = recordsState.asStateFlow()
+    private val recoveryState = MutableStateFlow(false)
+    val recoveryRequired: StateFlow<Boolean> = recoveryState.asStateFlow()
 
     init {
         load()
     }
 
-    fun identityOrNull(): AtvClientIdentity? = synchronized(lock) { identity }
+    fun identityOrNull(): AtvClientIdentity? = synchronized(lock) { identity.takeUnless { recoveryState.value } }
+
+    /** An in-memory identity can still be verified during recovery; never use it to connect. */
+    fun pairingIdentityOrNull(): AtvClientIdentity? = synchronized(lock) {
+        retryBlockedRead()
+        identity
+    }
 
     fun saveIdentity(value: AtvClientIdentity) {
         synchronized(lock) {
+            requireReadable()
             persist(savedIdentity = value)
             identity = value
         }
     }
 
     /** Called only after verified pairing. A new pin replaces this receiver's previous association. */
-    fun upsert(record: AtvTvRecord) {
+    fun upsert(record: AtvTvRecord) = saveRecord(record, null, verified = false)
+
+    /** Recovery replaces unreadable credentials only after the TV verified this identity. */
+    fun saveVerifiedPairing(value: AtvClientIdentity, record: AtvTvRecord) = saveRecord(record, value, verified = true)
+
+    private fun saveRecord(record: AtvTvRecord, value: AtvClientIdentity?, verified: Boolean) {
         val fingerprint = record.fingerprint.lowercase()
         if (!isFingerprint(fingerprint)) return
         synchronized(lock) {
-            val replaced = tvs.filter { it.fingerprint == fingerprint || it.receiverIds.any(record.receiverIds::contains) }
+            retryBlockedRead()
+            val recovering = recoveryState.value
+            if (!verified) requireReadable()
+            // Runtime key loss can retain a readable in-memory identity/records. Preserve
+            // unrelated TVs when that same client identity is verified again.
+            val previous = if (recovering && identity != value) emptyList() else tvs
+            val replaced = previous.filter { it.fingerprint == fingerprint || it.receiverIds.any(record.receiverIds::contains) }
             val existing = replaced.lastOrNull()
             val merged = AtvTvRecord(
                 fingerprint = fingerprint,
@@ -66,15 +95,18 @@ internal class AtvCredentialStore(
                 lastIp = record.lastIp ?: existing?.lastIp,
                 receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds,
             )
-            val updated = tvs.filter { it !in replaced } + merged
-            persist(savedTvs = updated)
+            val updated = previous.filter { it !in replaced } + merged
+            persist(savedIdentity = value ?: identity, savedTvs = updated, rotateKey = recovering)
+            if (value != null) identity = value
             tvs = updated
             recordsState.value = tvs
+            recoveryState.value = false
         }
     }
 
     fun updateLastIp(fingerprint: String, ip: String) {
         synchronized(lock) {
+            requireReadable()
             val current = tvs.find { it.fingerprint == fingerprint.lowercase() } ?: return
             if (current.lastIp == ip) return
             val updated = tvs.map { if (it.fingerprint == current.fingerprint) it.copy(lastIp = ip) else it }
@@ -87,6 +119,7 @@ internal class AtvCredentialStore(
     /** Removes one television. The install identity stays. */
     fun forget(fingerprint: String) {
         synchronized(lock) {
+            requireReadable()
             val updated = tvs.filter { it.fingerprint != fingerprint.lowercase() }
             persist(savedTvs = updated)
             tvs = updated
@@ -95,19 +128,27 @@ internal class AtvCredentialStore(
     }
 
     private fun load() {
+        readBlocked = false
         val bytes = try {
             file.read()
         } catch (_: Exception) {
-            null
-        } ?: return
+            readBlocked = true
+            recoveryState.value = true
+            return
+        } ?: run {
+            recoveryState.value = false
+            return
+        }
         val plain = try {
             cipher.decrypt(bytes)
         } catch (_: Exception) {
+            recoveryState.value = true
             return
         }
         val json = try {
             JSONObject(plain.toString(Charsets.UTF_8))
         } catch (_: Exception) {
+            recoveryState.value = true
             return
         }
         val identityJson = json.optJSONObject("identity")
@@ -146,9 +187,23 @@ internal class AtvCredentialStore(
             migrated.filter { it !in replaced } + record.copy(receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds)
         }
         recordsState.value = tvs
+        recoveryState.value = false
     }
 
-    private fun persist(savedIdentity: AtvClientIdentity? = identity, savedTvs: List<AtvTvRecord> = tvs) {
+    private fun retryBlockedRead() {
+        if (!readBlocked) return
+        // A read failure says nothing about the key's usability. Do not rotate it
+        // or overwrite a possibly healthy file until a fresh read has succeeded.
+        load()
+        if (readBlocked) throw AtvStorageException()
+    }
+
+    private fun requireReadable() {
+        retryBlockedRead()
+        if (recoveryState.value) throw AtvStorageException()
+    }
+
+    private fun persist(savedIdentity: AtvClientIdentity? = identity, savedTvs: List<AtvTvRecord> = tvs, rotateKey: Boolean = false) {
         val document = JSONObject().put("version", 2)
         savedIdentity?.let { saved ->
             document.put("identity", JSONObject().put("cert_pem", saved.certPem).put("key_pem", saved.keyPem))
@@ -165,8 +220,18 @@ internal class AtvCredentialStore(
             )
         }
         document.put("tvs", array)
-        val blob = cipher.encrypt(document.toString().toByteArray(Charsets.UTF_8))
-        file.write(blob)
+        try {
+            if (rotateKey) cipher.rotateKey()
+            val blob = cipher.encrypt(document.toString().toByteArray(Charsets.UTF_8))
+            file.write(blob)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: AtvKeyUnavailableException) {
+            recoveryState.value = true
+            throw AtvStorageException()
+        } catch (_: Exception) {
+            throw AtvStorageException()
+        }
     }
 }
 

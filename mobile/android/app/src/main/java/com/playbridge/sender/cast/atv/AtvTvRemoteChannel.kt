@@ -36,7 +36,7 @@ import kotlinx.coroutines.withContext
 
 enum class AtvPairingPhase { Idle, Starting, WaitingForCode, Verifying, Failed, Paired }
 
-enum class AtvPairingFailure { BadCode, Unreachable, Timeout, Protocol, Closed }
+enum class AtvPairingFailure { BadCode, Unreachable, Timeout, Protocol, Closed, Storage }
 
 data class AtvPairingUi(
     val phase: AtvPairingPhase = AtvPairingPhase.Idle,
@@ -79,13 +79,14 @@ internal class AtvTvRemoteChannel(
     private var controlGeneration = 0L
     private data class TrustFailure(val needsRepair: Boolean = false, val pinMismatch: Boolean = false, val stopped: Boolean = false)
     private val trustFailures = mutableMapOf<String, TrustFailure>()
+    private val storageFailures = mutableSetOf<String>()
 
     override val state: StateFlow<TvRemoteChannelState> = channelState.asStateFlow()
     override val pairing: StateFlow<AtvPairingUi> = pairingState.asStateFlow()
 
     init {
         scope.launch {
-            combine(visible, receivers, refresh) { isVisible, receiver, _ -> isVisible to receiver }
+            combine(visible, receivers, refresh, credentials.recoveryRequired) { isVisible, receiver, _, _ -> isVisible to receiver }
                 .onEach { (isVisible, receiver) ->
                     if (!isVisible || pairingOwner != null && pairingOwner != receiver?.endpoint) cancel()
                     if (!isVisible || channelState.value.matchedEndpoint != receiver?.endpoint) clearConnected()
@@ -249,7 +250,9 @@ internal class AtvTvRemoteChannel(
             }
             val match = AtvDeviceMatcher.match(receiver, devices, credentials.records.value)
             pairingTarget = match.host?.let { PairingTarget(receiver.endpoint, it) }
-            if (match.record != null && trustFailures[match.record.fingerprint]?.stopped != true && match.host != null) {
+            if (match.record != null && !credentials.recoveryRequired.value &&
+                trustFailures[match.record.fingerprint]?.stopped != true && match.host != null
+            ) {
                 connectLoop(receiver, match.record, match.host)
             } else if (match.available) {
                 publishAvailable(receiver, match.record, match.host)
@@ -279,6 +282,7 @@ internal class AtvTvRemoteChannel(
                 currentCoroutineContext().ensureActive()
                 if (!visible.value || receivers.value?.endpoint != receiver.endpoint) throw CancellationException("Control owner changed")
                 credentials.updateLastIp(record.fingerprint, host)
+                storageFailures.remove(record.fingerprint)
                 trustFailures.remove(record.fingerprint)
                 publishConnected(receiver, record, session.television.value)
                 coroutineScope {
@@ -296,6 +300,13 @@ internal class AtvTvRemoteChannel(
                 throw AtvCommandException("closed", fixedMessage("closed"))
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (_: AtvStorageException) {
+                storageFailures.add(record.fingerprint)
+                publishAvailable(receiver, record, host)
+                withContext(NonCancellable) { runCatching { session.disconnect() } }
+                started = false
+                // Retry only after a fresh foreground/selection or verified pairing.
+                awaitCancellation()
             } catch (error: AtvCommandException) {
                 when (error.kind) {
                     "not_trusted" -> {
@@ -331,9 +342,12 @@ internal class AtvTvRemoteChannel(
         val host = target.host
         val endpoint = target.endpoint
         try {
-            val stored = credentials.identityOrNull() ?: session.generateIdentity(ATV_CLIENT_NAME).let { generated ->
+            val stored = credentials.pairingIdentityOrNull() ?: session.generateIdentity(ATV_CLIENT_NAME).let { generated ->
                 ensurePairingCurrent(generation, target)
-                AtvClientIdentity(generated.certPem, generated.keyPem).also(credentials::saveIdentity)
+                AtvClientIdentity(generated.certPem, generated.keyPem).also { identity ->
+                    // An unreadable file is not replaced until the TV verifies the new identity.
+                    if (!credentials.recoveryRequired.value) credentials.saveIdentity(identity)
+                }
             }
             ensurePairingCurrent(generation, target)
             val started = session.startPairing(host, stored.certPem, stored.keyPem, ATV_CLIENT_NAME)
@@ -351,7 +365,8 @@ internal class AtvTvRemoteChannel(
             val paired = session.finishPairing(code)
             ensurePairingCurrent(generation, target)
             val previousPins = credentials.records.value.filter { endpoint.toString() in it.receiverIds }.map { it.fingerprint }
-            credentials.upsert(
+            credentials.saveVerifiedPairing(
+                stored,
                 AtvTvRecord(
                     fingerprint = paired.fingerprint,
                     mac = paired.mac,
@@ -361,11 +376,16 @@ internal class AtvTvRemoteChannel(
                 ),
             )
             previousPins.forEach(trustFailures::remove)
+            previousPins.forEach(storageFailures::remove)
             trustFailures.remove(paired.fingerprint)
+            storageFailures.remove(paired.fingerprint)
             pairingState.value = AtvPairingUi(AtvPairingPhase.Paired, serverName = paired.serverName ?: started.serverName)
             refresh.value += 1
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: AtvStorageException) {
+            ensurePairingCurrent(generation, target)
+            pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = AtvPairingFailure.Storage)
         } catch (error: AtvCommandException) {
             ensurePairingCurrent(generation, target)
             pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = pairingFailure(error.kind))
@@ -418,8 +438,9 @@ internal class AtvTvRemoteChannel(
             physicalDeviceId = record?.let(::physicalId),
             paired = record != null,
             connected = false,
-            needsRepair = failure?.needsRepair == true,
+            needsRepair = failure?.needsRepair == true || credentials.recoveryRequired.value,
             pinMismatch = failure?.pinMismatch == true,
+            storageFailure = record?.let { it.fingerprint in storageFailures } == true,
             serverName = record?.serverName,
             fullControlAvailable = true,
         )

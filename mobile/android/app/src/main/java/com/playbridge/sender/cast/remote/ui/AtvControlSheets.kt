@@ -39,6 +39,7 @@ import com.playbridge.sender.cast.atv.AtvPairingController
 import com.playbridge.sender.cast.atv.AtvPairingFailure
 import com.playbridge.sender.cast.atv.AtvPairingPhase
 import com.playbridge.sender.cast.atv.AtvPairingUi
+import com.playbridge.sender.cast.atv.ATV_SAVE_ERROR
 import com.playbridge.sender.cast.atv.normalizePairingCode
 import com.playbridge.sender.cast.atv.normalizePairingCodeInput
 import com.playbridge.sender.cast.remote.RemoteAction
@@ -149,6 +150,7 @@ private fun pairingMessage(failure: AtvPairingFailure?): String = when (failure)
     AtvPairingFailure.Unreachable -> "Android TV remote is unreachable"
     AtvPairingFailure.Timeout -> "Android TV remote timed out"
     AtvPairingFailure.Closed -> "Android TV remote connection closed"
+    AtvPairingFailure.Storage -> ATV_SAVE_ERROR
     AtvPairingFailure.Protocol, null -> "invalid Android TV remote command or protocol message"
 }
 

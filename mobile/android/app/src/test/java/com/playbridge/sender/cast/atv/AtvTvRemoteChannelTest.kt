@@ -25,6 +25,8 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -327,13 +329,127 @@ class AtvTvRemoteChannelTest {
         }
     }
 
+    @Test fun failedAddressSaveClosesControlAndCanRetryWithoutLosingTheSupervisor() = runTest {
+        val file = FaultSecretFile()
+        val store = AtvCredentialStore(file, XorCipher()).apply {
+            saveIdentity(AtvClientIdentity("CERT", "KEY"))
+            upsert(AtvTvRecord("ab".repeat(32), null, "TV", "10.0.0.1", setOf(endpoint.toString())))
+        }
+        file.fail = true
+        val session = FakeSession()
+        withChannel(session, store) { channel, _, _ ->
+            channel.setRemoteVisible(true)
+            runCurrent()
+            assertFalse(channel.state.value.connected)
+            assertTrue(channel.state.value.storageFailure)
+            assertTrue(session.disconnectCount >= 1)
+            assertEquals("10.0.0.1", store.records.value.single().lastIp)
+            channel.setRemoteVisible(false)
+            runCurrent()
+            file.fail = false
+            channel.setRemoteVisible(true)
+            runCurrent()
+            assertTrue(channel.state.value.connected)
+            assertFalse(channel.state.value.storageFailure)
+            assertEquals(target.addresses.first(), AtvCredentialStore(file, XorCipher()).records.value.single().lastIp)
+        }
+    }
+
+    @Test fun failedIdentitySaveShowsFixedPairingFailureAndRetryStillWorks() = runTest {
+        val file = FaultSecretFile().apply { fail = true }
+        val store = AtvCredentialStore(file, XorCipher())
+        val session = FakeSession()
+        withChannel(session, store) { channel, _, _ ->
+            channel.setRemoteVisible(true)
+            runCurrent()
+            channel.begin()
+            runCurrent()
+            assertEquals(AtvPairingPhase.Failed, channel.pairing.value.phase)
+            assertEquals(AtvPairingFailure.Storage, channel.pairing.value.failure)
+            assertEquals(0, session.pairStarts)
+            assertNull(store.identityOrNull())
+            file.fail = false
+            channel.begin()
+            runCurrent()
+            assertEquals(AtvPairingPhase.WaitingForCode, channel.pairing.value.phase)
+            assertEquals(1, session.pairStarts)
+        }
+    }
+
+    @Test fun failedVerifiedPairingSaveDoesNotPublishPairedOrReplaceThePin() = runTest {
+        val file = FaultSecretFile()
+        val store = AtvCredentialStore(file, XorCipher()).apply {
+            saveIdentity(AtvClientIdentity("CERT", "KEY"))
+            upsert(AtvTvRecord("ab".repeat(32), null, "TV", target.addresses.first(), setOf(endpoint.toString())))
+        }
+        withChannel(FakeSession(), store) { channel, _, _ ->
+            channel.setRemoteVisible(true)
+            runCurrent()
+            file.fail = true
+            channel.begin()
+            runCurrent()
+            channel.submitCode("ABC123")
+            runCurrent()
+            assertEquals(AtvPairingPhase.Failed, channel.pairing.value.phase)
+            assertEquals(AtvPairingFailure.Storage, channel.pairing.value.failure)
+            assertEquals("ab".repeat(32), store.records.value.single().fingerprint)
+            assertEquals("ab".repeat(32), AtvCredentialStore(file, XorCipher()).records.value.single().fingerprint)
+        }
+    }
+
+    @Test fun unreadableKeyPromptsPairAgainAndOnlyVerifiedPairingRewritesTheFile() = runTest {
+        for (failWrite in listOf(false, true)) {
+            val keys = FixtureKeystoreKeys()
+            val file = FaultSecretFile()
+            AtvCredentialStore(file, AndroidAtvCipher(keys)).apply {
+                saveIdentity(AtvClientIdentity("OLD-CERT", "OLD-KEY"))
+                upsert(AtvTvRecord("ab".repeat(32), null, "TV", target.addresses.first(), setOf(endpoint.toString())))
+            }
+            val before = file.read()!!
+            keys.invalid = true
+            val store = AtvCredentialStore(file, AndroidAtvCipher(keys))
+            val session = FakeSession()
+            withChannel(session, store) { channel, _, _ ->
+                channel.setRemoteVisible(true)
+                runCurrent()
+                assertTrue(channel.state.value.needsRepair)
+                assertFalse(channel.state.value.connected)
+                assertEquals(0, session.connectCount)
+                channel.begin()
+                runCurrent()
+                assertEquals(AtvPairingPhase.WaitingForCode, channel.pairing.value.phase)
+                assertArrayEquals(before, file.read())
+                assertEquals(0, keys.rotations)
+                file.fail = failWrite
+                channel.submitCode("ABC123")
+                runCurrent()
+                if (failWrite) {
+                    assertEquals(AtvPairingFailure.Storage, channel.pairing.value.failure)
+                    assertTrue(store.recoveryRequired.value)
+                    assertArrayEquals(before, file.read())
+                    assertTrue(store.records.value.isEmpty())
+                    assertEquals(0, session.connectCount)
+                    file.fail = false
+                    channel.begin()
+                    runCurrent()
+                    channel.submitCode("ABC123")
+                    runCurrent()
+                }
+                assertEquals(AtvPairingPhase.Paired, channel.pairing.value.phase)
+                assertFalse(store.recoveryRequired.value)
+                assertTrue(channel.state.value.connected)
+                assertEquals("ef".repeat(32), AtvCredentialStore(file, AndroidAtvCipher(keys)).records.value.single().fingerprint)
+            }
+        }
+    }
+
     /** Foreground child of the test. backgroundScope work stays queued through advanceUntilIdle. */
-    private suspend fun TestScope.withChannel(session: FakeSession, block: suspend (AtvTvRemoteChannel, AtvCredentialStore, MutableStateFlow<AtvReceiverTarget?>) -> Unit) {
+    private suspend fun TestScope.withChannel(session: FakeSession, credentialStore: AtvCredentialStore? = null, block: suspend (AtvTvRemoteChannel, AtvCredentialStore, MutableStateFlow<AtvReceiverTarget?>) -> Unit) {
         val job = SupervisorJob(coroutineContext[Job])
         val file = MemorySecretFile()
-        val store = AtvCredentialStore(file, XorCipher())
-        store.saveIdentity(AtvClientIdentity("CERT", "KEY"))
-        store.upsert(
+        val store = credentialStore ?: AtvCredentialStore(file, XorCipher()).apply {
+            saveIdentity(AtvClientIdentity("CERT", "KEY"))
+            upsert(
             AtvTvRecord(
                 fingerprint = "ab".repeat(32),
                 mac = "C0:E5:DA:D8:C3:5F",
@@ -342,6 +458,7 @@ class AtvTvRemoteChannelTest {
                 receiverIds = setOf(endpoint.toString()),
             ),
         )
+        }
         val receivers = MutableStateFlow<AtvReceiverTarget?>(target)
         val channel = AtvTvRemoteChannel(
             session,
@@ -382,7 +499,7 @@ private class FakeSession : AtvControlSession {
         discoverCount++
         return emptyList()
     }
-    override suspend fun generateIdentity(clientName: String) = error("unused")
+    override suspend fun generateIdentity(clientName: String) = AtvIdentity("CERT", "KEY", "01".repeat(32))
     override suspend fun startPairing(host: String, certPem: String, keyPem: String, clientName: String): AtvPairingStarted {
         pairStarts++
         return AtvPairingStarted("TV", "ab".repeat(32), null)
