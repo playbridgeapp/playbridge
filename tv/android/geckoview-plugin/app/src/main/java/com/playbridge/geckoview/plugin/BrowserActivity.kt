@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import java.util.Locale
+import com.playbridge.shared.protocol.statusWithFullscreen
 
 class BrowserActivity : ComponentActivity() {
 
@@ -91,6 +92,7 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
     private var isGeckoFullscreen = false
+    private var lastBrowserStatusJson: String? = null
 
     private var customOverlayView: FrameLayout? = null
     private var customOverlayTextView: android.widget.TextView? = null
@@ -267,10 +269,22 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun sendVideoStatus(json: String) {
-        if (!playerBridge.videoStatus(json)) {
+        lastBrowserStatusJson = json
+        dispatchBrowserStatus(json)
+    }
+
+    private fun publishFullscreenNow() {
+        dispatchBrowserStatus(
+            lastBrowserStatusJson ?: """{"type":"status","state":"idle","position":0,"duration":0}""",
+        )
+    }
+
+    private fun dispatchBrowserStatus(json: String) {
+        val merged = statusWithFullscreen(json, isGeckoFullscreen)
+        if (!playerBridge.videoStatus(merged)) {
             sendBroadcast(Intent(ACTION_BROWSER_VIDEO_STATUS).apply {
                 setPackage("com.playbridge.player")
-                putExtra(EXTRA_VIDEO_STATUS_JSON, json)
+                putExtra(EXTRA_VIDEO_STATUS_JSON, merged)
             }, BROWSER_CONTROL_PERMISSION)
         }
     }
@@ -282,6 +296,7 @@ class BrowserActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishFullscreenNow()
     }
 
     private fun exitGeckoFullscreen() {
@@ -289,6 +304,7 @@ class BrowserActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView)
             .show(WindowInsetsCompat.Type.systemBars())
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishFullscreenNow()
     }
 
     /**
@@ -554,6 +570,17 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command received")
 
+        // A focused field still receives text in native fullscreen. A fullscreen
+        // video with no input or contenteditable target leaves the script at no_focus.
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
+
         // Active video owns D-pad input, including Gecko's native fullscreen surface.
         if (engine?.isVideoControlActive() == true) {
             when (key) {
@@ -597,16 +624,6 @@ class BrowserActivity : ComponentActivity() {
                     cursorView?.updatePosition(cursorX, cursorY)
                 }
             }
-            return
-        }
-
-        // Keyboard input streamed from the phone (browser keyboard mode).
-        if (key != null && key.startsWith("text:")) {
-            injectFocusedText(key.removePrefix("text:"))
-            return
-        }
-        if (key == "key_enter") {
-            submitFocusedInput()
             return
         }
 

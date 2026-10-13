@@ -272,6 +272,8 @@ class ProtocolJsonTest {
 
     @Test
     fun receiverAdvertisesPairedDiagnosticLogs() {
-        assertTrue("diagnostic_logs_v1" in com.playbridge.player.server.TvCapabilities(emptyList(), emptyList()).features)
+        val features = com.playbridge.player.server.TvCapabilities(emptyList(), emptyList()).features
+        assertTrue("diagnostic_logs_v1" in features)
+        assertTrue("player_home_v1" in features)
     }
 }

@@ -17,6 +17,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import com.playbridge.shared.browser.VideoTargetSelector
+import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.player.logging.DebugNetworkLogger
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
@@ -661,11 +662,11 @@ class SystemWebViewEngine(
 
             // Handle Downloads via Android DownloadManager
             setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
-                Log.d(TAG, "Download requested: $url (mime=$mimeType)")
+                Log.d(TAG, "Download requested: ${redactUrlForLog(url)} (mime=$mimeType)")
                 try {
                     if (!url.startsWith("http://") && !url.startsWith("https://")) {
                         // DownloadManager only handles http(s); blob:/data: can't be enqueued.
-                        Log.w(TAG, "Cannot download non-http URL: $url")
+                        Log.w(TAG, "Cannot download non-http URL: ${redactUrlForLog(url)}")
                         android.widget.Toast.makeText(context, "This download type isn't supported", android.widget.Toast.LENGTH_SHORT).show()
                         return@setDownloadListener
                     }
@@ -833,7 +834,7 @@ class SystemWebViewEngine(
 
             // Use AdBlocker with popup-aware blocking for navigations
             if (adBlocker.shouldBlockNavigation(url, currentUrl)) {
-                Log.d(TAG, "Blocked navigation (popup/redirect rule): $url")
+                Log.d(TAG, "Blocked navigation (popup/redirect rule): ${redactUrlForLog(url)}")
                 return true
             }
 
@@ -848,7 +849,7 @@ class SystemWebViewEngine(
                 if (now - lastNavigationTime < 1000) {
                     navigationCount++
                     if (navigationCount > 3) {
-                        Log.d(TAG, "Blocked rapid cross-origin redirect chain: $url")
+                        Log.d(TAG, "Blocked rapid cross-origin redirect chain: ${redactUrlForLog(url)}")
                         navigationCount = 0
                         return true
                     }
@@ -877,7 +878,7 @@ class SystemWebViewEngine(
                     url.contains("popad") ||
                     url.contains("/go/") && (url.contains("ad") || url.contains("click")) ||
                     url.contains("track.php")) {
-                    Log.d(TAG, "Blocked suspicious redirect: $url")
+                    Log.d(TAG, "Blocked suspicious redirect: ${redactUrlForLog(url)}")
                     return true
                 }
             }

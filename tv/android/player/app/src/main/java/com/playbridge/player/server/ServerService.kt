@@ -876,7 +876,7 @@ class ServerService : Service() {
                     addAll(msg.payload.items)
                 }
                 val item = requestedItems.firstOrNull()
-                FileLogger.i(TAG, "=== QUEUE_ADD === count: ${requestedItems.size}, title: ${item?.title}")
+                FileLogger.i(TAG, "=== QUEUE_ADD === count: ${requestedItems.size}")
                 if (command.requestId != null || msg.payload.items.isNotEmpty() || msg.payload.if_playback_id != null) {
                     pendingQueueCommands.add(PendingQueueCommand(command.connectionId, command.requestId, msg))
                     sendBroadcast(Intent(ACTION_QUEUE_MUTATE).apply {

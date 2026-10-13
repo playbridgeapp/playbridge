@@ -29,7 +29,7 @@ class RemoteAvailabilityTest {
     }
 
     @Test fun navRoutesAreHonestAcrossContextsAndConnection() {
-        assertEquals(RemoteNavAvailability(true, false, false, true), remoteNavAvailability("player", false, true, true, true))
+        assertEquals(RemoteNavAvailability(true, true, false, true), remoteNavAvailability("player", false, true, true, true))
         assertEquals(RemoteNavAvailability(true, true, true, true), remoteNavAvailability("browser", false, true, true, true))
         assertEquals(RemoteNavAvailability(false, false, false, true), remoteNavAvailability("idle", false, true, true, true))
         assertEquals(RemoteNavAvailability(true, true, false, true), remoteNavAvailability("idle", true, true, true, true))

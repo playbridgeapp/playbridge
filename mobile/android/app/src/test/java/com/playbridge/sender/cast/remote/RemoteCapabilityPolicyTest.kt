@@ -46,6 +46,23 @@ class RemoteCapabilityPolicyTest {
             assertEquals(context == RemoteContext.Player && kind != RemoteMediaKind.Image, layout.transport.seek)
         }
     }
+    @Test fun androidPlayerHomeFollowsAdvertisedCapability() {
+        val player = state(RemoteProfile.AndroidTv, RemoteContext.Player, RemoteMediaKind.Video)
+        assertFalse(resolveRemoteLayout(player, RemoteViewport()).nav.home.enabled)
+        assertFalse(RemoteKey.Home in player.capabilities.keys)
+        val advertised = player.copy(capabilities = nativeRemoteCapabilities(
+            RemoteProfile.AndroidTv, RemoteContext.Player, RemoteMediaKind.Video, features = setOf("player_home_v1"),
+        ))
+        assertTrue(RemoteKey.Home in advertised.capabilities.keys)
+        assertTrue(resolveRemoteLayout(advertised, RemoteViewport()).nav.home.enabled)
+        val apple = state(RemoteProfile.AppleTv, RemoteContext.Player, RemoteMediaKind.Video).copy(
+            capabilities = nativeRemoteCapabilities(
+                RemoteProfile.AppleTv, RemoteContext.Player, RemoteMediaKind.Video, features = setOf("player_home_v1"),
+            ),
+        )
+        assertFalse(resolveRemoteLayout(apple, RemoteViewport()).nav.home.enabled)
+        assertTrue(resolveRemoteLayout(state(RemoteProfile.AndroidTv, RemoteContext.Browser, RemoteMediaKind.Video), RemoteViewport()).nav.home.enabled)
+    }
     @Test fun reconnectPairingFailureAndDisconnectDimReceiverControlsWithoutRemovingLayers() {
         val connections = listOf(RemoteConnection.Disconnected, RemoteConnection.Connecting("TV"), RemoteConnection.Reconnecting(1, 3, 2), RemoteConnection.Pairing("TV", RemoteConnection.Pairing.Phase.Approval), RemoteConnection.Failed("Lost"))
         for (connection in connections) {

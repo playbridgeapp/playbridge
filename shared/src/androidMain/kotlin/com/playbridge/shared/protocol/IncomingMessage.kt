@@ -5,6 +5,7 @@ import com.squareup.moshi.Types
 import com.squareup.wire.WireJsonAdapterFactory
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -465,6 +466,13 @@ fun createStatusJson(
     if (playbackId != null) put("playbackId", playbackId)
     if (currentItemId != null) put("currentItemId", currentItemId)
 }.toString()
+
+/** Merges native browser fullscreen onto a status frame. Non-status JSON is unchanged. */
+fun statusWithFullscreen(json: String, fullscreen: Boolean): String {
+    val element = runCatching { Json.parseToJsonElement(json) }.getOrNull() as? JsonObject ?: return json
+    if (element["type"]?.jsonPrimitive?.contentOrNull != "status") return json
+    return JsonObject(element + ("fullscreen" to JsonPrimitive(fullscreen))).toString()
+}
 
 fun createPlaylistStatusJson(
     items: List<Pair<Int, String>>,

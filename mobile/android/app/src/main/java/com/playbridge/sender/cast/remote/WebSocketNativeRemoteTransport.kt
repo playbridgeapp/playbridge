@@ -52,6 +52,7 @@ class WebSocketNativeRemoteTransport(
             speed = settings.speed.takeIf { reported("speed") }, scaling = ScalingMode.entries.firstOrNull { reported("scaling") && it.wireValue == settings.scaling },
             audioBoost = settings.audioBoost.takeIf { reported("audioBoost") }, subtitleOffsetMs = settings.subtitleOffsetMs.takeIf { reported("subtitleOffsetMs") },
             engine = settings.engine.takeIf { reported("engine") }, qualityMaxHeight = settings.qualityMaxHeight.takeIf { reported("qualityMaxHeight") }, currentVideoHeight = settings.currentVideoHeight.takeIf { reported("currentVideoHeight") },
+            loopEnabled = loopFromPlayerSettings(settings.loop, observation.settingsFields),
             availability = mapOf(
                 PlayerSetting.Speed to support(settings.speedAvailable), PlayerSetting.Scaling to support(settings.scalingAvailable),
                 PlayerSetting.AudioBoost to support(settings.audioBoostAvailable), PlayerSetting.Quality to support(settings.qualityAvailable),
@@ -76,6 +77,7 @@ class WebSocketNativeRemoteTransport(
                 browser = if (context == RemoteContext.Browser) RemoteBrowserState(
                     engine = if (wireContext == "browser_external") RemoteBrowserEngine.Gecko else RemoteBrowserEngine.Unknown,
                     muted = observation.browserMuted,
+                    fullscreen = browserFullscreenFromStatus(context, observation.browserFullscreen),
                 ) else null,
                 mirror = RemoteMirrorState(mirror.isActive, mirror.sessionId, mirror.phase.name, mirror.message, mirror.deviceAudioRequested, mirror.audioStatus.name, mirror.audioMessage),
                 linkedWebsite = LinkedWebsiteState(linked.active, linked.controllerName),
@@ -102,6 +104,12 @@ class WebSocketNativeRemoteTransport(
         return true
     }
 }
+
+internal fun loopFromPlayerSettings(loop: Boolean?, fields: Set<String>): Boolean? =
+    if ("loop" in fields) loop else null
+
+internal fun browserFullscreenFromStatus(context: RemoteContext, reported: Boolean?): Boolean? =
+    if (context == RemoteContext.Browser) reported else null
 
 internal fun support(value: Boolean) = if (value) Support.Supported else Support.Unsupported
 internal fun remoteMediaKind(value: String) = when (value) { "audio" -> RemoteMediaKind.Audio; "image" -> RemoteMediaKind.Image; else -> RemoteMediaKind.Video }

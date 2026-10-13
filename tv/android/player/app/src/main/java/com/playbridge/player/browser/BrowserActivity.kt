@@ -30,6 +30,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import com.playbridge.shared.logging.redactUrlForLog
+import com.playbridge.shared.protocol.statusWithFullscreen
 
 class BrowserActivity : ComponentActivity() {
 
@@ -82,6 +84,7 @@ class BrowserActivity : ComponentActivity() {
 
     // Fullscreen video support
     private var fullscreenView: View? = null
+    private var lastBrowserStatusJson: String? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
@@ -186,7 +189,7 @@ class BrowserActivity : ComponentActivity() {
         // Load the URL from intent
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
-            Log.d(TAG, "Loading URL: $url")
+            Log.d(TAG, "Loading URL: ${redactUrlForLog(url)}")
             currentUrl = url
             engine?.loadUrl(url)
         } else {
@@ -257,9 +260,7 @@ class BrowserActivity : ComponentActivity() {
 
         // Forward the controller's playback status to the phone (drives its scrubber).
         // Same "status" message the native player emits, so the phone parses it as-is.
-        engine?.onVideoStatus = { json ->
-            com.playbridge.player.server.ServerService.broadcastStatus(this, json)
-        }
+        engine?.onVideoStatus = { json -> publishBrowserStatus(json) }
 
         // Custom overlay support controlled by user scripts
         engine?.onVideoOverlay = { visible, text, style, bgColor, textColor, autoDismissMs ->
@@ -436,6 +437,7 @@ class BrowserActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishBrowserStatus(null)
     }
 
     /**
@@ -474,6 +476,17 @@ class BrowserActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView)
             .show(WindowInsetsCompat.Type.systemBars())
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishBrowserStatus(null)
+    }
+
+    private fun publishBrowserStatus(json: String?) {
+        if (json != null) lastBrowserStatusJson = json
+        val base = lastBrowserStatusJson
+            ?: """{"type":"status","state":"idle","position":0,"duration":0}"""
+        com.playbridge.player.server.ServerService.broadcastStatus(
+            this,
+            statusWithFullscreen(base, fullscreenView != null),
+        )
     }
 
     /**
@@ -737,7 +750,18 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun handleRemoteCommand(key: String?) {
-        Log.d(TAG, "Remote command: $key")
+        Log.d(TAG, if (key?.startsWith("text:") == true) "Remote command: text" else "Remote command: $key")
+
+        // A focused field still receives text in native fullscreen. A fullscreen
+        // video with no input or contenteditable target returns no_focus.
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
 
         if (fullscreenView != null) {
             when (key) {
@@ -770,16 +794,6 @@ class BrowserActivity : ComponentActivity() {
                 "dpad_up" -> { engine?.videoVolume(VOLUME_STEP); return }
                 "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP); return }
             }
-        }
-
-        // Keyboard input streamed from the phone (browser keyboard mode).
-        if (key != null && key.startsWith("text:")) {
-            injectFocusedText(key.removePrefix("text:"))
-            return
-        }
-        if (key == "key_enter") {
-            submitFocusedInput()
-            return
         }
 
         val cursorStepX = 15f // Finer control horizontally
@@ -973,7 +987,7 @@ class BrowserActivity : ComponentActivity() {
 
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
-            Log.d(TAG, "Loading new URL: $url")
+            Log.d(TAG, "Loading new URL: ${redactUrlForLog(url)}")
             currentUrl = url
             engine?.loadUrl(url)
         }

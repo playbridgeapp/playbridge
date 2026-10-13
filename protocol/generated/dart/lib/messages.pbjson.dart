@@ -523,12 +523,14 @@ const StatusMessage$json = {
     {'1': 'media_kind', '3': 6, '4': 1, '5': 9, '9': 1, '10': 'mediaKind', '17': true},
     {'1': 'playback_id', '3': 7, '4': 1, '5': 9, '9': 2, '10': 'playbackId', '17': true},
     {'1': 'current_item_id', '3': 8, '4': 1, '5': 9, '9': 3, '10': 'currentItemId', '17': true},
+    {'1': 'fullscreen', '3': 9, '4': 1, '5': 8, '9': 4, '10': 'fullscreen', '17': true},
   ],
   '8': [
     {'1': '_title'},
     {'1': '_media_kind'},
     {'1': '_playback_id'},
     {'1': '_current_item_id'},
+    {'1': '_fullscreen'},
   ],
 };
 
@@ -538,8 +540,26 @@ final $typed_data.Uint8List statusMessageDescriptor = $convert.base64Decode(
     'RlEhoKCHBvc2l0aW9uGAMgASgDUghwb3NpdGlvbhIaCghkdXJhdGlvbhgEIAEoA1IIZHVyYXRp'
     'b24SGQoFdGl0bGUYBSABKAlIAFIFdGl0bGWIAQESIgoKbWVkaWFfa2luZBgGIAEoCUgBUgltZW'
     'RpYUtpbmSIAQESJAoLcGxheWJhY2tfaWQYByABKAlIAlIKcGxheWJhY2tJZIgBARIrCg9jdXJy'
-    'ZW50X2l0ZW1faWQYCCABKAlIA1INY3VycmVudEl0ZW1JZIgBAUIICgZfdGl0bGVCDQoLX21lZG'
-    'lhX2tpbmRCDgoMX3BsYXliYWNrX2lkQhIKEF9jdXJyZW50X2l0ZW1faWQ=');
+    'ZW50X2l0ZW1faWQYCCABKAlIA1INY3VycmVudEl0ZW1JZIgBARIjCgpmdWxsc2NyZWVuGAkgAS'
+    'gISARSCmZ1bGxzY3JlZW6IAQFCCAoGX3RpdGxlQg0KC19tZWRpYV9raW5kQg4KDF9wbGF5YmFj'
+    'a19pZEISChBfY3VycmVudF9pdGVtX2lkQg0KC19mdWxsc2NyZWVu');
+
+@$core.Deprecated('Use playerSettingsMessageDescriptor instead')
+const PlayerSettingsMessage$json = {
+  '1': 'PlayerSettingsMessage',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
+    {'1': 'loop', '3': 2, '4': 1, '5': 8, '9': 0, '10': 'loop', '17': true},
+  ],
+  '8': [
+    {'1': '_loop'},
+  ],
+};
+
+/// Descriptor for `PlayerSettingsMessage`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List playerSettingsMessageDescriptor = $convert.base64Decode(
+    'ChVQbGF5ZXJTZXR0aW5nc01lc3NhZ2USEgoEdHlwZRgBIAEoCVIEdHlwZRIXCgRsb29wGAIgAS'
+    'gISABSBGxvb3CIAQFCBwoFX2xvb3A=');
 
 @$core.Deprecated('Use contextMessageDescriptor instead')
 const ContextMessage$json = {

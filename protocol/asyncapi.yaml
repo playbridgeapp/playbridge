@@ -367,7 +367,7 @@ components:
           type: array
           uniqueItems: true
           items:
-            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1, diagnostic_logs_v1]
+            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1, diagnostic_logs_v1, player_home_v1]
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -877,6 +877,9 @@ components:
         mediaKind: { type: [string, 'null'], enum: [video, audio, image, null] }
         playbackId: { type: [string, 'null'] }
         currentItemId: { type: [string, 'null'] }
+        fullscreen:
+          type: boolean
+          description: Native browser fullscreen. Omitted by the player and by receivers that do not report it.
       additionalProperties: false
     Context:
       type: object
@@ -1002,6 +1005,9 @@ components:
         scalingAvailable: { type: boolean }
         audioBoostAvailable: { type: boolean }
         qualityAvailable: { type: boolean }
+        loop:
+          type: boolean
+          description: Repeat-one. Omitted when the receiver does not report loop state.
       additionalProperties: false
     UserScript:
       type: object

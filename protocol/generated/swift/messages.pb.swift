@@ -1010,6 +1010,16 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   /// Clears the value of `currentItemID`. Subsequent reads from it will return its default value.
   mutating func clearCurrentItemID() {self._currentItemID = nil}
 
+  /// Native browser fullscreen. Omitted by the player and by older receivers.
+  var fullscreen: Bool {
+    get {_fullscreen ?? false}
+    set {_fullscreen = newValue}
+  }
+  /// Returns true if `fullscreen` has been explicitly set.
+  var hasFullscreen: Bool {self._fullscreen != nil}
+  /// Clears the value of `fullscreen`. Subsequent reads from it will return its default value.
+  mutating func clearFullscreen() {self._fullscreen = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -1018,6 +1028,32 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   fileprivate var _mediaKind: String? = nil
   fileprivate var _playbackID: String? = nil
   fileprivate var _currentItemID: String? = nil
+  fileprivate var _fullscreen: Bool? = nil
+}
+
+/// Android TV player_settings. The live JSON object has more fields; this message
+/// records the additive loop flag. Field numbers start at 1 because the message is new.
+nonisolated struct Playbridge_PlayerSettingsMessage: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var type: String = String()
+
+  var loop: Bool {
+    get {_loop ?? false}
+    set {_loop = newValue}
+  }
+  /// Returns true if `loop` has been explicitly set.
+  var hasLoop: Bool {self._loop != nil}
+  /// Clears the value of `loop`. Subsequent reads from it will return its default value.
+  mutating func clearLoop() {self._loop = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _loop: Bool? = nil
 }
 
 nonisolated struct Playbridge_ContextMessage: Sendable {
@@ -2572,7 +2608,7 @@ nonisolated extension Playbridge_BrowserControlPayload: SwiftProtobuf.Message, S
 
 nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StatusMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}playback_id\0\u{3}current_item_id\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}playback_id\0\u{3}current_item_id\0\u{1}fullscreen\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2588,6 +2624,7 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
       case 6: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self._playbackID) }()
       case 8: try { try decoder.decodeSingularStringField(value: &self._currentItemID) }()
+      case 9: try { try decoder.decodeSingularBoolField(value: &self._fullscreen) }()
       default: break
       }
     }
@@ -2622,6 +2659,9 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     try { if let v = self._currentItemID {
       try visitor.visitSingularStringField(value: v, fieldNumber: 8)
     } }()
+    try { if let v = self._fullscreen {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 9)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2634,6 +2674,46 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     if lhs._mediaKind != rhs._mediaKind {return false}
     if lhs._playbackID != rhs._playbackID {return false}
     if lhs._currentItemID != rhs._currentItemID {return false}
+    if lhs._fullscreen != rhs._fullscreen {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_PlayerSettingsMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".PlayerSettingsMessage"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}loop\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self._loop) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    try { if let v = self._loop {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_PlayerSettingsMessage, rhs: Playbridge_PlayerSettingsMessage) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs._loop != rhs._loop {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

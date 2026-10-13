@@ -123,6 +123,7 @@ private fun PlayerSettingsSheet(
     onSwitchEngine: (String) -> Unit,
     showSettings: Boolean,
     showLoop: Boolean,
+    loopEnabled: Boolean?,
     onLoop: (Boolean) -> Unit,
     onStop: () -> Unit,
     showAddSubtitle: Boolean,
@@ -166,24 +167,42 @@ private fun PlayerSettingsSheet(
                     }
                 }
                 if (showLoop) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "Loop · TV state unavailable",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
+                    if (loopEditorUsesSwitch(loopEnabled)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Loop",
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Switch(
                                 enabled = LocalRemoteControlsEnabled.current,
-                                onClick = { onLoop(true) },
-                            ) {
-                                Text("Enable loop")
-                            }
-                            OutlinedButton(
-                                enabled = LocalRemoteControlsEnabled.current,
-                                onClick = { onLoop(false) },
-                            ) {
-                                Text("Disable loop")
+                                checked = loopEnabled == true,
+                                onCheckedChange = onLoop,
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Loop · TV state unavailable",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    enabled = LocalRemoteControlsEnabled.current,
+                                    onClick = { onLoop(true) },
+                                ) {
+                                    Text("Enable loop")
+                                }
+                                OutlinedButton(
+                                    enabled = LocalRemoteControlsEnabled.current,
+                                    onClick = { onLoop(false) },
+                                ) {
+                                    Text("Disable loop")
+                                }
                             }
                         }
                     }
@@ -700,6 +719,9 @@ private fun SubtitlesBottomSheet(
     }
 }
 
+/** A reported loop boolean draws the switch. A missing field keeps Enable and Disable. */
+internal fun loopEditorUsesSwitch(loopEnabled: Boolean?): Boolean = loopEnabled != null
+
 /** Stage 3d's sole sheet entry. Script/UA sheets keep their existing RemoteEffect host. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -727,6 +749,7 @@ internal fun RemoteSheets(
                 onAdjustSubtitleOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
                 onSwitchEngine = { dispatch(RemoteAction.SwitchEngine(it)) },
                 showSettings = !external && !image, showLoop = !external && !image && state.playback?.isLive != true,
+                loopEnabled = state.settings.loopEnabled,
                 onLoop = { dispatch(RemoteAction.SetLoop(it)) },
                 onStop = { dispatch(RemoteAction.StopPlayback); close() },
                 showAddSubtitle = !external && !image && !audio,

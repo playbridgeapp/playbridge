@@ -75,4 +75,11 @@ class RemoteSheetsGatingTest {
         assertTrue(isLoopVisible(external = false, image = false, live = false))
         assertTrue(isAddSubtitleVisible(external = false, image = false, audio = false))
     }
+
+    @Test
+    fun reportedLoopUsesASwitchAndAMissingFieldKeepsExplicitButtons() {
+        assertTrue(loopEditorUsesSwitch(true))
+        assertTrue(loopEditorUsesSwitch(false))
+        assertFalse(loopEditorUsesSwitch(null))
+    }
 }
