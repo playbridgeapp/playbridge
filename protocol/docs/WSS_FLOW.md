@@ -225,11 +225,11 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 | Type | When used |
 |---|---|
 | `context` | Active surface changes or a `context_query` arrives |
-| `status` | Playback state/position changes; duration is `0` when unknown/live |
+| `status` | Playback state/position changes; duration is `0` when unknown/live. Browser status may include optional `fullscreen` |
 | `playlist_status` | Queue replacement, append, index change, reconnect, or clear |
 | `command_result` | Targeted acknowledgement or structured rejection of a command carrying `requestId` |
 | `tracks` | Audio/subtitle track list or selection changes |
-| `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, and live capability changes |
+| `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, live capability, and optional `loop` changes |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
 | `pong` | Response to application-level `ping` |
 | `screen_mirror_ready` | Peer + renderer/pipe created; sent before the phone offers |
@@ -314,9 +314,11 @@ or replacement by a new connection.
 - `proto/messages.proto` still describes plaintext `token` / `certFingerprint` fields on
   `PairingApprovedMessage`. The live protocol uses only protected `nonce` + `ciphertext`; new code
   must follow AsyncAPI and must not reintroduce plaintext credentials.
-- Protobuf does not model `tracks`, `player_settings`, browser administration, capability arrays,
+- Protobuf does not model `tracks`, the full `player_settings` object, browser administration, capability arrays,
   protected credential bundles, or the enriched `season` / `episode` / `imdbId` / `bingeGroup`
-  fields in `playlist_status`.
+  fields in `playlist_status`. `PlayerSettingsMessage` records `type` and optional `loop` only.
+  `StatusMessage.fullscreen` is optional and is sent by browser surfaces.
+- Android TV advertises `player_home_v1` when remote Home finishes the player and returns to the receiver idle screen. Receivers that omit the feature keep Home unavailable in the player.
 - Legacy receivers may have included the `token` in `auth_response`. Current receivers must never
   return the token, and senders must ignore it if present, retaining the token they already hold.
 - Apple TV still accepts the legacy `command/play` action for compatibility. Canonical senders

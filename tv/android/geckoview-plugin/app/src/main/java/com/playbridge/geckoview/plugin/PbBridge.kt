@@ -26,6 +26,30 @@ object PbBridge {
     // recreation cannot retain an old engine or clear a replacement engine's listener.
     var onVideoMessage: ((JSONObject) -> Unit)? = null
 
+    /**
+     * Deliver text or Enter to every frame. [b64] is the phone's base64 payload, already
+     * restricted to the base64 alphabet. A missing port falls back to a queued main-frame eval.
+     */
+    fun focusCommand(op: String, b64: String = "") {
+        val p = port
+        if (p == null) {
+            val script = if (op == "enter") {
+                "(window.__pbvc&&window.__pbvc.submitFocused())||'no_focus'"
+            } else {
+                "(window.__pbvc&&window.__pbvc.applyText('${b64}'))||'no_focus'"
+            }
+            eval(script)
+            return
+        }
+        try {
+            val json = JSONObject().put("type", "focus_cmd").put("op", if (op == "enter") "enter" else "text")
+            if (op != "enter") json.put("b64", b64)
+            p.postMessage(json)
+        } catch (_: Exception) {
+            Log.w(TAG, "focus command delivery failed")
+        }
+    }
+
     /** Commands are never queued: a disconnected frame/document must not receive a stale action. */
     fun videoCommand(tabId: Long, frameId: Long, documentId: String, cmd: String) {
         val p = port ?: return

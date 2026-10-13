@@ -56,7 +56,10 @@ function background() {
                 sendMessage: async (...args) => { delivered.push(args); return 'ok'; },
                 onRemoved: { addListener: fn => { events.removed = fn; } }
             },
-            webNavigation: { onCommitted: { addListener: fn => { events.committed = fn; } } }
+            webNavigation: {
+                onCommitted: { addListener: fn => { events.committed = fn; } },
+                getAllFrames: async query => (events.allFrames ? events.allFrames(query) : [])
+            }
         },
         setTimeout: fn => { events.reconnect = fn; }
     });
@@ -91,6 +94,59 @@ test('targeted commands drive toggle, absolute/relative seek, volume and native 
     command('vol,0.1');
     assert.equal(c.video.volume, 0.6);
     assert.ok(c.sent.some(message => JSON.parse(message.data).type === 'overlay'));
+});
+
+test('text uses the page prototype behind a Gecko Xray wrapper', () => {
+    function PageCtor() {}
+    Object.defineProperty(PageCtor.prototype, 'value', {
+        configurable: true,
+        set(next) { this._pageValue = next; },
+    });
+    const pageInput = textField();
+    const pageWindow = {
+        HTMLInputElement: PageCtor,
+        HTMLTextAreaElement: PageCtor,
+        InputEvent: function (type, init) { this.type = type; this.init = init; this.kind = 'input'; },
+        Event: function (type, init) { this.type = type; this.init = init; this.kind = 'event'; },
+    };
+    const xray = {
+        tagName: 'INPUT',
+        wrappedJSObject: pageInput,
+        _events: [],
+        dispatchEvent(event) { this._events.push(event); },
+        set value(next) { this._xrayValue = next; },
+    };
+    const page = loadMaximize((ctx, document) => {
+        installTextGlobals(ctx);
+        ctx.wrappedJSObject = pageWindow;
+        document.hasFocus = () => true;
+        document.activeElement = xray;
+    });
+    assert.equal(page.context.__pbvc.applyText('aGk='), 'ok');
+    assert.equal(pageInput._pageValue, 'hi');
+    assert.equal(pageInput._nativeValue, undefined);
+    assert.equal(xray._xrayValue, undefined);
+    assert.equal(pageInput._events[0].init.inputType, 'insertReplacementText');
+    assert.equal(pageInput._events[0].init.data, 'hi');
+    assert.equal(xray._events.length, 0);
+});
+
+test('content delivers focus commands to the controller and keeps eval', () => {
+    const c = content();
+    installTextGlobals(c.context);
+    const input = textField();
+    c.context.document.hasFocus = () => true;
+    c.context.document.activeElement = input;
+    let response = 'unset';
+    c.receive({ type: 'focus_cmd', op: 'text', b64: 'aGk=' }, {}, value => { response = value; });
+    assert.equal(response, '');
+    assert.equal(input._nativeValue, 'hi');
+    const posted = c.sent.map(message => JSON.parse(message.data)).filter(message => message.type === 'result');
+    assert.equal(posted.at(-1).kind, 'text');
+    assert.equal(posted.at(-1).value, 'ok');
+    let evaluated;
+    c.receive({ type: 'eval', code: '1 + 2' }, {}, value => { evaluated = value; });
+    assert.equal(evaluated, '3');
 });
 
 test('content rejects commands for a replaced document and preserves eval', () => {
@@ -203,4 +259,444 @@ test('tab removal clears cached frames so reconnect cannot replay them', () => {
     b.sent.length = 0;
     b.events.reconnect();
     assert.equal(b.sent.length, 0);
+});
+
+// Maximize tests load only the controller, with a page mock richer than content().
+function stylable(extra) {
+    const props = {};
+    return Object.assign({
+        style: { setProperty: (name, value) => { props[name] = value; } },
+        _props: props,
+        _styleAttr: null,
+        _removedStyle: false,
+        getAttribute(name) { return name === 'style' ? this._styleAttr : null; },
+        setAttribute(name, value) { if (name === 'style') this._styleAttr = value; },
+        removeAttribute(name) { if (name === 'style') { this._styleAttr = null; this._removedStyle = true; } },
+        querySelectorAll() { return []; },
+    }, extra);
+}
+
+function loadMaximize(setup) {
+    const posts = [];
+    const parentPosts = [];
+    const listeners = { window: {}, document: {} };
+    const timers = [];
+    const document = {
+        title: 'Video',
+        body: { tag: 'body' },
+        documentElement: { clientWidth: 100, clientHeight: 100 },
+        fullscreenElement: null,
+        querySelectorAll: () => [],
+        addEventListener: (name, fn) => { (listeners.document[name] ||= []).push(fn); },
+        exitFullscreen() { document.fullscreenElement = null; },
+    };
+    const context = vm.createContext({
+        document,
+        Promise,
+        setInterval: () => 0,
+        setTimeout: (fn) => { timers.push(fn); return timers.length; },
+        clearTimeout: (id) => { if (typeof id === 'number') timers[id - 1] = null; },
+        innerWidth: 100,
+        innerHeight: 100,
+        addEventListener: (name, fn) => { (listeners.window[name] ||= []).push(fn); },
+        pbVideoChannel: { onmessage: null, postMessage: data => posts.push(JSON.parse(data)) },
+    });
+    context.window = context;
+    context.parent = { postMessage: message => parentPosts.push(message) };
+    setup(context, document);
+    vm.runInContext(read(controller), context);
+    const flushTimers = () => {
+        const due = timers.splice(0, timers.length);
+        due.forEach(fn => fn && fn());
+    };
+    return { context, document, posts, parentPosts, listeners, flushTimers };
+}
+
+function box(width, height, top = 0) {
+    return () => ({ width, height, left: 0, top, right: width, bottom: top + height });
+}
+
+const resultsOf = posts => posts.filter(message => message.type === 'result');
+
+async function settle() {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
+test('maximize clicks the site fullscreen button and a repeat does not click again', () => {
+    const calls = [];
+    let clicks = 0;
+    const page = loadMaximize((ctx, document) => {
+        const button = {
+            tagName: 'BUTTON',
+            className: 'ytp-fullscreen-button',
+            getAttribute: name => (name === 'aria-label' ? 'Full screen' : ''),
+            click() {
+                clicks++;
+                document.fullscreenElement = shell;
+            },
+        };
+        var shell = stylable({
+            id: 'movie_player',
+            className: 'html5-video-player',
+            querySelectorAll: query => (query === 'button,[role="button"],a' ? [button] : []),
+            requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+            getBoundingClientRect: box(100, 100),
+        });
+        shell.parentElement = document.body;
+        const video = stylable({
+            paused: false,
+            parentElement: shell,
+            getBoundingClientRect: box(100, 100),
+            requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+        });
+        ctx.parent = ctx;
+        document.querySelectorAll = query => (query === 'video' ? [video] : []);
+        ctx.__video = video;
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'ok_site');
+    assert.equal(clicks, 1);
+    assert.deepEqual(calls, []);
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_site');
+    assert.equal(page.context.__video.__pbFit, undefined);
+    assert.equal(page.context.__pbvc.maximize(), 'ok_held');
+    assert.equal(clicks, 1);
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_held');
+});
+
+test('a site button that engages on the next turn still wins over requestFullscreen', () => {
+    const calls = [];
+    const page = loadMaximize((ctx, document) => {
+        const button = {
+            tagName: 'BUTTON',
+            className: 'vjs-fullscreen-control',
+            getAttribute: () => '',
+            click() { clicks++; },
+        };
+        var clicks = 0;
+        ctx.__clicks = () => clicks;
+        const shell = stylable({
+            className: 'video-js',
+            querySelectorAll: query => (query === 'button,[role="button"],a' || query === 'button,[role="button"],input' ? [button] : []),
+            requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+            getBoundingClientRect: box(100, 108),
+        });
+        shell.parentElement = document.body;
+        button.click = () => { clicks++; };
+        const video = stylable({
+            parentElement: shell,
+            getBoundingClientRect: box(100, 100),
+            requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+        });
+        document.querySelectorAll = query => (query === 'video' ? [video] : []);
+        ctx.__arm = () => { shell.className = 'video-js vjs-fullscreen'; };
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'pending');
+    assert.deepEqual(calls, []);
+    page.context.__arm();
+    page.flushTimers();
+    assert.equal(page.context.__clicks(), 1);
+    assert.deepEqual(calls, []);
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_site');
+});
+
+test('fullscreen targets the player container that holds the controls', async () => {
+    const calls = [];
+    const seek = { tagName: 'BUTTON', className: 'vjs-play-control', getAttribute: () => '' };
+    const shell = stylable({
+        className: 'video-js',
+        querySelectorAll: query => (query === 'button,[role="button"],input' || query === 'button,[role="button"],a' ? [seek] : []),
+        requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+        getBoundingClientRect: box(100, 108),
+    });
+    const inner = stylable({
+        className: 'html5-video-container',
+        parentElement: shell,
+        requestFullscreen() { calls.push('inner'); return Promise.resolve(); },
+        getBoundingClientRect: box(100, 100),
+    });
+    const video = stylable({
+        tagName: 'VIDEO',
+        controls: false,
+        parentElement: inner,
+        getBoundingClientRect: box(100, 100),
+        requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+    });
+    const page = loadMaximize((ctx, document) => {
+        shell.parentElement = document.body;
+        ctx.parent = ctx;
+        document.querySelectorAll = query => (query === 'video' ? [video] : []);
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'pending');
+    await settle();
+    assert.deepEqual(calls, ['shell']);
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_video');
+    assert.equal(video.__pbFit, undefined);
+    assert.equal(inner.__pbFit, undefined);
+    assert.equal(page.context.__pbvc.maximize(), 'ok_held');
+    assert.deepEqual(calls, ['shell']);
+});
+
+test('a refused requestFullscreen fills the player container and restore leaves fullscreen alone', async () => {
+    const childMessages = [];
+    let exits = 0;
+    const seek = { tagName: 'BUTTON', className: 'vjs-control', getAttribute: () => 'seek' };
+    const shell = stylable({
+        className: 'video-js',
+        querySelectorAll: query => (query === 'button,[role="button"],input' || query === 'button,[role="button"],a' ? [seek] : []),
+        requestFullscreen: () => Promise.reject(new Error('no-gesture')),
+        getBoundingClientRect: box(80, 48),
+    });
+    const video = stylable({
+        paused: true,
+        controls: false,
+        parentElement: shell,
+        getBoundingClientRect: box(80, 40),
+        requestFullscreen: () => Promise.reject(new Error('no-gesture')),
+    });
+    const iframe = stylable({
+        contentWindow: { postMessage: message => childMessages.push(message) },
+    });
+    const page = loadMaximize((ctx, document) => {
+        shell.parentElement = document.body;
+        document.exitFullscreen = () => { exits++; document.fullscreenElement = null; };
+        document.querySelectorAll = query => {
+            if (query === 'video') return [video];
+            if (query === 'iframe') return [iframe];
+            return [];
+        };
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'pending');
+    await settle();
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_fill');
+    assert.equal(shell._props.position, 'fixed');
+    assert.equal(shell._props.width, '100%');
+    assert.equal(shell._props.height, '100%');
+    assert.equal(shell._props['z-index'], '2147483647');
+    assert.equal(video.__pbFit, undefined);
+    assert.equal(video._props.position, undefined);
+    assert.equal(page.parentPosts.at(-1).pb, 'pb-frame-fit');
+    assert.equal(page.parentPosts.at(-1).op, 'enter');
+    assert.equal(page.context.__pbvc.restore(), 'ok');
+    assert.equal(exits, 0);
+    assert.equal(shell.__pbFit, false);
+    assert.equal(shell._removedStyle, true);
+    assert.equal(page.parentPosts.at(-1).op, 'exit');
+    assert.equal(childMessages.at(-1).pb, 'pb-frame-fit');
+    assert.equal(childMessages.at(-1).op, 'exit-video');
+    assert.equal(resultsOf(page.posts).at(-1).kind, 'restore');
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok');
+});
+
+test('leaving a site fullscreen clicks the site button and skips exitFullscreen once it is gone', () => {
+    let clicks = 0;
+    let exits = 0;
+    const page = loadMaximize((ctx, document) => {
+        const button = {
+            tagName: 'BUTTON',
+            className: 'ytp-fullscreen-button',
+            getAttribute: name => (name === 'aria-label' ? 'Full screen' : ''),
+            click() {
+                clicks++;
+                document.fullscreenElement = clicks === 1 ? shell : null;
+            },
+        };
+        var shell = stylable({
+            className: 'html5-video-player',
+            querySelectorAll: query => (query === 'button,[role="button"],a' ? [button] : []),
+            getBoundingClientRect: box(100, 100),
+        });
+        shell.parentElement = document.body;
+        const video = stylable({
+            parentElement: shell,
+            getBoundingClientRect: box(100, 100),
+        });
+        document.exitFullscreen = () => { exits++; document.fullscreenElement = null; };
+        document.querySelectorAll = query => (query === 'video' ? [video] : []);
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'ok_site');
+    assert.equal(page.context.__pbvc.restore(), 'ok');
+    assert.equal(clicks, 2);
+    assert.equal(exits, 0);
+    assert.equal(page.document.fullscreenElement, null);
+});
+
+test('a top frame with no video expands the largest iframe once', () => {
+    const childMessages = [];
+    let fullscreenCalls = 0;
+    const iframe = stylable({
+        offsetWidth: 200,
+        offsetHeight: 80,
+        contentWindow: { postMessage: message => childMessages.push(message) },
+        requestFullscreen() { fullscreenCalls++; return Promise.resolve(); },
+    });
+    Object.defineProperty(iframe, 'contentDocument', { get() { throw new Error('cross-origin'); } });
+    const page = loadMaximize((ctx, document) => {
+        ctx.parent = ctx;
+        document.querySelectorAll = query => (query === 'iframe' ? [iframe] : []);
+    });
+    assert.equal(page.context.__pbvc.maximize(), 'ok_iframe');
+    assert.equal(iframe.__pbFit, true);
+    assert.equal(fullscreenCalls, 1);
+    assert.equal(childMessages.length, 1);
+    assert.equal(childMessages[0].pb, 'pb-frame-fit');
+    assert.equal(childMessages[0].op, 'fill-video');
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_iframe');
+    assert.equal(page.context.__pbvc.maximize(), 'ok_held');
+    assert.equal(fullscreenCalls, 1);
+    assert.equal(childMessages.length, 1);
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_held');
+});
+
+test('a parent frame expands the iframe that sent enter and forwards the chain', () => {
+    const source = {};
+    let fullscreenCalls = 0;
+    const iframe = stylable({
+        contentWindow: source,
+        requestFullscreen() { fullscreenCalls++; return Promise.resolve(); },
+    });
+    const page = loadMaximize((ctx, document) => {
+        document.querySelectorAll = query => (query === 'iframe' ? [iframe] : []);
+    });
+    const deliver = event => page.listeners.window.message.forEach(fn => fn(event));
+    deliver({ data: { pb: 'other', op: 'enter' }, source });
+    assert.equal(iframe.__pbFit, undefined);
+    deliver({ data: { pb: 'pb-frame-fit', op: 'enter' }, source });
+    assert.equal(iframe.__pbFit, true);
+    assert.equal(fullscreenCalls, 1);
+    assert.equal(page.parentPosts.at(-1).pb, 'pb-frame-fit');
+    assert.equal(page.parentPosts.at(-1).op, 'enter');
+    deliver({ data: { pb: 'pb-frame-fit', op: 'enter' }, source });
+    assert.equal(fullscreenCalls, 1);
+    deliver({ data: { pb: 'pb-frame-fit', op: 'enter' }, source: {} });
+    deliver({ data: { pb: 'pb-frame-fit', op: 'exit' }, source });
+    assert.equal(iframe.__pbFit, false);
+    assert.equal(iframe._removedStyle, true);
+    assert.equal(page.parentPosts.at(-1).op, 'exit');
+});
+
+function latin1Escape(value) {
+    let out = '';
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i) & 0xff;
+        const ch = String.fromCharCode(code);
+        if (/[A-Za-z0-9@*_+./-]/.test(ch)) out += ch;
+        else out += '%' + code.toString(16).toUpperCase().padStart(2, '0');
+    }
+    return out;
+}
+
+function installTextGlobals(ctx) {
+    function Ctor() {}
+    Object.defineProperty(Ctor.prototype, 'value', {
+        configurable: true,
+        set(next) { this._nativeValue = next; },
+    });
+    ctx.HTMLInputElement = Ctor;
+    ctx.HTMLTextAreaElement = Ctor;
+    ctx.InputEvent = function (type, init) { this.type = type; this.init = init; this.kind = 'input'; };
+    ctx.Event = function (type, init) { this.type = type; this.init = init; this.kind = 'event'; };
+    ctx.KeyboardEvent = function (type, init) { this.type = type; this.init = init; this.kind = 'key'; };
+    ctx.atob = encoded => Buffer.from(encoded, 'base64').toString('latin1');
+    ctx.escape = latin1Escape;
+}
+
+function textField(extra) {
+    return Object.assign({
+        tagName: 'INPUT',
+        _events: [],
+        dispatchEvent(event) { this._events.push(event); },
+        set value(next) { this._ownValue = next; },
+    }, extra);
+}
+
+test('focused text replaces the field through the native setter and ignores other frames', () => {
+    const input = textField();
+    const page = loadMaximize((ctx, document) => {
+        installTextGlobals(ctx);
+        document.hasFocus = () => true;
+        document.activeElement = input;
+    });
+    assert.equal(page.context.__pbvc.applyText('aGk='), 'ok');
+    assert.equal(input._nativeValue, 'hi');
+    assert.equal(input._ownValue, undefined);
+    assert.equal(input._events[0].type, 'input');
+    assert.equal(input._events[0].init.inputType, 'insertReplacementText');
+    assert.equal(input._events[0].init.data, 'hi');
+    assert.equal(input._events[1].type, 'change');
+    assert.equal(resultsOf(page.posts).at(-1).kind, 'text');
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok');
+
+    page.context.document.hasFocus = () => false;
+    assert.equal(page.context.__pbvc.applyText('YQ=='), 'no_focus');
+    assert.equal(input._nativeValue, 'hi');
+
+    page.context.document.hasFocus = () => true;
+    page.context.document.activeElement = { tagName: 'IFRAME' };
+    assert.equal(page.context.__pbvc.applyText('YQ=='), 'no_focus');
+    assert.equal(input._nativeValue, 'hi');
+});
+
+test('text fills an open shadow input, a contenteditable, and clears on an empty payload', () => {
+    const inner = textField();
+    const host = { tagName: 'DIV', shadowRoot: { activeElement: inner } };
+    const editable = textField({ tagName: 'DIV', isContentEditable: true });
+    const page = loadMaximize((ctx, document) => {
+        installTextGlobals(ctx);
+        document.hasFocus = () => true;
+        document.activeElement = host;
+    });
+    assert.equal(page.context.__pbvc.applyText('w6k='), 'ok');
+    assert.equal(inner._nativeValue, 'é');
+    assert.equal(editable.textContent, undefined);
+
+    page.context.document.activeElement = editable;
+    assert.equal(page.context.__pbvc.applyText(''), 'ok');
+    assert.equal(editable.textContent, '');
+    assert.equal(inner._nativeValue, 'é');
+    page.context.pbVideoChannel.onmessage({ data: JSON.stringify({ type: 'text', b64: 'YQ==' }) });
+    assert.equal(editable.textContent, 'a');
+});
+
+test('enter submits the focused form and a frame without focus does nothing', () => {
+    let submitted = 0;
+    const input = textField({ form: { requestSubmit() { submitted++; } } });
+    const page = loadMaximize((ctx, document) => {
+        installTextGlobals(ctx);
+        document.hasFocus = () => true;
+        document.activeElement = input;
+    });
+    assert.equal(page.context.__pbvc.submitFocused(), 'ok');
+    assert.deepEqual(input._events.map(event => event.type), ['keydown', 'keypress', 'keyup']);
+    assert.equal(input._events[0].init.key, 'Enter');
+    assert.equal(submitted, 1);
+    assert.equal(resultsOf(page.posts).at(-1).kind, 'enter');
+    page.context.document.hasFocus = () => false;
+    assert.equal(page.context.__pbvc.submitFocused(), 'no_focus');
+    assert.equal(submitted, 1);
+});
+
+test('focus command is delivered to every reported frame', async () => {
+    const broadcast = background();
+    broadcast.events.allFrames = async () => [{ frameId: 0 }, { frameId: 4 }];
+    await broadcast.events.native({ type: 'focus_cmd', op: 'text', b64: 'aGk=' });
+    assert.equal(broadcast.delivered.length, 2);
+    assert.deepEqual(broadcast.delivered.map(call => call[2].frameId).sort((a, b) => a - b), [0, 4]);
+    assert.equal(broadcast.delivered[0][1].type, 'focus_cmd');
+    assert.equal(broadcast.delivered[0][1].op, 'text');
+    assert.equal(broadcast.delivered[0][1].b64, 'aGk=');
+    assert.equal(broadcast.sent.length, 0);
+
+    const known = background();
+    known.events.allFrames = async () => { throw new Error('unavailable'); };
+    known.send(3, { type: 'active', active: false });
+    known.delivered.length = 0;
+    await known.events.native({ type: 'focus_cmd', op: 'enter' });
+    assert.equal(known.delivered.length, 1);
+    assert.equal(known.delivered[0][2].frameId, 3);
+    assert.equal(known.delivered[0][1].op, 'enter');
+
+    const main = background();
+    await main.events.native({ type: 'focus_cmd', op: 'enter' });
+    assert.equal(main.delivered.length, 1);
+    assert.equal(main.delivered[0][2].frameId, 0);
 });

@@ -11,6 +11,8 @@ data class FullControlStatus(
     val serverName: String? = null,
     val keys: Set<RemoteKey> = emptySet(),
     val text: TextCapabilities = TextCapabilities(),
+    /** Receiver text support before the Whole-device capability overlay. */
+    val receiverText: TextCapabilities = TextCapabilities(),
     val volume: VolumeCapabilities = VolumeCapabilities(),
 )
 
@@ -31,6 +33,7 @@ internal fun projectFullControl(
         serverName = channel.serverName,
         keys = channel.keys,
         text = channel.text,
+        receiverText = base.text,
         volume = channel.volume,
     )
     val capabilities = if (status.connected) base.withWholeDevice(channel) else base
@@ -42,6 +45,8 @@ internal val RemoteUiState.fullControlReady: Boolean get() = fullControl?.connec
 internal fun RemoteUiState.fullControlSupports(action: RemoteAction): Boolean {
     val channel = fullControl?.takeIf { it.connected } ?: return false
     return when (action) {
+        is RemoteAction.KeyboardInput -> action.route == RemoteKeyboardRoute.FullControl &&
+            action.context == context && action.action is RemoteAction.EditTvText && fullControlSupports(action.action)
         is RemoteAction.Key -> action.key in channel.keys
         is RemoteAction.AdjustVolume -> channel.volume.adjust == Support.Supported
         is RemoteAction.ReplaceText -> channel.text.replace == Support.Supported

@@ -66,7 +66,7 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
         showModeRow = modes.size > 1,
         nav = RemoteNavSpec(
             enabled(RemoteKey.Back in keys && (!idle || external || whole), "TV Back unavailable: no remote route", state.fullControlSupports(RemoteAction.Key(RemoteKey.Back))),
-            enabled(RemoteKey.Home in keys && (browser || external || whole), "TV Home unavailable: no Home route; full TV control is coming later", state.fullControlSupports(RemoteAction.Key(RemoteKey.Home))),
+            enabled(RemoteKey.Home in keys && (browser || player || external || whole), "TV Home unavailable: no Home route; full TV control is coming later", state.fullControlSupports(RemoteAction.Key(RemoteKey.Home))),
             enabled(
                 state.capabilities.text.replace == Support.Supported && ((!external && browser) || (whole && state.capabilities.text.delete == Support.Supported)),
                 "Keys unavailable: text input requires the TV browser",

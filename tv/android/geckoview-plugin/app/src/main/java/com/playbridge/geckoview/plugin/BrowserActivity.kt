@@ -31,6 +31,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import java.util.Locale
+import com.playbridge.shared.browser.browserFullscreenReported
+import com.playbridge.shared.protocol.statusWithFullscreen
 
 class BrowserActivity : ComponentActivity() {
 
@@ -91,6 +93,7 @@ class BrowserActivity : ComponentActivity() {
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
     private var isGeckoFullscreen = false
+    private var lastBrowserStatusJson: String? = null
 
     private var customOverlayView: FrameLayout? = null
     private var customOverlayTextView: android.widget.TextView? = null
@@ -201,9 +204,8 @@ class BrowserActivity : ComponentActivity() {
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
-            if (isGeckoFullscreen) {
-                exitGeckoFullscreen()
-                engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
+            if (reportedFullscreen()) {
+                exitAnyFullscreen()
             } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
@@ -260,6 +262,7 @@ class BrowserActivity : ComponentActivity() {
             showCustomVideoOverlay(visible, text, style, bgColor, textColor, autoDismissMs)
         }
         engine?.onVideoStatus = ::sendVideoStatus
+        engine?.onFullscreenFlagsChanged = { publishFullscreenNow() }
         engine?.onRequestUnmuteTap = { autoUnmuteActiveVideo() }
 
         // Add engine view at index 0 (behind cursor)
@@ -267,10 +270,36 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun sendVideoStatus(json: String) {
-        if (!playerBridge.videoStatus(json)) {
+        lastBrowserStatusJson = json
+        dispatchBrowserStatus(json)
+    }
+
+    private fun publishFullscreenNow() {
+        dispatchBrowserStatus(
+            lastBrowserStatusJson ?: """{"type":"status","state":"idle","position":0,"duration":0}""",
+        )
+    }
+
+    private fun reportedFullscreen(): Boolean = browserFullscreenReported(
+        isGeckoFullscreen,
+        engine?.isFrameFillActive() == true,
+        engine?.isNativeClaimActive() == true,
+    )
+
+    /** Phone restore and TV Back leave native chrome and the in-frame fill together. */
+    private fun exitAnyFullscreen() {
+        val native = isGeckoFullscreen
+        val scripted = engine?.isFrameFillActive() == true || engine?.isNativeClaimActive() == true
+        if (native || scripted) engine?.videoRestore()
+        if (native) exitGeckoFullscreen()
+    }
+
+    private fun dispatchBrowserStatus(json: String) {
+        val merged = statusWithFullscreen(json, reportedFullscreen())
+        if (!playerBridge.videoStatus(merged)) {
             sendBroadcast(Intent(ACTION_BROWSER_VIDEO_STATUS).apply {
                 setPackage("com.playbridge.player")
-                putExtra(EXTRA_VIDEO_STATUS_JSON, json)
+                putExtra(EXTRA_VIDEO_STATUS_JSON, merged)
             }, BROWSER_CONTROL_PERMISSION)
         }
     }
@@ -282,6 +311,7 @@ class BrowserActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishFullscreenNow()
     }
 
     private fun exitGeckoFullscreen() {
@@ -289,6 +319,8 @@ class BrowserActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView)
             .show(WindowInsetsCompat.Type.systemBars())
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        engine?.noteChromeHidden()
+        publishFullscreenNow()
     }
 
     /**
@@ -554,6 +586,17 @@ class BrowserActivity : ComponentActivity() {
     private fun handleRemoteCommand(key: String?) {
         Log.d(TAG, "Remote command received")
 
+        // A focused field still receives text in native fullscreen. A fullscreen
+        // video with no input or contenteditable target leaves the script at no_focus.
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
+
         // Active video owns D-pad input, including Gecko's native fullscreen surface.
         if (engine?.isVideoControlActive() == true) {
             when (key) {
@@ -569,13 +612,12 @@ class BrowserActivity : ComponentActivity() {
             when (key) {
                 "back" -> {
                     runOnUiThread {
-                        exitGeckoFullscreen()
+                        exitAnyFullscreen()
                     }
-                    engine?.evaluateJavascript("document.exitFullscreen && document.exitFullscreen();", null)
                 }
                 "home" -> {
                     // Home always exits the browser, fullscreen or not.
-                    runOnUiThread { exitGeckoFullscreen() }
+                    runOnUiThread { exitAnyFullscreen() }
                     closeBrowser()
                 }
                 "dpad_center" -> {
@@ -600,13 +642,10 @@ class BrowserActivity : ComponentActivity() {
             return
         }
 
-        // Keyboard input streamed from the phone (browser keyboard mode).
-        if (key != null && key.startsWith("text:")) {
-            injectFocusedText(key.removePrefix("text:"))
-            return
-        }
-        if (key == "key_enter") {
-            submitFocusedInput()
+        // CSS fill has no Gecko fullscreen chrome. Back restores the video's styles
+        // and does not walk history while that fill is what the phone is showing.
+        if (reportedFullscreen() && key == "back") {
+            exitAnyFullscreen()
             return
         }
 
@@ -667,34 +706,24 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             "home" -> {
-                // Home always exits the browser.
+                // Home always exits the browser. Drop an in-frame fill first so the
+                // phone's fullscreen flag matches the page we are leaving.
+                if (engine?.isFrameFillActive() == true || engine?.isNativeClaimActive() == true) {
+                    engine?.videoRestore()
+                }
                 closeBrowser()
             }
         }
     }
 
-    /** Write [b64] (base64 UTF-8) into the focused web input, replacing its contents. */
+    /** Write [b64] (base64 UTF-8) into the focused field, including one inside an iframe. */
     private fun injectFocusedText(b64: String) {
-        val safe = b64.filter { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }
-        val js = "(function(){try{" +
-            "var t=decodeURIComponent(escape(atob('$safe')));" +
-            "var e=document.activeElement;" +
-            "if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){" +
-              "if(e.isContentEditable){e.textContent=t;}else{e.value=t;}" +
-              "e.dispatchEvent(new Event('input',{bubbles:true}));" +
-              "e.dispatchEvent(new Event('change',{bubbles:true}));}" +
-            "}catch(err){}})();"
-        engine?.evaluateJavascript(js, null)
+        engine?.injectFocusedText(b64)
     }
 
-    /** Fire an Enter key on the focused input and submit its form if any. */
+    /** Fire Enter on the focused field and submit its form when it has one. */
     private fun submitFocusedInput() {
-        val js = "(function(){var e=document.activeElement;if(!e)return;" +
-            "var mk=function(ty){return new KeyboardEvent(ty,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true});};" +
-            "e.dispatchEvent(mk('keydown'));e.dispatchEvent(mk('keypress'));e.dispatchEvent(mk('keyup'));" +
-            "if(e.form){try{if(e.form.requestSubmit){e.form.requestSubmit();}else{e.form.submit();}}catch(err){}}" +
-            "})();"
-        engine?.evaluateJavascript(js, null)
+        engine?.submitFocusedInput()
     }
 
     private fun handleBrowserControlCommand(action: String?) {
@@ -727,62 +756,8 @@ class BrowserActivity : ComponentActivity() {
                 null -> showCustomVideoOverlay(true, "No active video", "minimal", null, null, 1500)
             }
             "refresh" -> engine?.reload()
-            "maximize_video" -> {
-                val js = "(function(){" +
-                    "var old=document.getElementById('pb-maximize-style');" +
-                    "if(old)old.parentNode.removeChild(old);" +
-                    "function findLargestVideo(doc){" +
-                      "try{var videos=doc.querySelectorAll('video');var largest=null;var largestArea=0;" +
-                      "for(var i=0;i<videos.length;i++){var v=videos[i];var area=v.offsetWidth*v.offsetHeight;" +
-                      "if(area>largestArea||(area===0&&!largest)){largest=v;largestArea=area;}}" +
-                      "return largest;}catch(e){return null;}}" +
-                    "var target=findLargestVideo(document);var targetIsIframe=false;" +
-                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
-                      "for(var i=0;i<iframes.length;i++){try{" +
-                        "var iframeDoc=iframes[i].contentDocument||iframes[i].contentWindow.document;" +
-                        "var v=findLargestVideo(iframeDoc);" +
-                        "if(v){target=iframes[i];targetIsIframe=true;break;}" +
-                      "}catch(e){}}}" +
-                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
-                      "var largestIframe=null;var largestArea=0;" +
-                      "for(var i=0;i<iframes.length;i++){" +
-                        "var area=iframes[i].offsetWidth*iframes[i].offsetHeight;" +
-                        "if(area>largestArea){largestIframe=iframes[i];largestArea=area;}}" +
-                      "if(largestIframe&&largestArea>100){target=largestIframe;targetIsIframe=true;}}" +
-                    "if(!target)return 'no_video';" +
-                    "if(!targetIsIframe&&target.paused){try{target.play();}catch(e){}}" +
-                    "target.dataset.pbMaximized='true';" +
-                    "var el=target;while(el&&el!==document.body&&el!==document.documentElement){el.dataset.pbAncestor='true';el=el.parentElement;}" +
-                    "var style=document.createElement('style');style.id='pb-maximize-style';" +
-                    "style.textContent=" +
-                      "'body>*:not([data-pb-ancestor]){display:none!important;}'" +
-                      "+'[data-pb-ancestor]>*:not([data-pb-ancestor]):not([data-pb-maximized]){display:none!important;}'" +
-                      "+'body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}'" +
-                      "+'[data-pb-ancestor]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;margin:0!important;padding:0!important;position:fixed!important;top:0!important;left:0!important;overflow:hidden!important;}'" +
-                      "+'[data-pb-maximized]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;object-fit:contain!important;position:fixed!important;top:0!important;left:0!important;z-index:2147483647!important;background:#000!important;border:none!important;}';" +
-                    "document.head.appendChild(style);" +
-                    "return targetIsIframe?'ok_iframe':'ok_video';" +
-                    "})();"
-                engine?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "maximize_video result: $result")
-                }
-            }
-            "restore_video" -> {
-                val js = "(function(){" +
-                    "var style=document.getElementById('pb-maximize-style');" +
-                    "if(style)style.parentNode.removeChild(style);" +
-                    "var ancestors=document.querySelectorAll('[data-pb-ancestor]');" +
-                    "for(var i=0;i<ancestors.length;i++){delete ancestors[i].dataset.pbAncestor;}" +
-                    "var el=document.querySelector('[data-pb-maximized]');" +
-                    "if(el){delete el.dataset.pbMaximized;return 'ok';}" +
-                    "if(document.fullscreenElement||document.webkitFullscreenElement){" +
-                      "var exitFs=document.exitFullscreen||document.webkitExitFullscreen;" +
-                      "if(exitFs)exitFs.call(document);return 'ok_native';}" +
-                    "return 'not_maximized';})();"
-                engine?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "restore_video result: $result")
-                }
-            }
+            "maximize_video" -> engine?.videoMaximize(isGeckoFullscreen)
+            "restore_video" -> engine?.videoRestore()
         }
     }
 

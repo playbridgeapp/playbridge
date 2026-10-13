@@ -210,7 +210,7 @@ class ConnectionCoordinator internal constructor(
                             )
                             // Player status carries mediaKind, playbackId, or currentItemId
                             // (createStatusJson). Browser status never does: active frames add
-                            // title, muted, and suppressUnmute; idle frames are only
+                            // title, muted, fullscreen, and suppressUnmute; idle frames are only
                             // type/state/position/duration. Hold the player frame so the
                             // paused player behind the browser cannot repaint the card.
                             if (isBrowserSurface(tvActiveContext.value) && isPlayerOwnedStatus(json)) {
@@ -224,6 +224,7 @@ class ConnectionCoordinator internal constructor(
                                         mediaGeneration = previous.mediaGeneration + if (mediaChanged) 1L else 0L,
                                         playbackAtMs = clock(),
                                         browserMuted = if (json.has("muted")) json.optBoolean("muted") else null,
+                                        browserFullscreen = if (json.has("fullscreen")) json.optBoolean("fullscreen") else null,
                                     )
                                 }
                             }
@@ -319,6 +320,7 @@ class ConnectionCoordinator internal constructor(
                                 scalingAvailable = json.optBoolean("scalingAvailable", true),
                                 audioBoostAvailable = json.optBoolean("audioBoostAvailable", true),
                                 qualityAvailable = json.optBoolean("qualityAvailable", false),
+                                loop = if (json.has("loop")) json.optBoolean("loop") else null,
                             )
                             val fields = json.keys().asSequence().toSet()
                             if (holdingPlayerSnapshots) {
@@ -452,7 +454,15 @@ class ConnectionCoordinator internal constructor(
         tvAudioTracks.value = emptyList()
         tvSubtitleTracks.value = emptyList()
         tvPlayerSettings.value = TvPlayerSettings()
-        mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L, settingsReported = false, settingsFields = emptySet(), browserMuted = null) }
+        mutableRemoteObservation.update {
+            it.copy(
+                mediaGeneration = it.mediaGeneration + 1L,
+                settingsReported = false,
+                settingsFields = emptySet(),
+                browserMuted = null,
+                browserFullscreen = null,
+            )
+        }
         nowPlayingTvId.value = null
         nowPlayingSeason.value = null
         nowPlayingEpisodeStart.value = 1

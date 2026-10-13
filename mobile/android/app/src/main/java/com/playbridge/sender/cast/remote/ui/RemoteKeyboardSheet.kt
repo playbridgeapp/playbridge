@@ -123,7 +123,7 @@ internal fun KeyboardSheetContent(
             val shortened = current.substring(0, newLength)
             textFieldValue = TextFieldValue(shortened, selection = TextRange(shortened.length))
             commitText(shortened)
-            dispatch(RemoteAction.DeleteText)
+            // Replacement already removes the code point; a second delete would remove extra text.
         }
     }
 

@@ -2177,6 +2177,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             put("scalingAvailable", currentMediaKind == MediaKind.VIDEO && state.capabilities.scalingAvailable)
             put("audioBoostAvailable", currentMediaKind != MediaKind.IMAGE && state.capabilities.audioBoostAvailable)
             put("qualityAvailable", currentMediaKind == MediaKind.VIDEO && state.capabilities.qualityAvailable)
+            put("loop", state.isLooping)
         }.toString()
         ServerService.broadcastStatus(this, status)
     }
@@ -2838,6 +2839,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleRemote(key: String?) {
+        if (key == "home") {
+            leavePlayerToReceiverIdle()
+            return
+        }
         if (key != "back" &&
             controlsViewModel.controlsState.value.playbackTransitionMessage != null
         ) return
@@ -2904,6 +2909,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 else Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
             )
         }.onFailure { FileLogger.w(TAG, "Unable to apply frame-rate matching") }
+    }
+
+    /** Remote Home stops this activity and shows the receiver idle screen. System Home is not available here. */
+    private fun leavePlayerToReceiverIdle() {
+        if (finishingSession) return
+        logPlaybackContextCheckpoint("Home finishing player")
+        finishingSession = true
+        runCatching {
+            startActivity(
+                Intent(this, com.playbridge.player.MainActivity::class.java).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    )
+                },
+            )
+        }
+        finish()
     }
 
     private fun handleBackPressed() {

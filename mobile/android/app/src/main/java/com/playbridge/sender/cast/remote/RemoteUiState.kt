@@ -98,6 +98,7 @@ data class RemoteObservation(
     val sequence: Long = 0L, val atMs: Long = 0L, val playbackSequence: Long = 0L,
     val playbackAtMs: Long = 0L, val mediaGeneration: Long = 0L, val settingsReported: Boolean = false,
     val browserMuted: Boolean? = null,
+    val browserFullscreen: Boolean? = null,
     val contextSequence: Long = 0L,
     val settingsFields: Set<String> = emptySet(),
     val controlFailureVersion: Long = 0L,

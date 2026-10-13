@@ -88,6 +88,15 @@ public class StatusMessage(
     schemaIndex = 7,
   )
   public val current_item_id: String? = null,
+  /**
+   * Native browser fullscreen. Omitted by the player and by older receivers.
+   */
+  @field:WireField(
+    tag = 9,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    schemaIndex = 8,
+  )
+  public val fullscreen: Boolean? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<StatusMessage, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -109,6 +118,7 @@ public class StatusMessage(
     if (media_kind != other.media_kind) return false
     if (playback_id != other.playback_id) return false
     if (current_item_id != other.current_item_id) return false
+    if (fullscreen != other.fullscreen) return false
     return true
   }
 
@@ -124,6 +134,7 @@ public class StatusMessage(
       result = result * 37 + (media_kind?.hashCode() ?: 0)
       result = result * 37 + (playback_id?.hashCode() ?: 0)
       result = result * 37 + (current_item_id?.hashCode() ?: 0)
+      result = result * 37 + (fullscreen?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -139,6 +150,7 @@ public class StatusMessage(
     if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
     if (playback_id != null) result += """playback_id=${sanitize(playback_id)}"""
     if (current_item_id != null) result += """current_item_id=${sanitize(current_item_id)}"""
+    if (fullscreen != null) result += """fullscreen=$fullscreen"""
     return result.joinToString(prefix = "StatusMessage{", separator = ", ", postfix = "}")
   }
 
@@ -151,9 +163,10 @@ public class StatusMessage(
     media_kind: String? = this.media_kind,
     playback_id: String? = this.playback_id,
     current_item_id: String? = this.current_item_id,
+    fullscreen: Boolean? = this.fullscreen,
     unknownFields: ByteString = this.unknownFields,
   ): StatusMessage = StatusMessage(type, state, position, duration, title, media_kind, playback_id,
-      current_item_id, unknownFields)
+      current_item_id, fullscreen, unknownFields)
 
   public companion object {
     @JvmField
@@ -183,6 +196,7 @@ public class StatusMessage(
         size += ProtoAdapter.STRING.encodedSizeWithTag(6, value.media_kind)
         size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.playback_id)
         size += ProtoAdapter.STRING.encodedSizeWithTag(8, value.current_item_id)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(9, value.fullscreen)
         return size
       }
 
@@ -203,11 +217,13 @@ public class StatusMessage(
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.media_kind)
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.playback_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 8, value.current_item_id)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 9, value.fullscreen)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: StatusMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 9, value.fullscreen)
         ProtoAdapter.STRING.encodeWithTag(writer, 8, value.current_item_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.playback_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.media_kind)
@@ -235,6 +251,7 @@ public class StatusMessage(
         var media_kind: String? = null
         var playback_id: String? = null
         var current_item_id: String? = null
+        var fullscreen: Boolean? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -245,6 +262,7 @@ public class StatusMessage(
             6 -> media_kind = ProtoAdapter.STRING.decode(reader)
             7 -> playback_id = ProtoAdapter.STRING.decode(reader)
             8 -> current_item_id = ProtoAdapter.STRING.decode(reader)
+            9 -> fullscreen = ProtoAdapter.BOOL.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -257,6 +275,7 @@ public class StatusMessage(
           media_kind = media_kind,
           playback_id = playback_id,
           current_item_id = current_item_id,
+          fullscreen = fullscreen,
           unknownFields = unknownFields
         )
       }

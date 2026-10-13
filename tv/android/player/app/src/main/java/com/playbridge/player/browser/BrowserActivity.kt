@@ -30,6 +30,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import com.playbridge.shared.browser.browserFullscreenReported
+import com.playbridge.shared.logging.redactUrlForLog
+import com.playbridge.shared.protocol.statusWithFullscreen
 
 class BrowserActivity : ComponentActivity() {
 
@@ -82,6 +85,7 @@ class BrowserActivity : ComponentActivity() {
 
     // Fullscreen video support
     private var fullscreenView: View? = null
+    private var lastBrowserStatusJson: String? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenContainer: FrameLayout? = null
     private var contentContainer: FrameLayout? = null
@@ -186,7 +190,7 @@ class BrowserActivity : ComponentActivity() {
         // Load the URL from intent
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
-            Log.d(TAG, "Loading URL: $url")
+            Log.d(TAG, "Loading URL: ${redactUrlForLog(url)}")
             currentUrl = url
             engine?.loadUrl(url)
         } else {
@@ -197,8 +201,8 @@ class BrowserActivity : ComponentActivity() {
 
         // Handle back press
         onBackPressedDispatcher.addCallback(this) {
-            if (fullscreenView != null) {
-                exitFullscreen()
+            if (reportedFullscreen()) {
+                exitAnyFullscreen()
             } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
@@ -257,9 +261,8 @@ class BrowserActivity : ComponentActivity() {
 
         // Forward the controller's playback status to the phone (drives its scrubber).
         // Same "status" message the native player emits, so the phone parses it as-is.
-        engine?.onVideoStatus = { json ->
-            com.playbridge.player.server.ServerService.broadcastStatus(this, json)
-        }
+        engine?.onVideoStatus = { json -> publishBrowserStatus(json) }
+        engine?.onFullscreenFlagsChanged = { publishBrowserStatus(null) }
 
         // Custom overlay support controlled by user scripts
         engine?.onVideoOverlay = { visible, text, style, bgColor, textColor, autoDismissMs ->
@@ -436,6 +439,7 @@ class BrowserActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        publishBrowserStatus(null)
     }
 
     /**
@@ -459,8 +463,25 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    private fun reportedFullscreen(): Boolean = browserFullscreenReported(
+        fullscreenView != null,
+        engine?.isFrameFillActive() == true,
+        engine?.isNativeClaimActive() == true,
+    )
+
+    /** Phone restore and TV Back leave native chrome and the in-frame fill together. */
+    private fun exitAnyFullscreen() {
+        val native = fullscreenView != null
+        val scripted = engine?.isFrameFillActive() == true || engine?.isNativeClaimActive() == true
+        if (native || scripted) engine?.videoRestore()
+        if (native) exitFullscreen()
+    }
+
     private fun exitFullscreen() {
-        if (fullscreenView == null) return
+        if (fullscreenView == null) {
+            engine?.noteChromeHidden()
+            return
+        }
 
         fullscreenContainer?.removeView(fullscreenView)
         fullscreenView = null
@@ -474,6 +495,18 @@ class BrowserActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView)
             .show(WindowInsetsCompat.Type.systemBars())
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        engine?.noteChromeHidden()
+        publishBrowserStatus(null)
+    }
+
+    private fun publishBrowserStatus(json: String?) {
+        if (json != null) lastBrowserStatusJson = json
+        val base = lastBrowserStatusJson
+            ?: """{"type":"status","state":"idle","position":0,"duration":0}"""
+        com.playbridge.player.server.ServerService.broadcastStatus(
+            this,
+            statusWithFullscreen(base, reportedFullscreen()),
+        )
     }
 
     /**
@@ -737,13 +770,24 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun handleRemoteCommand(key: String?) {
-        Log.d(TAG, "Remote command: $key")
+        Log.d(TAG, if (key?.startsWith("text:") == true) "Remote command: text" else "Remote command: $key")
+
+        // A focused field still receives text in native fullscreen. A fullscreen
+        // video with no input or contenteditable target returns no_focus.
+        if (key != null && key.startsWith("text:")) {
+            injectFocusedText(key.removePrefix("text:"))
+            return
+        }
+        if (key == "key_enter") {
+            submitFocusedInput()
+            return
+        }
 
         if (fullscreenView != null) {
             when (key) {
                 "back" -> {
                     runOnUiThread {
-                        exitFullscreen()
+                        exitAnyFullscreen()
                     }
                 }
                 // In fullscreen the D-pad drives the playing <video> via the injected
@@ -755,6 +799,13 @@ class BrowserActivity : ComponentActivity() {
                 "dpad_up" -> engine?.videoVolume(VOLUME_STEP)
                 "dpad_down" -> engine?.videoVolume(-VOLUME_STEP)
             }
+            return
+        }
+
+        // CSS fill has no custom view. Back restores the video's styles and does not
+        // walk history while that fill is what the phone is showing as fullscreen.
+        if (reportedFullscreen() && key == "back") {
+            exitAnyFullscreen()
             return
         }
 
@@ -770,16 +821,6 @@ class BrowserActivity : ComponentActivity() {
                 "dpad_up" -> { engine?.videoVolume(VOLUME_STEP); return }
                 "dpad_down" -> { engine?.videoVolume(-VOLUME_STEP); return }
             }
-        }
-
-        // Keyboard input streamed from the phone (browser keyboard mode).
-        if (key != null && key.startsWith("text:")) {
-            injectFocusedText(key.removePrefix("text:"))
-            return
-        }
-        if (key == "key_enter") {
-            submitFocusedInput()
-            return
         }
 
         val cursorStepX = 15f // Finer control horizontally
@@ -839,36 +880,24 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
             "home" -> {
-                // Home always exits the browser.
+                // Home always exits the browser. Drop an in-frame fill first so the
+                // phone's fullscreen flag matches the page we are leaving.
+                if (engine?.isFrameFillActive() == true || engine?.isNativeClaimActive() == true) {
+                    engine?.videoRestore()
+                }
                 closeBrowser()
             }
         }
     }
 
-    /** Write [b64] (base64 UTF-8) into the focused web input, replacing its contents. */
+    /** Write [b64] (base64 UTF-8) into the focused field, including one inside an iframe. */
     private fun injectFocusedText(b64: String) {
-        // Decode in JS so arbitrary text never has to be escaped into the script string.
-        val safe = b64.filter { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }
-        val js = "(function(){try{" +
-            "var t=decodeURIComponent(escape(atob('$safe')));" +
-            "var e=document.activeElement;" +
-            "if(e&&(e.tagName==='INPUT'||e.tagName==='TEXTAREA'||e.isContentEditable)){" +
-              "if(e.isContentEditable){e.textContent=t;}else{e.value=t;}" +
-              "e.dispatchEvent(new Event('input',{bubbles:true}));" +
-              "e.dispatchEvent(new Event('change',{bubbles:true}));" +
-              "return 'ok';}" +
-            "return 'no_focus';}catch(err){return 'err:'+err;}})();"
-        engine?.evaluateJavascript(js) { result -> Log.d(TAG, "injectFocusedText: $result") }
+        engine?.injectFocusedText(b64)
     }
 
-    /** Fire an Enter key on the focused input and submit its form if any. */
+    /** Fire Enter on the focused field and submit its form when it has one. */
     private fun submitFocusedInput() {
-        val js = "(function(){var e=document.activeElement;if(!e)return 'no_focus';" +
-            "var mk=function(ty){return new KeyboardEvent(ty,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true});};" +
-            "e.dispatchEvent(mk('keydown'));e.dispatchEvent(mk('keypress'));e.dispatchEvent(mk('keyup'));" +
-            "if(e.form){try{if(e.form.requestSubmit){e.form.requestSubmit();}else{e.form.submit();}}catch(err){}}" +
-            "return 'ok';})();"
-        engine?.evaluateJavascript(js) { result -> Log.d(TAG, "submitFocusedInput: $result") }
+        engine?.submitFocusedInput()
     }
 
     private fun handleBrowserControlCommand(action: String?) {
@@ -908,62 +937,8 @@ class BrowserActivity : ComponentActivity() {
             }
             "forward" -> engine?.goForward()
             "refresh" -> engine?.reload()
-            "maximize_video" -> {
-                val js = "(function(){" +
-                    "var old=document.getElementById('pb-maximize-style');" +
-                    "if(old)old.parentNode.removeChild(old);" +
-                    "function findLargestVideo(doc){" +
-                      "try{var videos=doc.querySelectorAll('video');var largest=null;var largestArea=0;" +
-                      "for(var i=0;i<videos.length;i++){var v=videos[i];var area=v.offsetWidth*v.offsetHeight;" +
-                      "if(area>largestArea||(area===0&&!largest)){largest=v;largestArea=area;}}" +
-                      "return largest;}catch(e){return null;}}" +
-                    "var target=findLargestVideo(document);var targetIsIframe=false;" +
-                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
-                      "for(var i=0;i<iframes.length;i++){try{" +
-                        "var iframeDoc=iframes[i].contentDocument||iframes[i].contentWindow.document;" +
-                        "var v=findLargestVideo(iframeDoc);" +
-                        "if(v){target=iframes[i];targetIsIframe=true;break;}" +
-                      "}catch(e){}}}" +
-                    "if(!target){var iframes=document.querySelectorAll('iframe');" +
-                      "var largestIframe=null;var largestArea=0;" +
-                      "for(var i=0;i<iframes.length;i++){" +
-                        "var area=iframes[i].offsetWidth*iframes[i].offsetHeight;" +
-                        "if(area>largestArea){largestIframe=iframes[i];largestArea=area;}}" +
-                      "if(largestIframe&&largestArea>100){target=largestIframe;targetIsIframe=true;}}" +
-                    "if(!target)return 'no_video';" +
-                    "if(!targetIsIframe&&target.paused){try{target.play();}catch(e){}}" +
-                    "target.dataset.pbMaximized='true';" +
-                    "var el=target;while(el&&el!==document.body&&el!==document.documentElement){el.dataset.pbAncestor='true';el=el.parentElement;}" +
-                    "var style=document.createElement('style');style.id='pb-maximize-style';" +
-                    "style.textContent=" +
-                      "'body>*:not([data-pb-ancestor]){display:none!important;}'" +
-                      "+'[data-pb-ancestor]>*:not([data-pb-ancestor]):not([data-pb-maximized]){display:none!important;}'" +
-                      "+'body{margin:0!important;padding:0!important;overflow:hidden!important;background:#000!important;}'" +
-                      "+'[data-pb-ancestor]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;margin:0!important;padding:0!important;position:fixed!important;top:0!important;left:0!important;overflow:hidden!important;}'" +
-                      "+'[data-pb-maximized]{width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;object-fit:contain!important;position:fixed!important;top:0!important;left:0!important;z-index:2147483647!important;background:#000!important;border:none!important;}';" +
-                    "document.head.appendChild(style);" +
-                    "return targetIsIframe?'ok_iframe':'ok_video';" +
-                    "})();"
-                engine?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "maximize_video result: $result")
-                }
-            }
-            "restore_video" -> {
-                val js = "(function(){" +
-                    "var style=document.getElementById('pb-maximize-style');" +
-                    "if(style)style.parentNode.removeChild(style);" +
-                    "var ancestors=document.querySelectorAll('[data-pb-ancestor]');" +
-                    "for(var i=0;i<ancestors.length;i++){delete ancestors[i].dataset.pbAncestor;}" +
-                    "var el=document.querySelector('[data-pb-maximized]');" +
-                    "if(el){delete el.dataset.pbMaximized;return 'ok';}" +
-                    "if(document.fullscreenElement||document.webkitFullscreenElement){" +
-                      "var exitFs=document.exitFullscreen||document.webkitExitFullscreen;" +
-                      "if(exitFs)exitFs.call(document);return 'ok_native';}" +
-                    "return 'not_maximized';})();"
-                engine?.evaluateJavascript(js) { result ->
-                    Log.d(TAG, "restore_video result: $result")
-                }
-            }
+            "maximize_video" -> engine?.videoMaximize(fullscreenView != null)
+            "restore_video" -> engine?.videoRestore()
         }
     }
 
@@ -973,7 +948,7 @@ class BrowserActivity : ComponentActivity() {
 
         val url = intent.getStringExtra(EXTRA_URL)
         if (!url.isNullOrEmpty()) {
-            Log.d(TAG, "Loading new URL: $url")
+            Log.d(TAG, "Loading new URL: ${redactUrlForLog(url)}")
             currentUrl = url
             engine?.loadUrl(url)
         }

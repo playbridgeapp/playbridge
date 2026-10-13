@@ -40,6 +40,16 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         return;
     }
+    if (message.type === "focus_cmd") {
+        // Every frame receives this. The controller acts only when this document
+        // holds an editable focus, so a main-frame iframe element is left alone.
+        if (videoDocumentLive && window.__pbvc) {
+            if (message.op === "enter") window.__pbvc.submitFocused();
+            else if (message.op === "text") window.__pbvc.applyText(typeof message.b64 === "string" ? message.b64 : "");
+        }
+        sendResponse("");
+        return true;
+    }
     if (message.type === "eval") {
         try {
             const result = eval(message.code);

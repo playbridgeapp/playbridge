@@ -61,7 +61,10 @@ fun nativeRemoteCapabilities(
     val known = android || desktop || apple || profile == RemoteProfile.Cli
     fun supported(value: Boolean) = if (value) yes else no
     val keys = when {
-        android && player -> setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok, RemoteKey.Back)
+        android && player -> buildSet {
+            addAll(setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok, RemoteKey.Back))
+            if ("player_home_v1" in features) add(RemoteKey.Home)
+        }
         browser -> setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok, RemoteKey.Back, RemoteKey.Home, RemoteKey.Enter)
         apple && player -> setOf(RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok)
         else -> emptySet()

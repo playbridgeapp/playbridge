@@ -192,6 +192,15 @@ message StatusMessage {
   optional string media_kind = 6 [json_name = "mediaKind"];
   optional string playback_id = 7 [json_name = "playbackId"];
   optional string current_item_id = 8 [json_name = "currentItemId"];
+  // Native browser fullscreen. Omitted by the player and by older receivers.
+  optional bool fullscreen = 9;
+}
+
+// Android TV player_settings. The live JSON object has more fields; this message
+// records the additive loop flag. Field numbers start at 1 because the message is new.
+message PlayerSettingsMessage {
+  string type = 1;
+  optional bool loop = 2;
 }
 
 message ContextMessage {

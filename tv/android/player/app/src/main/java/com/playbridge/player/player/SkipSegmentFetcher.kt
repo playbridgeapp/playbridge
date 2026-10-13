@@ -3,6 +3,7 @@ package com.playbridge.player.player
 import android.content.Context
 import android.util.Log
 import com.playbridge.player.logging.DebugNetworkLogger
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -81,7 +82,7 @@ object SkipSegmentFetcher {
         val apiKey = prefs.getString("introdb_api_key", "") ?: ""
 
         val url = "$baseUrl/segments?imdb_id=$imdbId&season=$season&episode=$episode"
-        Log.i(TAG, "Fetching skip segments from IntroDB: $url")
+        Log.i(TAG, "Fetching skip segments from IntroDB: ${redactUrlForLog(url)}")
 
         val requestBuilder = Request.Builder()
             .url(url)
@@ -153,7 +154,7 @@ object SkipSegmentFetcher {
         val episodeQuery =
             if (season != null && episode != null) "&season=$season&episode=$episode" else ""
         val url = "$baseUrl/v3/media?$idQuery$episodeQuery"
-        Log.i(TAG, "Fetching skip segments from TheIntroDB: $url")
+        Log.i(TAG, "Fetching skip segments from TheIntroDB: ${redactUrlForLog(url)}")
 
         val request = Request.Builder()
             .url(url)

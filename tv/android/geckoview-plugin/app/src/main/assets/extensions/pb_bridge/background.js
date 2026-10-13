@@ -50,6 +50,33 @@ browser.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
 });
 browser.tabs.onRemoved.addListener(tabId => retireFrames(tabId));
 
+async function deliverFocus(message) {
+    const tabs = await browser.tabs.query({});
+    if (tabs.length === 0) return;
+    const tabId = tabs[0].id;
+    const payload = {
+        type: "focus_cmd",
+        op: message.op === "enter" ? "enter" : "text",
+        b64: typeof message.b64 === "string" ? message.b64 : ""
+    };
+    const ids = new Set();
+    try {
+        const all = await browser.webNavigation.getAllFrames({ tabId });
+        if (Array.isArray(all)) {
+            for (const frame of all) {
+                if (frame && typeof frame.frameId === "number") ids.add(frame.frameId);
+            }
+        }
+    } catch (_) { /* Fall through to frames that have already reported. */ }
+    for (const frame of frames.values()) {
+        if (frame.tabId === tabId) ids.add(frame.frameId);
+    }
+    if (ids.size === 0) ids.add(0);
+    await Promise.all([...ids].map(frameId =>
+        browser.tabs.sendMessage(tabId, payload, { frameId }).catch(() => {})
+    ));
+}
+
 async function handleMessage(message) {
     retryMs = 1000;
     if (message.type === "video_cmd") {
@@ -63,13 +90,15 @@ async function handleMessage(message) {
                 retireFrames(message.tabId, message.frameId);
             }
         }
+    } else if (message.type === "focus_cmd") {
+        await deliverFocus(message);
     } else if (message.type === "eval") {
         try {
             // Not {active: true}: GeckoView doesn't mark its session's tab active, so that
             // query returned nothing and every eval (text input, maximize) failed.
             const tabs = await browser.tabs.query({});
             if (tabs.length > 0) {
-                // Every frame receives eval; only the frame with the focused input acts.
+                // Omitting frameId reaches the top frame. Text and Enter use deliverFocus.
                 const result = await browser.tabs.sendMessage(tabs[0].id, {
                     type: "eval", code: message.code
                 });

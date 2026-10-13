@@ -4,7 +4,15 @@ import android.content.Context
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import com.playbridge.shared.browser.FullscreenFlags
+import com.playbridge.shared.browser.MaximizeRoute
 import com.playbridge.shared.browser.VideoTargetSelector
+import com.playbridge.shared.browser.focusResultToken
+import com.playbridge.shared.browser.focusTextPayload
+import com.playbridge.shared.browser.applyMaximizeSignal
+import com.playbridge.shared.browser.maximizeResultToken
+import com.playbridge.shared.browser.maximizeRoute
+import com.playbridge.shared.browser.maximizeSignal
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -54,6 +62,119 @@ class GeckoViewEngine(
     fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
     fun videoUnmute() = sendVideoCommand("unmute")
 
+    /** In-frame CSS fill is on. Native chrome is tracked separately by the activity. */
+    fun isFrameFillActive(): Boolean = fullscreenFlags.frameFill
+
+    /** requestFullscreen was accepted, or the page was already fullscreen, before chrome appears. */
+    fun isNativeClaimActive(): Boolean = fullscreenFlags.nativeClaim
+
+    var onFullscreenFlagsChanged: (() -> Unit)? = null
+
+    private var fullscreenFlags = FullscreenFlags()
+    private var maximizeTarget: FrameKey? = null
+    private var acceptingMaximize = false
+    private var focusKind: String? = null
+    private var focusSawOk = false
+    private var focusSawOther = false
+
+    /**
+     * Replace the focused field in whichever frame holds it. [b64] is the phone's base64
+     * payload. An invalid payload is dropped.
+     */
+    fun injectFocusedText(b64: String) {
+        val safe = focusTextPayload(b64)
+        if (safe == null) {
+            Log.d(TAG, "injectFocusedText: err")
+            return
+        }
+        beginFocus("text")
+        PbBridge.focusCommand("text", safe)
+    }
+
+    /** Enter in the frame that holds the focused field. */
+    fun submitFocusedInput() {
+        beginFocus("enter")
+        PbBridge.focusCommand("enter")
+    }
+
+    private fun beginFocus(kind: String) {
+        focusKind = kind
+        focusSawOk = false
+        focusSawOther = false
+    }
+
+    private fun noteFocusResult(kind: String, value: String) {
+        if (kind != focusKind) return
+        val token = focusResultToken(value)
+        val label = if (kind == "text") "injectFocusedText" else "submitFocusedInput"
+        if (token == "ok") {
+            if (!focusSawOk) Log.d(TAG, "$label: ok")
+            focusSawOk = true
+            return
+        }
+        if (!focusSawOk && !focusSawOther) {
+            Log.d(TAG, "$label: $token")
+            focusSawOther = true
+        }
+    }
+
+    /** Enter fullscreen for the selected frame. A repeat while already on does not re-request it. */
+    fun videoMaximize(nativeChrome: Boolean) {
+        val target = videoTargets.current()
+        val hasTarget = target != null && documents[target] != null
+        when (maximizeRoute(hasTarget, nativeChrome || fullscreenFlags.frameFill || fullscreenFlags.nativeClaim)) {
+            MaximizeRoute.Hold -> applyMaximizeResult("maximize", "ok_held")
+            MaximizeRoute.TargetFrame, MaximizeRoute.MainFrameFallback -> {
+                acceptingMaximize = true
+                dispatchFit("maximize")
+            }
+        }
+    }
+
+    /** Exit the in-frame fill and any fullscreen element our script owns. */
+    fun videoRestore() {
+        acceptingMaximize = false
+        setFullscreenFlags(FullscreenFlags())
+        dispatchFit("restore")
+        maximizeTarget = null
+    }
+
+    /** Native chrome went away. The CSS fill stays until [videoRestore]. */
+    fun noteChromeHidden() {
+        setFullscreenFlags(fullscreenFlags.copy(nativeClaim = false))
+    }
+
+    private fun dispatchFit(cmd: String) {
+        val target = if (cmd == "restore") maximizeTarget ?: videoTargets.current() else videoTargets.current()
+        val document = target?.let { documents[it] }
+        if (target != null && document != null) {
+            if (cmd == "maximize") maximizeTarget = target
+            PbBridge.videoCommand(target.tabId, target.frameId, document, cmd)
+            return
+        }
+        // No selected frame. The top-frame controller posts its token on the video channel.
+        // evaluateJavascript's callback is always null on this engine.
+        val call = if (cmd == "restore") {
+            "(window.__pbvc&&window.__pbvc.restore())||'not_maximized'"
+        } else {
+            "(window.__pbvc&&window.__pbvc.maximize())||'no_video'"
+        }
+        evaluateJavascript(call, null)
+    }
+
+    private fun applyMaximizeResult(kind: String, value: String) {
+        if (kind != "maximize" && kind != "restore") return
+        val token = maximizeResultToken(value)
+        Log.d(TAG, if (kind == "restore") "restore_video result: $token" else "maximize_video result: $token")
+        setFullscreenFlags(applyMaximizeSignal(fullscreenFlags, maximizeSignal(kind, token)))
+    }
+
+    private fun setFullscreenFlags(next: FullscreenFlags) {
+        if (next == fullscreenFlags) return
+        fullscreenFlags = next
+        onFullscreenFlagsChanged?.invoke()
+    }
+
     private fun sendVideoCommand(cmd: String) {
         val target = videoTargets.current() ?: return
         val document = documents[target] ?: return
@@ -79,6 +200,10 @@ class GeckoViewEngine(
         mutedTarget = null
         activeVideoMuted = null
         autoUnmuteDone = false
+        maximizeTarget = null
+        acceptingMaximize = false
+        focusKind = null
+        setFullscreenFlags(FullscreenFlags())
         if (hadFrames) sendIdleVideoStatus()
     }
 
@@ -129,9 +254,20 @@ class GeckoViewEngine(
                     onVideoStatus?.invoke(data)
                 }
                 "result" -> {
-                    if (documents[key] != document || videoTargets.current() != key) return
                     val kind = o.optString("kind")
                     val value = o.optString("value")
+                    if (kind == "text" || kind == "enter") {
+                        noteFocusResult(kind, value)
+                        return
+                    }
+                    if (kind == "maximize" || kind == "restore") {
+                        if (documents[key] != null && documents[key] != document) return
+                        if (kind == "maximize" && !acceptingMaximize) return
+                        if (kind == "maximize" && maximizeTarget != null && key != maximizeTarget) return
+                        applyMaximizeResult(kind, value)
+                        return
+                    }
+                    if (documents[key] != document || videoTargets.current() != key) return
                     if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
                 }
                 "overlay" -> {

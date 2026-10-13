@@ -1707,6 +1707,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     $core.String? mediaKind,
     $core.String? playbackId,
     $core.String? currentItemId,
+    $core.bool? fullscreen,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -1717,6 +1718,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     if (mediaKind != null) result.mediaKind = mediaKind;
     if (playbackId != null) result.playbackId = playbackId;
     if (currentItemId != null) result.currentItemId = currentItemId;
+    if (fullscreen != null) result.fullscreen = fullscreen;
     return result;
   }
 
@@ -1734,6 +1736,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     ..aOS(6, _omitFieldNames ? '' : 'mediaKind')
     ..aOS(7, _omitFieldNames ? '' : 'playbackId')
     ..aOS(8, _omitFieldNames ? '' : 'currentItemId')
+    ..aOB(9, _omitFieldNames ? '' : 'fullscreen')
     ..hasRequiredFields = false
   ;
 
@@ -1825,6 +1828,76 @@ class StatusMessage extends $pb.GeneratedMessage {
   $core.bool hasCurrentItemId() => $_has(7);
   @$pb.TagNumber(8)
   void clearCurrentItemId() => $_clearField(8);
+
+  /// Native browser fullscreen. Omitted by the player and by older receivers.
+  @$pb.TagNumber(9)
+  $core.bool get fullscreen => $_getBF(8);
+  @$pb.TagNumber(9)
+  set fullscreen($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasFullscreen() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearFullscreen() => $_clearField(9);
+}
+
+/// Android TV player_settings. The live JSON object has more fields; this message
+/// records the additive loop flag. Field numbers start at 1 because the message is new.
+class PlayerSettingsMessage extends $pb.GeneratedMessage {
+  factory PlayerSettingsMessage({
+    $core.String? type,
+    $core.bool? loop,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (loop != null) result.loop = loop;
+    return result;
+  }
+
+  PlayerSettingsMessage._();
+
+  factory PlayerSettingsMessage.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory PlayerSettingsMessage.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PlayerSettingsMessage', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'type')
+    ..aOB(2, _omitFieldNames ? '' : 'loop')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PlayerSettingsMessage clone() => PlayerSettingsMessage()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PlayerSettingsMessage copyWith(void Function(PlayerSettingsMessage) updates) => super.copyWith((message) => updates(message as PlayerSettingsMessage)) as PlayerSettingsMessage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PlayerSettingsMessage create() => PlayerSettingsMessage._();
+  @$core.override
+  PlayerSettingsMessage createEmptyInstance() => create();
+  static $pb.PbList<PlayerSettingsMessage> createRepeated() => $pb.PbList<PlayerSettingsMessage>();
+  @$core.pragma('dart2js:noInline')
+  static PlayerSettingsMessage getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<PlayerSettingsMessage>(create);
+  static PlayerSettingsMessage? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get type => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set type($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.bool get loop => $_getBF(1);
+  @$pb.TagNumber(2)
+  set loop($core.bool value) => $_setBool(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasLoop() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearLoop() => $_clearField(2);
 }
 
 class ContextMessage extends $pb.GeneratedMessage {

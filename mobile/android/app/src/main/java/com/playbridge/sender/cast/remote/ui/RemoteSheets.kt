@@ -77,12 +77,14 @@ import com.playbridge.sender.cast.remote.RemoteCallbackActions
 import com.playbridge.sender.cast.remote.RemoteCommandResult
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteMediaKind
+import com.playbridge.sender.cast.remote.RemoteKeyboardRoute
 import com.playbridge.sender.cast.remote.RemoteProfile
 import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
 import com.playbridge.sender.cast.remote.RemoteViewport
 import com.playbridge.sender.cast.remote.ScalingMode
 import com.playbridge.sender.cast.remote.fullControlReady
+import com.playbridge.sender.cast.remote.keyboardRoute
 import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.resolveRemoteLayout
 import com.playbridge.sender.cast.subtitleOffIds
@@ -123,6 +125,7 @@ private fun PlayerSettingsSheet(
     onSwitchEngine: (String) -> Unit,
     showSettings: Boolean,
     showLoop: Boolean,
+    loopEnabled: Boolean?,
     onLoop: (Boolean) -> Unit,
     onStop: () -> Unit,
     showAddSubtitle: Boolean,
@@ -166,24 +169,42 @@ private fun PlayerSettingsSheet(
                     }
                 }
                 if (showLoop) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "Loop · TV state unavailable",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
+                    if (loopEditorUsesSwitch(loopEnabled)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Loop",
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Switch(
                                 enabled = LocalRemoteControlsEnabled.current,
-                                onClick = { onLoop(true) },
-                            ) {
-                                Text("Enable loop")
-                            }
-                            OutlinedButton(
-                                enabled = LocalRemoteControlsEnabled.current,
-                                onClick = { onLoop(false) },
-                            ) {
-                                Text("Disable loop")
+                                checked = loopEnabled == true,
+                                onCheckedChange = onLoop,
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Loop · TV state unavailable",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    enabled = LocalRemoteControlsEnabled.current,
+                                    onClick = { onLoop(true) },
+                                ) {
+                                    Text("Enable loop")
+                                }
+                                OutlinedButton(
+                                    enabled = LocalRemoteControlsEnabled.current,
+                                    onClick = { onLoop(false) },
+                                ) {
+                                    Text("Disable loop")
+                                }
                             }
                         }
                     }
@@ -700,6 +721,9 @@ private fun SubtitlesBottomSheet(
     }
 }
 
+/** A reported loop boolean draws the switch. A missing field keeps Enable and Disable. */
+internal fun loopEditorUsesSwitch(loopEnabled: Boolean?): Boolean = loopEnabled != null
+
 /** Stage 3d's sole sheet entry. Script/UA sheets keep their existing RemoteEffect host. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -727,12 +751,22 @@ internal fun RemoteSheets(
                 onAdjustSubtitleOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
                 onSwitchEngine = { dispatch(RemoteAction.SwitchEngine(it)) },
                 showSettings = !external && !image, showLoop = !external && !image && state.playback?.isLive != true,
+                loopEnabled = state.settings.loopEnabled,
                 onLoop = { dispatch(RemoteAction.SetLoop(it)) },
                 onStop = { dispatch(RemoteAction.StopPlayback); close() },
                 showAddSubtitle = !external && !image && !audio,
                 onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
             )
-            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close, imeKeys = state.fullControlReady, execute = execute)
+            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) {
+                val route = remember { state.keyboardRoute() }
+                val context = remember { state.context }
+                RemoteKeyboardSheet(
+                    dispatch = { dispatch(RemoteAction.KeyboardInput(it, route, context)) },
+                    onDismiss = close,
+                    imeKeys = route == RemoteKeyboardRoute.FullControl,
+                    execute = { execute(RemoteAction.KeyboardInput(it, route, context)) },
+                )
+            }
             RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
             RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
             RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close)

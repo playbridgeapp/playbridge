@@ -41,4 +41,5 @@ data class TvPlayerSettings(
     val scalingAvailable: Boolean = true,
     val audioBoostAvailable: Boolean = true,
     val qualityAvailable: Boolean = false,
+    val loop: Boolean? = null,
 )
