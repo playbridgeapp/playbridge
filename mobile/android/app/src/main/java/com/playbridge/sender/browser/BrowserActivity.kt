@@ -3284,7 +3284,7 @@ class BrowserActivity : ComponentActivity() {
                     val popupPrefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
                     fun openPopupTab() {
                         scope.launch(Dispatchers.Main) {
-                            val tabId = tabManager.createTab(url = popup.popupUrl, store = store, parentId = selectedTab?.id, select = true)
+                            val tabId = tabManager.createTab(url = popup.popupUrl, store = store, parentId = popup.openerTabId, select = true, detectorPopup = true)
                             // Link the popup's engine session in the store —
                             // EngineMiddleware's EngineObserver takes over
                             // URL/title/nav/state sync and crash handling.

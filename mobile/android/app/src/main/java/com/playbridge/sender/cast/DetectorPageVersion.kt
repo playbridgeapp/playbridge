@@ -3,6 +3,8 @@ package com.playbridge.sender.cast
 internal data class DetectorPageVersion(
     val detectorEpoch: Long,
     val navigationGeneration: Long,
+    val detectorTabId: Int = -1,
+    val bindingGeneration: Long = 0L,
 )
 
 internal enum class DetectorMessageOrder {
@@ -22,6 +24,9 @@ internal fun detectorMessageOrder(
     current == null -> DetectorMessageOrder.ADVANCE
     incoming.detectorEpoch > current.detectorEpoch -> DetectorMessageOrder.ADVANCE
     incoming.detectorEpoch < current.detectorEpoch -> DetectorMessageOrder.STALE
+    incoming.bindingGeneration > current.bindingGeneration -> DetectorMessageOrder.ADVANCE
+    incoming.bindingGeneration < current.bindingGeneration -> DetectorMessageOrder.STALE
+    incoming.detectorTabId != current.detectorTabId -> DetectorMessageOrder.STALE
     incoming.navigationGeneration > current.navigationGeneration -> DetectorMessageOrder.ADVANCE
     incoming.navigationGeneration < current.navigationGeneration -> DetectorMessageOrder.STALE
     else -> DetectorMessageOrder.CURRENT
@@ -35,6 +40,9 @@ internal class DetectorPageTracker {
         if (order == DetectorMessageOrder.ADVANCE) versions[tabId] = incoming
         return order
     }
+
+    fun order(tabId: String, incoming: DetectorPageVersion): DetectorMessageOrder =
+        detectorMessageOrder(versions[tabId], incoming)
 
     fun forget(tabId: String) {
         versions.remove(tabId)

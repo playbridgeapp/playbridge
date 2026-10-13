@@ -806,6 +806,18 @@ object Components {
     private var videoDetectorExtension: GeckoWebExtension? = null
     private val detectorTabBindingTracker = DetectorTabBindingTracker()
 
+    internal fun registerDetectorTab(tabId: String, url: String, openerId: String?, popup: Boolean = false) {
+        detectorTabBindingTracker.registerCreatedTab(tabId, url, openerId, popup)
+    }
+
+    internal fun detectorSessionChanged(tabId: String) {
+        detectorTabBindingTracker.sessionChanged(tabId)
+    }
+
+    internal fun forgetDetectorKotlinTab(tabId: String) {
+        detectorTabBindingTracker.forgetKotlinTab(tabId)
+    }
+
     // NOTE: the old 2-second "video polling" Handler was removed — it was a
     // no-op (native→extension messaging isn't possible; the extension pushes
     // detections itself) that ran forever, including in the background.
@@ -813,7 +825,7 @@ object Components {
     /**
      * Process incoming message from extension.
      * Resolves the Kotlin tab through an epoch-scoped WebExtension tab binding,
-     * bootstrapped only by exact current/previous document URL matches.
+     * bootstrapped by native tab creation and document URL evidence.
      */
     private fun processMessage(message: Any, resolutionAttempt: Int = 0) {
         try {
@@ -856,6 +868,9 @@ object Components {
                         onLinkedCastRequest?.invoke(JSONObject(jsonString))
                     }
                 } else if (type == "detector_hello") {
+                    jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull?.let {
+                        detectorTabBindingTracker.acceptEpoch(it)
+                    }
                     debugDetectorLog(
                         "Video detector native channel ready " +
                             "epoch=${jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: "legacy"}",
@@ -863,7 +878,9 @@ object Components {
                 } else if (type == "detector_tab_closed") {
                     val detectorEpoch = jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull
                     val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
-                    if (detectorEpoch != null && detectorTabId != null) {
+                    if (detectorEpoch != null && detectorTabId != null &&
+                        detectorTabBindingTracker.acceptEpoch(detectorEpoch)
+                    ) {
                         detectorTabBindingTracker.forgetDetectorTab(detectorEpoch, detectorTabId)
                         pageNavigationGenerations[detectorTabId] = Long.MAX_VALUE
                         Handler(Looper.getMainLooper()).post {
@@ -1034,18 +1051,12 @@ object Components {
                     val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
                     val navigationGeneration =
                         jsonObject["navigationGeneration"]?.jsonPrimitive?.longOrNull
-                    if (detectorTabId != null && navigationGeneration != null) {
-                        pageNavigationGenerations[detectorTabId] = navigationGeneration
-                        Handler(Looper.getMainLooper()).post {
-                            onPageNavigation?.invoke(detectorTabId, navigationGeneration)
-                        }
-                    }
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
                     if (kotlinTabId == null) {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
-                    val version = detectorPageVersion(jsonObject)
+                    val version = detectorPageVersion(jsonObject, kotlinTabId)
                     val transitionType = jsonObject["transitionType"]?.jsonPrimitive?.contentOrNull
                     val acceptedNavigation = if (transitionType == "same_document") {
                         // SPA view change: rows are kept, but the tab's media lifecycle
@@ -1080,6 +1091,12 @@ object Components {
                         order != DetectorMessageOrder.STALE
                     }
                     if (acceptedNavigation) {
+                        if (detectorTabId != null && navigationGeneration != null) {
+                            pageNavigationGenerations[detectorTabId] = navigationGeneration
+                            Handler(Looper.getMainLooper()).post {
+                                onPageNavigation?.invoke(detectorTabId, navigationGeneration)
+                            }
+                        }
                         jsonObject["url"]?.jsonPrimitive?.contentOrNull?.let {
                             updateDetectionOrigin(kotlinTabId, it)
                         }
@@ -1102,7 +1119,7 @@ object Components {
                         )
                         if (!mediaDetectionSettings.allows(kind)) return
                     }
-                    val version = detectorPageVersion(jsonObject)
+                    val version = detectorPageVersion(jsonObject, kotlinTabId)
                     if (
                         type == "video_detected" &&
                         version != null &&
@@ -1123,11 +1140,15 @@ object Components {
         }
     }
 
-    private fun detectorPageVersion(message: JsonObject): DetectorPageVersion? {
+    private fun detectorPageVersion(message: JsonObject, kotlinTabId: String): DetectorPageVersion? {
         val detectorEpoch = message["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: return null
         val navigationGeneration =
             message["navigationGeneration"]?.jsonPrimitive?.longOrNull ?: return null
-        return DetectorPageVersion(detectorEpoch, navigationGeneration)
+        val detectorTabId = message["tabId"]?.jsonPrimitive?.intOrNull ?: return null
+        val bindingGeneration = detectorTabBindingTracker.bindingGeneration(
+            detectorEpoch, detectorTabId, kotlinTabId,
+        ) ?: return null
+        return DetectorPageVersion(detectorEpoch, navigationGeneration, detectorTabId, bindingGeneration)
     }
 
     private fun parsePageCastHeaders(value: JsonObject?): Map<String, String>? {
@@ -1161,7 +1182,7 @@ object Components {
     
     /**
      * Resolve the WebExtension tab to a Kotlin tab using an existing binding or
-     * an exact current/previous document URL match. Unknown tabs are left
+     * native-created tab evidence or an exact document URL match. Unknown tabs are left
      * unresolved so a blocked popup cannot clear the selected opener tab.
      */
     private fun resolveKotlinTabId(message: JsonObject): String? {
@@ -1178,13 +1199,23 @@ object Components {
             val detectorEpoch = message["detectorEpoch"]?.jsonPrimitive?.longOrNull
             val detectorTabId = message["tabId"]?.jsonPrimitive?.intOrNull
             if (detectorEpoch != null && detectorTabId != null) {
-                detectorTabBindingTracker.resolve(
+                val documentUrl = if (message["type"]?.jsonPrimitive?.contentOrNull == "navigation") {
+                    message["url"]?.jsonPrimitive?.contentOrNull
+                } else null // A video's url is the media resource, not its document.
+                fun resolve(recover: Boolean = false) = detectorTabBindingTracker.resolve(
                     incomingEpoch = detectorEpoch,
                     detectorTabId = detectorTabId,
                     messageUrls = messageUrls,
                     candidates = candidates,
                     selectedKotlinTabId = state.selectedTabId,
+                    documentUrl = documentUrl,
+                    recoverStaleBinding = recover,
                 )
+                val tabId = resolve() ?: return null
+                val version = detectorPageVersion(message, tabId)
+                if (version != null && VideoDetector.detectorOrder(tabId, version) == DetectorMessageOrder.STALE) {
+                    resolve(recover = true)
+                } else tabId
             } else {
                 detectorTabBindingTracker.resolveLegacy(
                     messageUrls = messageUrls,

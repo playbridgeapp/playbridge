@@ -30,6 +30,7 @@ data class PendingPopup(
     val openerHost: String,
     val popupUrl: String,
     val engineSession: EngineSession,
+    val openerTabId: String? = null,
 )
 
 /** State for a pending download awaiting user confirmation. */
