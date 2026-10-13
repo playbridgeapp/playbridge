@@ -61,11 +61,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import com.playbridge.sender.cast.remote.RemoteInputMode
-import com.playbridge.sender.cast.remote.remotePressFeedback
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -79,6 +74,7 @@ import com.playbridge.sender.cast.newestSubtitlesFirst
 import com.playbridge.sender.cast.publishLocalSubtitle
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteCallbackActions
+import com.playbridge.sender.cast.remote.RemoteCommandResult
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteMediaKind
 import com.playbridge.sender.cast.remote.RemoteProfile
@@ -86,6 +82,7 @@ import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
 import com.playbridge.sender.cast.remote.RemoteViewport
 import com.playbridge.sender.cast.remote.ScalingMode
+import com.playbridge.sender.cast.remote.fullControlReady
 import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.resolveRemoteLayout
 import com.playbridge.sender.cast.subtitleOffIds
@@ -130,9 +127,6 @@ private fun PlayerSettingsSheet(
     onStop: () -> Unit,
     showAddSubtitle: Boolean,
     onAddSubtitle: () -> Unit,
-    showInputPreferences: Boolean,
-    buttonPad: Boolean,
-    onButtonPad: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -150,9 +144,6 @@ private fun PlayerSettingsSheet(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )
-            if (showInputPreferences) {
-                ButtonPadPreference(buttonPad, onButtonPad)
-            }
 
             // 1. Playback group: Speed, Loop, Stop
             val showSpeed = showSettings && settings.speedAvailable
@@ -712,21 +703,21 @@ private fun SubtitlesBottomSheet(
 /** Stage 3d's sole sheet entry. Script/UA sheets keep their existing RemoteEffect host. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RemoteSheets(state: RemoteUiState, dispatch: (RemoteAction) -> Unit, detectedSubtitles: List<DetectedVideo>) {
+internal fun RemoteSheets(
+    state: RemoteUiState,
+    dispatch: (RemoteAction) -> Unit,
+    detectedSubtitles: List<DetectedVideo>,
+    execute: suspend (RemoteAction) -> RemoteCommandResult = { action -> dispatch(action); RemoteCommandResult.Submitted },
+) {
     val external = state.receiver?.profile == RemoteProfile.External
     val image = state.playback?.mediaKind == RemoteMediaKind.Image
     val audio = state.playback?.mediaKind == RemoteMediaKind.Audio
     val close = { dispatch(RemoteAction.CloseSheet) }
     val layout = resolveRemoteLayout(state, RemoteViewport())
-    CompositionLocalProvider(LocalRemoteControlsEnabled provides state.connection.ready) {
+    val enabled = state.connection.ready || state.sheet == RemoteSheet.Keyboard && layout.nav.keys.enabled ||
+        state.sheet == RemoteSheet.OpenTvApp && state.fullControlReady
+    CompositionLocalProvider(LocalRemoteControlsEnabled provides enabled) {
         when (state.sheet) {
-            RemoteSheet.InputPreferences -> ModalBottomSheet(onDismissRequest = close) {
-                RemoteDialogVolumeKeys()
-                Column(Modifier.fillMaxWidth().padding(24.dp)) {
-                    Text("Pad settings", style = MaterialTheme.typography.titleMedium)
-                    ButtonPadPreference(state.preferences.buttonPad) { dispatch(RemoteAction.SetButtonPad(it)) }
-                }
-            }
             RemoteSheet.More -> PlayerSettingsSheet(
                 settings = state.screenSettings(), videoTracks = state.tracks.video.map { it.screenTrack() },
                 onSetVideoQuality = { dispatch(RemoteAction.SetVideoQuality(it.takeIf { value -> value > 0 })) },
@@ -739,12 +730,9 @@ internal fun RemoteSheets(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                 onLoop = { dispatch(RemoteAction.SetLoop(it)) },
                 onStop = { dispatch(RemoteAction.StopPlayback); close() },
                 showAddSubtitle = !external && !image && !audio,
-                showInputPreferences = RemoteInputMode.Pad in layout.modes,
-                buttonPad = state.preferences.buttonPad,
-                onButtonPad = { dispatch(RemoteAction.SetButtonPad(it)) },
                 onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
             )
-            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close, imeKeys = state.fullControl?.connected == true)
+            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) RemoteKeyboardSheet(dispatch, close, imeKeys = state.fullControlReady, execute = execute)
             RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
             RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
             RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close)
@@ -763,16 +751,5 @@ internal fun RemoteSheets(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
             RemoteSheet.Queue -> if (layout.showQueue) RemoteQueueSheet(state, dispatch)
             else -> Unit
         }
-    }
-}
-
-@Composable
-private fun ButtonPadPreference(buttonPad: Boolean, onButtonPad: (Boolean) -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Button D-pad", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Switch(checked = buttonPad, onCheckedChange = onButtonPad,
-            interactionSource = interaction,
-            modifier = Modifier.remotePressFeedback(interaction).semantics { contentDescription = "Button D-pad" })
     }
 }

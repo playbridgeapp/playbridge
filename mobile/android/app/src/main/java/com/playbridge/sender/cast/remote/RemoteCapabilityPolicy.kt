@@ -53,8 +53,10 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
         RemoteInputMode.Pointer in modes -> RemoteInputMode.Pointer
         else -> RemoteInputMode.Context // Sentinel when INPUT is absent, never an empty body.
     }
-    fun enabled(route: Boolean, reason: String): RemoteControlAvailability =
-        RemoteControlAvailability(state.connection.ready && route, if (state.connection.ready && route) null else reason)
+    fun enabled(route: Boolean, reason: String, fullControl: Boolean = false): RemoteControlAvailability {
+        val ready = route && (state.connection.ready || fullControl)
+        return RemoteControlAvailability(ready, if (ready) null else reason)
+    }
     val queue = state.queue
     val indices = queue?.items.orEmpty().map { it.index }
     val current = indices.indexOf(queue?.currentIndex)
@@ -63,13 +65,14 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
         modes = modes, selectedMode = state.inputMode.takeIf { it in modes && it != RemoteInputMode.Keyboard } ?: defaultMode,
         showModeRow = modes.size > 1,
         nav = RemoteNavSpec(
-            enabled(RemoteKey.Back in keys && (!idle || external || whole), "TV Back unavailable: no remote route"),
-            enabled(RemoteKey.Home in keys && (browser || external || whole), "TV Home unavailable: no Home route; full TV control is coming later"),
+            enabled(RemoteKey.Back in keys && (!idle || external || whole), "TV Back unavailable: no remote route", state.fullControlSupports(RemoteAction.Key(RemoteKey.Back))),
+            enabled(RemoteKey.Home in keys && (browser || external || whole), "TV Home unavailable: no Home route; full TV control is coming later", state.fullControlSupports(RemoteAction.Key(RemoteKey.Home))),
             enabled(
                 state.capabilities.text.replace == Support.Supported && ((!external && browser) || (whole && state.capabilities.text.delete == Support.Supported)),
                 "Keys unavailable: text input requires the TV browser",
+                state.fullControlReady && state.fullControl?.text?.replace == Support.Supported && state.fullControl.text.delete == Support.Supported,
             ),
-            enabled(state.capabilities.volume.adjust == Support.Supported, "TV volume unavailable: no volume route"),
+            enabled(state.capabilities.volume.adjust == Support.Supported, "TV volume unavailable: no volume route", state.fullControlSupports(RemoteAction.AdjustVolume(1))),
         ),
         transport = RemoteTransportSpec(
             visible = false, enabled = state.connection.ready,

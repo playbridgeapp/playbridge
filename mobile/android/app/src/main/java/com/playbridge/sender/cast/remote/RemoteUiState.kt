@@ -8,7 +8,7 @@ enum class RemoteInputMode { Context, Pad, Pointer, Keyboard }
 enum class RemoteMediaKind { Video, Audio, Image }
 enum class RemotePlaybackState { Idle, Playing, Paused, Buffering, Error, Unknown }
 enum class RemoteBrowserEngine { WebView, Gecko, Unknown }
-enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue, InputPreferences, OpenTvApp }
+enum class RemoteSheet { More, BrowserMore, Subtitles, AddSubtitle, Keyboard, Connections, WholeTvControl, Queue, OpenTvApp }
 enum class RemoteTimeDisplay { Duration, Remaining }
 
 data class RemoteSessionId(val endpoint: EndpointKey, val generation: Long)
@@ -84,6 +84,8 @@ data class LinkedWebsiteState(val active: Boolean = false, val controllerName: S
 data class RemotePreferences(
     val buttonPad: Boolean = false, val timeDisplay: RemoteTimeDisplay = RemoteTimeDisplay.Duration,
     val learnedGestures: Set<String> = emptySet(),
+    val hapticsEnabled: Boolean = true,
+    val hapticsLevel: RemoteHapticLevel = RemoteHapticLevel.Light,
     val modesByContext: Map<RemoteContext, RemoteInputMode> = mapOf(
         RemoteContext.Player to RemoteInputMode.Context, RemoteContext.Browser to RemoteInputMode.Pointer,
     ),

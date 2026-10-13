@@ -22,22 +22,25 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteCallbackActions
+import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteLayoutSpec
 import com.playbridge.sender.cast.remote.RemoteNavAvailability
 import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
+import com.playbridge.sender.cast.remote.rememberRemoteHaptics
 
 @Composable
 internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit) {
     if (!nav.back && !nav.home && !nav.keys && !nav.volume) return
+    val haptics = rememberRemoteHaptics()
     Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f), shape = CircleShape) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             if (nav.back) RemoteButton(Icons.AutoMirrored.Filled.Undo, "TV Back", true) { onRemoteKey("back") }
             if (nav.home) RemoteButton(Icons.Default.Home, "TV Home", true) { onRemoteKey("home") }
             if (nav.keys) RemoteButton(Icons.Default.Keyboard, "Keys", true, onKeys)
             if (nav.volume) {
-                RemoteButton(Icons.AutoMirrored.Filled.VolumeDown, "TV volume down", true) { onRemoteKey("volume_down") }
-                RemoteButton(Icons.AutoMirrored.Filled.VolumeUp, "TV volume up", true) { onRemoteKey("volume_up") }
+                RemoteButton(Icons.AutoMirrored.Filled.VolumeDown, "TV volume down", true) { onRemoteKey("volume_down"); haptics.perform(RemoteFeedback.VOLUME) }
+                RemoteButton(Icons.AutoMirrored.Filled.VolumeUp, "TV volume up", true) { onRemoteKey("volume_up"); haptics.perform(RemoteFeedback.VOLUME) }
             }
         }
     }

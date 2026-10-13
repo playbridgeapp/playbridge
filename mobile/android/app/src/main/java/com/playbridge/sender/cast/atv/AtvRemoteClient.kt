@@ -4,7 +4,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +16,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -88,7 +91,7 @@ internal interface AtvControlSession {
     suspend fun launchApp(uriOrPackage: String)
     suspend fun power()
     suspend fun disconnect()
-    fun close()
+    suspend fun close()
 }
 
 internal class AtvRemoteClient(
@@ -97,10 +100,13 @@ internal class AtvRemoteClient(
 ) : AtvControlSession {
     private val ids = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
-    private val startLock = Mutex()
+    private val nativeLock = Mutex()
+    private val closeLock = Mutex()
     private val televisionState = MutableStateFlow<AtvTelevisionState?>(null)
-    private val closures = Channel<String>(Channel.CONFLATED)
-    private var handle = 0L
+    private data class Connection(val requestId: String, val closed: CompletableDeferred<String> = CompletableDeferred())
+    @Volatile private var connection: Connection? = null
+    @Volatile private var handle = 0L
+    private var closed = false
     private var pump: kotlinx.coroutines.Job? = null
 
     override val television: StateFlow<AtvTelevisionState?> = televisionState.asStateFlow()
@@ -136,7 +142,6 @@ internal class AtvRemoteClient(
     }
 
     override suspend fun connect(host: String, certPem: String, keyPem: String, pinSha256Hex: String) {
-        televisionState.value = null
         roundTrip(command("connect") {
             put("host", host)
             put("port", JSONObject.NULL)
@@ -147,7 +152,9 @@ internal class AtvRemoteClient(
     }
 
     override suspend fun awaitClosed() {
-        closures.receive()
+        val current = connection ?: throw closedException()
+        val kind = current.closed.await()
+        throw AtvCommandException(kind, fixedMessage(kind))
     }
 
     override suspend fun key(name: String?, code: Int?, direction: String) {
@@ -178,14 +185,22 @@ internal class AtvRemoteClient(
         roundTrip(command("disconnect"), 10_000L)
     }
 
-    override fun close() {
-        val current = handle
-        if (current == 0L) return
-        handle = 0L
-        native.cancel(current)
-        pump?.cancel()
-        native.free(current)
-        failPending(AtvCommandException("closed", "Android TV remote connection closed"))
+    override suspend fun close() = withContext(NonCancellable) {
+        closeLock.withLock {
+            val (current, job) = nativeLock.withLock {
+                closed = true
+                val current = handle
+                handle = 0L
+                retireConnection()
+                if (current != 0L) native.cancel(current)
+                (current to pump).also { pump = null }
+            }
+            job?.cancelAndJoin()
+            nativeLock.withLock {
+                if (current != 0L) native.free(current)
+            }
+            failPending(closedException())
+        }
     }
 
     private fun command(name: String, fill: JSONObject.() -> Unit = {}): JSONObject =
@@ -197,8 +212,17 @@ internal class AtvRemoteClient(
         val deferred = CompletableDeferred<JSONObject>()
         pending[id] = deferred
         val accepted = try {
-            ensureStarted()
-            native.submitJson(handle, body.toString())
+            nativeLock.withLock {
+                ensureStarted()
+                when (body.optString("command")) {
+                    "connect" -> {
+                        retireConnection()
+                        connection = Connection(id)
+                    }
+                    "disconnect" -> retireConnection()
+                }
+                native.submitJson(handle, body.toString())
+            }
         } catch (error: Throwable) {
             pending.remove(id)
             throw error
@@ -214,23 +238,22 @@ internal class AtvRemoteClient(
         }
     }
 
-    private suspend fun ensureStarted() {
+    /** Must hold nativeLock: start/submit/close are serialized; close joins polling before free. */
+    private fun ensureStarted() {
+        if (closed) throw closedException()
         if (handle != 0L) return
-        startLock.withLock {
-            if (handle != 0L) return
-            val abi = native.abiVersion()
-            if (abi != ATV_REMOTE_ABI) {
-                throw AtvCommandException("protocol", "Android TV remote command was not accepted")
-            }
-            val started = native.start()
-            if (started == 0L) throw AtvCommandException("protocol", "Android TV remote command was not accepted")
-            handle = started
-            pump = scope.launch { pumpEvents(started) }
+        val abi = native.abiVersion()
+        if (abi != ATV_REMOTE_ABI) {
+            throw AtvCommandException("protocol", "Android TV remote command was not accepted")
         }
+        val started = native.start()
+        if (started == 0L) throw AtvCommandException("protocol", "Android TV remote command was not accepted")
+        handle = started
+        pump = scope.launch { pumpEvents(started) }
     }
 
     private suspend fun pumpEvents(nativeHandle: Long) {
-        while (scope.isActive && handle == nativeHandle) {
+        while (currentCoroutineContext().isActive && handle == nativeHandle) {
             val raw = try {
                 runInterruptible(Dispatchers.IO) { native.nextEvent(nativeHandle, EVENT_WAIT_MS) }
             } catch (cancelled: CancellationException) {
@@ -238,7 +261,7 @@ internal class AtvRemoteClient(
             } catch (_: Exception) {
                 null
             } ?: continue
-            deliver(raw)
+            nativeLock.withLock { if (handle == nativeHandle) deliver(raw) }
         }
     }
 
@@ -250,9 +273,14 @@ internal class AtvRemoteClient(
             return
         }
         when (event) {
-            is AtvEvent.State -> televisionState.value = event.state
+            is AtvEvent.State -> if (event.requestId == connection?.requestId && connection?.closed?.isCompleted == false) {
+                televisionState.value = event.state
+            }
             is AtvEvent.Closed -> {
-                closures.trySend(event.kind)
+                connection?.takeIf { it.requestId == event.requestId }?.let {
+                    televisionState.value = null
+                    it.closed.complete(event.kind)
+                }
                 completeExceptionally(event.requestId, AtvCommandException(event.kind, fixedMessage(event.kind)))
             }
             is AtvEvent.Error -> completeExceptionally(event.requestId, AtvCommandException(event.kind, event.message))
@@ -278,6 +306,14 @@ internal class AtvRemoteClient(
     private fun failPending(error: AtvCommandException) {
         pending.values.forEach { it.completeExceptionally(error) }
     }
+
+    private fun retireConnection() {
+        connection?.closed?.complete("closed")
+        connection = null
+        televisionState.value = null
+    }
+
+    private fun closedException() = AtvCommandException("closed", fixedMessage("closed"))
 
     private companion object {
         const val EVENT_WAIT_MS = 250L

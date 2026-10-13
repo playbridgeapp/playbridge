@@ -6,11 +6,16 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.database.ContentObserver
+import android.media.AudioAttributes
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
-import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.Window
 import androidx.compose.animation.core.animateFloatAsState
@@ -38,6 +43,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.playbridge.sender.browser.BrowserActivity
 
 internal val LocalRemoteMotionPolicy = staticCompositionLocalOf { RemoteMotionPolicy(1f, true, true) }
+internal val LocalRemotePreferences = staticCompositionLocalOf { RemotePreferences() }
 
 @Composable
 internal fun rememberRemoteMotionPolicy(): RemoteMotionPolicy {
@@ -78,13 +84,42 @@ internal fun rememberRemoteMotionPolicy(): RemoteMotionPolicy {
 }
 
 @Composable
-internal fun rememberRemoteHaptics(): RemoteHaptics {
+internal fun rememberRemoteHaptics(levelOverride: RemoteHapticLevel? = null): RemoteHaptics {
+    val preferences by rememberUpdatedState(LocalRemotePreferences.current)
+    val emit = rememberRemoteHapticEmitter()
+    return remember(emit, levelOverride) {
+        RemoteHaptics(enabled = { preferences.hapticsEnabled }, emit = { emit(levelOverride ?: preferences.hapticsLevel) })
+    }
+}
+
+/** Predefined touch effects retain the platform's touch intensity and suppression policy. */
+@Suppress("DEPRECATION")
+@Composable
+internal fun rememberRemoteHapticEmitter(): (RemoteHapticLevel) -> Unit {
+    val context = LocalContext.current
     val view = LocalView.current
-    return remember(view) {
-        RemoteHaptics(
-            enabled = { view.isHapticFeedbackEnabled },
-            emit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) },
-        )
+    val vibrator = remember(context) {
+        if (Build.VERSION.SDK_INT >= 31) context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        else context.getSystemService(Vibrator::class.java)
+    }
+    return remember(view, vibrator) {
+        { level ->
+            if (vibrator?.hasVibrator() == true && view.isHapticFeedbackEnabled &&
+                Settings.System.getInt(context.contentResolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0) {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val effect = VibrationEffect.createPredefined(remoteHapticEffectId(level))
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+                    } else {
+                        vibrator.vibrate(effect, AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+                    }
+                } else {
+                    view.performHapticFeedback(remoteHapticFallbackConstant(level))
+                }
+            }
+        }
     }
 }
 

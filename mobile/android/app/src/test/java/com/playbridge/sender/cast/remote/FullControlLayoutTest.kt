@@ -46,6 +46,31 @@ class FullControlLayoutTest {
         assertEquals(false, reducer.state.fullControl?.connected)
     }
 
+    @Test fun receiverOfflineStillAllowsOnlyMatchedWholeTvActions() {
+        val online = projected(RemoteContext.Idle)
+        val offline = online.copy(connection = RemoteConnection.Disconnected)
+        val layout = resolveRemoteLayout(offline, RemoteViewport())
+        assertTrue(layout.nav.home.enabled)
+        assertTrue(layout.nav.back.enabled)
+        assertTrue(layout.nav.keys.enabled)
+        assertTrue(offline.actionReady(RemoteAction.Key(RemoteKey.Up)))
+        assertTrue(offline.actionReady(RemoteAction.ReplaceText("x")))
+        assertTrue(offline.actionReady(RemoteAction.AdjustVolume(1)))
+        assertFalse(offline.actionReady(RemoteAction.SetPlaying(true)))
+        assertFalse(offline.actionReady(RemoteAction.PointerMove(1f, 1f)))
+    }
+
+    @Test fun unrelatedUnpairedOrUnidentifiedChannelCannotMakeOfflineReceiverReady() {
+        val base = nativeRemoteCapabilities(RemoteProfile.AndroidTv, RemoteContext.Idle, RemoteMediaKind.Video)
+        val offline = projected(RemoteContext.Idle).copy(connection = RemoteConnection.Disconnected)
+        for (invalid in listOf(channel(true).copy(matchedEndpoint = null), channel(true).copy(paired = false), channel(true).copy(physicalDeviceId = null))) {
+            val state = projectFullControl(offline, base, invalid)
+            assertFalse(state.fullControlReady)
+            assertFalse(state.actionReady(RemoteAction.Key(RemoteKey.Up)))
+            assertFalse(resolveRemoteLayout(state, RemoteViewport()).nav.home.enabled)
+        }
+    }
+
     private fun projected(context: RemoteContext, baseOverride: RemoteCapabilities? = null, connected: Boolean = true): RemoteUiState {
         val base = baseOverride ?: nativeRemoteCapabilities(RemoteProfile.AndroidTv, context, RemoteMediaKind.Video)
         return projectFullControl(

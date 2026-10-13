@@ -47,44 +47,50 @@ internal class AtvCredentialStore(
 
     fun saveIdentity(value: AtvClientIdentity) {
         synchronized(lock) {
+            persist(savedIdentity = value)
             identity = value
-            persist()
         }
     }
 
+    /** Called only after verified pairing. A new pin replaces this receiver's previous association. */
     fun upsert(record: AtvTvRecord) {
         val fingerprint = record.fingerprint.lowercase()
         if (!isFingerprint(fingerprint)) return
         synchronized(lock) {
-            val existing = tvs.find { it.fingerprint == fingerprint }
+            val replaced = tvs.filter { it.fingerprint == fingerprint || it.receiverIds.any(record.receiverIds::contains) }
+            val existing = replaced.lastOrNull()
             val merged = AtvTvRecord(
                 fingerprint = fingerprint,
                 mac = (record.mac ?: existing?.mac)?.uppercase(),
                 serverName = record.serverName ?: existing?.serverName,
                 lastIp = record.lastIp ?: existing?.lastIp,
-                receiverIds = existing?.receiverIds.orEmpty() + record.receiverIds,
+                receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds,
             )
-            tvs = tvs.filter { it.fingerprint != fingerprint } + merged
+            val updated = tvs.filter { it !in replaced } + merged
+            persist(savedTvs = updated)
+            tvs = updated
             recordsState.value = tvs
-            persist()
         }
     }
 
     fun updateLastIp(fingerprint: String, ip: String) {
         synchronized(lock) {
             val current = tvs.find { it.fingerprint == fingerprint.lowercase() } ?: return
-            tvs = tvs.filter { it.fingerprint != current.fingerprint } + current.copy(lastIp = ip)
+            if (current.lastIp == ip) return
+            val updated = tvs.map { if (it.fingerprint == current.fingerprint) it.copy(lastIp = ip) else it }
+            persist(savedTvs = updated)
+            tvs = updated
             recordsState.value = tvs
-            persist()
         }
     }
 
     /** Removes one television. The install identity stays. */
     fun forget(fingerprint: String) {
         synchronized(lock) {
-            tvs = tvs.filter { it.fingerprint != fingerprint.lowercase() }
+            val updated = tvs.filter { it.fingerprint != fingerprint.lowercase() }
+            persist(savedTvs = updated)
+            tvs = updated
             recordsState.value = tvs
-            persist()
         }
     }
 
@@ -120,26 +126,35 @@ internal class AtvCredentialStore(
                 add(
                     AtvTvRecord(
                         fingerprint = fingerprint,
-                        mac = item.optString("mac").takeIf { it.isNotBlank() }?.uppercase(),
-                        serverName = item.optString("server_name").takeIf { it.isNotBlank() },
-                        lastIp = item.optString("last_ip").takeIf { it.isNotBlank() },
+                        mac = item.optionalString("mac")?.uppercase(),
+                        serverName = item.optionalString("server_name"),
+                        lastIp = item.optionalString("last_ip"),
                         receiverIds = buildSet {
-                            if (ids != null) for (idIndex in 0 until ids.length()) add(ids.optString(idIndex))
+                            if (ids != null) for (idIndex in 0 until ids.length()) {
+                                ids.optString(idIndex).takeIf { it.isNotBlank() }?.let(::add)
+                            }
                         },
                     ),
                 )
             }
         }
+        // Version 1 appended verified re-pairings. The last saved association owns each id.
+        // Keep single legacy pairings (including their install identity) unchanged. Never
+        // infer ownership from a MAC or an IP. The version 2 document is saved on the next write.
+        tvs = tvs.fold(emptyList()) { migrated, record ->
+            val replaced = migrated.filter { it.fingerprint == record.fingerprint || it.receiverIds.any(record.receiverIds::contains) }
+            migrated.filter { it !in replaced } + record.copy(receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds)
+        }
         recordsState.value = tvs
     }
 
-    private fun persist() {
-        val document = JSONObject()
-        identity?.let { saved ->
+    private fun persist(savedIdentity: AtvClientIdentity? = identity, savedTvs: List<AtvTvRecord> = tvs) {
+        val document = JSONObject().put("version", 2)
+        savedIdentity?.let { saved ->
             document.put("identity", JSONObject().put("cert_pem", saved.certPem).put("key_pem", saved.keyPem))
         }
         val array = JSONArray()
-        tvs.forEach { record ->
+        savedTvs.forEach { record ->
             array.put(
                 JSONObject()
                     .put("fingerprint", record.fingerprint)
@@ -154,3 +169,6 @@ internal class AtvCredentialStore(
         file.write(blob)
     }
 }
+
+private fun JSONObject.optionalString(name: String): String? =
+    if (isNull(name)) null else optString(name).takeIf { it.isNotBlank() }

@@ -19,6 +19,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is declared only in the foss source set.
          Play builds omit it (store policy). CastSessionManager.maybeRequestBatteryExemption()
          uses the direct dialog when the permission is present, otherwise app details. -->

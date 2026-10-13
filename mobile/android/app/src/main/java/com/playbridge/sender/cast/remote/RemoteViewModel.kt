@@ -42,6 +42,14 @@ class RemoteViewModel(
     init {
         presentationPreferences?.let { reducer.restorePreferences(it.load()) }
         mutableState.value = reducer.observe(registry.controller.value?.snapshot?.value ?: RemoteReceiverSnapshot())
+        presentationPreferences?.let { store ->
+            this.scope.launch {
+                store.state.collect {
+                    // Input modes remain session-local; settings changes only replace persisted fields.
+                    mutableState.value = reducer.restorePreferences(store.load().copy(modesByContext = state.value.preferences.modesByContext))
+                }
+            }
+        }
         this.scope.launch {
             registry.controller.collectLatest { controller ->
                 if (controller == null) mutableState.value = reducer.observe(RemoteReceiverSnapshot())
@@ -115,10 +123,17 @@ class RemoteViewModel(
         if (action is RemoteAction.SelectInputMode || action is RemoteAction.OpenSheet || action == RemoteAction.CloseSheet ||
             action is RemoteAction.SetTimeDisplay || action is RemoteAction.SetButtonPad || action is RemoteAction.MarkGestureLearned || action == RemoteAction.RequestWholeTvControl) {
             mutableState.value = reducer.local(action)
-            if (action is RemoteAction.SetTimeDisplay || action is RemoteAction.SetButtonPad || action is RemoteAction.MarkGestureLearned) presentationPreferences?.save(mutableState.value.preferences)
+            if (action is RemoteAction.SetTimeDisplay || action is RemoteAction.SetButtonPad || action is RemoteAction.MarkGestureLearned) persistPreferenceAction(action)
             return true
         }
         return false
+    }
+
+    private fun persistPreferenceAction(action: RemoteAction) {
+        presentationPreferences?.let { store ->
+            val updated = store.update { it.withPresentationAction(action) }
+            mutableState.value = reducer.restorePreferences(updated.copy(modesByContext = state.value.preferences.modesByContext))
+        }
     }
 
     private data class Ticket(val controller: RemoteController, val action: RemoteAction, val version: Long, val media: RemoteMediaId?, val token: String, val subtitleConfirmation: Boolean, val activation: Long, val learnedGesture: String?)
@@ -168,7 +183,7 @@ class RemoteViewModel(
             RemoteCommandResult.Submitted, RemoteCommandResult.Confirmed -> {
                 ticket.learnedGesture?.let {
                     mutableState.value = reducer.local(RemoteAction.MarkGestureLearned(it))
-                    presentationPreferences?.save(mutableState.value.preferences)
+                    persistPreferenceAction(RemoteAction.MarkGestureLearned(it))
                 }
                 mutableState.value = reducer.browserCommandAccepted(ticket.action)
                 if (ticket.action == RemoteAction.StopPlayback && state.value.receiver?.profile != RemoteProfile.External) mutableState.value = reducer.stopped()

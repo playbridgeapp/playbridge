@@ -32,8 +32,9 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Swipe
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
@@ -57,6 +59,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -64,13 +67,16 @@ import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteCallbackActions
 import com.playbridge.sender.cast.remote.RemoteFeedback
+import com.playbridge.sender.cast.remote.RemoteHapticLevel
 import com.playbridge.sender.cast.remote.RemoteInputMode
 import com.playbridge.sender.cast.remote.RemoteInputPresentation
+import com.playbridge.sender.cast.remote.RemoteKey
 import com.playbridge.sender.cast.remote.RemoteLayoutSpec
 import com.playbridge.sender.cast.remote.RemoteMediaKind
 import com.playbridge.sender.cast.remote.RemoteRepeatPolicy
-import com.playbridge.sender.cast.remote.RemoteSheet
 import com.playbridge.sender.cast.remote.RemoteUiState
+import com.playbridge.sender.cast.remote.fullControlReady
+import com.playbridge.sender.cast.remote.fullControlSupports
 import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
 import com.playbridge.sender.cast.remote.remotePressFeedback
@@ -79,6 +85,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val ButtonPadExtent = 224.dp
+internal val PadModeToggleInset = 8.dp
+internal val PadModeToggleTouchSize = 48.dp
+
+/** Same full touch target as the overlay, in pad coordinates, including RTL top-start. */
+internal fun padModeToggleBounds(padWidth: Float, density: Float, rtl: Boolean): Rect {
+    val inset = PadModeToggleInset.value * density
+    val extent = PadModeToggleTouchSize.value * density
+    val left = if (rtl) padWidth - inset - extent else inset
+    return Rect(left, inset, left + extent, inset + extent)
+}
 
 @Composable
 internal fun RemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, dispatch: (RemoteAction) -> Unit) {
@@ -90,7 +106,11 @@ internal fun RemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, dispatc
 
 @Composable
 private fun FullRemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, dispatch: (RemoteAction) -> Unit) {
-    val enabled = state.connection.ready && LocalRemoteMotionPolicy.current.resumed
+    val fullPad = layout.selectedMode == RemoteInputMode.Pad && state.fullControlReady &&
+        setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok).all {
+            state.fullControlSupports(RemoteAction.Key(it))
+        }
+    val enabled = (state.connection.ready || fullPad) && LocalRemoteMotionPolicy.current.resumed
     val sendKey: (String) -> Unit = { dispatch(RemoteCallbackActions.key(it)) }
     val image = state.playback?.mediaKind == RemoteMediaKind.Image
     val showSwitch = RemoteInputMode.Pad in layout.modes && RemoteInputMode.Pointer in layout.modes
@@ -98,7 +118,7 @@ private fun FullRemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, disp
     Box(Modifier.fillMaxSize()) {
         key(layout.selectedMode, buttonPad, state.context, state.sessionId, state.playback?.mediaId, enabled) {
             when (layout.selectedMode) {
-                RemoteInputMode.Pad -> if (buttonPad) FittedButtonPad(sendKey, enabled) else RemoteGesturePad(enabled, sendKey)
+                RemoteInputMode.Pad -> if (buttonPad) FittedButtonPad(sendKey, enabled) else RemoteGesturePad(enabled, sendKey, excludeModeToggle = true)
                 RemoteInputMode.Pointer -> RemotePointerArea(
                     enabled = enabled,
                     onMouseMove = { x, y -> dispatch(RemoteAction.PointerMove(x, y)) },
@@ -118,6 +138,11 @@ private fun FullRemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, disp
                 RemoteInputMode.Context, RemoteInputMode.Keyboard -> if (layout.idle) IdleEmptyState(state.receiver?.name)
             }
         }
+        if (layout.selectedMode == RemoteInputMode.Pad) {
+            PadModeToggle(buttonPad, Modifier.align(Alignment.TopStart).padding(PadModeToggleInset)) {
+                dispatch(RemoteAction.SetButtonPad(!buttonPad))
+            }
+        }
         if (showSwitch) {
             PadPointerSwitch(
                 selected = layout.selectedMode,
@@ -125,17 +150,35 @@ private fun FullRemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, disp
                 onSelect = { dispatch(RemoteAction.SelectInputMode(it)) },
             )
         }
-        if (RemoteInputMode.Pad in layout.modes) {
-            PadSettingsButton(Modifier.align(Alignment.TopStart).padding(8.dp)) { dispatch(RemoteAction.OpenSheet(RemoteSheet.InputPreferences)) }
-        }
     }
 }
 
 @Composable
-private fun PadSettingsButton(modifier: Modifier, onClick: () -> Unit) {
+private fun PadModeToggle(buttonPad: Boolean, modifier: Modifier, onToggle: () -> Unit) {
     val source = remember { MutableInteractionSource() }
-    IconButton(onClick = onClick, modifier = modifier.size(48.dp).remotePressFeedback(source), interactionSource = source) {
-        Icon(Icons.Default.Settings, contentDescription = "Pad settings")
+    val haptics = rememberRemoteHaptics(levelOverride = RemoteHapticLevel.Light)
+    Box(
+        modifier.size(PadModeToggleTouchSize)
+            .testTag("remote.padModeToggle")
+            .remotePressFeedback(source)
+            .clickable(
+                enabled = LocalRemoteMotionPolicy.current.resumed,
+                interactionSource = source, indication = null, role = Role.Button,
+                onClick = { onToggle(); haptics.perform(RemoteFeedback.PAD_STEP) },
+            )
+            .semantics {
+                contentDescription = if (buttonPad) "Switch to swipe pad" else "Switch to button pad"
+                stateDescription = if (buttonPad) "Button pad" else "Swipe pad"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(36.dp).remoteSolidSurface(CircleShape), contentAlignment = Alignment.Center) {
+            Icon(
+                if (buttonPad) Icons.Default.Swipe else Icons.Default.Gamepad,
+                contentDescription = null, modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -205,8 +248,19 @@ private fun FittedButtonPad(onRemoteKey: (String) -> Unit, enabled: Boolean) {
     BoxWithConstraints(Modifier.fillMaxSize().testTag("remote.buttonPad"), contentAlignment = Alignment.Center) {
         val availableW = if (maxWidth == Dp.Infinity) ButtonPadExtent else maxWidth
         val availableH = if (maxHeight == Dp.Infinity) ButtonPadExtent else maxHeight
-        val scale = minOf(availableW / ButtonPadExtent, availableH / ButtonPadExtent).coerceIn(0.01f, 1f)
-        DpadArea(onRemoteKey, enabled, scale)
+        val centeredScale = minOf(availableW / ButtonPadExtent, availableH / ButtonPadExtent).coerceIn(0.01f, 1f)
+        val toggleEnd = PadModeToggleInset + PadModeToggleTouchSize
+        // The start arrow is 64 dp wide and vertically centered. Keep its target clear
+        // of the corner toggle even after a short input card has applied its padding.
+        val startArrowTop = (availableH - 64.dp * centeredScale) / 2
+        val startArrowStart = (availableW - ButtonPadExtent * centeredScale) / 2
+        val startInset = if (startArrowTop < toggleEnd && startArrowStart < toggleEnd) {
+            toggleEnd + PadModeToggleInset
+        } else 0.dp
+        val scale = minOf((availableW - startInset) / ButtonPadExtent, availableH / ButtonPadExtent).coerceIn(0.01f, 1f)
+        Box(Modifier.fillMaxSize().padding(start = startInset)) {
+            DpadArea(onRemoteKey, enabled, scale)
+        }
     }
 }
 

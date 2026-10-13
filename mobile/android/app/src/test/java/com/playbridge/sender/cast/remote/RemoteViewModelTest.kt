@@ -40,6 +40,36 @@ class RemoteViewModelTest {
         val playback get() = vm.state.value.playback!!
     }
 
+    @Test fun receiverDownChannelUpRoutesWholeTvCommandsAndKeepsReceiverActionsDisabled() = runTest {
+        val raw = testSnapshot().let { it.copy(state = it.state.copy(connection = RemoteConnection.Disconnected, playback = null)) }
+        val transport = FakeNativeRemoteTransport(raw)
+        val targets = MutableStateFlow<RemoteNativeTarget?>(RemoteNativeTarget(testConfiguration()))
+        val registry = RemoteControllerRegistry(targets, transport, backgroundScope)
+        val actions = mutableListOf<RemoteAction>()
+        val channel = object : TvRemoteChannel {
+            override val state = MutableStateFlow(TvRemoteChannelState(
+                matchedEndpoint = remoteTestEndpoint, physicalDeviceId = "TV", paired = true, connected = true,
+                keys = setOf(RemoteKey.Home), text = TextCapabilities(Support.Supported, Support.Supported),
+                volume = VolumeCapabilities(adjust = Support.Supported),
+            ))
+            override suspend fun sendKey(key: RemoteKey): RemoteCommandResult { actions += RemoteAction.Key(key); return RemoteCommandResult.Submitted }
+            override suspend fun adjustVolume(steps: Int): RemoteCommandResult { actions += RemoteAction.AdjustVolume(steps); return RemoteCommandResult.Submitted }
+            override suspend fun replaceText(text: String): RemoteCommandResult { actions += RemoteAction.ReplaceText(text); return RemoteCommandResult.Submitted }
+            override suspend fun deleteText() = RemoteCommandResult.Submitted
+            override suspend fun editText(deletes: Int, text: String, enter: Boolean): RemoteCommandResult { actions += RemoteAction.EditTvText(deletes, text, enter); return RemoteCommandResult.Submitted }
+        }
+        val vm = RemoteViewModel(registry, RemoteInputRouter(channel), { 0L }, backgroundScope, tvRemote = channel)
+        runCurrent()
+        assertFalse(vm.state.value.connection.ready)
+        assertTrue(vm.state.value.fullControlReady)
+        val commands = listOf(RemoteAction.Key(RemoteKey.Home), RemoteAction.AdjustVolume(1), RemoteAction.EditTvText(0, "x"))
+        for (command in commands) assertEquals(RemoteCommandResult.Submitted, vm.execute(command))
+        assertEquals(commands, actions)
+        assertTrue(transport.commands.isEmpty())
+        assertTrue(vm.execute(RemoteAction.SetPlaying(true)) is RemoteCommandResult.Failed)
+        assertTrue(transport.commands.isEmpty())
+    }
+
     @Test fun seekOverlaySurvivesStaleTicksAndOnlyFreshMatchingStatusConfirmsIt() = runTest {
         val f = Fixture(this); runCurrent()
         assertEquals(RemoteCommandResult.Submitted, f.vm.execute(RemoteAction.SeekTo(60_000L)))
@@ -333,10 +363,53 @@ class RemoteViewModelTest {
         assertTrue(f.transport.commands.isEmpty())
     }
 
+    @Test fun settingsUpdatesReachOpenRemotesWithoutResettingSessionInputModes() = runTest {
+        val store = Preferences()
+        val first = Fixture(this, preferenceStore = store)
+        val second = Fixture(this, preferenceStore = store)
+        runCurrent()
+        first.vm.dispatch(RemoteAction.SelectInputMode(RemoteInputMode.Pointer))
+        val modes = first.vm.state.value.preferences.modesByContext
+        store.update { it.copy(hapticsEnabled = false, hapticsLevel = RemoteHapticLevel.Strong, buttonPad = true) }
+        runCurrent()
+        assertFalse(first.vm.state.value.preferences.hapticsEnabled)
+        assertEquals(RemoteHapticLevel.Strong, second.vm.state.value.preferences.hapticsLevel)
+        assertTrue(first.vm.state.value.preferences.buttonPad)
+        assertEquals(modes, first.vm.state.value.preferences.modesByContext)
+        first.vm.deactivate()
+        store.update { it.copy(hapticsEnabled = true, hapticsLevel = RemoteHapticLevel.Medium) }
+        runCurrent()
+        first.vm.activate()
+        assertEquals(RemoteHapticLevel.Medium, first.vm.state.value.preferences.hapticsLevel)
+        assertTrue(first.vm.state.value.preferences.hapticsEnabled)
+        assertTrue(first.transport.commands.isEmpty())
+        assertTrue(second.transport.commands.isEmpty())
+    }
+
+    @Test fun localPreferenceWritesKeepNewSettingsBeforeTheirObserverRuns() = runTest {
+        val store = Preferences()
+        val f = Fixture(this, preferenceStore = store)
+        runCurrent()
+        store.update { it.copy(hapticsEnabled = false, hapticsLevel = RemoteHapticLevel.Strong) }
+        // Deliberately do not run the observer before these local writes.
+        f.vm.dispatch(RemoteAction.SetButtonPad(true))
+        f.vm.dispatch(RemoteAction.SetTimeDisplay(RemoteTimeDisplay.Remaining))
+        f.vm.dispatch(RemoteAction.MarkGestureLearned("seek"))
+        assertFalse(store.value.hapticsEnabled)
+        assertEquals(RemoteHapticLevel.Strong, store.value.hapticsLevel)
+        assertTrue(store.value.buttonPad)
+        assertEquals(RemoteTimeDisplay.Remaining, store.value.timeDisplay)
+        assertEquals(setOf("seek"), store.value.learnedGestures)
+        runCurrent()
+        assertEquals(store.value, f.vm.state.value.preferences)
+        assertTrue(f.transport.commands.isEmpty())
+    }
+
     private class Preferences : RemotePresentationPreferenceStore {
-        var value = RemotePreferences()
-        override fun load() = value
-        override fun save(preferences: RemotePreferences) { value = preferences }
+        override val state = MutableStateFlow(RemotePreferences())
+        val value get() = state.value
+        override fun load() = state.value
+        override fun save(preferences: RemotePreferences) { state.value = preferences }
     }
     @Test fun successfulWaveGesturesPersistWhileFailuresAndOrdinaryVolumeDoNotTeach() = runTest {
         val store = Preferences()

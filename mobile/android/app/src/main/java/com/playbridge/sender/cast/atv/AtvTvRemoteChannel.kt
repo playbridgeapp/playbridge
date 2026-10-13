@@ -7,6 +7,7 @@ import com.playbridge.sender.cast.remote.TextCapabilities
 import com.playbridge.sender.cast.remote.TvRemoteChannel
 import com.playbridge.sender.cast.remote.TvRemoteChannelState
 import com.playbridge.sender.cast.remote.VolumeCapabilities
+import com.playbridge.sender.cast.remote.ATV_TEXT_DELETE_CAP
 import com.playbridge.sender.model.EndpointKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -14,8 +15,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +28,10 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class AtvPairingPhase { Idle, Starting, WaitingForCode, Verifying, Failed, Paired }
@@ -62,11 +69,16 @@ internal class AtvTvRemoteChannel(
     private val pairingState = MutableStateFlow(AtvPairingUi())
     private var pairingJob: Job? = null
     private var codeSlot: CompletableDeferred<String>? = null
-    private var pairingHost: String? = null
-    private var pairingEndpoint: EndpointKey? = null
+    private data class PairingTarget(val endpoint: EndpointKey, val host: String)
+    private var pairingTarget: PairingTarget? = null
+    private var pairingOwner: EndpointKey? = null
+    private var pairingGeneration = 0L
+    private val pairingLock = Mutex()
+    private val keyboardLock = Mutex()
     private var activeFingerprint: String? = null
-    private var needsRepair = false
-    private var pinMismatch = false
+    private var controlGeneration = 0L
+    private data class TrustFailure(val needsRepair: Boolean = false, val pinMismatch: Boolean = false, val stopped: Boolean = false)
+    private val trustFailures = mutableMapOf<String, TrustFailure>()
 
     override val state: StateFlow<TvRemoteChannelState> = channelState.asStateFlow()
     override val pairing: StateFlow<AtvPairingUi> = pairingState.asStateFlow()
@@ -74,6 +86,10 @@ internal class AtvTvRemoteChannel(
     init {
         scope.launch {
             combine(visible, receivers, refresh) { isVisible, receiver, _ -> isVisible to receiver }
+                .onEach { (isVisible, receiver) ->
+                    if (!isVisible || pairingOwner != null && pairingOwner != receiver?.endpoint) cancel()
+                    if (!isVisible || channelState.value.matchedEndpoint != receiver?.endpoint) clearConnected()
+                }
                 .collectLatest { (isVisible, receiver) -> supervise(isVisible, receiver) }
         }
         scope.launch {
@@ -84,6 +100,7 @@ internal class AtvTvRemoteChannel(
                     val active = activeFingerprint
                     if (active != null && active !in fingerprints) {
                         activeFingerprint = null
+                        clearConnected()
                         refresh.value += 1
                     }
                 }
@@ -93,23 +110,36 @@ internal class AtvTvRemoteChannel(
     override fun setRemoteVisible(visible: Boolean) {
         this.visible.value = visible
         if (!visible) {
-            channelState.value = channelState.value.copy(
-                connected = false,
-                keys = emptySet(),
-                volume = VolumeCapabilities(),
-                text = TextCapabilities(),
-                powerOn = null,
-            )
+            clearConnected()
+            cancel()
         }
     }
 
     override fun begin() {
         val phase = pairingState.value.phase
         if (phase == AtvPairingPhase.Starting || phase == AtvPairingPhase.WaitingForCode || phase == AtvPairingPhase.Verifying) return
+        val target = pairingTarget
+        if (!visible.value || target == null || target.endpoint != receivers.value?.endpoint) {
+            pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = AtvPairingFailure.Unreachable)
+            return
+        }
+        val generation = ++pairingGeneration
+        pairingOwner = target.endpoint
         pairingJob?.cancel()
+        pairingState.value = AtvPairingUi(AtvPairingPhase.Starting)
         pairingJob = scope.launch {
-            runCatching { session.cancelPairing() }
-            runPairing()
+            pairingLock.withLock {
+                ensurePairingCurrent(generation, target)
+                try {
+                    session.cancelPairing()
+                    runPairing(generation, target)
+                } catch (error: AtvCommandException) {
+                    ensurePairingCurrent(generation, target)
+                    pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = pairingFailure(error.kind))
+                } finally {
+                    withContext(NonCancellable) { runCatching { session.cancelPairing() } }
+                }
+            }
         }
     }
 
@@ -123,11 +153,12 @@ internal class AtvTvRemoteChannel(
     }
 
     override fun cancel() {
+        pairingGeneration++
         pairingJob?.cancel()
         pairingJob = null
+        pairingOwner = null
         codeSlot = null
         pairingState.value = AtvPairingUi()
-        scope.launch { runCatching { session.cancelPairing() } }
     }
 
     override suspend fun sendKey(key: RemoteKey): RemoteCommandResult {
@@ -162,6 +193,36 @@ internal class AtvTvRemoteChannel(
         return runCatchingCommand { session.key(name = "KEYCODE_DEL", code = null, direction = ATV_KEY_SHORT) }
     }
 
+    override suspend fun editText(deletes: Int, text: String, enter: Boolean): RemoteCommandResult {
+        if (deletes !in 0..ATV_TEXT_DELETE_CAP || text.codePointCount(0, text.length) > ATV_TEXT_DELETE_CAP) {
+            return RemoteCommandResult.Failed("Text edit is too long")
+        }
+        val generation = controlGeneration
+        val fingerprint = activeFingerprint
+        return keyboardLock.withLock {
+            runCatchingCommand {
+                fun checkOwner() {
+                    if (!channelState.value.connected || fingerprint == null || activeFingerprint != fingerprint || controlGeneration != generation ||
+                        !visible.value || channelState.value.matchedEndpoint != receivers.value?.endpoint
+                    ) throw AtvCommandException("closed", fixedMessage("closed"))
+                }
+                checkOwner()
+                repeat(deletes) {
+                    checkOwner()
+                    session.key(name = "KEYCODE_DEL", code = null, direction = ATV_KEY_SHORT)
+                }
+                if (text.isNotEmpty()) {
+                    checkOwner()
+                    session.text(text)
+                }
+                if (enter) {
+                    checkOwner()
+                    session.key(name = "KEYCODE_ENTER", code = null, direction = ATV_KEY_SHORT)
+                }
+            }
+        }
+    }
+
     override suspend fun launchApp(packageId: String): RemoteCommandResult {
         if (!channelState.value.connected) return RemoteCommandResult.Failed("Full control is not connected")
         val id = packageId.trim()
@@ -175,22 +236,29 @@ internal class AtvTvRemoteChannel(
     }
 
     private suspend fun supervise(isVisible: Boolean, receiver: AtvReceiverTarget?) {
+        clearConnected()
+        pairingTarget = null
         if (!isVisible || receiver == null) return
-        val devices = try {
-            session.discover(discoverTimeoutMs)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: AtvCommandException) {
-            emptyList()
-        }
-        val match = AtvDeviceMatcher.match(receiver, devices, credentials.records.value)
-        pairingHost = match.host
-        pairingEndpoint = receiver.endpoint
-        if (match.record != null && !pinMismatch && match.host != null) {
-            connectLoop(receiver, match.record, match.host)
-        } else if (match.available) {
-            publishAvailable(receiver, match.record, match.host)
-            awaitCancellation()
+        try {
+            val devices = try {
+                session.discover(discoverTimeoutMs)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: AtvCommandException) {
+                emptyList()
+            }
+            val match = AtvDeviceMatcher.match(receiver, devices, credentials.records.value)
+            pairingTarget = match.host?.let { PairingTarget(receiver.endpoint, it) }
+            if (match.record != null && trustFailures[match.record.fingerprint]?.stopped != true && match.host != null) {
+                connectLoop(receiver, match.record, match.host)
+            } else if (match.available) {
+                publishAvailable(receiver, match.record, match.host)
+                awaitCancellation()
+            }
+        } finally {
+            clearConnected()
+            activeFingerprint = null
+            pairingTarget = null
         }
     }
 
@@ -198,6 +266,7 @@ internal class AtvTvRemoteChannel(
         activeFingerprint = record.fingerprint
         var attempt = 1
         while (true) {
+            val generation = ++controlGeneration
             var started = false
             try {
                 val identity = credentials.identityOrNull()
@@ -207,33 +276,37 @@ internal class AtvTvRemoteChannel(
                 }
                 started = true
                 session.connect(host, identity.certPem, identity.keyPem, record.fingerprint)
+                currentCoroutineContext().ensureActive()
+                if (!visible.value || receivers.value?.endpoint != receiver.endpoint) throw CancellationException("Control owner changed")
                 credentials.updateLastIp(record.fingerprint, host)
-                needsRepair = false
+                trustFailures.remove(record.fingerprint)
                 publishConnected(receiver, record, session.television.value)
                 coroutineScope {
-                    launch {
+                    val collector = launch {
                         session.television.collect { television ->
                             if (television != null && channelState.value.connected) publishConnected(receiver, record, television)
                         }
                     }
-                    session.awaitClosed()
+                    try {
+                        session.awaitClosed()
+                    } finally {
+                        collector.cancelAndJoin()
+                    }
                 }
-                publishAvailable(receiver, record, host)
-                delay(backoffMs(attempt))
-                attempt++
+                throw AtvCommandException("closed", fixedMessage("closed"))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: AtvCommandException) {
                 when (error.kind) {
                     "not_trusted" -> {
-                        needsRepair = true
+                        trustFailures[record.fingerprint] = TrustFailure(needsRepair = true, stopped = attempt >= maxTrustRetries)
                         publishAvailable(receiver, record, host)
                         if (attempt >= maxTrustRetries) awaitCancellation()
                         delay(backoffMs(attempt))
                         attempt++
                     }
                     "pin_mismatch" -> {
-                        pinMismatch = true
+                        trustFailures[record.fingerprint] = TrustFailure(pinMismatch = true, stopped = true)
                         publishAvailable(receiver, record, host)
                         awaitCancellation()
                     }
@@ -245,6 +318,7 @@ internal class AtvTvRemoteChannel(
                 }
             } finally {
                 if (started) {
+                    if (controlGeneration == generation) clearConnected()
                     withContext(NonCancellable) {
                         runCatching { session.disconnect() }
                     }
@@ -253,19 +327,17 @@ internal class AtvTvRemoteChannel(
         }
     }
 
-    private suspend fun runPairing() {
-        val host = pairingHost
-        val endpoint = pairingEndpoint
-        pairingState.value = AtvPairingUi(AtvPairingPhase.Starting)
+    private suspend fun runPairing(generation: Long, target: PairingTarget) {
+        val host = target.host
+        val endpoint = target.endpoint
         try {
-            if (host.isNullOrBlank() || endpoint == null) {
-                pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = AtvPairingFailure.Unreachable)
-                return
-            }
             val stored = credentials.identityOrNull() ?: session.generateIdentity(ATV_CLIENT_NAME).let { generated ->
+                ensurePairingCurrent(generation, target)
                 AtvClientIdentity(generated.certPem, generated.keyPem).also(credentials::saveIdentity)
             }
+            ensurePairingCurrent(generation, target)
             val started = session.startPairing(host, stored.certPem, stored.keyPem, ATV_CLIENT_NAME)
+            ensurePairingCurrent(generation, target)
             val deferred = CompletableDeferred<String>()
             codeSlot = deferred
             pairingState.value = AtvPairingUi(AtvPairingPhase.WaitingForCode, serverName = started.serverName)
@@ -274,8 +346,11 @@ internal class AtvTvRemoteChannel(
             } finally {
                 if (codeSlot === deferred) codeSlot = null
             }
+            ensurePairingCurrent(generation, target)
             pairingState.value = AtvPairingUi(AtvPairingPhase.Verifying, serverName = started.serverName ?: pairingState.value.serverName)
             val paired = session.finishPairing(code)
+            ensurePairingCurrent(generation, target)
+            val previousPins = credentials.records.value.filter { endpoint.toString() in it.receiverIds }.map { it.fingerprint }
             credentials.upsert(
                 AtvTvRecord(
                     fingerprint = paired.fingerprint,
@@ -285,18 +360,33 @@ internal class AtvTvRemoteChannel(
                     receiverIds = setOf(endpoint.toString()),
                 ),
             )
-            needsRepair = false
-            pinMismatch = false
+            previousPins.forEach(trustFailures::remove)
+            trustFailures.remove(paired.fingerprint)
             pairingState.value = AtvPairingUi(AtvPairingPhase.Paired, serverName = paired.serverName ?: started.serverName)
             refresh.value += 1
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: AtvCommandException) {
+            ensurePairingCurrent(generation, target)
             pairingState.value = AtvPairingUi(AtvPairingPhase.Failed, failure = pairingFailure(error.kind))
         }
     }
 
+    private suspend fun ensurePairingCurrent(generation: Long, target: PairingTarget) {
+        currentCoroutineContext().ensureActive()
+        if (generation != pairingGeneration || !visible.value || receivers.value?.endpoint != target.endpoint) {
+            throw CancellationException("Pairing owner changed")
+        }
+    }
+
+    private fun clearConnected() {
+        channelState.value = channelState.value.copy(
+            connected = false, keys = emptySet(), volume = VolumeCapabilities(), text = TextCapabilities(), powerOn = null,
+        )
+    }
+
     private fun publishConnected(receiver: AtvReceiverTarget, record: AtvTvRecord, television: AtvTelevisionState?) {
+        if (!visible.value || receivers.value?.endpoint != receiver.endpoint || activeFingerprint != record.fingerprint) return
         val level = television?.volumeLevel
         val maximum = television?.volumeMax
         channelState.value = TvRemoteChannelState(
@@ -322,17 +412,18 @@ internal class AtvTvRemoteChannel(
     }
 
     private fun publishAvailable(receiver: AtvReceiverTarget, record: AtvTvRecord?, host: String?) {
+        val failure = record?.let { trustFailures[it.fingerprint] }
         channelState.value = TvRemoteChannelState(
             matchedEndpoint = receiver.endpoint,
             physicalDeviceId = record?.let(::physicalId),
             paired = record != null,
             connected = false,
-            needsRepair = needsRepair,
-            pinMismatch = pinMismatch,
+            needsRepair = failure?.needsRepair == true,
+            pinMismatch = failure?.pinMismatch == true,
             serverName = record?.serverName,
             fullControlAvailable = true,
         )
-        if (host != null) pairingHost = host
+        pairingTarget = host?.let { PairingTarget(receiver.endpoint, it) }
     }
 
     private suspend fun runCatchingCommand(block: suspend () -> Unit): RemoteCommandResult = try {

@@ -26,35 +26,27 @@ internal fun TvDevice.toAtvTarget(): AtvReceiverTarget = AtvReceiverTarget(
     googleCast = resolvedProtocol == com.playbridge.sender.model.CastProtocol.GOOGLE_CAST,
 )
 
-/** Matches `_androidtvremote2._tcp` to the current receiver by IP, then by stored id or `bt` MAC. */
+/** Receiver ids establish credential ownership. MAC only relocates an already-associated TV. */
 internal object AtvDeviceMatcher {
     fun match(receiver: AtvReceiverTarget, devices: List<AtvDiscoveredDevice>, records: List<AtvTvRecord>): AtvMatch {
         val receiverAddresses = receiver.addresses.map(::normalizeIp).filter { it.isNotEmpty() }.toSet()
         val byIp = devices.firstOrNull { device ->
             (device.addresses + device.host).map(::normalizeIp).any { it.isNotEmpty() && it in receiverAddresses }
         }
-        val byId = records.firstOrNull { receiver.endpoint.toString() in it.receiverIds }
-        val byMac = records.firstOrNull { record ->
-            val mac = normalizeMac(record.mac) ?: return@firstOrNull false
-            devices.any { normalizeMac(it.bluetoothMac) == mac }
-        }
-        val byLastIp = if (devices.isEmpty()) {
-            records.firstOrNull { record ->
-                val ip = normalizeIp(record.lastIp)
-                ip.isNotEmpty() && ip in receiverAddresses
-            }
-        } else {
-            null
-        }
-        val record = byId ?: byMac ?: byLastIp
-        val device = byIp ?: devices.firstOrNull { candidate ->
-            val mac = normalizeMac(candidate.bluetoothMac)
-            mac != null && mac == normalizeMac(record?.mac)
-        }
+        val associated = records.filter { receiver.endpoint.toString() in it.receiverIds }
+        // An ambiguous legacy association must be resolved by verified pairing, not discovery.
+        if (associated.size > 1) return AtvMatch(null, null, true, null)
+        val record = associated.singleOrNull()
+        val mac = normalizeMac(record?.mac)
+        val relocated = if (mac == null) null else devices.firstOrNull { normalizeMac(it.bluetoothMac) == mac }
+        val ipConflicts = record != null && mac != null && byIp?.bluetoothMac != null &&
+            normalizeMac(byIp.bluetoothMac) != mac
+        val device = if (record == null) byIp else relocated ?: byIp.takeUnless { ipConflicts }
+        if (ipConflicts && relocated == null) return AtvMatch(record, null, true, null)
         val available = record != null || receiver.androidTv || byIp != null
         val host = device?.host?.takeIf { it.isNotBlank() }
-            ?: record?.lastIp?.takeIf { it.isNotBlank() }
             ?: receiver.addresses.firstOrNull { it.isNotBlank() }
+            ?: record?.lastIp?.takeIf { it.isNotBlank() }
         return AtvMatch(record = record, device = device, available = available, host = host)
     }
 

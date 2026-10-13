@@ -1,6 +1,12 @@
 package com.playbridge.sender.cast.remote
 
+import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -14,8 +20,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performTouchInput
+import androidx.test.platform.app.InstrumentationRegistry
 import com.playbridge.sender.cast.Capability
 import com.playbridge.sender.cast.TargetKind
+import com.playbridge.sender.cast.remote.ui.RemoteInput
 import com.playbridge.sender.connection.QueueCommandResult
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
@@ -53,6 +63,48 @@ class RemoteRouteTest {
         override fun endPointerGesture() = true
         override fun stopMirror() = true
         override suspend fun confirmed(requestId: String, command: String, timeoutMs: Long) = QueueCommandResult(true, null)
+    }
+
+    @Test fun padTogglePersistsThroughTheViewModelAndReloadsWithoutSendingKeys() {
+        val backing = InstrumentationRegistry.getInstrumentation().targetContext
+            .getSharedPreferences("remote_pad_toggle_fixture", Context.MODE_PRIVATE)
+        assertTrue(backing.edit().clear().commit())
+        val store = RemotePresentationPreferences(backing)
+        val transport = Transport()
+        val registry = RemoteControllerRegistry(MutableStateFlow<RemoteNativeTarget?>(null), transport, scope)
+        val vm = RemoteViewModel(registry, RemoteInputRouter(), scope = scope, presentationPreferences = store)
+        val actions = mutableListOf<RemoteAction>()
+        val fixture = RemoteUiState(
+            connection = RemoteConnection.Connected("Fixture TV"), context = RemoteContext.Player,
+            capabilities = nativeRemoteCapabilities(RemoteProfile.AndroidTv, RemoteContext.Player, RemoteMediaKind.Video)
+                .copy(keyScope = ControlScope.WholeDevice),
+        )
+        compose.setContent { MaterialTheme {
+            val observed by vm.state.collectAsState()
+            val state = fixture.copy(preferences = observed.preferences)
+            Box(Modifier.size(320.dp, 360.dp)) {
+                RemoteInput(state, resolveRemoteLayout(state, RemoteViewport())) { action ->
+                    actions += action
+                    vm.dispatch(action)
+                }
+            }
+        } }
+        compose.onNodeWithContentDescription("Switch to button pad").performTouchInput { click(center) }
+        compose.onNodeWithContentDescription("Switch to swipe pad").assertIsDisplayed()
+        compose.runOnIdle {
+            assertTrue(backing.getBoolean("button_pad_v2", false))
+            val reloaded = RemotePresentationPreferences(backing)
+            assertTrue(reloaded.load().buttonPad)
+            val recreated = RemoteViewModel(registry, RemoteInputRouter(), scope = scope, presentationPreferences = reloaded)
+            assertTrue(recreated.state.value.preferences.buttonPad)
+        }
+        compose.onNodeWithContentDescription("Switch to swipe pad").performTouchInput { click(center) }
+        compose.onNodeWithContentDescription("Switch to button pad").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(false, RemotePresentationPreferences(backing).load().buttonPad)
+            assertEquals(listOf(RemoteAction.SetButtonPad(true), RemoteAction.SetButtonPad(false)), actions)
+            assertTrue(transport.commands.isEmpty())
+        }
     }
 
     @Test fun nativeAdapterKeepsStageOneControlsAndUsesOneViewModelOverlayAndEffects() {

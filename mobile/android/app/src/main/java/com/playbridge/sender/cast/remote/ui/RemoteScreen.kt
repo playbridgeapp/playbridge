@@ -43,13 +43,18 @@ import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteAdaptiveLayout
 import com.playbridge.sender.cast.remote.RemoteAdaptiveSections
 import com.playbridge.sender.cast.remote.RemoteColumnSplit
+import com.playbridge.sender.cast.remote.RemoteCommandResult
+import com.playbridge.sender.cast.remote.RemoteInputMode
 import com.playbridge.sender.cast.remote.RemoteSectionHeights
 import com.playbridge.sender.cast.remote.RemoteUiState
 import com.playbridge.sender.cast.remote.RemoteViewport
 import com.playbridge.sender.cast.remote.RemoteVolumeKeys
+import com.playbridge.sender.cast.remote.actionReady
+import com.playbridge.sender.cast.remote.fullControlReady
 import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.rememberRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.resolveRemoteLayout
+import com.playbridge.sender.cast.remote.LocalRemotePreferences
 import kotlin.math.roundToInt
 
 /** The only screen shell. Receiver state, optimism, modes, sheets and commands remain owned by the view model. */
@@ -59,13 +64,14 @@ fun RemoteScreen(
     dispatch: (RemoteAction) -> Unit,
     modifier: Modifier = Modifier,
     detectedSubtitles: List<DetectedVideo> = emptyList(),
+    execute: suspend (RemoteAction) -> RemoteCommandResult = { action -> dispatch(action); RemoteCommandResult.Submitted },
 ) {
     val motion = rememberRemoteMotionPolicy()
     val layout = resolveRemoteLayout(state, RemoteViewport())
     RemoteVolumeKeys(layout.nav.volume.enabled, state.sessionId.toString()) {
         dispatch(RemoteAction.AdjustVolume(if (it) 1 else -1))
     }
-    CompositionLocalProvider(LocalRemoteMotionPolicy provides motion) {
+    CompositionLocalProvider(LocalRemoteMotionPolicy provides motion, LocalRemotePreferences provides state.preferences) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
             BoxWithConstraints(Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime))
@@ -88,7 +94,7 @@ fun RemoteScreen(
                     Modifier.onSizeChanged { size -> heights = update(heights, with(density) { size.height.toDp().value }) }
                 val guardedDispatch: (RemoteAction) -> Unit = { action ->
                     // Pointer cleanup must still run when a gesture loses readiness.
-                    if (state.connection.ready || action == RemoteAction.PointerGestureEnd || action == RemoteAction.PointerUp ||
+                    if (state.actionReady(action) || action == RemoteAction.PointerGestureEnd || action == RemoteAction.PointerUp ||
                         action is RemoteAction.SetButtonPad || action is RemoteAction.SelectInputMode || action is RemoteAction.OpenSheet || action == RemoteAction.CloseSheet) dispatch(action)
                 }
                 val header: @Composable () -> Unit = {
@@ -108,7 +114,7 @@ fun RemoteScreen(
                 }
                 val input: @Composable (Modifier) -> Unit = { inputModifier ->
                     Box(inputModifier.testTag("remote.input")) {
-                        RemoteSectionCard("remote.inputCard", state.connection.ready || layout.idle) {
+                        RemoteSectionCard("remote.inputCard", state.connection.ready || layout.idle || state.fullControlReady && layout.selectedMode == RemoteInputMode.Pad) {
                             RemoteInput(state, layout, guardedDispatch)
                         }
                     }
@@ -192,7 +198,7 @@ fun RemoteScreen(
                 }
             }
         }
-        key(state.sessionId, state.playback?.mediaId) { RemoteSheets(state, dispatch, detectedSubtitles) }
+        key(state.sessionId, state.playback?.mediaId) { RemoteSheets(state, dispatch, detectedSubtitles, execute) }
     }
 }
 

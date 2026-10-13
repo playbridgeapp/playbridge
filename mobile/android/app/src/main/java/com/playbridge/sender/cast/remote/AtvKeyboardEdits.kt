@@ -6,12 +6,13 @@ internal const val ATV_TEXT_DELETE_CAP = 64
  * Android TV `insert_text` inserts. The sheet sends the added suffix, or one delete per removed
  * code point. An empty replace is never sent.
  */
-internal fun atvKeyboardEdits(previous: String, next: String): List<RemoteAction> {
+internal fun atvKeyboardEdits(previous: String, next: String): List<RemoteAction>? {
     if (previous == next) return emptyList()
     val common = commonPrefixLength(previous, next)
     val removed = previous.substring(common)
     val added = next.substring(common)
-    val deletes = removed.codePointCount(0, removed.length).coerceAtMost(ATV_TEXT_DELETE_CAP)
+    val deletes = removed.codePointCount(0, removed.length)
+    if (deletes > ATV_TEXT_DELETE_CAP) return null
     return buildList {
         repeat(deletes) { add(RemoteAction.DeleteText) }
         if (added.isNotEmpty()) add(RemoteAction.ReplaceText(added))

@@ -11,6 +11,7 @@ import com.playbridge.sender.data.settings.SettingsRepository
 import android.os.Environment
 import android.widget.Toast
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -33,6 +34,9 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.playbridge.sender.cast.remote.RemoteHapticLevel
+import com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore
+import com.playbridge.sender.cast.remote.rememberRemoteHapticEmitter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -229,6 +233,11 @@ fun TVSettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            val remotePreferences: RemotePresentationPreferenceStore = koinInject()
+            RemoteSettingsGroup(remotePreferences)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text("Paired TVs", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
             val pairedTvs by atvCredentials.records.collectAsState()
@@ -320,6 +329,50 @@ fun TVSettingsScreen(
                 )
             ) {
                 Text(if (isClearing) "Clearing…" else "Clear TV Logs")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun RemoteSettingsGroup(
+    store: RemotePresentationPreferenceStore,
+    sample: (RemoteHapticLevel) -> Unit = rememberRemoteHapticEmitter(),
+) {
+    val preferences by store.state.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Remote", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        ListItem(
+            headlineContent = { Text("Haptic feedback") },
+            trailingContent = {
+                Switch(
+                    checked = preferences.hapticsEnabled,
+                    onCheckedChange = { enabled -> store.update { it.copy(hapticsEnabled = enabled) } },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                        .semantics { contentDescription = "Haptic feedback" },
+                )
+            },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        )
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Intensity", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RemoteHapticLevel.entries.forEach { level ->
+                    FilterChip(
+                        selected = preferences.hapticsLevel == level,
+                        enabled = preferences.hapticsEnabled,
+                        onClick = {
+                            // Read the shared store at click time, including when another screen just disabled feedback.
+                            if (store.load().hapticsEnabled) {
+                                val updated = store.update { it.copy(hapticsLevel = level) }
+                                if (updated.hapticsEnabled) sample(level)
+                            }
+                        },
+                        label = { Text(level.name) },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .semantics { contentDescription = "Haptic intensity ${level.name}" },
+                    )
+                }
             }
         }
     }

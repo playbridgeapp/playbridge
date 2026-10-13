@@ -36,6 +36,8 @@ sealed interface RemoteAction {
     data class SetVolume(val percent: Int) : RemoteAction
     data class ReplaceText(val text: String) : RemoteAction
     data object DeleteText : RemoteAction
+    /** One ordered, acknowledged Full control edit. Never falls back to receiver text replacement. */
+    data class EditTvText(val deletes: Int, val text: String, val enter: Boolean = false) : RemoteAction
     data class PointerMove(val dx: Float, val dy: Float) : RemoteAction
     data object PointerClick : RemoteAction
     data class PointerScroll(val dx: Float, val dy: Float) : RemoteAction

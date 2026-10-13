@@ -9,6 +9,9 @@ data class FullControlStatus(
     val pinMismatch: Boolean = false,
     val powerOn: Boolean? = null,
     val serverName: String? = null,
+    val keys: Set<RemoteKey> = emptySet(),
+    val text: TextCapabilities = TextCapabilities(),
+    val volume: VolumeCapabilities = VolumeCapabilities(),
 )
 
 internal fun projectFullControl(
@@ -17,20 +20,39 @@ internal fun projectFullControl(
     channel: TvRemoteChannelState?,
 ): RemoteUiState {
     val endpoint = state.sessionId?.endpoint
-    val same = channel != null && endpoint != null && channel.matchedEndpoint == endpoint
-    if (!same || channel == null) return state.copy(capabilities = base, fullControl = null)
+    if (channel == null || endpoint == null || channel.matchedEndpoint != endpoint) return state.copy(capabilities = base, fullControl = null)
     val status = FullControlStatus(
-        connected = channel.connected,
+        connected = channel.readyFor(endpoint),
         paired = channel.paired,
         available = channel.fullControlAvailable || channel.paired,
         needsRepair = channel.needsRepair,
         pinMismatch = channel.pinMismatch,
         powerOn = channel.powerOn,
         serverName = channel.serverName,
+        keys = channel.keys,
+        text = channel.text,
+        volume = channel.volume,
     )
-    val capabilities = if (channel.connected) base.withWholeDevice(channel) else base
+    val capabilities = if (status.connected) base.withWholeDevice(channel) else base
     return state.copy(capabilities = capabilities, fullControl = status)
 }
+
+internal val RemoteUiState.fullControlReady: Boolean get() = fullControl?.connected == true
+
+internal fun RemoteUiState.fullControlSupports(action: RemoteAction): Boolean {
+    val channel = fullControl?.takeIf { it.connected } ?: return false
+    return when (action) {
+        is RemoteAction.Key -> action.key in channel.keys
+        is RemoteAction.AdjustVolume -> channel.volume.adjust == Support.Supported
+        is RemoteAction.ReplaceText -> channel.text.replace == Support.Supported
+        RemoteAction.DeleteText -> channel.text.delete == Support.Supported
+        is RemoteAction.EditTvText -> channel.text.replace == Support.Supported && channel.text.delete == Support.Supported
+        is RemoteAction.LaunchTvApp, RemoteAction.PowerTv -> true
+        else -> false
+    }
+}
+
+internal fun RemoteUiState.actionReady(action: RemoteAction): Boolean = connection.ready || fullControlSupports(action)
 
 private fun RemoteCapabilities.withWholeDevice(channel: TvRemoteChannelState): RemoteCapabilities {
     val level = channel.volume.level

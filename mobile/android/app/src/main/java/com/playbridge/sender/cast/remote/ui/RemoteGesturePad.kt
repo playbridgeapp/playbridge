@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -36,6 +37,7 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
 import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteKey
@@ -58,6 +60,7 @@ internal fun RemoteGesturePad(
     enabled: Boolean,
     onStep: (String) -> Unit,
     modifier: Modifier = Modifier,
+    excludeModeToggle: Boolean = false,
 ) {
     val haptics = rememberRemoteHaptics()
     val onStepState = rememberUpdatedState(onStep)
@@ -65,6 +68,7 @@ internal fun RemoteGesturePad(
     val motion = rememberUpdatedState(LocalRemoteMotionPolicy.current)
     val clock = remember { GestureClock() }
     val density = LocalDensity.current.density
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val policy = remember(density) { PadGesturePolicy.forDensity(clock = { clock.now }, density = density) }
     var flash by remember { mutableStateOf<PadDirection?>(null) }
     var flashNonce by remember { mutableIntStateOf(0) }
@@ -121,12 +125,16 @@ internal fun RemoteGesturePad(
                 if (!enabled) disabled()
                 customActions = actions
             }
-            .pointerInput(enabled, policy) {
+            .pointerInput(enabled, policy, excludeModeToggle, rtl, density) {
                 if (!enabled) return@pointerInput
                 coroutineScope {
                     try {
                         awaitEachGesture {
                             val down = awaitFirstDown()
+                            if (excludeModeToggle && padModeToggleBounds(size.width.toFloat(), density, rtl).contains(down.position)) {
+                                policy.cancel()
+                                return@awaitEachGesture
+                            }
                             down.consume()
                             clock.observe(down.uptimeMillis)
                             policy.down(down.position.x, down.position.y)
@@ -150,6 +158,10 @@ internal fun RemoteGesturePad(
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                     change.consume()
+                                    if (excludeModeToggle && padModeToggleBounds(size.width.toFloat(), density, rtl).contains(change.position)) {
+                                        policy.cancel()
+                                        break
+                                    }
                                     clock.observe(change.uptimeMillis)
                                     if (!change.pressed) {
                                         emit(policy.up(change.position.x, change.position.y))

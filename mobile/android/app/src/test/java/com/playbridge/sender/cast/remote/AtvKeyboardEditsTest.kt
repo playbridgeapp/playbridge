@@ -11,11 +11,11 @@ class AtvKeyboardEditsTest {
         assertEquals(listOf(RemoteAction.ReplaceText("h")), atvKeyboardEdits("", "h"))
         assertEquals(listOf(RemoteAction.ReplaceText("e")), atvKeyboardEdits("h", "he"))
         assertEquals(listOf(RemoteAction.DeleteText), atvKeyboardEdits("he", "h"))
-        val cleared = atvKeyboardEdits("he", "")
+        val cleared = atvKeyboardEdits("he", "")!!
         assertTrue(cleared.all { it == RemoteAction.DeleteText })
         assertEquals(2, cleared.size)
-        assertTrue(atvKeyboardEdits("x".repeat(80), "").filterIsInstance<RemoteAction.ReplaceText>().isEmpty())
-        assertEquals(ATV_TEXT_DELETE_CAP, atvKeyboardEdits("x".repeat(80), "").size)
+        assertEquals(null, atvKeyboardEdits("x".repeat(80), ""))
+        assertEquals(ATV_TEXT_DELETE_CAP, atvKeyboardEdits("x".repeat(64), "")!!.size)
     }
 
     @Test fun enterDeleteAndArrowsUseShortAndroidNames() {

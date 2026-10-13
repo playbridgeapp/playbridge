@@ -1,7 +1,6 @@
 package com.playbridge.sender.cast.remote
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -21,14 +20,11 @@ fun RemoteRoute(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val handleEffect by rememberUpdatedState(onEffect)
-    DisposableEffect(viewModel) {
-        viewModel.activate()
-        onDispose { viewModel.deactivate() }
-    }
+    RemoteRouteLifecycleEffect(viewModel, viewModel::activate, viewModel::deactivate)
     LaunchedEffect(viewModel) { viewModel.effects.collect { handleEffect(it) } }
     LaunchedEffect(viewModel, state.sessionId) { if (state.sessionId != null) viewModel.dispatch(RemoteAction.Resync) }
     val playback = state.playback
     val external = state.receiver?.profile == RemoteProfile.External
     val subtitles = remember(subtitleSourceKey, playback?.title, external) { if (external) emptyList() else detectedSubtitles(playback?.title) }
-    RemoteScreen(state = state, dispatch = viewModel::dispatch, detectedSubtitles = subtitles)
+    RemoteScreen(state = state, dispatch = viewModel::dispatch, detectedSubtitles = subtitles, execute = viewModel::execute)
 }

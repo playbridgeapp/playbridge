@@ -31,19 +31,20 @@ class RemoteIntegrationFixTest {
             queue = RemoteQueueState(currentItemId = "current", items = listOf(current, next)),
         )
     }
-    @Test fun defaultGesturePadCanSwitchToButtonsFromPadSettingsAndBackFromMore() {
+    @Test fun buttonPadChangesDirectlyOnPadAndIsAbsentFromPlayerSheet() {
         val reducer = RemoteStateReducer { 0L }
         val state = mutableStateOf(reducer.observe(RemoteReceiverSnapshot(state())))
         val dispatch: (RemoteAction) -> Unit = { state.value = reducer.local(it) }
         compose.setContent { MaterialTheme { RemoteScreen(state.value, dispatch) } }
         compose.onNodeWithTag("remote.gesturePad").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Pad settings").performClick()
-        compose.onNodeWithContentDescription("Button D-pad").performClick()
-        compose.runOnIdle { dispatch(RemoteAction.CloseSheet) }
+        compose.onNodeWithContentDescription("Pad settings").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Switch to button pad").performClick()
         compose.onNodeWithTag("remote.buttonPad").assertIsDisplayed()
         compose.onNodeWithText("More").performClick()
-        compose.onNodeWithContentDescription("Button D-pad").performClick()
+        compose.onNodeWithContentDescription("Button D-pad").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Button pad").assertDoesNotExist()
         compose.runOnIdle { dispatch(RemoteAction.CloseSheet) }
+        compose.onNodeWithContentDescription("Switch to swipe pad").performClick()
         compose.onNodeWithTag("remote.gesturePad").assertIsDisplayed()
     }
     @Test fun storedWatchedBadgeAppearsInBothUpNextAndAllSheet() {

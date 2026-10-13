@@ -2,10 +2,14 @@ package com.playbridge.sender.cast.remote.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -15,14 +19,18 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -36,6 +44,7 @@ import com.playbridge.sender.cast.atv.normalizePairingCodeInput
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import org.koin.compose.koinInject
+import kotlinx.coroutines.launch
 
 internal val ATV_LAUNCH_APPS = listOf(
     "YouTube" to "com.google.android.youtube.tv",
@@ -47,9 +56,9 @@ internal val ATV_LAUNCH_APPS = listOf(
 )
 
 @Composable
-internal fun AtvPairingRoute(onDismiss: () -> Unit) {
-    val controller: AtvPairingController = koinInject()
+internal fun AtvPairingRoute(onDismiss: () -> Unit, controller: AtvPairingController = koinInject()) {
     val ui by controller.pairing.collectAsState()
+    DisposableEffect(controller) { onDispose { controller.cancel() } }
     LaunchedEffect(Unit) {
         val phase = controller.pairing.value.phase
         if (phase == AtvPairingPhase.Idle || phase == AtvPairingPhase.Failed || phase == AtvPairingPhase.Paired) controller.begin()
@@ -76,10 +85,10 @@ internal fun AtvPairingSheet(
     onCancel: () -> Unit,
     onRetry: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onCancel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onCancel, sheetState = sheetState) {
         RemoteDialogVolumeKeys()
         AtvPairingContent(ui, onSubmit, onCancel, onRetry)
-        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -92,7 +101,10 @@ internal fun AtvPairingContent(
 ) {
     var code by remember { mutableStateOf("") }
     var invalid by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val fieldInView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())
+        .padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Full control", style = MaterialTheme.typography.titleMedium)
         Text("Lets PlayBridge work like your TV remote: any app, Home, typing.")
         when (ui.phase) {
@@ -109,7 +121,9 @@ internal fun AtvPairingContent(
                         code = normalizePairingCodeInput(it)
                         invalid = false
                     },
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Pairing code" },
+                    modifier = Modifier.fillMaxWidth().bringIntoViewRequester(fieldInView)
+                        .onFocusChanged { if (it.isFocused) scope.launch { fieldInView.bringIntoView() } }
+                        .semantics { contentDescription = "Pairing code" },
                     label = { Text("Pairing code") },
                     supportingText = { Text("6 characters shown on the TV") },
                     isError = invalid,
@@ -141,17 +155,20 @@ private fun pairingMessage(failure: AtvPairingFailure?): String = when (failure)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AtvOpenAppSheet(dispatch: (RemoteAction) -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         RemoteDialogVolumeKeys()
         AtvOpenAppContent(dispatch, onDismiss)
-        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
 internal fun AtvOpenAppContent(dispatch: (RemoteAction) -> Unit, onDismiss: () -> Unit) {
     var other by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val fieldInView = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())
+        .padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Open app", style = MaterialTheme.typography.titleMedium)
         ATV_LAUNCH_APPS.forEach { (label, packageId) ->
             OutlinedButton(
@@ -170,7 +187,9 @@ internal fun AtvOpenAppContent(dispatch: (RemoteAction) -> Unit, onDismiss: () -
         OutlinedTextField(
             value = other,
             onValueChange = { other = it.trim() },
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "App package" },
+            modifier = Modifier.fillMaxWidth().bringIntoViewRequester(fieldInView)
+                .onFocusChanged { if (it.isFocused) scope.launch { fieldInView.bringIntoView() } }
+                .semantics { contentDescription = "App package" },
             label = { Text("Other…") },
             singleLine = true,
         )

@@ -351,6 +351,10 @@ class CastSessionManager(
     private val nativeDevice: StateFlow<TvDevice?> = connectionStore.tvDevice
         .stateIn(scope, SharingStarted.Eagerly, null)
 
+    /** Selected receiver identity survives a transport disconnect, but never a route change. */
+    val remoteDevice: StateFlow<TvDevice?> = combine(route, nativeDevice, activeExternalDevice, ::selectedRemoteDevice)
+        .stateIn(scope, SharingStarted.Eagerly, selectedRemoteDevice(route.value, nativeDevice.value, activeExternalDevice.value))
+
     fun selectRokuTarget(device: TvDevice) {
         selectExternalTarget(device, RokuCastTarget(device, scope, context))
     }
