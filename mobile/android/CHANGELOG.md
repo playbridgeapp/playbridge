@@ -24,6 +24,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Browser typing**: Text typed from the phone goes to PlayBridge's TV browsers over the PlayBridge connection, even while Full control is connected, and reaches search and text fields inside embedded players and in fullscreen.
 
 ### Fixed
+- **Video detection in popup tabs**: Videos on pages that a site opens in a new tab or popup are detected again, even when another tab on the same site is open.
 - **Android TV pairing storage**: Pairings are saved safely. If a save or removal fails, the remote shows "Couldn't save the pairing" or "Couldn't remove the TV" with a retry, and if a saved pairing can't be read, it asks you to pair again.
 - **In-app browser keyboard**: Web pages and Bridged Apps keep focused input fields visible above the soft keyboard when typing, including login and password fields.
 - **Browser fullscreen toggle**: The browser fullscreen action tracks the page's actual display state so restoring windowed mode works reliably.
