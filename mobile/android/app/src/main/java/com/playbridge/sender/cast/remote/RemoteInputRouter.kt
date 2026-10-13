@@ -11,6 +11,7 @@ data class TvRemoteChannelState(
     val volume: VolumeCapabilities = VolumeCapabilities(), val text: TextCapabilities = TextCapabilities(),
     val needsRepair: Boolean = false, val pinMismatch: Boolean = false, val powerOn: Boolean? = null,
     val serverName: String? = null, val fullControlAvailable: Boolean = false,
+    val storageFailure: Boolean = false,
 )
 interface TvRemoteChannel {
     val state: StateFlow<TvRemoteChannelState>

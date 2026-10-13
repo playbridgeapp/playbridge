@@ -42,13 +42,12 @@ import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteKey
 import com.playbridge.sender.cast.remote.input.PadDirection
-import com.playbridge.sender.cast.remote.input.PadGesturePolicy
+import com.playbridge.sender.cast.remote.input.PadGestureSession
 import com.playbridge.sender.cast.remote.input.PadStep
 import com.playbridge.sender.cast.remote.input.PadStepKind
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Exclusion stays on the pad or pointer rect. Android 9 and earlier keep insets only. */
@@ -66,10 +65,9 @@ internal fun RemoteGesturePad(
     val onStepState = rememberUpdatedState(onStep)
     val enabledState = rememberUpdatedState(enabled)
     val motion = rememberUpdatedState(LocalRemoteMotionPolicy.current)
-    val clock = remember { GestureClock() }
     val density = LocalDensity.current.density
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val policy = remember(density) { PadGesturePolicy.forDensity(clock = { clock.now }, density = density) }
+    val session = remember(density) { PadGestureSession(density) }
     var flash by remember { mutableStateOf<PadDirection?>(null) }
     var flashNonce by remember { mutableIntStateOf(0) }
 
@@ -104,13 +102,13 @@ internal fun RemoteGesturePad(
     ).map { (direction, label) ->
         CustomAccessibilityAction(label) {
             if (!enabledState.value) return@CustomAccessibilityAction false
-            policy.cancel()
+            session.cancel()
             emit(listOf(PadStep(direction.key.wireValue, PadStepKind.SWIPE, direction)))
             true
         }
     } + CustomAccessibilityAction("OK") {
         if (!enabledState.value) return@CustomAccessibilityAction false
-        policy.cancel()
+        session.cancel()
         emit(listOf(PadStep(RemoteKey.Ok.wireValue, PadStepKind.TAP, null)))
         true
     }
@@ -125,56 +123,41 @@ internal fun RemoteGesturePad(
                 if (!enabled) disabled()
                 customActions = actions
             }
-            .pointerInput(enabled, policy, excludeModeToggle, rtl, density) {
+            .pointerInput(enabled, session, excludeModeToggle, rtl, density) {
                 if (!enabled) return@pointerInput
                 coroutineScope {
                     try {
                         awaitEachGesture {
                             val down = awaitFirstDown()
                             if (excludeModeToggle && padModeToggleBounds(size.width.toFloat(), density, rtl).contains(down.position)) {
-                                policy.cancel()
+                                session.cancel()
                                 return@awaitEachGesture
                             }
                             down.consume()
-                            clock.observe(down.uptimeMillis)
-                            policy.down(down.position.x, down.position.y)
-                            val hold = launch {
-                                while (isActive) {
-                                    val deadline = policy.holdDeadline()
-                                    if (deadline == null) {
-                                        delay(16)
-                                        continue
-                                    }
-                                    val wait = deadline - clock.now
-                                    if (wait > 0) delay(wait)
-                                    if (!isActive) continue
-                                    clock.advanceTo(deadline)
-                                    val steps = policy.tick()
-                                    if (steps.isEmpty()) delay(16) else emit(steps)
-                                }
-                            }
+                            session.down(down.uptimeMillis, down.position.x, down.position.y)
+                            val hold = launch { session.repeatHold(::emit) }
                             try {
                                 while (true) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                     change.consume()
                                     if (excludeModeToggle && padModeToggleBounds(size.width.toFloat(), density, rtl).contains(change.position)) {
-                                        policy.cancel()
+                                        session.cancel()
                                         break
                                     }
-                                    clock.observe(change.uptimeMillis)
                                     if (!change.pressed) {
-                                        emit(policy.up(change.position.x, change.position.y))
+                                        emit(session.up(change.uptimeMillis, change.position.x, change.position.y))
                                         break
                                     }
-                                    emit(policy.move(change.position.x, change.position.y))
+                                    emit(session.move(change.uptimeMillis, change.position.x, change.position.y))
                                 }
                             } finally {
                                 hold.cancel()
+                                session.cancel()
                             }
                         }
                     } finally {
-                        policy.cancel()
+                        session.cancel()
                     }
                 }
             },
@@ -202,19 +185,5 @@ internal fun RemoteGesturePad(
                 textAlign = TextAlign.Center,
             )
         }
-    }
-}
-
-/** Event timestamps drive recognition. The hold loop only moves time forward to a deadline. */
-private class GestureClock {
-    var now: Long = 0L
-        private set
-
-    fun observe(time: Long) {
-        if (time > now) now = time
-    }
-
-    fun advanceTo(time: Long) {
-        if (time > now) now = time
     }
 }

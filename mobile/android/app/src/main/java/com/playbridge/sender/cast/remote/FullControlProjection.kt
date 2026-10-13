@@ -14,6 +14,7 @@ data class FullControlStatus(
     /** Receiver text support before the Whole-device capability overlay. */
     val receiverText: TextCapabilities = TextCapabilities(),
     val volume: VolumeCapabilities = VolumeCapabilities(),
+    val storageFailure: Boolean = false,
 )
 
 internal fun projectFullControl(
@@ -35,6 +36,7 @@ internal fun projectFullControl(
         text = channel.text,
         receiverText = base.text,
         volume = channel.volume,
+        storageFailure = channel.storageFailure,
     )
     val capabilities = if (status.connected) base.withWholeDevice(channel) else base
     return state.copy(capabilities = capabilities, fullControl = status)

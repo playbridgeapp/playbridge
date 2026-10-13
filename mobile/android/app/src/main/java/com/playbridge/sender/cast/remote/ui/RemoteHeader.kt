@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.playbridge.sender.cast.atv.ATV_SAVE_ERROR
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteContext
 import com.playbridge.sender.cast.remote.RemoteKey
@@ -86,6 +87,9 @@ internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                             color = MaterialTheme.colorScheme.primary)
                         FullControlTag(state, dispatch)
                     }
+                    if (state.fullControl?.storageFailure == true) {
+                        Text(ATV_SAVE_ERROR, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
@@ -114,7 +118,7 @@ private fun FullControlTag(state: RemoteUiState, dispatch: (RemoteAction) -> Uni
             color = MaterialTheme.colorScheme.tertiaryContainer,
             modifier = Modifier.testTag("remote.repair"),
         ) {
-            Text("Re-pair", modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
+            Text("Pair again", modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
         }
         control.available && !control.paired -> Surface(
             onClick = { dispatch(RemoteAction.RequestWholeTvControl) },

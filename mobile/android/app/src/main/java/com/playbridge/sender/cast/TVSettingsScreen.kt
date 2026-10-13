@@ -238,45 +238,8 @@ fun TVSettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text("Paired TVs", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
-            val pairedTvs by atvCredentials.records.collectAsState()
-            var pendingForget by remember { mutableStateOf<com.playbridge.sender.cast.atv.AtvTvRecord?>(null) }
-            if (pairedTvs.isEmpty()) {
-                Text(
-                    "No paired TVs",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            pairedTvs.forEach { tv ->
-                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
-                ListItem(
-                    headlineContent = { Text(label) },
-                    trailingContent = {
-                        TextButton(
-                            onClick = { pendingForget = tv },
-                            modifier = Modifier.semantics { contentDescription = "Forget $label" },
-                        ) { Text("Forget") }
-                    },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                )
-            }
-            pendingForget?.let { tv ->
-                val label = tv.serverName ?: tv.lastIp ?: "Paired TV"
-                AlertDialog(
-                    onDismissRequest = { pendingForget = null },
-                    title = { Text("Forget $label?") },
-                    text = { Text("PlayBridge will need a new pairing code to control this TV.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            atvCredentials.forget(tv.fingerprint)
-                            pendingForget = null
-                        }) { Text("Forget") }
-                    },
-                    dismissButton = { TextButton(onClick = { pendingForget = null }) { Text("Cancel") } },
-                )
-            }
+            AtvPairedTvsSettings(atvCredentials)
 
             Spacer(modifier = Modifier.height(12.dp))
 
