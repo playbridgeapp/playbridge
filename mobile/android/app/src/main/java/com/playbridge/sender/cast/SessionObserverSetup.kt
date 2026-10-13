@@ -304,6 +304,9 @@ fun SessionObserverSetup(
                     return
                 }
 
+                val openerId = store.state.tabs.firstOrNull {
+                    it.engineState.engineSession === session
+                }?.id
                 val uri = windowRequest.url
                 val popupSession = windowRequest.prepare()
                 val openerUrl = currentUrl.value
@@ -330,6 +333,7 @@ fun SessionObserverSetup(
                                 openerHost = openerHost,
                                 popupUrl = uri,
                                 engineSession = popupSession,
+                                openerTabId = openerId,
                             )
                         }
                     } else {
@@ -337,8 +341,9 @@ fun SessionObserverSetup(
                         val tabId = tabManager.createTab(
                             url = uri,
                             store = store,
-                            parentId = selectedTabState.value?.id,
-                            select = true
+                            parentId = openerId,
+                            select = true,
+                            detectorPopup = true,
                         )
                         // EngineMiddleware registers its EngineObserver on link —
                         // URL/title/nav/state sync and crash handling for free.

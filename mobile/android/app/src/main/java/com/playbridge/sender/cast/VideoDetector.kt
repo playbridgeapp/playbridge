@@ -612,7 +612,7 @@ object VideoDetector {
     // Detections stamp the current value into DetectedVideo.lifecycleIndex.
     private val tabLifecycleIndex = mutableMapOf<String, Int>()
 
-    // Last document generation accepted from the GeckoView detector per Kotlin tab.
+    // Active detector binding and document generation for each Kotlin tab.
     private val detectorPageTracker = DetectorPageTracker()
 
     // Suppression belongs to the document that established the master/segment relationship.
@@ -731,6 +731,9 @@ object VideoDetector {
      * Prepare for a detection. A newer detection may arrive before its navigation
      * message, so it advances and clears atomically; stale detections are rejected.
      */
+    internal fun detectorOrder(tabId: String, incoming: DetectorPageVersion): DetectorMessageOrder =
+        detectorPageTracker.order(tabId, incoming)
+
     internal fun acceptDetectorVideo(tabId: String, incoming: DetectorPageVersion): Boolean {
         return when (detectorPageTracker.observe(tabId, incoming)) {
             DetectorMessageOrder.ADVANCE -> {

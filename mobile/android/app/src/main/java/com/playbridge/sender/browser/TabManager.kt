@@ -210,6 +210,7 @@ class TabManager {
                             if (sessions[tab.id] != null) {
                                 com.playbridge.sender.cast.MediaPlaybackService.deactivate(tab.id)
                             }
+                            if (sessions[tab.id] != null) Components.detectorSessionChanged(tab.id)
                             sessions[tab.id] = engineSession
                             Components.bindDetectionPolicy(tab.id, engineSession)
                             engineSession.register(
@@ -222,7 +223,7 @@ class TabManager {
                             )
                         }
                     } else {
-                        sessions.remove(tab.id)
+                        if (sessions.remove(tab.id) != null) Components.detectorSessionChanged(tab.id)
                     }
 
                     // 2. Mirror back/forward state (EngineObserver keeps content state updated).
@@ -323,8 +324,10 @@ class TabManager {
         select: Boolean = true,
         engineSessionState: EngineSessionState? = null,
         bridgedAppOrigin: String? = null,
+        detectorPopup: Boolean = false,
     ): String {
         val tabId = UUID.randomUUID().toString()
+        Components.registerDetectorTab(tabId, url, parentId, popup = detectorPopup)
         // Mark app ownership before dispatch can create/load its engine session.
         if (bridgedAppOrigin != null) {
             Components.bridgedAppOriginsByTabId = Components.bridgedAppOriginsByTabId + (tabId to bridgedAppOrigin)
@@ -486,6 +489,7 @@ class TabManager {
 
     /** Drop all per-tab UI state for [tabId]. Called when a tab is closed. */
     fun purgeTabState(tabId: String) {
+        Components.forgetDetectorKotlinTab(tabId)
         navigationStates.remove(tabId)
         playingTabIds.remove(tabId)
         recentlyActiveTabIds.remove(tabId)

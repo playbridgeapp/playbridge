@@ -83,4 +83,64 @@ class DetectorTabBindingTrackerTest {
             ),
         )
     }
+    @Test
+    fun `current navigation document cannot bind previous or origin URL alone`() {
+        val tabs = listOf(DetectorTabCandidate("opener", "https://site.example/watch"))
+        assertNull(tracker.resolve(
+            10L, 9, listOf("https://site.example/watch", "https://other.example/video"),
+            tabs, "opener", documentUrl = "https://other.example/video",
+        ))
+    }
+
+    @Test
+    fun `newest native tab breaks background duplicate URL tie`() {
+        val tabs = listOf(
+            DetectorTabCandidate("old", "https://site.example/watch"),
+            DetectorTabCandidate("new", "https://site.example/watch"),
+        )
+        tracker.registerCreatedTab("old", "https://site.example/watch", null)
+        tracker.registerCreatedTab("new", "https://site.example/watch", null)
+        assertEquals("new", tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, null))
+    }
+
+    @Test
+    fun `closed detector cannot rebind and old epoch close cannot retire current binding`() {
+        val tabs = listOf(DetectorTabCandidate("tab", "https://site.example/watch"))
+        tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, "tab")
+        assertNull(tracker.forgetDetectorTab(9L, 9))
+        assertEquals("tab", tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, "tab"))
+        assertEquals("tab", tracker.forgetDetectorTab(10L, 9))
+        assertNull(tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, "tab"))
+        assertEquals("tab", tracker.resolve(11L, 9, listOf("https://site.example/watch"), tabs, "tab"))
+    }
+
+    @Test
+    fun `blank unrelated selected tab does not receive an unknown detector`() {
+        val tabs = listOf(
+            DetectorTabCandidate("opener", "https://site.example/watch"),
+            DetectorTabCandidate("blank", "about:blank"),
+        )
+        tracker.registerCreatedTab("blank", "about:blank", null)
+        assertNull(tracker.resolve(10L, 9, listOf("https://ads.example/popup"), tabs, "blank"))
+    }
+
+    @Test
+    fun `close in newer epoch fences late messages even before hello`() {
+        val tabs = listOf(DetectorTabCandidate("tab", "https://site.example/watch"))
+        tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, "tab")
+        org.junit.Assert.assertTrue(tracker.acceptEpoch(11L))
+        assertNull(tracker.forgetDetectorTab(11L, 12))
+        assertNull(tracker.resolve(11L, 12, listOf("https://site.example/watch"), tabs, "tab"))
+        assertNull(tracker.resolve(10L, 9, listOf("https://site.example/watch"), tabs, "tab"))
+    }
+
+    @Test
+    fun `message for tab just pruned cannot bind another tab with its URL`() {
+        val original = listOf(DetectorTabCandidate("closed", "https://site.example/watch"))
+        tracker.resolve(10L, 9, listOf("https://site.example/watch"), original, "closed")
+        val remaining = listOf(DetectorTabCandidate("remaining", "https://site.example/watch"))
+        assertNull(tracker.resolve(10L, 9, listOf("https://site.example/watch"), remaining, "remaining"))
+        assertEquals("remaining", tracker.resolve(10L, 12, listOf("https://site.example/watch"), remaining, "remaining"))
+    }
+
 }
