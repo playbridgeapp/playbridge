@@ -3,6 +3,38 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.0] — 2026-10-13 (versionCode 229)
+
+> **Works best together**: Player Home, the TV-reported Loop switch, browser fullscreen state, and typing and fullscreen inside embedded web players need the next PlayBridge TV Player update. Older TVs keep working: those controls stay hidden or use the older behaviour. Full Android TV control works with any Android TV or Google TV, whether or not PlayBridge is installed on it.
+
+### Added
+- **Android TV full control**: Pair directly with any Android TV or Google TV using the on-screen code to control the directional pad, Home, Back, volume level, the keyboard, and open apps.
+- **Paired TVs settings**: View, manage, and remove paired televisions from Settings → TV.
+- **Remote keyboard**: Type directly into focused search and text fields on the TV from a keyboard sheet that stays positioned above the soft keyboard.
+- **Remote haptics**: Feel tactile vibration feedback on remote presses, with customizable intensity (light, medium, or strong) in Settings → TV → Remote.
+- **Button pad**: Switch between the directional swipe pad and traditional arrow buttons directly from the on-pad toggle.
+- **Up next queue**: View upcoming items with watched and progress state, or open the All sheet with season tabs to jump ahead or manage the queue.
+
+### Changed
+- **Remote redesign**: The remote adapts cleanly across portrait and landscape, replacing separate transport controls with a unified wave seek bar for playback, seeking, and volume while hiding the pad during video playback.
+- **TV context header**: The remote header dynamically displays current television activity (such as Watching, Listening, Browsing, or Viewing) with clear audio and subtitle track names.
+- **Swipe pad stepping**: The gesture pad steps cleanly by distance with stationary hold-to-repeat, replacing velocity flicking.
+- **Player controls**: The player's Loop control is a switch when the TV reports its loop state, and Home from the player returns the TV to PlayBridge's idle screen on TVs that support it.
+- **Browser fullscreen**: The remote follows the TV browser's fullscreen state, including when you leave fullscreen with the TV's Back button. Fullscreen fills the screen with the video, even inside embedded players, and keeps the site's own player controls.
+- **Browser typing**: Text typed from the phone goes to PlayBridge's TV browsers over the PlayBridge connection, even while Full control is connected, and reaches search and text fields inside embedded players and in fullscreen.
+
+### Fixed
+- **Android TV pairing storage**: Pairings are saved safely. If a save or removal fails, the remote shows "Couldn't save the pairing" or "Couldn't remove the TV" with a retry, and if a saved pairing can't be read, it asks you to pair again.
+- **In-app browser keyboard**: Web pages and Bridged Apps keep focused input fields visible above the soft keyboard when typing, including login and password fields.
+- **Browser fullscreen toggle**: The browser fullscreen action tracks the page's actual display state so restoring windowed mode works reliably.
+- **Player-to-browser transitions**: Switching from the video player to the TV browser immediately clears stale titles, playlists, and seek bars from the remote.
+- **Roku playback**: A stale stop command no longer interrupts newer media loads.
+
+### Security
+- **Browser engine upgrade**: Updated GeckoView to version 157 and Android Components to 157.0.1, incorporating upstream security patches.
+- **Pairing credential encryption**: Android TV credentials are encrypted at rest using AES-GCM via the Android Keystore and excluded from cloud backups and device migration.
+- **Log privacy**: Release builds no longer write media titles, stream URLs, pairing codes, or typed text to device logs.
+
 ## [0.15.0] — 2026-10-09 (versionCode 228)
 
 ### Added
