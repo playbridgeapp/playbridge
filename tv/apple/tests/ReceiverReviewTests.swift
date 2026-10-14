@@ -684,4 +684,110 @@ private func runPlayerSettingsTests() {
     assert(outcome(loopOn: true, hasNextItem: true, identity: mpvIdentity) == "ignored")
 
     print("PASS: player settings snapshot, loop, engine switch, resync, and stale engine")
+
+    // ReceiverCapabilities descriptor tests
+    let descriptor = TvCapabilities.currentDescriptor
+    assert(descriptor["version"] as? Int == 1, "Descriptor version must be 1")
+
+    // 1. Host
+    let host = descriptor["host"] as? [String: Any]
+    assert(host?["osFamily"] as? String == "tvos", "Host osFamily must be tvos")
+    assert(host?["deviceClass"] as? String == "tv", "Host deviceClass must be tv")
+
+    // 2. Volume and CompanionHints
+    assert(descriptor["volume"] == nil, "Volume block must be omitted until Step 4c app volume")
+    assert(descriptor["companionHints"] == nil, "Companion hints must be omitted for Apple TV")
+
+    // 3. Surfaces & Engines
+    guard let surfaces = descriptor["surfaces"] as? [String: Any] else {
+        fatalError("descriptor.surfaces missing")
+    }
+    assert(Set(surfaces.keys) == ["player"], "Only player surface must be declared")
+    guard let playerSurface = surfaces["player"] as? [String: Any],
+          let engines = playerSurface["engines"] as? [String: Any] else {
+        fatalError("player.engines missing")
+    }
+    assert(Set(engines.keys) == ["avplayer", "mpv"], "Must advertise both avplayer and mpv engines")
+
+    let expectedTransport = ["play", "pause", "toggle", "stop", "seek_absolute", "seek_relative"]
+    let expectedKeys = ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"]
+    let expectedSettings = ["loop", "engine"]
+    let expectedTracks = ["audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add"]
+    let expectedQueue = ["replace", "append", "jump_index", "jump_item", "remove", "move", "clear"]
+    let expectedReporting = ["status", "context", "tracks", "playlist_status", "player_settings"]
+
+    for engineName in ["avplayer", "mpv"] {
+        guard let engineCaps = engines[engineName] as? [String: Any] else {
+            assertionFailure("Missing capabilities for engine \(engineName)")
+            continue
+        }
+        assert(engineCaps["transport"] as? [String] == expectedTransport, "Transport operations match")
+        assert(engineCaps["keys"] as? [String] == expectedKeys, "Key operations match")
+        assert(engineCaps["settings"] as? [String] == expectedSettings, "Settings operations match")
+        assert(engineCaps["tracks"] as? [String] == expectedTracks, "Track operations match")
+        assert(engineCaps["queue"] as? [String] == expectedQueue, "Queue operations match")
+        assert(engineCaps["reporting"] as? [String] == expectedReporting, "Reporting operations match")
+
+        // Verified non-presence of unhandled operation categories
+        assert(engineCaps["pointer"] == nil, "Apple TV player must not declare pointer")
+        assert(engineCaps["text"] == nil, "Apple TV player must not declare text")
+        assert(engineCaps["imageTransforms"] == nil, "Apple TV player must not declare imageTransforms")
+        assert(engineCaps["browser"] == nil, "Apple TV player must not declare browser")
+    }
+
+    // 4. Auth response and credential bundle carry identical descriptor
+    let certFp = "sha256/test_fingerprint_hash"
+    let token = "test_token_sample"
+    let authResponse = TvCapabilities.buildAuthResponsePayload(certFingerprint: certFp)
+    let credentialBundle = TvCapabilities.buildCredentialBundlePayload(token: token, certFingerprint: certFp)
+
+    let authCaps = authResponse["capabilities"] as? [String: Any]
+    let bundleCaps = credentialBundle["capabilities"] as? [String: Any]
+    assert(authCaps != nil, "Auth response contains capabilities")
+    assert(bundleCaps != nil, "Credential bundle contains capabilities")
+
+    let authCapsData = try! JSONSerialization.data(withJSONObject: authCaps!, options: [.sortedKeys])
+    let bundleCapsData = try! JSONSerialization.data(withJSONObject: bundleCaps!, options: [.sortedKeys])
+    assert(authCapsData == bundleCapsData, "Auth response and credential bundle must carry identical descriptor")
+
+    // 5. Legacy fields unchanged
+    assert(authResponse["type"] as? String == "auth_response")
+    assert(authResponse["success"] as? Bool == true)
+    assert(authResponse["certFingerprint"] as? String == certFp)
+    assert(authResponse["players"] as? [String] == ["avplayer", "mpv"])
+    assert(authResponse["features"] as? [String] == TvCapabilities.defaultFeatures)
+    assert(authResponse["browsers"] == nil, "Browsers must not be added to Apple TV auth")
+    assert(authResponse["mediaKinds"] == nil, "mediaKinds must not be added to Apple TV auth")
+    assert(authResponse["screenMirrorWebRtc"] == nil, "screenMirrorWebRtc must not be added to Apple TV auth")
+
+    assert(credentialBundle["token"] as? String == token)
+    assert(credentialBundle["certFingerprint"] as? String == certFp)
+    assert(credentialBundle["players"] as? [String] == ["avplayer", "mpv"])
+    assert(credentialBundle["features"] as? [String] == TvCapabilities.defaultFeatures)
+    assert(credentialBundle["browsers"] == nil)
+    assert(credentialBundle["mediaKinds"] == nil)
+    assert(credentialBundle["screenMirrorWebRtc"] == nil)
+
+    // 6. Byte identity of existing fields when capabilities is stripped
+    let legacyAuth = TvCapabilities.buildAuthResponsePayload(certFingerprint: certFp, capabilities: nil)
+    var strippedAuth = authResponse
+    strippedAuth.removeValue(forKey: "capabilities")
+    let legacyAuthData = try! JSONSerialization.data(withJSONObject: legacyAuth, options: [.sortedKeys])
+    let strippedAuthData = try! JSONSerialization.data(withJSONObject: strippedAuth, options: [.sortedKeys])
+    assert(legacyAuthData == strippedAuthData, "Auth response existing fields are identical when capabilities stripped")
+
+    let legacyBundle = TvCapabilities.buildCredentialBundlePayload(token: token, certFingerprint: certFp, capabilities: nil)
+    var strippedBundle = credentialBundle
+    strippedBundle.removeValue(forKey: "capabilities")
+    let legacyBundleData = try! JSONSerialization.data(withJSONObject: legacyBundle, options: [.sortedKeys])
+    let strippedBundleData = try! JSONSerialization.data(withJSONObject: strippedBundle, options: [.sortedKeys])
+    assert(legacyBundleData == strippedBundleData, "Credential bundle existing fields are identical when capabilities stripped")
+
+    // Also test without certFingerprint (optional field)
+    let authNoFp = TvCapabilities.buildAuthResponsePayload(certFingerprint: nil)
+    assert(authNoFp["certFingerprint"] == nil)
+    let bundleNoFp = TvCapabilities.buildCredentialBundlePayload(token: token, certFingerprint: nil)
+    assert(bundleNoFp["certFingerprint"] == nil)
+
+    print("PASS: receiver capabilities descriptor shape, both engines, identical auth/bundle descriptor, and legacy field preservation")
 }

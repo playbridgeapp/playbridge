@@ -749,12 +749,10 @@ class WebSocketServer: ObservableObject {
                 length: 32
             )
             let credentialNonce = SasCrypto.generateNonce(size: 12)
-            var credentials: [String: Any] = [
-                "token": token,
-                "players": Self.capabilityPlayers,
-                "features": Self.capabilityFeatures,
-            ]
-            if let fp = certFingerprint { credentials["certFingerprint"] = fp }
+            let credentials = TvCapabilities.buildCredentialBundlePayload(
+                token: token,
+                certFingerprint: certFingerprint
+            )
             let plaintext = try JSONSerialization.data(withJSONObject: credentials)
             let ciphertext = try SasCrypto.aesGcmEncrypt(
                 key: credentialKey,
@@ -809,7 +807,8 @@ class WebSocketServer: ObservableObject {
     /// shows "TV Default" + AVPlayer + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
     static let capabilityPlayers = PlaybackEngine.capabilityPlayers
-    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1"]
+    static let capabilityFeatures = TvCapabilities.defaultFeatures
+    static let capabilitiesDescriptor = TvCapabilities.currentDescriptor
 
     /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
     /// `remote` key (userInfo["key"]). The active player view observes these.
@@ -904,10 +903,9 @@ class WebSocketServer: ObservableObject {
             self.connectedCount = self.connectedConnections.count
             if sendAuthResponse {
                 // Safe on reconnect: the sender has already pinned this TLS identity.
-                var response: [String: Any] = ["type": "auth_response", "success": true]
-                if let fp = self.certFingerprint { response["certFingerprint"] = fp }
-                response["players"] = Self.capabilityPlayers
-                response["features"] = Self.capabilityFeatures
+                let response = TvCapabilities.buildAuthResponsePayload(
+                    certFingerprint: self.certFingerprint
+                )
                 self.send(json: response, to: connection)
             }
             // Re-sync now-playing for a client that connected mid-playback: context + a nudge

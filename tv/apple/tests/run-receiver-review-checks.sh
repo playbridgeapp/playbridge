@@ -20,5 +20,6 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Player/ExternalSubtitleCatalog.swift" \
   "$source_root/Player/ExternalSubtitleDownload.swift" \
   "$source_root/Player/ExternalSubtitleCues.swift" \
+  "$source_root/Network/TvCapabilities.swift" \
   "$repo_root/tv/apple/tests/ReceiverReviewTests.swift" -o "$test_dir/check"
 "$test_dir/check" "$repo_root/protocol/tests/fixtures/receiver-capabilities"
