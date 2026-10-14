@@ -289,8 +289,7 @@ class BrowserActivity : ComponentActivity() {
     /** Phone restore and TV Back leave native chrome and the in-frame fill together. */
     private fun exitAnyFullscreen() {
         val native = isGeckoFullscreen
-        val scripted = engine?.isFrameFillActive() == true || engine?.isNativeClaimActive() == true
-        if (native || scripted) engine?.videoRestore()
+        engine?.videoRestore()
         if (native) exitGeckoFullscreen()
     }
 
@@ -557,6 +556,11 @@ class BrowserActivity : ComponentActivity() {
             "scroll" -> {
                 engine?.scrollBy(dx, dy)
             }
+            "zoom" -> {
+                val view = engine?.getView() ?: return
+                engine?.zoomBy(dx, cursorX / view.width.coerceAtLeast(1), cursorY / view.height.coerceAtLeast(1))
+            }
+            "reset" -> engine?.resetPageZoom()
             "down" -> {
                 // Start a click-drag: send ACTION_DOWN and remember the time
                 showCursorAndResetTimer()
@@ -757,7 +761,7 @@ class BrowserActivity : ComponentActivity() {
             }
             "refresh" -> engine?.reload()
             "maximize_video" -> engine?.videoMaximize(isGeckoFullscreen)
-            "restore_video" -> engine?.videoRestore()
+            "restore_video" -> exitAnyFullscreen()
         }
     }
 

@@ -12,6 +12,10 @@ const read = file => fs.readFileSync(file, 'utf8');
 function content() {
     const sent = [], events = {}, intervals = [];
     let receive;
+    const listen = (name, fn) => {
+        const previous = events[name];
+        events[name] = (...args) => { if (previous) previous(...args); fn(...args); };
+    };
     const video = {
         paused: true, currentTime: 20, duration: 100, volume: 0.5, muted: true, playbackRate: 1,
         getBoundingClientRect: () => ({ width: 100, height: 100, left: 0, top: 0, right: 100, bottom: 100 }),
@@ -26,11 +30,11 @@ function content() {
         document: {
             title: 'Video', documentElement: { clientWidth: 100, clientHeight: 100 },
             querySelectorAll: query => query === 'video' ? [video] : [],
-            addEventListener: (name, fn) => { events[name] = fn; }
+            addEventListener: listen
         },
         setInterval: fn => intervals.push(fn),
         innerWidth: 100, innerHeight: 100,
-        addEventListener: (name, fn) => { events[name] = fn; }
+        addEventListener: listen
     });
     context.window = context;
     vm.runInContext(read(path.join(assets, 'content.js')), context);
@@ -273,6 +277,10 @@ function stylable(extra) {
         setAttribute(name, value) { if (name === 'style') this._styleAttr = value; },
         removeAttribute(name) { if (name === 'style') { this._styleAttr = null; this._removedStyle = true; } },
         querySelectorAll() { return []; },
+        contains(node) {
+            for (let el = node; el; el = el.parentElement) if (el === this) return true;
+            return false;
+        },
     }, extra);
 }
 
@@ -293,6 +301,7 @@ function loadMaximize(setup) {
     const context = vm.createContext({
         document,
         Promise,
+        navigator: { userActivation: { isActive: true } },
         setInterval: () => 0,
         setTimeout: (fn) => { timers.push(fn); return timers.length; },
         clearTimeout: (id) => { if (typeof id === 'number') timers[id - 1] = null; },
@@ -304,6 +313,11 @@ function loadMaximize(setup) {
     context.window = context;
     context.parent = { postMessage: message => parentPosts.push(message) };
     setup(context, document);
+    // Successful native-request mocks expose the same DOM truth as a browser.
+    const nodes = [...document.querySelectorAll('video'), ...document.querySelectorAll('iframe')];
+    nodes.forEach(node => {
+        for (let el = node; el && el !== document.body; el = el.parentElement) el.ownerDocument = document;
+    });
     vm.runInContext(read(controller), context);
     const flushTimers = () => {
         const due = timers.splice(0, timers.length);
@@ -339,7 +353,7 @@ test('maximize clicks the site fullscreen button and a repeat does not click aga
             id: 'movie_player',
             className: 'html5-video-player',
             querySelectorAll: query => (query === 'button,[role="button"],a' ? [button] : []),
-            requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+            requestFullscreen() { calls.push('shell'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
             getBoundingClientRect: box(100, 100),
         });
         shell.parentElement = document.body;
@@ -347,7 +361,7 @@ test('maximize clicks the site fullscreen button and a repeat does not click aga
             paused: false,
             parentElement: shell,
             getBoundingClientRect: box(100, 100),
-            requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+            requestFullscreen() { calls.push('video'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
         });
         ctx.parent = ctx;
         document.querySelectorAll = query => (query === 'video' ? [video] : []);
@@ -377,7 +391,7 @@ test('a site button that engages on the next turn still wins over requestFullscr
         const shell = stylable({
             className: 'video-js',
             querySelectorAll: query => (query === 'button,[role="button"],a' || query === 'button,[role="button"],input' ? [button] : []),
-            requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+            requestFullscreen() { calls.push('shell'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
             getBoundingClientRect: box(100, 108),
         });
         shell.parentElement = document.body;
@@ -385,10 +399,10 @@ test('a site button that engages on the next turn still wins over requestFullscr
         const video = stylable({
             parentElement: shell,
             getBoundingClientRect: box(100, 100),
-            requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+            requestFullscreen() { calls.push('video'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
         });
         document.querySelectorAll = query => (query === 'video' ? [video] : []);
-        ctx.__arm = () => { shell.className = 'video-js vjs-fullscreen'; };
+        ctx.__arm = () => { shell.className = 'video-js vjs-fullscreen'; document.fullscreenElement = shell; };
     });
     assert.equal(page.context.__pbvc.maximize(), 'pending');
     assert.deepEqual(calls, []);
@@ -405,13 +419,13 @@ test('fullscreen targets the player container that holds the controls', async ()
     const shell = stylable({
         className: 'video-js',
         querySelectorAll: query => (query === 'button,[role="button"],input' || query === 'button,[role="button"],a' ? [seek] : []),
-        requestFullscreen() { calls.push('shell'); return Promise.resolve(); },
+        requestFullscreen() { calls.push('shell'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
         getBoundingClientRect: box(100, 108),
     });
     const inner = stylable({
         className: 'html5-video-container',
         parentElement: shell,
-        requestFullscreen() { calls.push('inner'); return Promise.resolve(); },
+        requestFullscreen() { calls.push('inner'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
         getBoundingClientRect: box(100, 100),
     });
     const video = stylable({
@@ -419,7 +433,7 @@ test('fullscreen targets the player container that holds the controls', async ()
         controls: false,
         parentElement: inner,
         getBoundingClientRect: box(100, 100),
-        requestFullscreen() { calls.push('video'); return Promise.resolve(); },
+        requestFullscreen() { calls.push('video'); this.ownerDocument.fullscreenElement = this; return Promise.resolve(); },
     });
     const page = loadMaximize((ctx, document) => {
         shell.parentElement = document.body;
@@ -699,4 +713,302 @@ test('focus command is delivered to every reported frame', async () => {
     await main.events.native({ type: 'focus_cmd', op: 'enter' });
     assert.equal(main.delivered.length, 1);
     assert.equal(main.delivered[0][2].frameId, 0);
+});
+
+
+function remoteFullscreenPage(request = () => Promise.reject(new Error('no activation'))) {
+    let clicks = 0;
+    let requests = 0;
+    const page = loadMaximize((ctx, document) => {
+        ctx.parent = ctx;
+        ctx.navigator.userActivation.isActive = false;
+        const button = { tagName: 'BUTTON', className: 'vjs-fullscreen-control', getAttribute: () => '',
+            click() { clicks++; } };
+        const shell = stylable({ className: 'player fullscreen-wrapper',
+            getBoundingClientRect: box(80, 80),
+            querySelectorAll: query => query.includes('button') ? [button] : [],
+            requestFullscreen() { requests++; return request.call(this, document); },
+            parentElement: document.body });
+        const video = stylable({ paused: false, parentElement: shell, getBoundingClientRect: box(80, 80) });
+        document.querySelectorAll = query => query === 'video' ? [video] : [];
+        ctx.__shell = shell;
+        ctx.__video = video;
+    });
+    return Object.assign(page, { clicks: () => clicks, requests: () => requests });
+}
+
+test('fullscreen class names cannot claim native fullscreen; denied remote toggles repeat without a click', async () => {
+    const page = remoteFullscreenPage();
+    for (let i = 0; i < 3; i++) {
+        assert.equal(page.context.__pbvc.maximize(), 'pending');
+        assert.equal(page.context.__pbvc.maximize(), 'pending');
+        await settle();
+        assert.equal(resultsOf(page.posts).at(-1).value, 'ok_fill');
+        assert.equal(page.context.__shell._props.position, 'fixed');
+        assert.equal(page.context.__video.paused, false);
+        assert.equal(page.context.__pbvc.maximize(), 'ok_held');
+        assert.equal(page.context.__pbvc.restore(), 'ok');
+        assert.equal(page.context.__shell.__pbFit, false);
+        assert.equal(page.document.fullscreenElement, null);
+        assert.equal(page.clicks(), 0);
+        assert.equal(page.requests(), i + 1);
+    }
+});
+
+test('restore with a stale site state cannot click a toggle into fullscreen', () => {
+    let clicks = 0;
+    const page = remoteFullscreenPage();
+    page.context.navigator.userActivation.isActive = true;
+    const shell = page.context.__shell;
+    shell.querySelectorAll = () => [{ tagName: 'BUTTON', className: 'vjs-fullscreen-control', getAttribute: () => '',
+        click() { clicks++; page.document.fullscreenElement = shell; } }];
+    assert.equal(page.context.__pbvc.maximize(), 'ok_site');
+    assert.equal(clicks, 1);
+    page.document.fullscreenElement = null; // Browser/site exited before an event reached us.
+    assert.equal(page.context.__pbvc.restore(), 'ok');
+    assert.equal(clicks, 1);
+    assert.equal(page.document.fullscreenElement, null);
+});
+
+test('a fulfilled request without a fullscreen element still uses CSS fill', async () => {
+    const page = remoteFullscreenPage(() => Promise.resolve());
+    page.context.__pbvc.maximize();
+    await settle();
+    assert.equal(resultsOf(page.posts).at(-1).value, 'ok_fill');
+    assert.equal(page.document.fullscreenElement, null);
+});
+
+test('failed CSS fill cannot report fullscreen success', async () => {
+    const page = remoteFullscreenPage();
+    page.context.__shell.style.setProperty = () => { throw new Error('detached style'); };
+    page.context.__pbvc.maximize();
+    await settle();
+    assert.equal(resultsOf(page.posts).at(-1).value, 'no_video');
+});
+
+test('restore cancels a pending denied request without ghost fullscreen', async () => {
+    let reject;
+    const page = remoteFullscreenPage(() => new Promise((resolve, fail) => { reject = fail; }));
+    page.context.__pbvc.maximize();
+    page.context.__pbvc.restore();
+    reject(new Error('denied'));
+    await settle();
+    assert.equal(resultsOf(page.posts).at(-1).kind, 'restore');
+    assert.equal(page.context.__shell.__pbFit, undefined);
+});
+
+test('restore exits a native request that settles late', async () => {
+    let resolve;
+    const page = remoteFullscreenPage(() => new Promise(done => { resolve = done; }));
+    page.context.__pbvc.maximize();
+    page.context.__pbvc.restore();
+    page.document.fullscreenElement = page.context.__shell;
+    resolve();
+    await settle();
+    assert.equal(page.document.fullscreenElement, null);
+    assert.equal(resultsOf(page.posts).at(-1).kind, 'restore');
+});
+
+test('an existing real DOM fullscreen element reports confirmed native mode', () => {
+    const page = remoteFullscreenPage();
+    page.document.fullscreenElement = page.context.__shell;
+    assert.equal(page.context.__pbvc.maximize(), 'ok_video');
+    assert.equal(page.requests(), 0);
+    assert.equal(page.clicks(), 0);
+});
+
+test('scroll retains playing title, duration, seek route and frame score while offscreen', () => {
+    const c = content();
+    c.video.paused = false;
+    c.events.play();
+    c.sent.length = 0;
+    c.video.getBoundingClientRect = box(100, 100, -200);
+    c.events.scroll();
+    c.intervals[0]();
+    const data = c.sent.map(message => JSON.parse(message.data));
+    assert.ok(data.every(message => message.type !== 'active' || message.active));
+    assert.ok(data.filter(message => message.type === 'active').every(message => message.score === 10000));
+    const status = data.find(message => message.type === 'status');
+    assert.equal(status.state, 'playing');
+    assert.equal(status.title, 'Video');
+    assert.equal(status.position, 20000);
+    assert.equal(status.duration, 100000);
+    c.receive({ type: 'video_cmd', documentId: 'doc-1', cmd: 'seekto,50' });
+    assert.equal(c.video.currentTime, 50);
+});
+
+test('paused offscreen media can resume but removing the element clears status', () => {
+    const c = content();
+    c.video.getBoundingClientRect = box(100, 100, -200);
+    c.events.scroll();
+    c.intervals[0]();
+    assert.equal(JSON.parse(c.sent.at(-1).data).state, 'paused');
+    c.receive({ type: 'video_cmd', documentId: 'doc-1', cmd: 'toggle' });
+    assert.equal(c.video.paused, false);
+    c.sent.length = 0;
+    c.context.document.querySelectorAll = () => [];
+    c.events.scroll();
+    assert.equal(JSON.parse(c.sent.at(-1).data).state, 'idle');
+    assert.ok(c.sent.some(message => JSON.parse(message.data).active === false));
+});
+
+test('an unseen playing video cannot acquire control, and a visible ad cannot replace the offscreen incumbent', () => {
+    const c = content();
+    c.video.paused = false;
+    c.events.play();
+    c.video.getBoundingClientRect = box(100, 100, -200);
+    const ad = { paused: false, currentTime: 1, duration: 5, getBoundingClientRect: box(100, 100) };
+    c.context.document.querySelectorAll = query => query === 'video' ? [c.video, ad] : [];
+    c.events.scroll();
+    c.intervals[0]();
+    assert.equal(JSON.parse(c.sent.at(-1).data).duration, 100000);
+    c.context.document.querySelectorAll = query => query === 'video' ? [ad] : [];
+    ad.getBoundingClientRect = box(100, 100, -200);
+    c.events.scroll();
+    assert.equal(JSON.parse(c.sent.at(-1).data).state, 'idle');
+});
+
+function zoomPageFixture(originalZoom = '', originalPriority = '') {
+    const frames = new Map();
+    const changes = [];
+    let frameId = 0;
+    let page;
+    page = loadMaximize((ctx, document) => {
+        ctx.parent = ctx;
+        ctx.scrollX = 20; ctx.scrollY = 40;
+        ctx.CSS = { supports: () => true };
+        const props = new Map(originalZoom ? [['zoom', originalZoom]] : []);
+        const priorities = new Map(originalZoom ? [['zoom', originalPriority]] : []);
+        document.documentElement = {
+            style: {
+                setProperty(name, value, priority) { props.set(name, value); priorities.set(name, priority); changes.push(Number(value)); },
+                removeProperty(name) { props.delete(name); priorities.delete(name); },
+                getPropertyValue: name => props.get(name) || '',
+                getPropertyPriority: name => priorities.get(name) || '',
+            },
+            getBoundingClientRect: () => ({ left: -ctx.scrollX, top: -ctx.scrollY }),
+        };
+        ctx.getComputedStyle = () => ({ zoom: originalZoom || '1' });
+        ctx.requestAnimationFrame = fn => { frames.set(++frameId, fn); return frameId; };
+        ctx.cancelAnimationFrame = id => frames.delete(id);
+        ctx.scrollTo = point => { ctx.scrollX = point.left; ctx.scrollY = point.top; };
+    });
+    const flush = () => {
+        let count = 0;
+        while (frames.size) {
+            assert.ok(++count < 500, 'zoom must settle');
+            const due = [...frames.values()]; frames.clear(); due.forEach(fn => fn());
+        }
+    };
+    return Object.assign(page, { frames, flush, changes });
+}
+
+test('zoom accumulates relative factors once per frame and converges smoothly to bounded targets', () => {
+    const page = zoomPageFixture();
+    assert.equal(page.context.__pbvc.zoomPage(2, 0.3, 0.75), 'ok');
+    assert.equal(page.context.__pbvc.zoomPage(1.5, 0.3, 0.75), 'ok');
+    assert.equal(page.frames.size, 1);
+    assert.equal(page.changes.length, 0);
+    page.flush();
+    assert.equal(Number(page.document.documentElement.style.getPropertyValue('zoom')), 3);
+    page.changes.forEach((value, i) => assert.ok(value / (page.changes[i - 1] || 1) <= Math.exp(0.12) + 1e-9));
+    page.context.__pbvc.zoomPage(100, 0.5, 0.5); page.flush();
+    assert.equal(Number(page.document.documentElement.style.getPropertyValue('zoom')), 3);
+    page.context.__pbvc.zoomPage(0.001, 0.5, 0.5); page.flush();
+    assert.equal(Number(page.document.documentElement.style.getPropertyValue('zoom')), 0.5);
+});
+
+test('zoom preserves the cursor focal point and a site-provided zoom on reset', () => {
+    const page = zoomPageFixture();
+    page.context.__pbvc.zoomPage(1.2, 0.3, 0.75); page.flush();
+    assert.ok(Math.abs((page.context.scrollX + 30) / 1.2 - 50) < 1e-8);
+    assert.ok(Math.abs((page.context.scrollY + 75) / 1.2 - 115) < 1e-8);
+    page.context.__pbvc.resetPageZoom();
+    assert.equal(page.document.documentElement.style.getPropertyValue('zoom'), '');
+    const styled = zoomPageFixture('0.8', 'important');
+    styled.context.__pbvc.zoomPage(1.5, 0.5, 0.5); styled.flush();
+    assert.ok(Math.abs(Number(styled.document.documentElement.style.getPropertyValue('zoom')) - 1.2) < 1e-8);
+    styled.context.__pbvc.resetPageZoom();
+    assert.equal(styled.document.documentElement.style.getPropertyValue('zoom'), '0.8');
+    assert.equal(styled.document.documentElement.style.getPropertyPriority('zoom'), 'important');
+});
+
+test('zoom rejects invalid factors, unsupported CSS and child-frame application', () => {
+    const page = zoomPageFixture();
+    for (const factor of [0, -1, NaN, Infinity, '1.5']) assert.equal(page.context.__pbvc.zoomPage(factor, 0.5, 0.5), 'invalid');
+    assert.equal(page.context.__pbvc.zoomPage(1, NaN, 0), 'invalid');
+    assert.equal(page.frames.size, 0);
+    page.context.CSS.supports = () => false;
+    assert.equal(page.context.__pbvc.zoomPage(1.5, 0.5, 0.5), 'unsupported');
+    page.context.CSS.supports = () => true;
+    page.context.parent = {};
+    assert.equal(page.context.__pbvc.zoomPage(1.5, 0.5, 0.5), 'unsupported');
+});
+
+test('reset and pagehide cancel pending zoom without changing other styles', () => {
+    const page = zoomPageFixture();
+    page.document.documentElement.style.setProperty('color', 'red', '');
+    page.context.__pbvc.zoomPage(1.5, 0.5, 0.5);
+    const pending = [...page.frames.values()][0];
+    page.context.__pbvc.resetPageZoom();
+    pending(); // A stale callback that could not be cancelled must also be harmless.
+    assert.equal(page.document.documentElement.style.getPropertyValue('zoom'), '');
+    assert.equal(page.document.documentElement.style.getPropertyValue('color'), 'red');
+    page.context.__pbvc.zoomPage(1.5, 0.5, 0.5); page.flush();
+    page.listeners.window.pagehide.forEach(fn => fn());
+    assert.equal(page.document.documentElement.style.getPropertyValue('zoom'), '');
+    assert.equal(page.frames.size, 0);
+});
+
+
+test('a previously expanded ancestor iframe remains a successful fill without another native request', () => {
+    let calls = 0;
+    const child = { postMessage() {} };
+    const iframe = stylable({ offsetWidth: 100, offsetHeight: 100, contentWindow: child,
+        requestFullscreen() { calls++; return Promise.reject(new Error('denied')); } });
+    const page = loadMaximize((ctx, document) => {
+        ctx.parent = ctx;
+        document.querySelectorAll = query => query === 'iframe' ? [iframe] : [];
+    });
+    page.listeners.window.message.forEach(fn => fn({ data: { pb: 'pb-frame-fit', op: 'enter' }, source: child }));
+    assert.equal(calls, 1);
+    assert.equal(page.context.__pbvc.maximize(), 'ok_iframe');
+    assert.equal(calls, 1);
+});
+
+test('ending offscreen playback retires the playing pin and clears the seekbar', () => {
+    const c = content();
+    c.video.paused = false;
+    c.events.play();
+    c.video.getBoundingClientRect = box(100, 100, -200);
+    c.events.scroll();
+    c.sent.length = 0;
+    c.video.ended = true;
+    c.video.paused = true;
+    c.events.ended();
+    assert.ok(c.sent.some(message => JSON.parse(message.data).active === false));
+    assert.equal(JSON.parse(c.sent.at(-1).data).state, 'idle');
+});
+
+test('legacy WebView status bridge also retains playing media after scroll', () => {
+    const statuses = [], active = [], intervals = [], events = {};
+    const video = { paused: false, currentTime: 12, duration: 90, muted: false, getBoundingClientRect: box(100, 100) };
+    const ctx = vm.createContext({
+        document: { title: 'Legacy video', documentElement: {},
+            querySelectorAll: query => query === 'video' ? [video] : [],
+            addEventListener(name, fn) { (events[name] ||= []).push(fn); } },
+        innerWidth: 100, innerHeight: 100,
+        PBVideoNative: { setActive: value => active.push(value), onStatus: value => statuses.push(JSON.parse(value)) },
+        setInterval: fn => intervals.push(fn),
+        addEventListener(name, fn) { (events[name] ||= []).push(fn); },
+    });
+    ctx.window = ctx; ctx.parent = ctx;
+    vm.runInContext(read(controller), ctx);
+    video.getBoundingClientRect = box(100, 100, -200);
+    events.scroll.forEach(fn => fn());
+    intervals[0]();
+    assert.deepEqual(active, [true]);
+    assert.equal(statuses.at(-1).title, 'Legacy video');
+    assert.equal(statuses.at(-1).duration, 90000);
+    assert.equal(statuses.at(-1).state, 'playing');
 });
