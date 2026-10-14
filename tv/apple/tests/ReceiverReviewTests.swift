@@ -284,5 +284,282 @@ struct ReceiverReviewTests {
         assert(srt.text(at: 2) == "Hi")
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
+
+        runRemoteNavigationTests()
     }
+}
+
+private func pumpMain() {
+    let until = Date().addingTimeInterval(0.05)
+    while Date() < until {
+        RunLoop.current.run(mode: .default, before: until)
+    }
+}
+
+private func runRemoteNavigationTests() {
+    let overlays: [(String, WritableKeyPath<PlayerChromeState, Bool>, PlayerRemoteEffect)] = [
+        ("still watching", \.stillWatching, .dismissStillWatching),
+        ("subtitle menu", \.subtitleMenu, .dismissSubtitleMenu),
+        ("audio menu", \.audioMenu, .dismissAudioMenu),
+        ("engine menu", \.engineMenu, .dismissEngineMenu),
+        ("settings sheet", \.settingsSheet, .dismissSettingsSheet),
+        ("scrub", \.scrubbing, .dismissScrub),
+        ("playlist", \.playlist, .dismissPlaylist),
+        ("controls", \.controlsVisible, .dismissControls),
+    ]
+
+    for (name, path, expected) in overlays {
+        var only = PlayerChromeState(sessionMatches: true)
+        only[keyPath: path] = true
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: only)
+        assert(effect == expected, "Back should close \(name)")
+        var closed = only
+        PlayerRemoteNavigation.closing(effect, in: &closed)
+        assert(closed[keyPath: path] == false, "Back should clear \(name)")
+        assert(closed.sessionMatches, "Closing \(name) should stay in the player")
+        for (otherName, otherPath, _) in overlays where otherPath != path {
+            assert(closed[keyPath: otherPath] == false, "Closing \(name) should leave \(otherName) untouched")
+        }
+        assert(PlayerRemoteNavigation.effect(for: "home", chrome: only) == .exitPlayback,
+               "Home should leave from \(name)")
+
+        var stacked = PlayerChromeState(
+            sessionMatches: true,
+            stillWatching: true,
+            subtitleMenu: true,
+            audioMenu: true,
+            engineMenu: true,
+            settingsSheet: true,
+            scrubbing: true,
+            playlist: true,
+            controlsVisible: true
+        )
+        stacked[keyPath: path] = false
+        // The highest remaining overlay is the one Back closes.
+        if let top = overlays.first(where: { stacked[keyPath: $0.1] }) {
+            assert(PlayerRemoteNavigation.effect(for: "back", chrome: stacked) == top.2,
+                   "Back with \(name) already closed should close \(top.0)")
+        }
+    }
+
+    let everything = PlayerChromeState(
+        sessionMatches: true,
+        stillWatching: true,
+        subtitleMenu: true,
+        audioMenu: true,
+        engineMenu: true,
+        settingsSheet: true,
+        scrubbing: true,
+        playlist: true,
+        controlsVisible: true
+    )
+    var walk = everything
+    for (_, path, expected) in overlays {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: walk)
+        assert(effect == expected, "Stacked Back should close one level at a time")
+        let beforeClose = walk
+        PlayerRemoteNavigation.closing(effect, in: &walk)
+        assert(walk[keyPath: path] == false)
+        for (_, otherPath, _) in overlays where otherPath != path {
+            assert(walk[keyPath: otherPath] == beforeClose[keyPath: otherPath],
+                   "Back should leave the other overlays open")
+        }
+    }
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: walk) == .exitPlayback,
+           "Back with nothing open should exit")
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: everything) == .exitPlayback)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: PlayerChromeState(sessionMatches: true)) == .exitPlayback)
+
+    var stale = everything
+    stale.sessionMatches = false
+    let staleBefore = stale
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: stale) == .ignored)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: stale) == .ignored)
+    assert(stale == staleBefore, "A stale key leaves every overlay where it is")
+    for key in ["volume_up", "Back", "Home", ""] {
+        assert(PlayerRemoteNavigation.effect(for: key, chrome: everything) == .ignored,
+               "\(key) stays outside Back/Home")
+    }
+    print("PASS: Back closes one overlay, Home exits, stale and other keys are ignored")
+    runRemoteDirectionTests()
+
+    let gate = PlayerRemoteExitGate()
+    gate.note(engine: .avplayer, generation: 1)
+    var exits = 0
+    gate.scheduleExit(engine: .avplayer, generation: 1) { exits += 1 }
+    gate.note(engine: .mpv, generation: 2)
+    pumpMain()
+    assert(exits == 0 && !gate.didExit, "A key queued for the previous item must not exit")
+    gate.scheduleExit(engine: .mpv, generation: 2) { exits += 1 }
+    pumpMain()
+    assert(exits == 1 && gate.didExit)
+    gate.scheduleExit(engine: .mpv, generation: 2) { exits += 1 }
+    assert(gate.beginExit() == false)
+    pumpMain()
+    assert(exits == 1, "A second Home after exit must not run the owner path again")
+    print("PASS: stale generation and a repeated exit are ignored")
+
+    var events: [[String: Any]] = []
+    let webhook = PlaybackProgressWebhook(send: { _, _, data in
+        events.append(try! JSONSerialization.jsonObject(with: data) as! [String: Any])
+    })
+    webhook.configure(url: "https://example.com/progress", token: "test-token", playbackID: "cast-remote")
+    let identity: [String: Any] = ["type": "movie", "contentId": "movie", "videoId": "movie-1"]
+    webhook.sample(itemID: "movie-1", content: identity, state: "playing", position: 120_000, duration: 600_000)
+
+    let suite = "PlayBridgeTVRemoteExit.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let provider = TestHistoryKeyProvider(key: SymmetricKey(size: .bits256))
+    let store = HistoryStore(defaults: defaults, keyProvider: provider)
+    let url = URL(string: "https://example.com/remote-exit.mp4")!
+    store.addToHistory(url: url, title: "Remote", headers: nil)
+    store.updateProgress(url: url, positionMs: 120_000, durationMs: 600_000)
+    let beforeFlush = HistoryStore(defaults: defaults, keyProvider: provider)
+    assert(beforeFlush.history.first?.resumePositionMs == nil,
+           "Progress stays unsaved until the exit flush")
+
+    var progressFinishes = 0
+    var historyFlushes = 0
+    var idleBroadcasts = 0
+    let owner = PlayerRemoteExitGate()
+    owner.note(engine: .avplayer, generation: 4)
+    func ownerExit() {
+        guard owner.beginExit() else { return }
+        PlayerSessionExit.perform(
+            finishProgress: {
+                progressFinishes += 1
+                webhook.finish(clear: true)
+            },
+            flushHistory: {
+                historyFlushes += 1
+                store.flushProgress()
+            },
+            leaveToIdle: {
+                // The screen dismiss finishes progress again and publishes idle once.
+                webhook.finish(clear: true)
+                idleBroadcasts += 1
+            }
+        )
+    }
+    ownerExit()
+    ownerExit()
+    assert(progressFinishes == 1 && historyFlushes == 1 && idleBroadcasts == 1)
+    assert(events.compactMap { $0["event"] as? String } == ["started", "stopped"])
+    let afterFlush = HistoryStore(defaults: defaults, keyProvider: provider)
+    assert(afterFlush.history.first?.resumePositionMs == 120_000)
+    let saved = defaults.data(forKey: "pb_playback_history_encrypted_v1")
+    ownerExit()
+    assert(defaults.data(forKey: "pb_playback_history_encrypted_v1") == saved)
+    assert(progressFinishes == 1 && historyFlushes == 1 && idleBroadcasts == 1)
+    print("PASS: exit saves progress and history once and broadcasts idle once")
+}
+
+private func runRemoteDirectionTests() {
+    func effect(_ key: String, _ chrome: PlayerChromeState) -> PlayerRemoteEffect {
+        PlayerRemoteNavigation.effect(for: key, chrome: chrome)
+    }
+
+    func assertTransport(_ chrome: PlayerChromeState, _ name: String) {
+        assert(effect("dpad_left", chrome) == .seekBackward, "\(name) Left seeks")
+        assert(effect("dpad_right", chrome) == .seekForward, "\(name) Right seeks")
+        assert(effect("dpad_up", chrome) == .ignored, "\(name) Up stays free")
+        assert(effect("dpad_down", chrome) == .ignored, "\(name) Down stays free")
+        assert(effect("dpad_center", chrome) == .togglePlayback, "\(name) Center toggles playback")
+        assert(effect("volume_up", chrome) == .ignored, "\(name) volume stays ignored")
+    }
+
+    let menu = PlayerChromeState(sessionMatches: true, subtitleMenu: true)
+    assert(effect("dpad_up", menu) == .moveHighlight(delta: -1))
+    assert(effect("dpad_down", menu) == .moveHighlight(delta: 1))
+    assert(effect("dpad_center", menu) == .activateHighlight)
+    assert(effect("dpad_left", menu) == .seekBackward)
+    assert(effect("dpad_right", menu) == .seekForward)
+    var rows = PlayerHighlightList(count: 4, index: 1)
+    if case .moveHighlight(let delta) = effect("dpad_down", menu) { rows = rows.moving(delta) }
+    assert(rows.index == 2, "Down moves one row")
+    if case .moveHighlight(let delta) = effect("dpad_up", menu) { rows = rows.moving(delta) }
+    assert(rows.index == 1, "Up moves one row")
+    assert(PlayerHighlightList(count: 4, index: 0).moving(-1).index == 0, "Up clamps on the first row")
+    assert(PlayerHighlightList(count: 4, index: 3).moving(1).index == 3, "Down clamps on the last row")
+    assert(PlayerHighlightList(count: 0, index: 0).moving(1).index == 0)
+    for key in ["volume_up", "Back", "Home", ""] {
+        assert(effect(key, menu) == .ignored, "\(key) stays ignored while a menu is open")
+    }
+    assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, audioMenu: true)) == .moveHighlight(delta: -1))
+    assert(effect("dpad_center", PlayerChromeState(sessionMatches: true, engineMenu: true)) == .activateHighlight)
+
+    var menuAndPlaylist = PlayerChromeState(sessionMatches: true, subtitleMenu: true, playlist: true)
+    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .subtitleMenu)
+    assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
+    assert(effect("dpad_center", menuAndPlaylist) == .activateHighlight)
+    var playlistRows = PlayerHighlightList(count: 5, index: 2)
+    let playlistBefore = playlistRows
+    if PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .playlist,
+       case .moveHighlight(let delta) = effect("dpad_down", menuAndPlaylist) {
+        playlistRows = playlistRows.moving(delta)
+    }
+    assert(playlistRows == playlistBefore, "An open menu keeps the playlist highlight where it is")
+    menuAndPlaylist.subtitleMenu = false
+    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .playlist)
+    assert(effect("dpad_up", menuAndPlaylist) == .moveHighlight(delta: -1))
+    assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
+    assert(effect("dpad_center", menuAndPlaylist) == .activateHighlight)
+    assert(effect("dpad_left", menuAndPlaylist) == .seekBackward)
+    assert(effect("dpad_right", menuAndPlaylist) == .seekForward)
+    if case .moveHighlight(let delta) = effect("dpad_down", menuAndPlaylist) {
+        playlistRows = playlistRows.moving(delta)
+    }
+    assert(playlistRows.index == 3)
+    assert(PlayerHighlightList(count: 5, index: 0).moving(-1).index == 0)
+    assert(PlayerHighlightList(count: 5, index: 4).moving(1).index == 4)
+
+    assertTransport(PlayerChromeState(sessionMatches: true, controlsVisible: true), "visible chrome")
+    assertTransport(PlayerChromeState(sessionMatches: true), "hidden chrome")
+    assertTransport(PlayerChromeState(sessionMatches: true, controlsVisible: true), "paused row")
+    let playing = PlayerChromeState(sessionMatches: true, controlsVisible: true)
+    assert(effect("back", playing) == .dismissControls)
+    assert(effect("home", playing) == .exitPlayback)
+    let hidden = PlayerChromeState(sessionMatches: true)
+    assert(effect("back", hidden) == .exitPlayback)
+    assert(effect("home", hidden) == .exitPlayback)
+
+    let prompt = PlayerChromeState(sessionMatches: true, stillWatching: true, controlsVisible: true)
+    for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right"] {
+        assert(effect(key, prompt) == .resumeStillWatching, "\(key) resumes the still-watching prompt")
+    }
+    assert(effect("back", prompt) == .dismissStillWatching)
+    assert(effect("home", prompt) == .exitPlayback)
+    var promptRows = PlayerHighlightList(count: 1, index: 0)
+    let promptBefore = promptRows
+    if case .moveHighlight(let delta) = effect("dpad_down", prompt) { promptRows = promptRows.moving(delta) }
+    assert(promptRows == promptBefore, "Still-watching Up/Down resume and leave the row alone")
+
+    let scrub = PlayerChromeState(sessionMatches: true, scrubbing: true, controlsVisible: true)
+    assert(effect("dpad_left", scrub) == .scrubBackward)
+    assert(effect("dpad_right", scrub) == .scrubForward)
+    assert(effect("dpad_center", scrub) == .commitScrub)
+    assert(effect("dpad_up", scrub) == .ignored)
+    assert(effect("dpad_down", scrub) == .ignored)
+    assert(effect("back", scrub) == .dismissScrub)
+
+    let sheet = PlayerChromeState(sessionMatches: true, settingsSheet: true, controlsVisible: true)
+    for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right"] {
+        assert(effect(key, sheet) == .ignored, "\(key) stays out of a presented sheet")
+    }
+    assert(effect("back", sheet) == .dismissSettingsSheet)
+    assert(effect("home", sheet) == .exitPlayback)
+
+    var staleList = PlayerHighlightList(count: 4, index: 1)
+    let staleMenu = PlayerChromeState(sessionMatches: false, subtitleMenu: true, playlist: true, controlsVisible: true)
+    for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right", "back", "home"] {
+        let staleEffect = effect(key, staleMenu)
+        assert(staleEffect == .ignored, "A stale \(key) is ignored")
+        if case .moveHighlight(let delta) = staleEffect { staleList = staleList.moving(delta) }
+    }
+    assert(staleList.index == 1 && staleList.count == 4, "A stale key leaves the highlight where it is")
+
+    assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: true) == [-1, 3, 5])
+    assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: false) == [3, 5])
+    print("PASS: Up/Down/center follow the open surface, and a stale session leaves the highlight")
 }

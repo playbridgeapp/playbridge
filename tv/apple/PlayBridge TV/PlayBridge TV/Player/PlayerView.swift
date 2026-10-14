@@ -38,8 +38,11 @@ struct PlayerView: View {
     @State private var sessionEngine: PlaybackEngine? = nil
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
+    @State private var playlistHighlight: Int = 0
     @State private var latestPlaybackIsPlaying = false
     @State private var mediaGeneration = 0
+    @State private var engineChrome = PlayerEngineChrome()
+    @State private var exitGate = PlayerRemoteExitGate()
     @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
 
@@ -59,6 +62,7 @@ struct PlayerView: View {
         guard isCurrentPlayback(source, generation: generation), target != source else { return }
         resumeTime = currentTime.isFinite && currentTime > 0 ? currentTime : 0
         sessionEngine = target
+        syncExitFence()
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
@@ -106,6 +110,7 @@ struct PlayerView: View {
             // Only an actual next item needs a new decoder identity. Incrementing on
             // terminal EOF briefly reloaded the old payload while dismissal rendered.
             mediaGeneration &+= 1
+            syncExitFence()
             if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
@@ -117,6 +122,7 @@ struct PlayerView: View {
         server.progressWebhook.finish(clear: false)
         stillWatching.reset()
         mediaGeneration &+= 1
+        syncExitFence()
         historyStore.flushProgress()
         consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
@@ -149,13 +155,82 @@ struct PlayerView: View {
         historyStore.updateProgress(url: url, positionMs: position, durationMs: duration)
     }
 
+    private func syncExitFence() {
+        let request = playlistStore.currentItem ?? payload
+        exitGate.note(engine: effectiveEngine(for: request), generation: mediaGeneration)
+    }
+
+    /// Physical Menu and network Home/Back share this owner path. A second call
+    /// while the screen is still up does not finish progress or broadcast idle again.
     private func exitPlayback() {
-        server.progressWebhook.finish(clear: true)
-        historyStore.flushProgress()
-        onDismiss()
+        guard exitGate.beginExit() else { return }
+        let webhook = server.progressWebhook
+        let history = historyStore
+        let leave = onDismiss
+        PlayerSessionExit.perform(
+            finishProgress: { webhook.finish(clear: true) },
+            flushHistory: { history.flushProgress() },
+            leaveToIdle: leave
+        )
+    }
+
+    private func handleRemoteNavigation(_ key: String) {
+        let engine = exitGate.liveEngine
+        let generation = exitGate.liveGeneration
+        let chrome = engineChrome.snapshot().chrome(
+            sessionMatches: true,
+            stillWatching: stillWatching.isPrompting,
+            playlist: showPlaylist
+        )
+        let effect = PlayerRemoteNavigation.effect(for: key, chrome: chrome)
+        switch effect {
+        case .ignored:
+            break
+        case .dismissStillWatching, .resumeStillWatching:
+            stillWatching.continueWatching()
+        case .dismissPlaylist:
+            withAnimation { showPlaylist = false }
+        case .exitPlayback:
+            let webhook = server.progressWebhook
+            let history = historyStore
+            let leave = onDismiss
+            exitGate.scheduleExit(engine: engine, generation: generation) {
+                PlayerSessionExit.perform(
+                    finishProgress: { webhook.finish(clear: true) },
+                    flushHistory: { history.flushProgress() },
+                    leaveToIdle: leave
+                )
+            }
+        case .moveHighlight, .activateHighlight:
+            if engineChrome.apply(effect) { break }
+            applyPlaylistHighlight(effect)
+        case .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
+             .dismissSettingsSheet, .dismissScrub, .dismissControls,
+             .togglePlayback, .seekBackward, .seekForward,
+             .scrubBackward, .scrubForward, .commitScrub:
+            _ = engineChrome.apply(effect)
+        }
+    }
+
+    private func applyPlaylistHighlight(_ effect: PlayerRemoteEffect) {
+        let count = playlistStore.items.count
+        switch effect {
+        case .moveHighlight(let delta):
+            playlistHighlight = PlayerHighlightList(count: count, index: playlistHighlight)
+                .moving(delta).index
+        case .activateHighlight:
+            let index = PlayerHighlightList(count: count, index: playlistHighlight).moving(0).index
+            guard playlistStore.items.indices.contains(index) else { return }
+            playlistHighlight = index
+            handleJump(to: index)
+        default:
+            break
+        }
     }
 
     var body: some View {
+        let fenceRequest = playlistStore.currentItem ?? payload
+        let _ = exitGate.note(engine: effectiveEngine(for: fenceRequest), generation: mediaGeneration)
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -175,7 +250,8 @@ struct PlayerView: View {
                         onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
+                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        engineChrome: engineChrome
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -195,7 +271,8 @@ struct PlayerView: View {
                         onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
+                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        engineChrome: engineChrome
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -212,6 +289,7 @@ struct PlayerView: View {
 
             if showPlaylist {
                 PlaylistOverlay(
+                    highlightedIndex: $playlistHighlight,
                     onItemSelected: { index in
                         handleJump(to: index)
                     },
@@ -233,12 +311,27 @@ struct PlayerView: View {
         }
         .onAppear {
             isPlayerFocused = true
+            syncExitFence()
+        }
+        .background(
+            PlayerExitFenceSync(
+                engine: effectiveEngine(for: playlistStore.currentItem ?? payload),
+                generation: mediaGeneration,
+                gate: exitGate
+            )
+        )
+        .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in
+            guard let key = note.userInfo?["key"] as? String else { return }
+            handleRemoteNavigation(key)
         }
         .onDisappear {
             historyStore.flushProgress()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
             guard !stillWatching.isPrompting else { return }
+            if !showPlaylist {
+                playlistHighlight = playlistStore.currentIndex
+            }
             withAnimation { showPlaylist.toggle() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .playBridgePlaybackActivity)) { note in
@@ -272,5 +365,24 @@ struct PlayerView: View {
         .onReceive(NotificationCenter.default.publisher(for: .playBridgeStillWatchingStop)) { _ in
             if stillWatching.isPrompting { stillWatching.stopNow(onDismiss) }
         }
+    }
+}
+
+/// Writes the live engine and generation into the exit gate on each render so a
+/// key queued for the previous item cannot close the item now on screen.
+private struct PlayerExitFenceSync: View {
+    let engine: PlaybackEngine
+    let generation: Int
+    let gate: PlayerRemoteExitGate
+
+    var body: some View {
+        Color.clear
+            .onAppear { gate.note(engine: engine, generation: generation) }
+            .onChange(of: engine) { _, newEngine in
+                gate.note(engine: newEngine, generation: generation)
+            }
+            .onChange(of: generation) { _, newGeneration in
+                gate.note(engine: engine, generation: newGeneration)
+            }
     }
 }

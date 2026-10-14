@@ -25,6 +25,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
+    let engineChrome: PlayerEngineChrome
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
@@ -109,13 +110,16 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         player.isMuted = isPreBuffering
         context.coordinator.attach(player: player)
+        context.coordinator.bindEngineChrome(
+            engineChrome, controller: controller, isPreBuffering: isPreBuffering)
         player.play()
         return controller
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         uiViewController.player?.isMuted = isPreBuffering
-        uiViewController.showsPlaybackControls = !isPreBuffering
+        context.coordinator.bindEngineChrome(
+            engineChrome, controller: uiViewController, isPreBuffering: isPreBuffering)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -154,6 +158,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var subtitleRequestID: UUID?
         private var lateSubtitleDownload: ScopedSubtitleDownload?
         private var didBroadcastTracks = false
+        /// Network Back hides the system transport. Later SwiftUI updates keep it hidden
+        /// until this player view is recreated for the next item.
+        private var remoteControlsHidden = false
+        private var controlsSuppressedByPreplay = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
         // synchronously by broadcastTracks/selectTrack. Avoids the deprecated sync accessor.
         private var audioGroup: AVMediaSelectionGroup?
@@ -178,9 +186,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(onControl(_:)),
                 name: WebSocketServer.controlCommand, object: nil)
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(onRemote(_:)),
-                name: WebSocketServer.remoteKey, object: nil)
             NotificationCenter.default.addObserver(
                 self, selector: #selector(onResync),
                 name: WebSocketServer.resyncRequest, object: nil)
@@ -609,16 +614,62 @@ struct NativePlayerView: UIViewControllerRepresentable {
             broadcastStatus()
         }
 
-        @objc private func onRemote(_ note: Notification) {
-            guard let key = note.userInfo?["key"] as? String, let player else { return }
-            if StillWatchingGate.isPrompting { return }
-            switch key {
-            case "dpad_center":
-                if player.timeControlStatus == .playing { player.pause() } else { player.play() }
-            case "dpad_left":  seek(by: -15)
-            case "dpad_right": seek(by: 15)
-            default: break
+        func bindEngineChrome(
+            _ chrome: PlayerEngineChrome,
+            controller: AVPlayerViewController,
+            isPreBuffering: Bool
+        ) {
+            playerController = controller
+            controlsSuppressedByPreplay = isPreBuffering
+            controller.showsPlaybackControls = !isPreBuffering && !remoteControlsHidden
+            chrome.snapshot = { [weak self] in
+                guard let self else { return PlayerEngineChromeSnapshot() }
+                let presented = self.playerController?.presentedViewController != nil
+                let controls = !self.controlsSuppressedByPreplay && !self.remoteControlsHidden
+                    && (self.playerController?.showsPlaybackControls ?? false)
+                return PlayerEngineChromeSnapshot(
+                    settingsSheet: presented,
+                    controlsVisible: controls
+                )
             }
+            chrome.apply = { [weak self] effect in
+                self?.applyRemoteEffect(effect) ?? false
+            }
+        }
+
+        /// Network Back closes a presented sheet, then the system transport.
+        /// Track menus drawn inside that transport go away with it.
+        private func applyRemoteEffect(_ effect: PlayerRemoteEffect) -> Bool {
+            switch effect {
+            case .dismissSettingsSheet:
+                guard playerController?.presentedViewController != nil else { return false }
+                playerController?.dismiss(animated: true)
+                return true
+            case .dismissControls:
+                return hideRemoteControls()
+            case .togglePlayback:
+                guard let player else { return false }
+                if player.timeControlStatus == .playing { player.pause() } else { player.play() }
+                return true
+            case .seekBackward:
+                guard player != nil else { return false }
+                seek(by: -15)
+                return true
+            case .seekForward:
+                guard player != nil else { return false }
+                seek(by: 15)
+                return true
+            default:
+                return false
+            }
+        }
+
+        private func hideRemoteControls() -> Bool {
+            guard !remoteControlsHidden, !controlsSuppressedByPreplay,
+                  playerController?.showsPlaybackControls == true else { return false }
+            remoteControlsHidden = true
+            playerController?.showsPlaybackControls = false
+            return true
         }
 
         @objc private func onStillWatchingPause() { player?.pause(); broadcastStatus() }
