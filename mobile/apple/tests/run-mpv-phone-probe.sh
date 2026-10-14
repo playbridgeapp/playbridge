@@ -46,7 +46,7 @@ s = (phone / 'PlayBridge Phone.xcodeproj/project.pbxproj').read_text()
 s = s.replace('\t\t\t\tAA0000000000000000000014 /* Verify Release Cast Core */,\n', '')
 if os.environ.get('MPV_PHONE_PROXY_PROBE') != '1':
     s = s.replace('\t\t\tbaseConfigurationReference = AA0000000000000000000013 /* CastCoreOptional.xcconfig */;\n', '')
-s = s.replace('"com.playbridge.PlayBridge-Phone"', '"com.playbridge.mpv-probe"')
+s = s.replace('PRODUCT_BUNDLE_IDENTIFIER = app.playbridge.phone;', 'PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.mpv-probe";')
 (project / 'project.pbxproj').write_text(s)
 schemes = project / 'xcshareddata/xcschemes'
 schemes.mkdir(parents=True)

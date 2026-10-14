@@ -1,6 +1,6 @@
 # Changelog — PlayBridge Sender (iOS phone)
 
-All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
+All notable changes to the iOS phone app (`app.playbridge.phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.15.0] — 2026-10-09 (build 7)
