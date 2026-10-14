@@ -1,6 +1,7 @@
 package com.playbridge.sender.cast.remote
 
 import com.playbridge.sender.model.EndpointKey
+import com.playbridge.sender.connection.ReceiverProtocolState
 
 enum class RemoteContext { Idle, Player, Browser, ScreenMirror, Unknown }
 enum class RemoteProfile { AndroidTv, AppleTv, Desktop, Cli, Unknown, External }
@@ -118,5 +119,7 @@ data class RemoteUiState(
     val pending: RemotePendingState = RemotePendingState(), val sheet: RemoteSheet? = null,
     val notice: RemoteNotice? = null,
     val fullControl: FullControlStatus? = null,
+    /** Stored wire metadata for Step 6; independent of the active legacy capability policy. */
+    val receiverProtocol: ReceiverProtocolState = ReceiverProtocolState(),
 )
 data class RemoteReceiverSnapshot(val state: RemoteUiState = RemoteUiState(), val observation: RemoteObservation = RemoteObservation())

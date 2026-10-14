@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast.remote
 
+import com.playbridge.sender.connection.ReceiverProtocolState
 import com.playbridge.shared.protocol.createAddSubtitleCommandJson
 import com.playbridge.shared.protocol.createBrowserCommandJson
 import com.playbridge.shared.protocol.createBrowserControlCommandJson
@@ -14,6 +15,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.json.JsonObject
@@ -23,6 +25,8 @@ import kotlinx.serialization.json.put
 
 data class NativeRemoteConfiguration(
     val receiver: RemoteReceiver, val players: List<String> = emptyList(), val features: Set<String> = emptySet(),
+    // A stable live reference keeps descriptor-only refreshes from changing registry/controller identity.
+    val receiverProtocol: StateFlow<ReceiverProtocolState>? = null,
 )
 
 open class NativeProfileRemoteController(
@@ -36,10 +40,13 @@ open class NativeProfileRemoteController(
     private var pointerActive = false
     private var pointerHeld = false
 
-    private fun decorate(raw: RemoteReceiverSnapshot): RemoteReceiverSnapshot {
+    private fun decorate(
+        raw: RemoteReceiverSnapshot, protocol: ReceiverProtocolState = raw.state.receiverProtocol,
+    ): RemoteReceiverSnapshot {
         val state = raw.state
         return raw.copy(state = state.copy(
             sessionId = sessionId, receiver = configuration.receiver,
+            receiverProtocol = if (state.connection.ready) protocol else ReceiverProtocolState(),
             playback = state.playback?.let { playback ->
                 playback.copy(mediaId = RemoteMediaId(sessionId, state.queue?.playbackId, state.queue?.currentItemId, raw.observation.mediaGeneration))
             },
@@ -50,8 +57,12 @@ open class NativeProfileRemoteController(
             ),
         ))
     }
-    final override val snapshot: StateFlow<RemoteReceiverSnapshot> = transport.snapshot.map(::decorate)
-        .stateIn(scope, SharingStarted.Eagerly, decorate(transport.snapshot.value))
+    final override val snapshot: StateFlow<RemoteReceiverSnapshot> = (configuration.receiverProtocol?.let { protocol ->
+        combine(transport.snapshot, protocol) { raw, metadata -> decorate(raw, metadata) }
+    } ?: transport.snapshot.map { decorate(it) })
+        .stateIn(scope, SharingStarted.Eagerly, decorate(
+            transport.snapshot.value, configuration.receiverProtocol?.value ?: transport.snapshot.value.state.receiverProtocol,
+        ))
 
     override suspend fun execute(action: RemoteAction): RemoteCommandResult {
         if (!current()) return RemoteCommandResult.Failed("Remote session changed")

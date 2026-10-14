@@ -26,6 +26,7 @@ import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.*
@@ -89,9 +90,22 @@ class WebSocketClient(
             is ConnectionState.Connected -> playbackLeases.active("connection")
             else -> Unit
         }
+        if (state is ConnectionState.AuthFailed || state is ConnectionState.PinMismatch ||
+            state is ConnectionState.PairingDenied || state is ConnectionState.Error || state is ConnectionState.Disconnected
+        ) clearReceiverProtocol()
         _connectionState.value = state
     }
     
+    private val receiverProtocolSession = ReceiverProtocolSession()
+    /** Live metadata only; never saved with receiver credentials or discovery records. */
+    val receiverProtocolState = receiverProtocolSession.state
+
+    private fun clearReceiverProtocol(): Long {
+        val session = receiverProtocolSession.begin()
+        _tvCapabilitiesState.value = _tvCapabilitiesState.value.copy(receiverDescriptor = null)
+        return session
+    }
+
     private val messageBus = WebSocketMessageBus()
     val messages = messageBus.messages
 
@@ -166,6 +180,7 @@ class WebSocketClient(
         val mediaKinds: List<String> = emptyList(),
         val screenMirrorWebRtc: Boolean = false,
         val features: Set<String> = emptySet(),
+        val receiverDescriptor: ReceiverDescriptor? = null,
     )
 
         sealed class ConnectionState {
@@ -225,7 +240,9 @@ class WebSocketClient(
         attemptConnection(ip, port, serverName)
     }
 
+    @Synchronized
     private fun attemptConnection(ip: String, port: Int, serverName: String) {
+        val receiverSession = clearReceiverProtocol()
         // Update state first to prevent race where UI thinks we are connected but socket is null
         _connectionState.value = ConnectionState.Connecting(serverName)
         
@@ -301,177 +318,179 @@ class WebSocketClient(
             }
             
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (webSocket !== this@WebSocketClient.webSocket) {
-                    Log.d(TAG, "Ignoring onMessage for stale socket")
-                    return
-                }
-                logWireFrame("Received", text)
-
-                // Route on the exact envelope `type` rather than substring matching, so a
-                // value that merely contains "pairing_approved" etc. can't be misrouted.
-                val type = runCatching {
-                    (Json.parseToJsonElement(text) as? JsonObject)
-                        ?.get("type")?.jsonPrimitive?.contentOrNull
-                }.getOrNull()
-
-                // Handle pairing_challenge message from TV
-                if (type == "pairing_challenge") {
-                    try {
-                        val parsed = parseIncomingMessage(text) as? IncomingMessage.PairingChallenge
-                        val msg = parsed?.msg
-                        if (msg != null) {
-                            val tvEphPubBytes = Base64.getDecoder().decode(msg.tv_eph_pub)
-                            val nonceTBytes = Base64.getDecoder().decode(msg.nonce_t)
-
-                            tvEphPub = tvEphPubBytes
-                            nonceT = nonceTBytes
-
-                            // Calculate ECDH shared secret
-                            val sharedSecret = SasCrypto.calculateECDH(senderKeyPair!!.privateKey, tvEphPubBytes)
-                            this@WebSocketClient.sharedSecret = sharedSecret
-
-                            // Calculate transcript and local SAS code
-                            val commitBytes = Base64.getDecoder().decode(commitStr!!)
-                            val transcript = commitBytes + tvEphPubBytes + nonceTBytes + senderKeyPair!!.publicKey + nonceS!!
-                            val sas = SasCrypto.generateSAS(sharedSecret, transcript)
-                            calculatedSas = sas
-
-                            Log.d(TAG, "Calculated SAS. Sending reveal and prompting user...")
-
-                            val senderEphPubB64 = Base64.getEncoder().encodeToString(senderKeyPair!!.publicKey)
-                            val nonceSB64 = Base64.getEncoder().encodeToString(nonceS!!)
-                            val revealJson = createPairingRevealJson(senderEphPub = senderEphPubB64, nonceS = nonceSB64)
-                            webSocket.send(revealJson)
-
-                            // Fresh handshake → reset the retry budget for code entry.
-                            pairingAttemptsLeft = MAX_PAIR_ATTEMPTS
-                            _connectionState.value = ConnectionState.WaitingForCodeInput(serverName)
-                            return
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error handling pairing_challenge", e)
-                        webSocket.close(1000, "Challenge failed")
-                    }
-                }
-                
-                // Handle pairing and auth responses before forwarding to command flow.
-                if (type == "pairing_approved") {
-                    try {
-                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
-                        if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
-                            val shared = sharedSecret ?: error("Missing pairing shared secret")
-                            val commit = commitStr ?: error("Missing pairing commitment")
-                            val tvPub = tvEphPub ?: error("Missing receiver public key")
-                            val receiverNonce = nonceT ?: error("Missing receiver nonce")
-                            val keypair = senderKeyPair ?: error("Missing sender keypair")
-                            val senderNonce = nonceS ?: error("Missing sender nonce")
-                            val transcript = Base64.getDecoder().decode(commit) + tvPub + receiverNonce +
-                                keypair.publicKey + senderNonce
-                            val transcriptHash = SasCrypto.sha256(transcript)
-                            val prk = SasCrypto.hkdfExtract(salt = null, ikm = shared)
-                            val credentialKey = SasCrypto.hkdfExpand(
-                                prk,
-                                info = "playbridgeCredentialKey-v1".toByteArray(),
-                                length = 32,
-                            )
-                            val nonce = Base64.getDecoder().decode(
-                                json["nonce"]?.jsonPrimitive?.contentOrNull ?: error("Missing credential nonce")
-                            )
-                            val ciphertext = Base64.getDecoder().decode(
-                                json["ciphertext"]?.jsonPrimitive?.contentOrNull ?: error("Missing credentials")
-                            )
-                            val credentialsJson = Json.parseToJsonElement(
-                                SasCrypto.aesGcmDecrypt(
-                                    credentialKey, nonce, ciphertext, transcriptHash
-                                ).decodeToString()
-                            ) as? JsonObject ?: error("Invalid credential payload")
-                            val token = credentialsJson["token"]?.jsonPrimitive?.contentOrNull
-                            val certFp = credentialsJson["certFingerprint"]?.jsonPrimitive?.contentOrNull
-                                ?.takeIf { it.isNotEmpty() }
-                            Log.i(TAG, "Pairing approved by $serverName")
-                            // Bind the delivered pin to the cert actually served this handshake.
-                            val served = capturedServerPin
-                            if (certFp != null && served != null && certFp != served) {
-                                Log.e(TAG, "pairing_approved pin ($certFp) != served cert ($served) — refusing")
-                                pinMismatch = true
-                                isUserDisconnect = true
-                                updateConnectionState(ConnectionState.PinMismatch(serverName))
-                                webSocket.close(1000, "pin mismatch")
-                                return
-                            }
-                            if (!token.isNullOrEmpty() && token != "null") {
-                                // Update in-memory connection info so retries after a network
-                                // blip send `auth` (not another `pairing_request`).
-                                val pin = certFp ?: served
-                                targetConnection = targetConnection?.copy(token = token, pin = pin)
-                                scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
-                            }
-                            emitCapabilities(credentialsJson)
-                            clearPairingSecrets() // handshake done — drop key material
-                            updateConnectionState(ConnectionState.Connected(serverName, isSecure))
-                            // Resync: the TV only broadcasts context on its own activity
-                            // transitions, so a client (re)connecting mid-playback would
-                            // otherwise show "idle" until the next transition.
-                            webSocket.send(createContextQueryJson())
-                            return
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Invalid or unauthenticated pairing credentials", e)
-                        isUserDisconnect = true
-                        updateConnectionState(ConnectionState.Error("Pairing security verification failed"))
-                        webSocket.close(1008, "Invalid pairing credentials")
+                synchronized(this@WebSocketClient) {
+                    if (webSocket !== this@WebSocketClient.webSocket) {
+                        Log.d(TAG, "Ignoring onMessage for stale socket")
                         return
                     }
-                }
+                    logWireFrame("Received", text)
 
-                if (type == "pairing_denied") {
-                    try {
-                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
-                        if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_denied") {
-                            Log.i(TAG, "Pairing denied by $serverName")
-                            isUserDisconnect = true
-                            updateConnectionState(ConnectionState.PairingDenied(serverName))
-                            webSocket.close(1000, "Pairing denied")
-                            return
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing pairing_denied", e)
-                    }
-                }
+                    val rawFrame = runCatching { Json.parseToJsonElement(text) as? JsonObject }.getOrNull()
+                    rawFrame?.let { receiverProtocolSession.observe(receiverSession, it) }
 
-                if (type == "auth_response") {
-                    try {
-                        val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
-                        if (json is JsonObject) {
-                            val type = json["type"].toString().replace("\"", "")
-                            if (type == "auth_response") {
-                                val success = json["success"].toString() == "true"
-                                if (success) {
-                                    Log.i(TAG, "Authentication successful")
-                                    emitCapabilities(json)
-                                    updateConnectionState(ConnectionState.Connected(serverName, isSecure))
-                                    // Resync context after every (re)connect — see the
-                                    // pairing_approved path for rationale.
-                                    webSocket.send(createContextQueryJson())
-                                    // SEC-005: legacy echoed tokens in auth_response are ignored.
-                                } else {
-                                    Log.e(TAG, "Authentication failed — stale token")
-                                    // Set flag before close so onClosed doesn't overwrite AuthFailed
-                                    // with Disconnected, and so onFailure won't schedule retries.
-                                    isUserDisconnect = true
-                                    updateConnectionState(ConnectionState.AuthFailed)
-                                    webSocket.close(1000, "Auth failed")
-                                }
+                    // Route on the exact envelope `type` rather than substring matching, so a
+                    // value that merely contains "pairing_approved" etc. can't be misrouted.
+                    val type = (rawFrame?.get("type") as? JsonPrimitive)?.contentOrNull
+
+                    // Handle pairing_challenge message from TV
+                    if (type == "pairing_challenge") {
+                        try {
+                            val parsed = parseIncomingMessage(text) as? IncomingMessage.PairingChallenge
+                            val msg = parsed?.msg
+                            if (msg != null) {
+                                val tvEphPubBytes = Base64.getDecoder().decode(msg.tv_eph_pub)
+                                val nonceTBytes = Base64.getDecoder().decode(msg.nonce_t)
+
+                                tvEphPub = tvEphPubBytes
+                                nonceT = nonceTBytes
+
+                                // Calculate ECDH shared secret
+                                val sharedSecret = SasCrypto.calculateECDH(senderKeyPair!!.privateKey, tvEphPubBytes)
+                                this@WebSocketClient.sharedSecret = sharedSecret
+
+                                // Calculate transcript and local SAS code
+                                val commitBytes = Base64.getDecoder().decode(commitStr!!)
+                                val transcript = commitBytes + tvEphPubBytes + nonceTBytes + senderKeyPair!!.publicKey + nonceS!!
+                                val sas = SasCrypto.generateSAS(sharedSecret, transcript)
+                                calculatedSas = sas
+
+                                Log.d(TAG, "Calculated SAS. Sending reveal and prompting user...")
+
+                                val senderEphPubB64 = Base64.getEncoder().encodeToString(senderKeyPair!!.publicKey)
+                                val nonceSB64 = Base64.getEncoder().encodeToString(nonceS!!)
+                                val revealJson = createPairingRevealJson(senderEphPub = senderEphPubB64, nonceS = nonceSB64)
+                                webSocket.send(revealJson)
+
+                                // Fresh handshake → reset the retry budget for code entry.
+                                pairingAttemptsLeft = MAX_PAIR_ATTEMPTS
+                                _connectionState.value = ConnectionState.WaitingForCodeInput(serverName)
                                 return
                             }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error handling pairing_challenge", e)
+                            webSocket.close(1000, "Challenge failed")
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing auth response", e)
                     }
-                }
+                
+                    // Handle pairing and auth responses before forwarding to command flow.
+                    if (type == "pairing_approved") {
+                        try {
+                            val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                            if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
+                                val shared = sharedSecret ?: error("Missing pairing shared secret")
+                                val commit = commitStr ?: error("Missing pairing commitment")
+                                val tvPub = tvEphPub ?: error("Missing receiver public key")
+                                val receiverNonce = nonceT ?: error("Missing receiver nonce")
+                                val keypair = senderKeyPair ?: error("Missing sender keypair")
+                                val senderNonce = nonceS ?: error("Missing sender nonce")
+                                val transcript = Base64.getDecoder().decode(commit) + tvPub + receiverNonce +
+                                    keypair.publicKey + senderNonce
+                                val transcriptHash = SasCrypto.sha256(transcript)
+                                val prk = SasCrypto.hkdfExtract(salt = null, ikm = shared)
+                                val credentialKey = SasCrypto.hkdfExpand(
+                                    prk,
+                                    info = "playbridgeCredentialKey-v1".toByteArray(),
+                                    length = 32,
+                                )
+                                val nonce = Base64.getDecoder().decode(
+                                    json["nonce"]?.jsonPrimitive?.contentOrNull ?: error("Missing credential nonce")
+                                )
+                                val ciphertext = Base64.getDecoder().decode(
+                                    json["ciphertext"]?.jsonPrimitive?.contentOrNull ?: error("Missing credentials")
+                                )
+                                val credentialsJson = Json.parseToJsonElement(
+                                    SasCrypto.aesGcmDecrypt(
+                                        credentialKey, nonce, ciphertext, transcriptHash
+                                    ).decodeToString()
+                                ) as? JsonObject ?: error("Invalid credential payload")
+                                val token = credentialsJson["token"]?.jsonPrimitive?.contentOrNull
+                                val certFp = credentialsJson["certFingerprint"]?.jsonPrimitive?.contentOrNull
+                                    ?.takeIf { it.isNotEmpty() }
+                                Log.i(TAG, "Pairing approved by $serverName")
+                                // Bind the delivered pin to the cert actually served this handshake.
+                                val served = capturedServerPin
+                                if (certFp != null && served != null && certFp != served) {
+                                    Log.e(TAG, "Pairing credential pin differs from served certificate — refusing")
+                                    pinMismatch = true
+                                    isUserDisconnect = true
+                                    updateConnectionState(ConnectionState.PinMismatch(serverName))
+                                    webSocket.close(1000, "pin mismatch")
+                                    return
+                                }
+                                if (!token.isNullOrEmpty() && token != "null") {
+                                    // Update in-memory connection info so retries after a network
+                                    // blip send `auth` (not another `pairing_request`).
+                                    val pin = certFp ?: served
+                                    targetConnection = targetConnection?.copy(token = token, pin = pin)
+                                    scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
+                                }
+                                if (!emitCapabilities(credentialsJson, receiverSession)) return
+                                clearPairingSecrets() // handshake done — drop key material
+                                updateConnectionState(ConnectionState.Connected(serverName, isSecure))
+                                // Resync: the TV only broadcasts context on its own activity
+                                // transitions, so a client (re)connecting mid-playback would
+                                // otherwise show "idle" until the next transition.
+                                webSocket.send(createContextQueryJson())
+                                return
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Invalid or unauthenticated pairing credentials", e)
+                            isUserDisconnect = true
+                            updateConnectionState(ConnectionState.Error("Pairing security verification failed"))
+                            webSocket.close(1008, "Invalid pairing credentials")
+                            return
+                        }
+                    }
 
-                playbackLeases.observe(text)
-                messageBus.publish(text)
+                    if (type == "pairing_denied") {
+                        try {
+                            val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                            if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_denied") {
+                                Log.i(TAG, "Pairing denied by $serverName")
+                                isUserDisconnect = true
+                                updateConnectionState(ConnectionState.PairingDenied(serverName))
+                                webSocket.close(1000, "Pairing denied")
+                                return
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing pairing_denied", e)
+                        }
+                    }
+
+                    if (type == "auth_response") {
+                        try {
+                            val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
+                            if (json is JsonObject) {
+                                val type = json["type"].toString().replace("\"", "")
+                                if (type == "auth_response") {
+                                    val success = json["success"].toString() == "true"
+                                    if (success) {
+                                        Log.i(TAG, "Authentication successful")
+                                        if (!emitCapabilities(json, receiverSession)) return
+                                        updateConnectionState(ConnectionState.Connected(serverName, isSecure))
+                                        // Resync context after every (re)connect — see the
+                                        // pairing_approved path for rationale.
+                                        webSocket.send(createContextQueryJson())
+                                        // SEC-005: legacy echoed tokens in auth_response are ignored.
+                                    } else {
+                                        Log.e(TAG, "Authentication failed — stale token")
+                                        // Set flag before close so onClosed doesn't overwrite AuthFailed
+                                        // with Disconnected, and so onFailure won't schedule retries.
+                                        isUserDisconnect = true
+                                        updateConnectionState(ConnectionState.AuthFailed)
+                                        webSocket.close(1000, "Auth failed")
+                                    }
+                                    return
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing auth response", e)
+                        }
+                    }
+
+                    playbackLeases.observe(text)
+                    messageBus.publish(text)
+                }
             }
             
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -480,38 +499,42 @@ class WebSocketClient(
             }
             
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "Connection closed: $reason")
-                if (webSocket === this@WebSocketClient.webSocket) {
-                    this@WebSocketClient.webSocket = null
-                    // Don't overwrite AuthFailed — the UI needs that state to show a re-pair prompt.
-                    if (_connectionState.value !is ConnectionState.AuthFailed) {
-                        updateConnectionState(ConnectionState.Disconnected)
+                synchronized(this@WebSocketClient) {
+                    Log.i(TAG, "Connection closed: $reason")
+                    if (webSocket === this@WebSocketClient.webSocket) {
+                        this@WebSocketClient.webSocket = null
+                        // Don't overwrite AuthFailed — the UI needs that state to show a re-pair prompt.
+                        if (_connectionState.value !is ConnectionState.AuthFailed) {
+                            updateConnectionState(ConnectionState.Disconnected)
+                        }
+                    } else {
+                         Log.d(TAG, "Ignoring onClosed for stale socket")
                     }
-                } else {
-                     Log.d(TAG, "Ignoring onClosed for stale socket")
                 }
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Connection failed: ${t.message}", t)
+                synchronized(this@WebSocketClient) {
+                    Log.e(TAG, "Connection failed: ${t.message}", t)
 
-                if (webSocket === this@WebSocketClient.webSocket) {
-                    this@WebSocketClient.webSocket = null
+                    if (webSocket === this@WebSocketClient.webSocket) {
+                        this@WebSocketClient.webSocket = null
 
-                    if (pinMismatch) {
-                        Log.e(TAG, "TLS pin mismatch — refusing to connect (possible MITM)")
-                        isUserDisconnect = true
-                        updateConnectionState(ConnectionState.PinMismatch(serverName))
-                        return
+                        if (pinMismatch) {
+                            Log.e(TAG, "TLS pin mismatch — refusing to connect (possible MITM)")
+                            isUserDisconnect = true
+                            updateConnectionState(ConnectionState.PinMismatch(serverName))
+                            return
+                        }
+
+                        // No automatic retries — a failed/dropped connection goes straight to
+                        // Error. Reconnects happen on demand: the "ensure connected before
+                        // sending" paths and the startup auto-connect cover recovery, without
+                        // a background retry loop flapping the connection UI.
+                        updateConnectionState(ConnectionState.Error(t.message ?: "Unknown error"))
+                    } else {
+                        Log.d(TAG, "Ignoring onFailure for stale socket")
                     }
-
-                    // No automatic retries — a failed/dropped connection goes straight to
-                    // Error. Reconnects happen on demand: the "ensure connected before
-                    // sending" paths and the startup auto-connect cover recovery, without
-                    // a background retry loop flapping the connection UI.
-                    updateConnectionState(ConnectionState.Error(t.message ?: "Unknown error"))
-                } else {
-                    Log.d(TAG, "Ignoring onFailure for stale socket")
                 }
             }
         })
@@ -590,18 +613,22 @@ class WebSocketClient(
     }
 
     /** Parse capabilities from every auth/pairing response, including an empty legacy response. */
-    private fun emitCapabilities(json: JsonObject) {
+    private fun emitCapabilities(json: JsonObject, session: Long): Boolean {
+        if (!receiverProtocolSession.acceptCredentials(session, json)) return false
         val players = parseStringArray(json, "players")
         val browsers = parseStringArray(json, "browsers")
         val mediaKinds = parseStringArray(json, "mediaKinds")
             .filter { it in setOf("video", "audio", "image") }
         val screenMirrorWebRtc = json["screenMirrorWebRtc"]?.jsonPrimitive?.contentOrNull == "true"
         val features = parseStringArray(json, "features").toSet()
-        val capabilities = TvCapabilities(players, browsers, mediaKinds, screenMirrorWebRtc, features)
+        val capabilities = TvCapabilities(
+            players, browsers, mediaKinds, screenMirrorWebRtc, features, receiverProtocolState.value.descriptor,
+        )
         // Always replace the previous receiver's capabilities. Otherwise connecting to an
         // older TV after a capable one can leave screen mirroring incorrectly enabled.
         _tvCapabilitiesState.value = capabilities
         scope.launch { _tvCapabilities.emit(capabilities) }
+        return true
     }
 
     private fun parseStringArray(json: JsonObject, key: String): List<String> =
@@ -866,8 +893,10 @@ class WebSocketClient(
      * [wasUserDisconnect] stays false so foreground-return / auto-connect can
      * re-open it. Pairing material is kept so the next auth is a normal reconnect.
      */
+    @Synchronized
     fun softDisconnect(reason: String = "background idle stand-down") {
         Log.i(TAG, "softDisconnect($reason)")
+        clearReceiverProtocol()
         clearPendingMouseCommands()
         // Deliberately do NOT set isUserDisconnect or clearPairingSecrets.
         try {

@@ -6,6 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WireFrameLogTest {
+    @Test fun authLoggingOmitsDescriptorAndCredentialsEvenInDebugFrames() {
+        val frame = """{"type":"auth_response","success":true,"token":"TEST_SECRET","capabilities":{"version":1,"surfaces":{"PRIVATE_SURFACE":{"engines":{}}}}}"""
+        assertFalse(WireFrameLog.summary(frame).contains("PRIVATE_SURFACE"))
+        assertFalse(WireFrameLog.redact(frame).contains("PRIVATE_SURFACE"))
+        assertFalse(WireFrameLog.redact(frame).contains("TEST_SECRET"))
+        assertFalse(WireFrameLog.redact(frame).contains("capabilities"))
+    }
+
     @Test fun summaryKeepsTheEnvelopeTypeAndDropsThePayload() {
         val frame = """{"type":"status","title":"Secret Movie","position":5000}"""
         val summary = WireFrameLog.summary(frame)
