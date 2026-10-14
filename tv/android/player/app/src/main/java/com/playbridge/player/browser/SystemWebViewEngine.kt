@@ -16,6 +16,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import com.playbridge.shared.browser.RESET_PAGE_ZOOM_SCRIPT
+import com.playbridge.shared.browser.pageZoomScript
 import com.playbridge.shared.browser.FullscreenFlags
 import com.playbridge.shared.browser.MaximizeRoute
 import com.playbridge.shared.browser.VideoTargetSelector
@@ -275,7 +277,7 @@ class SystemWebViewEngine(
 
     /** Enter fullscreen for the selected frame. A repeat while already on does not re-request it. */
     fun videoMaximize(nativeChrome: Boolean) {
-        when (maximizeRoute(multiFrame && currentProxy() != null, nativeChrome || fullscreenFlags.frameFill || fullscreenFlags.nativeClaim)) {
+        when (maximizeRoute(multiFrame && currentProxy() != null, nativeChrome || fullscreenFlags.frameFill)) {
             MaximizeRoute.Hold -> applyMaximizeResult("maximize", "ok_held")
             MaximizeRoute.TargetFrame, MaximizeRoute.MainFrameFallback -> {
                 acceptingMaximize = true
@@ -589,16 +591,14 @@ class SystemWebViewEngine(
         webView.evaluateJavascript(js, null)
     }
 
-    /**
-     * Relative pinch-zoom of the whole page using the WebView's built-in zoom
-     * (enabled via setSupportZoom/builtInZoomControls). [factor] is a multiplier
-     * applied to the current zoom (e.g. 1.05 = zoom in 5%); clamped per-event so a
-     * single jittery gesture can't jump scale.
-     */
-    fun zoomBy(factor: Float) {
-        if (factor.isNaN() || factor <= 0f) return
-        val clamped = factor.coerceIn(0.8f, 1.25f)
-        webView.zoomBy(clamped)
+    /** Shared CSS zoom accumulates relative factors and animates one bounded target. */
+    fun zoomBy(factor: Float, x: Float = 0.5f, y: Float = 0.5f) {
+        val script = pageZoomScript(factor, x, y) ?: return
+        webView.evaluateJavascript(script, null)
+    }
+
+    fun resetPageZoom() {
+        webView.evaluateJavascript(RESET_PAGE_ZOOM_SCRIPT, null)
     }
 
     fun simulateClick(x: Float, y: Float) {

@@ -26,8 +26,8 @@
  *   on change, and {type:"result",kind,value} per command. maximize/restore
  *   values are short tokens (ok_site, ok_video, ok_fill, ok_iframe, ok_held,
  *   no_video, ok, ok_native, not_maximized). Text/Enter values are ok, no_focus,
- *   or err. Enter fullscreen prefers the site's own fullscreen button, then the
- *   player container that holds the controls. A repeat does not request again
+ *   or err. With user activation, enter prefers the site's fullscreen button,
+ *   then the player container that holds the controls. A repeat does not request again
  *   and does not rebuild styles. Text replaces the whole field.
  *
  * Feedback is rendered NATIVELY by BrowserActivity (a DOM overlay would be hidden
@@ -62,9 +62,17 @@
     return (ix * iy) / (vw * vh);
   }
 
+  // Only a previously dominant video earns an offscreen playback pin.
+  var controlledVideo = null;
+  var controlledScore = 0;
+
   function bestVideo() {
     var out = [];
     collectVideos(document, out);
+    if (controlledVideo && out.indexOf(controlledVideo) !== -1 &&
+        (!controlledVideo.paused || coverage(controlledVideo) === 0) && !controlledVideo.ended) {
+      return { v: controlledVideo, cov: coverage(controlledVideo) };
+    }
     var best = null, bestCov = 0;
     for (var i = 0; i < out.length; i++) {
       var c = coverage(out[i]);
@@ -93,6 +101,8 @@
 
   // ── Direct API (also used by the legacy evaluateJavascript fallback) ───────
   var api = {
+    zoomPage: function (factor, x, y) { return zoomPage(factor, x, y); },
+    resetPageZoom: function () { return resetPageZoom(); },
     toggle: function () {
       var v = find();
       if (!v) return 'none';
@@ -289,6 +299,80 @@
     } catch (e) { return 'err'; }
   }
 
+  // ── Page zoom (top frame only; shared by Gecko and WebView) ────────────────
+  // Phone factors are relative PER EVENT. Preserve every multiplier, then animate
+  // one bounded target per display frame instead of overlapping native animations.
+  var zoomRoot = null, zoomStyle = '', zoomPriority = '', zoomBase = 1;
+  var zoomTarget = 1, zoomApplied = 1, zoomFrame = null, zoomGeneration = 0;
+  var zoomX = 0.5, zoomY = 0.5;
+
+  function zoomRect() {
+    return zoomRoot.getBoundingClientRect ? zoomRoot.getBoundingClientRect() : { left: 0, top: 0 };
+  }
+
+  function renderPageZoom(scale, restore) {
+    var before = zoomRect();
+    var x = zoomX * window.innerWidth, y = zoomY * window.innerHeight;
+    var sx = window.scrollX || 0, sy = window.scrollY || 0;
+    var ratio = scale / zoomApplied;
+    if (restore) {
+      if (zoomStyle) zoomRoot.style.setProperty('zoom', zoomStyle, zoomPriority);
+      else zoomRoot.style.removeProperty('zoom');
+    } else zoomRoot.style.setProperty('zoom', String(zoomBase * scale), 'important');
+    var after = zoomRect();
+    zoomApplied = scale;
+    // The wire has no pinch centroid; native supplies the normalized TV cursor.
+    if (typeof window.scrollTo === 'function') {
+      window.scrollTo({ left: sx + after.left + (x - before.left) * ratio - x,
+        top: sy + after.top + (y - before.top) * ratio - y, behavior: 'instant' });
+    }
+  }
+
+  function schedulePageZoom() {
+    if (zoomFrame !== null) return;
+    var generation = zoomGeneration;
+    var frame = window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); };
+    zoomFrame = frame.call(window, function () {
+      if (generation !== zoomGeneration) return;
+      zoomFrame = null;
+      var delta = Math.log(zoomTarget / zoomApplied);
+      var next = Math.abs(delta) < 0.002 ? zoomTarget : zoomApplied * Math.exp(clamp(delta * 0.4, -0.12, 0.12));
+      renderPageZoom(next, false);
+      if (zoomApplied !== zoomTarget) schedulePageZoom();
+    });
+  }
+
+  function zoomPage(factor, x, y) {
+    if (inFrame()) return 'unsupported';
+    if (typeof factor !== 'number' || !isFinite(factor) || factor <= 0 ||
+        typeof x !== 'number' || !isFinite(x) || typeof y !== 'number' || !isFinite(y)) return 'invalid';
+    if (!zoomRoot) {
+      if (!window.CSS || !window.CSS.supports('zoom', '1.1')) return 'unsupported';
+      zoomRoot = document.documentElement;
+      if (!zoomRoot || !zoomRoot.style) { zoomRoot = null; return 'unsupported'; }
+      zoomStyle = zoomRoot.style.getPropertyValue('zoom');
+      zoomPriority = zoomRoot.style.getPropertyPriority('zoom');
+      var computed = window.getComputedStyle(zoomRoot).zoom;
+      zoomBase = parseFloat(computed);
+      if (typeof computed === 'string' && computed.indexOf('%') !== -1) zoomBase /= 100;
+      if (!isFinite(zoomBase) || zoomBase <= 0) zoomBase = 1;
+    }
+    zoomX = clamp(x, 0, 1); zoomY = clamp(y, 0, 1);
+    zoomTarget = clamp(zoomTarget * factor, 0.5, 3);
+    schedulePageZoom();
+    return 'ok';
+  }
+
+  function resetPageZoom() {
+    zoomGeneration++;
+    if (zoomFrame !== null && window.cancelAnimationFrame) window.cancelAnimationFrame(zoomFrame);
+    zoomFrame = null;
+    if (zoomRoot) renderPageZoom(1, true);
+    zoomRoot = null;
+    zoomTarget = zoomApplied = 1;
+    return 'ok';
+  }
+
   // ── Fullscreen (site button, then the player container, then ancestor iframes)
   // Prefer the control the site already shows, so its seek bar and menus stay.
   // Otherwise fullscreen the player box that contains those controls, never the
@@ -425,23 +509,6 @@
     return video;
   }
 
-  function fullscreenModeTokens(video) {
-    var tokens = [];
-    var el = video ? video.parentElement : null;
-    var stop = ownBody(video);
-    var hops = 0;
-    while (el && hops < 8 && el !== stop && el !== document.documentElement) {
-      var parts = classText(el).split(/\s+/);
-      for (var i = 0; i < parts.length; i++) {
-        var token = parts[i];
-        if (token && /fullscreen/i.test(token) && !/button|control|icon|toggle|menu/i.test(token)) tokens.push(token);
-      }
-      el = el.parentElement;
-      hops++;
-    }
-    return tokens.join(' ');
-  }
-
   function activateControl(el) {
     var target = pageNode(el);
     try {
@@ -475,15 +542,20 @@
   }
 
   function applyFill(el) {
-    if (!rememberStyle(el) || !el.style || !el.style.setProperty) return;
+    if (!el || !el.style || !el.style.setProperty) return false;
+    if (el.__pbFit) return true;
+    if (!rememberStyle(el)) return false;
     var props = [
       ['position', 'fixed'], ['top', '0'], ['left', '0'], ['width', '100%'], ['height', '100%'],
       ['max-width', '100%'], ['max-height', '100%'], ['margin', '0'], ['object-fit', 'contain'],
       ['z-index', '2147483647'], ['background', '#000'], ['border', '0']
     ];
+    var applied = true;
     for (var i = 0; i < props.length; i++) {
-      try { el.style.setProperty(props[i][0], props[i][1], 'important'); } catch (e) { /* ignore */ }
+      try { el.style.setProperty(props[i][0], props[i][1], 'important'); } catch (e) { applied = false; }
     }
+    if (!applied) restoreStyle(el);
+    return applied;
   }
 
   function restoreFitted() {
@@ -524,7 +596,10 @@
       // A promise that settles late must not be failed by the timer first.
       // The timer is only how a non-thenable webkit call reports success.
       if (ret && typeof ret.then === 'function') {
-        ret.then(function () { finish(true); }, function () { finish(false); });
+        ret.then(function () {
+          var current = fullscreenElement();
+          finish(!!current && (current === el || containsNode(current, el)));
+        }, function () { finish(false); });
         return;
       }
       setTimeout(function () {
@@ -550,9 +625,11 @@
   }
 
   function expandIframe(iframe) {
-    if (!iframe || iframe.__pbFit) return;
-    applyFill(iframe);
+    if (!iframe) return false;
+    if (iframe.__pbFit) return true;
+    if (!applyFill(iframe)) return false;
     tryNativeFullscreen(iframe).then(function () {}, function () {});
+    return true;
   }
 
   function sameOriginTarget() {
@@ -599,6 +676,12 @@
   }
 
   function beginMaximize() {
+    if (fitState === 'pending') return 'pending';
+    if ((fitState === 'native' || fitState === 'site') && !fullscreenElement()) {
+      fitState = null;
+      siteButton = null;
+      siteUsedApi = false;
+    }
     if (fitState) return 'ok_held';
     var video = find();
     if (video) return enterPlayer(video, null);
@@ -607,7 +690,7 @@
     if (same) return enterPlayer(same.video, same.iframe);
     var iframe = largestIframe();
     if (!iframe) return 'no_video';
-    expandIframe(iframe);
+    if (!expandIframe(iframe)) return 'no_video';
     try { iframe.contentWindow.postMessage({ pb: PB_FRAME, op: 'fill-video' }, '*'); } catch (e) { /* cross-origin */ }
     fitState = 'iframe';
     return 'ok_iframe';
@@ -617,19 +700,16 @@
     var existing = fullscreenElement();
     if (existing && (containsNode(existing, video) || existing === video)) {
       fitState = 'native';
-      return 'ok_held';
-    }
-    if (fullscreenModeTokens(video)) {
-      fitState = 'site';
-      siteButton = findSiteFullscreenButton(video);
-      siteUsedApi = false;
-      return 'ok_held';
+      return 'ok_video';
     }
     var button = findSiteFullscreenButton(video);
-    if (button) {
-      var before = fullscreenModeTokens(video);
+    // A remote JS call normally has no user activation. Do not click a site's
+    // toggle in that case: it may change classes even when fullscreen is denied.
+    var activated = false;
+    try { activated = !!pageView().navigator.userActivation.isActive; } catch (e) { /* no activation API */ }
+    if (button && activated) {
       activateControl(button);
-      if (fullscreenElement() || fullscreenModeTokens(video) !== before) {
+      if (fullscreenElement() && containsNode(fullscreenElement(), video)) {
         fitState = 'site';
         siteButton = button;
         siteUsedApi = !!fullscreenElement();
@@ -640,7 +720,7 @@
       siteButton = button;
       setTimeout(function () {
         if (generation !== fitGeneration || fitState !== 'pending') return;
-        if (fullscreenElement() || fullscreenModeTokens(video) !== before) {
+        if (fullscreenElement() && containsNode(fullscreenElement(), video)) {
           fitState = 'site';
           siteUsedApi = !!fullscreenElement();
           postControlResult('maximize', 'ok_site');
@@ -660,12 +740,19 @@
   function requestContainer(video, iframe, generation) {
     var shell = playerContainer(video);
     tryNativeFullscreen(shell).then(function () {
-      if (generation !== fitGeneration || fitState !== 'pending') return;
+      if (generation !== fitGeneration || fitState !== 'pending') {
+        if (!fitState && containsNode(fullscreenElement(), shell)) exitDocumentFullscreen();
+        return;
+      }
       fitState = 'native';
       postControlResult('maximize', 'ok_video');
     }, function () {
       if (generation !== fitGeneration || fitState !== 'pending') return;
-      applyFill(shell);
+      if (!applyFill(shell)) {
+        fitState = null;
+        postControlResult('maximize', 'no_video');
+        return;
+      }
       if (iframe) expandIframe(iframe);
       else postParent('enter');
       fitState = 'fill';
@@ -688,7 +775,7 @@
       try { frames[i].contentWindow.postMessage({ pb: PB_FRAME, op: 'exit-video' }, '*'); } catch (err) { /* cross-origin */ }
     }
     postParent('exit');
-    if (viaSite && button) activateControl(button);
+    if (viaSite && button && fullscreenElement()) activateControl(button);
     if (fullscreenElement()) {
       exitDocumentFullscreen();
       return 'ok';
@@ -911,9 +998,12 @@
   function report() {
     bindChannel();
     var b = bestVideo();
-    var score = videoScore(b.cov);
-    var active = b.cov >= COVERAGE_THRESHOLD;
-    var playing = active && b.v && !b.v.paused;
+    var retained = b.v && b.v === controlledVideo && !b.v.ended;
+    var active = b.cov >= COVERAGE_THRESHOLD || !!retained;
+    var score = retained && b.cov < COVERAGE_THRESHOLD ? controlledScore : videoScore(b.cov);
+    var playing = !!(active && b.v && !b.v.paused && !b.v.ended);
+    controlledVideo = active ? b.v : null;
+    controlledScore = active ? score : 0;
     // Re-send when active/playing flips, or score shifts notably (resize/maximize),
     // so native's cross-frame "which frame wins" pick stays current.
     if (active !== lastActive || playing !== lastPlaying ||
@@ -935,10 +1025,13 @@
   document.addEventListener('pause', report, true);
   document.addEventListener('loadedmetadata', report, true);
   window.addEventListener('resize', report, true);
+  document.addEventListener('scroll', report, true);
+  document.addEventListener('ended', report, true);
   document.addEventListener('fullscreenchange', report, true);
   document.addEventListener('webkitfullscreenchange', report, true);
   document.addEventListener('fullscreenchange', onOwnedFullscreenEnd, true);
   document.addEventListener('webkitfullscreenchange', onOwnedFullscreenEnd, true);
   window.addEventListener('message', onFrameMessage, true);
+  window.addEventListener('pagehide', resetPageZoom, true);
   report();
 })();

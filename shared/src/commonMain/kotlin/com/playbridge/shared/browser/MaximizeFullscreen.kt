@@ -13,7 +13,7 @@ fun maximizeRoute(hasTargetFrame: Boolean, alreadyOn: Boolean): MaximizeRoute = 
     else -> MaximizeRoute.MainFrameFallback
 }
 
-/** Phone fullscreen follows native chrome, an in-frame fill, or a request that has not surfaced yet. */
+/** Phone fullscreen follows native chrome, an in-frame fill, or a script-confirmed DOM fullscreen element. */
 fun browserFullscreenReported(nativeChrome: Boolean, frameFill: Boolean, nativeClaim: Boolean = false): Boolean =
     nativeChrome || frameFill || nativeClaim
 
@@ -42,9 +42,11 @@ fun maximizeSignal(kind: String, value: String): MaximizeSignal = when (kind) {
 }
 
 fun applyMaximizeSignal(flags: FullscreenFlags, signal: MaximizeSignal): FullscreenFlags = when (signal) {
-    MaximizeSignal.Video, MaximizeSignal.Site, MaximizeSignal.Held -> flags.copy(nativeClaim = true)
-    MaximizeSignal.Fill, MaximizeSignal.Iframe -> flags.copy(frameFill = true)
+    MaximizeSignal.Video, MaximizeSignal.Site -> flags.copy(nativeClaim = true)
+    MaximizeSignal.Held -> flags
+    MaximizeSignal.Fill, MaximizeSignal.Iframe -> FullscreenFlags(frameFill = true)
     MaximizeSignal.NativeEnded -> flags.copy(nativeClaim = false)
     MaximizeSignal.Restored -> FullscreenFlags()
-    MaximizeSignal.NoVideo, MaximizeSignal.Unknown -> flags
+    MaximizeSignal.NoVideo -> FullscreenFlags()
+    MaximizeSignal.Unknown -> flags
 }

@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import com.playbridge.shared.browser.RESET_PAGE_ZOOM_SCRIPT
+import com.playbridge.shared.browser.pageZoomScript
 import com.playbridge.shared.browser.FullscreenFlags
 import com.playbridge.shared.browser.MaximizeRoute
 import com.playbridge.shared.browser.VideoTargetSelector
@@ -122,7 +124,7 @@ class GeckoViewEngine(
     fun videoMaximize(nativeChrome: Boolean) {
         val target = videoTargets.current()
         val hasTarget = target != null && documents[target] != null
-        when (maximizeRoute(hasTarget, nativeChrome || fullscreenFlags.frameFill || fullscreenFlags.nativeClaim)) {
+        when (maximizeRoute(hasTarget, nativeChrome || fullscreenFlags.frameFill)) {
             MaximizeRoute.Hold -> applyMaximizeResult("maximize", "ok_held")
             MaximizeRoute.TargetFrame, MaximizeRoute.MainFrameFallback -> {
                 acceptingMaximize = true
@@ -136,6 +138,7 @@ class GeckoViewEngine(
         acceptingMaximize = false
         setFullscreenFlags(FullscreenFlags())
         dispatchFit("restore")
+        session.exitFullScreen()
         maximizeTarget = null
     }
 
@@ -353,6 +356,15 @@ class GeckoViewEngine(
             ScreenLength.fromPixels(dx.toDouble() * multiplier),
             ScreenLength.fromPixels(dy.toDouble() * multiplier)
         )
+    }
+
+    fun zoomBy(factor: Float, x: Float = 0.5f, y: Float = 0.5f) {
+        val script = pageZoomScript(factor, x, y) ?: return
+        evaluateJavascript(script, null)
+    }
+
+    fun resetPageZoom() {
+        evaluateJavascript(RESET_PAGE_ZOOM_SCRIPT, null)
     }
 
     fun simulateClick(x: Float, y: Float) {

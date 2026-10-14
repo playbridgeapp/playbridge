@@ -124,7 +124,7 @@ fun buildReceiverCapabilities(
                         put("webview", buildBrowserEngineDescriptor(pointer = BROWSER_POINTER_BASE + "zoom"))
                     }
                     if ("gecko" in browsers) {
-                        put("gecko", buildBrowserEngineDescriptor(pointer = BROWSER_POINTER_BASE))
+                        put("gecko", buildBrowserEngineDescriptor(pointer = BROWSER_POINTER_BASE + "zoom"))
                     }
                 })
             })

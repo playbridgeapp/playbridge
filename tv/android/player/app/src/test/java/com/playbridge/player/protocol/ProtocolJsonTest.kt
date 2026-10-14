@@ -394,13 +394,13 @@ class ProtocolJsonTest {
             assertEquals(expectedBrowserReporting, engine?.get("reporting")?.jsonArray?.map { it.jsonPrimitive.content })
         }
 
-        // Pointer differences: webview supports pinch-zoom; gecko does not
+        // Both engines implement bounded page pinch-zoom through the shared controller
         val webviewPointer = browserEngines?.get("webview")?.jsonObject?.get("pointer")?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
         val geckoPointer = browserEngines?.get("gecko")?.jsonObject?.get("pointer")?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
         assertEquals(listOf("move", "click", "down", "up", "scroll", "zoom"), webviewPointer)
-        assertEquals(listOf("move", "click", "down", "up", "scroll"), geckoPointer)
+        assertEquals(listOf("move", "click", "down", "up", "scroll", "zoom"), geckoPointer)
         assertTrue("zoom" in webviewPointer)
-        assertFalse("zoom" in geckoPointer)
+        assertTrue("zoom" in geckoPointer)
     }
 
     @Test
