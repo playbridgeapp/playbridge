@@ -44,6 +44,12 @@ struct PlayerView: View {
     @State private var engineChrome = PlayerEngineChrome()
     @State private var exitGate = PlayerRemoteExitGate()
     @State private var settingsReporter = PlayerSettingsReporter(engine: "avplayer", generation: 0)
+    /// App volume for this playback session. A new player screen starts at full
+    /// level, unmuted. Engine switches and playlist moves keep the stored level.
+    @State private var appVolume = PlayerAppVolumeController(engine: "avplayer", generation: 0)
+    @State private var appVolumeBanner: String?
+    @State private var appVolumeShownLevel = PlayerAppVolume.defaultLevel
+    @State private var appVolumeBannerID = 0
     @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
 
@@ -63,6 +69,7 @@ struct PlayerView: View {
         guard isCurrentPlayback(source, generation: generation), target != source else { return }
         let sourceIdentity = PlayerReportIdentity(engine: source.rawValue, generation: generation)
         guard let frame = settingsReporter.switchEngine(from: sourceIdentity, to: target.rawValue) else { return }
+        appVolume.note(engine: target.rawValue, generation: generation)
         resumeTime = currentTime.isFinite && currentTime > 0 ? currentTime : 0
         sessionEngine = target
         syncExitFence()
@@ -95,6 +102,27 @@ struct PlayerView: View {
         let (decision, frame) = settingsReporter.endOfFile(identity: identity)
         if let frame { emit(frame, engine: identity.engine) }
         return decision
+    }
+
+    private func liveVolumeIdentity() -> PlayerReportIdentity {
+        PlayerReportIdentity(engine: exitGate.liveEngine.rawValue, generation: exitGate.liveGeneration)
+    }
+
+    /// Initial sync and `context_query` resync. A mismatched engine or item emits nothing.
+    private func emitAppVolume(engine: PlaybackEngine, generation: Int) {
+        let identity = reportIdentity(engine: engine, generation: generation)
+        guard let frame = appVolume.resync(identity: identity) else { return }
+        guard server.currentPlayRequest != nil else { return }
+        server.broadcast(frame)
+    }
+
+    /// An accepted step, absolute level, or mute toggle. The on-screen label follows.
+    private func publishAppVolume(_ frame: [String: Any]?) {
+        guard let frame, server.currentPlayRequest != nil else { return }
+        server.broadcast(frame)
+        appVolumeShownLevel = appVolume.level
+        appVolumeBanner = PlayerAppVolume.indicatorText(level: appVolume.level, muted: appVolume.muted)
+        appVolumeBannerID &+= 1
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
@@ -171,6 +199,7 @@ struct PlayerView: View {
     private func noteCurrentItem(_ request: Playbridge_PlayPayload) {
         let engine = effectiveEngine(for: request)
         settingsReporter.note(engine: engine.rawValue, generation: mediaGeneration)
+        appVolume.note(engine: engine.rawValue, generation: mediaGeneration)
         emitCurrent(engine: engine, generation: mediaGeneration)
     }
 
@@ -251,6 +280,10 @@ struct PlayerView: View {
              .togglePlayback, .seekBackward, .seekForward,
              .scrubBackward, .scrubForward, .commitScrub:
             _ = engineChrome.apply(effect)
+        case .adjustAppVolume(let steps):
+            publishAppVolume(appVolume.step(steps, identity: liveVolumeIdentity()))
+        case .toggleAppMute:
+            publishAppVolume(appVolume.toggleMute(identity: liveVolumeIdentity()))
         }
     }
 
@@ -276,6 +309,9 @@ struct PlayerView: View {
         let _ = settingsReporter.note(
             engine: effectiveEngine(for: fenceRequest).rawValue,
             generation: mediaGeneration)
+        let _ = appVolume.note(
+            engine: effectiveEngine(for: fenceRequest).rawValue,
+            generation: mediaGeneration)
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -299,6 +335,8 @@ struct PlayerView: View {
                         onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
                         onEndOfFile: { identity in emitEnd(identity) },
                         initialLoop: settingsReporter.loop,
+                        appLevel: appVolume.level,
+                        appMuted: appVolume.muted,
                         engineChrome: engineChrome
                     )
                     .ignoresSafeArea()
@@ -323,6 +361,8 @@ struct PlayerView: View {
                         onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
                         onEndOfFile: { identity in emitEnd(identity) },
                         initialLoop: settingsReporter.loop,
+                        appLevel: appVolume.level,
+                        appMuted: appVolume.muted,
                         mediaIdentity: currentGeneration,
                         engineChrome: engineChrome
                     )
@@ -352,6 +392,33 @@ struct PlayerView: View {
                 .zIndex(20)
             }
 
+            if let appVolumeBanner {
+                VStack {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(appVolumeBanner)
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.28))
+                            Capsule()
+                                .fill(.white)
+                                .frame(width: max(0, 320 * appVolumeShownLevel))
+                        }
+                        .frame(width: 320, height: 10)
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 18)
+                    .background(.black.opacity(0.78))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(appVolumeBanner)
+                    Spacer()
+                }
+                .padding(.top, 48)
+                .allowsHitTesting(false)
+                .zIndex(40)
+            }
+
             if stillWatching.isPrompting {
                 StillWatchingPrompt(
                     secondsRemaining: stillWatching.secondsRemaining,
@@ -365,11 +432,25 @@ struct PlayerView: View {
             isPlayerFocused = true
             syncExitFence()
             let request = playlistStore.currentItem ?? payload
-            emitCurrent(engine: effectiveEngine(for: request), generation: mediaGeneration)
+            let engine = effectiveEngine(for: request)
+            emitCurrent(engine: engine, generation: mediaGeneration)
+            emitAppVolume(engine: engine, generation: mediaGeneration)
         }
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.resyncRequest)) { _ in
             let request = playlistStore.currentItem ?? payload
-            emitCurrent(engine: effectiveEngine(for: request), generation: mediaGeneration)
+            let engine = effectiveEngine(for: request)
+            emitCurrent(engine: engine, generation: mediaGeneration)
+            emitAppVolume(engine: engine, generation: mediaGeneration)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.appVolumeCommand)) { note in
+            guard let level = note.userInfo?["level"] as? Double else { return }
+            publishAppVolume(appVolume.setAbsolute(level, identity: liveVolumeIdentity()))
+        }
+        .task(id: appVolumeBannerID) {
+            guard appVolumeBanner != nil else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            appVolumeBanner = nil
         }
         .background(
             PlayerExitFenceSync(

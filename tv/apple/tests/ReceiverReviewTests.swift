@@ -185,10 +185,14 @@ struct ReceiverReviewTests {
         assert(reusedAudioOptions["aid"] == "auto" && reusedAudioOptions["mute"] == "yes")
         assert(MPVAudioPolicy.muteValue(isPreBuffering: false) == "no")
         assert(MPVAudioPolicy.muteValue(isPreBuffering: true) == "yes")
+        assert(MPVAudioPolicy.muteValue(isPreBuffering: false, appMuted: true) == "yes")
+        assert(MPVAudioPolicy.muteValue(isPreBuffering: true, appMuted: true) == "yes")
         let audioTestPath = "https://example.test/video?parts=1,2"
         assert(MPVAudioPolicy.loadArguments(path: audioTestPath, isPreBuffering: false) ==
                ["loadfile", audioTestPath, "replace", "-1", "aid=auto,mute=no"])
         assert(MPVAudioPolicy.loadArguments(path: "/tmp/movie.mp4", isPreBuffering: true) ==
+               ["loadfile", "/tmp/movie.mp4", "replace", "-1", "aid=auto,mute=yes"])
+        assert(MPVAudioPolicy.loadArguments(path: "/tmp/movie.mp4", isPreBuffering: false, appMuted: true) ==
                ["loadfile", "/tmp/movie.mp4", "replace", "-1", "aid=auto,mute=yes"])
         print("PASS: MPV per-file audio resets stale track IDs/preplay mute without touching outgoing tracks or volume")
 
@@ -287,6 +291,7 @@ struct ReceiverReviewTests {
 
         runRemoteNavigationTests()
         runPlayerSettingsTests()
+        runAppVolumeTests()
     }
 }
 
@@ -464,10 +469,12 @@ private func runRemoteDirectionTests() {
     func assertTransport(_ chrome: PlayerChromeState, _ name: String) {
         assert(effect("dpad_left", chrome) == .seekBackward, "\(name) Left seeks")
         assert(effect("dpad_right", chrome) == .seekForward, "\(name) Right seeks")
-        assert(effect("dpad_up", chrome) == .ignored, "\(name) Up stays free")
-        assert(effect("dpad_down", chrome) == .ignored, "\(name) Down stays free")
+        assert(effect("dpad_up", chrome) == .adjustAppVolume(steps: 1), "\(name) Up steps app volume")
+        assert(effect("dpad_down", chrome) == .adjustAppVolume(steps: -1), "\(name) Down steps app volume")
         assert(effect("dpad_center", chrome) == .togglePlayback, "\(name) Center toggles playback")
-        assert(effect("volume_up", chrome) == .ignored, "\(name) volume stays ignored")
+        assert(effect("volume_up", chrome) == .adjustAppVolume(steps: 1), "\(name) volume up steps app volume")
+        assert(effect("volume_down", chrome) == .adjustAppVolume(steps: -1), "\(name) volume down steps app volume")
+        assert(effect("mute", chrome) == .toggleAppMute, "\(name) mute toggles app mute")
     }
 
     let menu = PlayerChromeState(sessionMatches: true, subtitleMenu: true)
@@ -484,7 +491,10 @@ private func runRemoteDirectionTests() {
     assert(PlayerHighlightList(count: 4, index: 0).moving(-1).index == 0, "Up clamps on the first row")
     assert(PlayerHighlightList(count: 4, index: 3).moving(1).index == 3, "Down clamps on the last row")
     assert(PlayerHighlightList(count: 0, index: 0).moving(1).index == 0)
-    for key in ["volume_up", "Back", "Home", ""] {
+    assert(effect("volume_up", menu) == .adjustAppVolume(steps: 1), "Volume up steps app volume while a menu is open")
+    assert(effect("volume_down", menu) == .adjustAppVolume(steps: -1))
+    assert(effect("mute", menu) == .toggleAppMute)
+    for key in ["Back", "Home", ""] {
         assert(effect(key, menu) == .ignored, "\(key) stays ignored while a menu is open")
     }
     assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, audioMenu: true)) == .moveHighlight(delta: -1))
@@ -508,6 +518,9 @@ private func runRemoteDirectionTests() {
     assert(effect("dpad_center", menuAndPlaylist) == .activateHighlight)
     assert(effect("dpad_left", menuAndPlaylist) == .seekBackward)
     assert(effect("dpad_right", menuAndPlaylist) == .seekForward)
+    assert(effect("volume_up", menuAndPlaylist) == .adjustAppVolume(steps: 1),
+           "Volume up steps app volume while the playlist is open")
+    assert(effect("dpad_up", menuAndPlaylist) == .moveHighlight(delta: -1))
     if case .moveHighlight(let delta) = effect("dpad_down", menuAndPlaylist) {
         playlistRows = playlistRows.moving(delta)
     }
@@ -542,18 +555,21 @@ private func runRemoteDirectionTests() {
     assert(effect("dpad_center", scrub) == .commitScrub)
     assert(effect("dpad_up", scrub) == .ignored)
     assert(effect("dpad_down", scrub) == .ignored)
+    assert(effect("volume_down", scrub) == .adjustAppVolume(steps: -1), "Scrub leaves Up and Down alone")
     assert(effect("back", scrub) == .dismissScrub)
 
     let sheet = PlayerChromeState(sessionMatches: true, settingsSheet: true, controlsVisible: true)
     for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right"] {
         assert(effect(key, sheet) == .ignored, "\(key) stays out of a presented sheet")
     }
+    assert(effect("volume_up", sheet) == .adjustAppVolume(steps: 1))
     assert(effect("back", sheet) == .dismissSettingsSheet)
     assert(effect("home", sheet) == .exitPlayback)
 
     var staleList = PlayerHighlightList(count: 4, index: 1)
     let staleMenu = PlayerChromeState(sessionMatches: false, subtitleMenu: true, playlist: true, controlsVisible: true)
-    for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right", "back", "home"] {
+    for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right", "back", "home",
+                "volume_up", "volume_down", "mute"] {
         let staleEffect = effect(key, staleMenu)
         assert(staleEffect == .ignored, "A stale \(key) is ignored")
         if case .moveHighlight(let delta) = staleEffect { staleList = staleList.moving(delta) }
@@ -562,7 +578,11 @@ private func runRemoteDirectionTests() {
 
     assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: true) == [-1, 3, 5])
     assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: false) == [3, 5])
-    print("PASS: Up/Down/center follow the open surface, and a stale session leaves the highlight")
+    let promptVolume = PlayerChromeState(sessionMatches: true, stillWatching: true)
+    assert(effect("volume_up", promptVolume) == .ignored)
+    assert(effect("volume_down", promptVolume) == .ignored)
+    assert(effect("mute", promptVolume) == .ignored)
+    print("PASS: Up/Down step app volume on playback, menus keep the highlight, and a stale session leaves the highlight")
 }
 
 private func jsonObject(at url: URL) -> [String: Any] {
@@ -684,4 +704,133 @@ private func runPlayerSettingsTests() {
     assert(outcome(loopOn: true, hasNextItem: true, identity: mpvIdentity) == "ignored")
 
     print("PASS: player settings snapshot, loop, engine switch, resync, and stale engine")
+}
+
+private func runAppVolumeTests() {
+    assert(PlayerAppVolume.step == 0.05)
+    assert(PlayerAppVolume.scope == "app")
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 0.35) == 0.35)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 0) == 0)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 1) == 1)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 1.0) == 1)
+    assert(PlayerAppVolume.absoluteLevel(in: ["scope": "app", "level": NSNumber(value: 0.35)]) == 0.35)
+    assert(PlayerAppVolume.absoluteLevel(scope: "system", level: 0.35) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "hdmi-cec", level: 0.2) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 35) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: -0.01) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 1.01) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: Double.nan) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: Double.infinity) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: true) == nil)
+    assert(PlayerAppVolume.absoluteLevel(scope: "app", level: NSNumber(value: true)) == nil)
+    let trueLevel = try! JSONSerialization.jsonObject(with: Data(#"{"scope":"app","level":true}"#.utf8)) as! [String: Any]
+    assert(PlayerAppVolume.absoluteLevel(in: trueLevel) == nil, "A JSON boolean is not a level")
+    let intLevel = try! JSONSerialization.jsonObject(with: Data(#"{"scope":"app","level":1}"#.utf8)) as! [String: Any]
+    assert(PlayerAppVolume.absoluteLevel(in: intLevel) == 1)
+    assert(PlayerAppVolume.absoluteLevel(scope: nil, level: 0.5) == nil)
+    assert(PlayerAppVolume.absoluteLevel(in: ["level": 0.5]) == nil)
+
+    assert(PlayerAppVolume.mpvVolumeString(level: 1) == "100.000")
+    assert(PlayerAppVolume.mpvVolumeString(level: 0) == "0.000")
+    assert(PlayerAppVolume.mpvVolumeString(level: 0.35) == "35.000")
+    assert(PlayerAppVolume.avPlayerVolume(0) == 0)
+    assert(PlayerAppVolume.avPlayerVolume(1) == 1)
+    assert(abs(PlayerAppVolume.avPlayerVolume(0.35) - 0.35) < 0.0001)
+    assert(PlayerAppVolume.indicatorText(level: 0.35, muted: false) == "App volume 35%")
+    assert(PlayerAppVolume.indicatorText(level: 1, muted: false) == "App volume 100%")
+    assert(PlayerAppVolume.indicatorText(level: 0, muted: false) == "App volume 0%")
+    assert(PlayerAppVolume.indicatorText(level: 0.35, muted: true) == "App volume muted")
+
+    let volume = PlayerAppVolumeController(engine: "avplayer", generation: 4)
+    let avplayer = PlayerReportIdentity(engine: "avplayer", generation: 4)
+    let staleEngine = PlayerReportIdentity(engine: "mpv", generation: 4)
+    let staleItem = PlayerReportIdentity(engine: "avplayer", generation: 3)
+    assert(volume.level == 1)
+    assert(volume.muted == false)
+    assert(volume.step(-1, identity: staleEngine) == nil)
+    assert(volume.step(-1, identity: staleItem) == nil)
+    assert(volume.setAbsolute(0.2, identity: staleEngine) == nil)
+    assert(volume.toggleMute(identity: staleItem) == nil)
+    assert(volume.resync(identity: staleEngine) == nil)
+    assert(volume.level == 1 && volume.muted == false, "A stale engine cannot change app volume")
+
+    var written: [String] = []
+    for _ in 0..<3 {
+        let frame = volume.step(-1, identity: avplayer)!
+        assert(frame["type"] as? String == "volume_state")
+        assert(frame["scope"] as? String == "app")
+        assert(frame["muted"] as? Bool == false)
+        assert(PlayerAppVolume.isValidVolumeState(frame))
+        written.append(PlayerAppVolume.mpvVolumeString(level: volume.level))
+    }
+    assert(written == ["95.000", "90.000", "85.000"], "Rapid steps publish absolute mpv volumes in order")
+    assert(volume.level == 0.85)
+    let up = volume.step(1, identity: avplayer)!
+    assert(up["level"] as? Double == 0.9)
+    assert(up["muted"] as? Bool == false)
+
+    let muted = volume.toggleMute(identity: avplayer)!
+    assert(muted["muted"] as? Bool == true)
+    assert(muted["level"] as? Double == 0.9, "Mute keeps the stored level")
+    assert(PlayerAppVolume.indicatorText(level: volume.level, muted: volume.muted) == "App volume muted")
+    let whileMuted = volume.step(-1, identity: avplayer)!
+    assert(whileMuted["level"] as? Double == 0.85)
+    assert(whileMuted["muted"] as? Bool == true, "A level change keeps mute")
+    let absolute = volume.setAbsolute(0.35, identity: avplayer)!
+    assert(absolute["level"] as? Double == 0.35)
+    assert(absolute["muted"] as? Bool == true, "An absolute level keeps mute")
+    assert(volume.setAbsolute(0.35, identity: avplayer) == nil, "The same level is not a change")
+    assert(volume.setAbsolute(1.5, identity: avplayer) == nil)
+    assert(volume.setAbsolute(Double.nan, identity: avplayer) == nil)
+    assert(volume.level == 0.35 && volume.muted)
+    let unmuted = volume.toggleMute(identity: avplayer)!
+    assert(unmuted["muted"] as? Bool == false)
+    assert(unmuted["level"] as? Double == 0.35, "Unmute restores the stored level")
+    assert(PlayerAppVolume.indicatorText(level: volume.level, muted: volume.muted) == "App volume 35%")
+
+    volume.note(engine: "mpv", generation: 4)
+    assert(volume.level == 0.35 && volume.muted == false, "An engine switch keeps app volume")
+    assert(volume.step(1, identity: avplayer) == nil)
+    assert(volume.level == 0.35)
+    let mpv = PlayerReportIdentity(engine: "mpv", generation: 4)
+    let switched = volume.resync(identity: mpv)!
+    assert(switched["scope"] as? String == "app")
+    assert(switched["level"] as? Double == 0.35)
+    assert(switched["muted"] as? Bool == false)
+    assert(PlayerAppVolume.isValidVolumeState(switched))
+    assert(!PlayerAppVolume.isValidVolumeState([
+        "type": "volume_state", "scope": "app", "level": 0.35, "muted": false, "playbackId": "x",
+    ]), "volume_state does not carry extra fields")
+    assert(!PlayerAppVolume.isValidVolumeState(["type": "volume_state", "scope": "system", "level": 0.35]))
+    assert(!PlayerAppVolume.isValidVolumeState(["type": "volume_state", "scope": "app"]))
+
+    volume.note(engine: "mpv", generation: 9)
+    assert(volume.level == 0.35 && volume.muted == false, "The next item keeps app volume")
+    assert(volume.resync(identity: mpv) == nil, "The previous item cannot report volume")
+    assert(volume.setAbsolute(0.5, identity: mpv) == nil)
+    let next = PlayerReportIdentity(engine: "mpv", generation: 9)
+    let nextFrame = volume.resync(identity: next)!
+    assert(nextFrame["level"] as? Double == 0.35)
+    assert(nextFrame["engine"] == nil)
+
+    let topped = PlayerAppVolumeController(engine: "avplayer", generation: 1, level: 0.98)
+    let topID = PlayerReportIdentity(engine: "avplayer", generation: 1)
+    let raised = topped.step(1, identity: topID)!
+    assert(raised["level"] as? Double == 1)
+    assert(topped.step(1, identity: topID) == nil)
+    assert(topped.muted == false)
+    let floored = PlayerAppVolumeController(engine: "avplayer", generation: 1, level: 0.02)
+    let floorID = PlayerReportIdentity(engine: "avplayer", generation: 1)
+    let lowered = floored.step(-1, identity: floorID)!
+    assert(lowered["level"] as? Double == 0)
+    assert(lowered["muted"] as? Bool == false, "Level 0 is not mute")
+    assert(floored.step(-1, identity: floorID) == nil)
+    assert(floored.toggleMute(identity: floorID)!["level"] as? Double == 0)
+    assert(floored.muted)
+    assert(floored.toggleMute(identity: floorID)!["level"] as? Double == 0)
+
+    let fresh = PlayerAppVolumeController(engine: "mpv", generation: 0)
+    assert(fresh.level == 1 && fresh.muted == false, "A new session starts unattenuated and unmuted")
+
+    print("PASS: app volume step, absolute, mute, clamp, engine switch, and stale volume_state")
 }
