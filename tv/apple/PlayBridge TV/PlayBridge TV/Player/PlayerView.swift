@@ -43,6 +43,7 @@ struct PlayerView: View {
     @State private var mediaGeneration = 0
     @State private var engineChrome = PlayerEngineChrome()
     @State private var exitGate = PlayerRemoteExitGate()
+    @State private var settingsReporter = PlayerSettingsReporter(engine: "avplayer", generation: 0)
     @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
 
@@ -60,9 +61,40 @@ struct PlayerView: View {
     private func handleSwitch(to target: PlaybackEngine, currentTime: Double,
                               from source: PlaybackEngine, generation: Int) {
         guard isCurrentPlayback(source, generation: generation), target != source else { return }
+        let sourceIdentity = PlayerReportIdentity(engine: source.rawValue, generation: generation)
+        guard let frame = settingsReporter.switchEngine(from: sourceIdentity, to: target.rawValue) else { return }
         resumeTime = currentTime.isFinite && currentTime > 0 ? currentTime : 0
         sessionEngine = target
         syncExitFence()
+        emit(frame, engine: target.rawValue)
+    }
+
+    private func reportIdentity(engine: PlaybackEngine, generation: Int) -> PlayerReportIdentity {
+        PlayerReportIdentity(engine: engine.rawValue, generation: generation)
+    }
+
+    private func emit(_ frame: [String: Any], engine: String) {
+        guard server.currentPlayRequest != nil else { return }
+        server.setPlaybackEngine(engine)
+        server.broadcast(frame)
+    }
+
+    private func emitCurrent(engine: PlaybackEngine, generation: Int) {
+        let identity = reportIdentity(engine: engine, generation: generation)
+        guard let frame = settingsReporter.resync(identity: identity) else { return }
+        emit(frame, engine: identity.engine)
+    }
+
+    private func emitLoop(_ enabled: Bool, identity: PlayerReportIdentity) -> Bool {
+        guard let frame = settingsReporter.setLoop(enabled, identity: identity) else { return false }
+        emit(frame, engine: identity.engine)
+        return true
+    }
+
+    private func emitEnd(_ identity: PlayerReportIdentity) -> PlayerEndDecision {
+        let (decision, frame) = settingsReporter.endOfFile(identity: identity)
+        if let frame { emit(frame, engine: identity.engine) }
+        return decision
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
@@ -111,6 +143,7 @@ struct PlayerView: View {
             // terminal EOF briefly reloaded the old payload while dismissal rendered.
             mediaGeneration &+= 1
             syncExitFence()
+            noteCurrentItem(nextRequest)
             if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
@@ -130,6 +163,15 @@ struct PlayerView: View {
             resumeTime = 0
             withAnimation { showPlaylist = false }
         }
+        noteCurrentItem(playlistStore.currentItem ?? payload)
+    }
+
+    /// The new item is current. Publish its engine and loop before a late callback
+    /// from the item that just ended can report.
+    private func noteCurrentItem(_ request: Playbridge_PlayPayload) {
+        let engine = effectiveEngine(for: request)
+        settingsReporter.note(engine: engine.rawValue, generation: mediaGeneration)
+        emitCurrent(engine: engine, generation: mediaGeneration)
     }
 
     private func broadcast(_ json: [String: Any], for item: Playbridge_PlayPayload) {
@@ -231,6 +273,9 @@ struct PlayerView: View {
     var body: some View {
         let fenceRequest = playlistStore.currentItem ?? payload
         let _ = exitGate.note(engine: effectiveEngine(for: fenceRequest), generation: mediaGeneration)
+        let _ = settingsReporter.note(
+            engine: effectiveEngine(for: fenceRequest).rawValue,
+            generation: mediaGeneration)
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -251,6 +296,9 @@ struct PlayerView: View {
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
                         onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
+                        onEndOfFile: { identity in emitEnd(identity) },
+                        initialLoop: settingsReporter.loop,
                         engineChrome: engineChrome
                     )
                     .ignoresSafeArea()
@@ -272,6 +320,10 @@ struct PlayerView: View {
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
                         onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
+                        onEndOfFile: { identity in emitEnd(identity) },
+                        initialLoop: settingsReporter.loop,
+                        mediaIdentity: currentGeneration,
                         engineChrome: engineChrome
                     )
                     .ignoresSafeArea()
@@ -312,6 +364,12 @@ struct PlayerView: View {
         .onAppear {
             isPlayerFocused = true
             syncExitFence()
+            let request = playlistStore.currentItem ?? payload
+            emitCurrent(engine: effectiveEngine(for: request), generation: mediaGeneration)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.resyncRequest)) { _ in
+            let request = playlistStore.currentItem ?? payload
+            emitCurrent(engine: effectiveEngine(for: request), generation: mediaGeneration)
         }
         .background(
             PlayerExitFenceSync(

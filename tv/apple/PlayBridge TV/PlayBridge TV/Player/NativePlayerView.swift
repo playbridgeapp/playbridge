@@ -25,6 +25,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
+    let onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
+    let onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
+    let initialLoop: Bool
+    let mediaIdentity: Int
     let engineChrome: PlayerEngineChrome
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -71,6 +75,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         ) { [weak coordinator = context.coordinator] action in
             coordinator?.toggleLoop(action)
         }
+        loopAction.state = context.coordinator.isLooping ? .on : .off
+        context.coordinator.loopAction = loopAction
         
         let switchMenu = UIMenu(
             title: "Switch Player",
@@ -120,11 +126,16 @@ struct NativePlayerView: UIViewControllerRepresentable {
         uiViewController.player?.isMuted = isPreBuffering
         context.coordinator.bindEngineChrome(
             engineChrome, controller: uiViewController, isPreBuffering: isPreBuffering)
+        context.coordinator.mediaIdentity = mediaIdentity
+        context.coordinator.onLoopChanged = onLoopChanged
+        context.coordinator.onEndOfFile = onEndOfFile
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch,
-                    headers: headers, subtitles: subtitles, onBroadcast: onBroadcast)
+                    headers: headers, subtitles: subtitles, onBroadcast: onBroadcast,
+                    onLoopChanged: onLoopChanged, onEndOfFile: onEndOfFile,
+                    initialLoop: initialLoop, mediaIdentity: mediaIdentity)
     }
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
@@ -142,6 +153,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let headers: [String: String]?
         var externalSubtitleCatalog: ExternalSubtitleCatalog
         let onBroadcast: ([String: Any]) -> Void
+        var onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
+        var onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
+        var mediaIdentity: Int
+        var loopAction: UIAction?
 
         private var timeObserver: Any?
         private var subtitleTimeObserver: Any?
@@ -170,7 +185,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
         init(title: String?, onDismiss: @escaping () -> Void, onExit: @escaping () -> Void,
              onSwitch: @escaping (PlaybackEngine, Double) -> Void,
              headers: [String: String]?, subtitles: [String]?,
-             onBroadcast: @escaping ([String: Any]) -> Void) {
+             onBroadcast: @escaping ([String: Any]) -> Void,
+             onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
+             onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
+             initialLoop: Bool, mediaIdentity: Int) {
             self.title = title
             self.onDismiss = onDismiss
             self.onExit = onExit
@@ -178,6 +196,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.headers = headers
             self.externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
             self.onBroadcast = onBroadcast
+            self.onLoopChanged = onLoopChanged
+            self.onEndOfFile = onEndOfFile
+            self.mediaIdentity = mediaIdentity
+            self.isLooping = initialLoop
             super.init()
 
             NotificationCenter.default.addObserver(
@@ -233,8 +255,15 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         @objc func toggleLoop(_ action: UIAction) {
             NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
-            isLooping.toggle()
-            action.state = isLooping ? .on : .off
+            setLooping(!isLooping, action: action)
+        }
+
+        private func setLooping(_ enabled: Bool, action: UIAction? = nil) {
+            let identity = PlayerReportIdentity(engine: PlaybackEngine.avplayer.rawValue, generation: mediaIdentity)
+            guard onLoopChanged(enabled, identity) else { return }
+            isLooping = enabled
+            let item = action ?? loopAction
+            item?.state = enabled ? .on : .off
         }
 
         func invokeSwitch(to target: PlaybackEngine) {
@@ -403,12 +432,19 @@ struct NativePlayerView: UIViewControllerRepresentable {
         @objc func itemDidFinish(notification: Notification) {
             guard let finishedItem = notification.object as? AVPlayerItem,
                   finishedItem == player?.currentItem else { return }
-            if isLooping {
-                player?.seek(to: .zero)
-                player?.play()
-            } else {
+            let identity = PlayerReportIdentity(engine: PlaybackEngine.avplayer.rawValue, generation: mediaIdentity)
+            switch onEndOfFile(identity) {
+            case .repeatCurrentItem:
+                let loopingPlayer = player
+                loopingPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    guard loopingPlayer?.currentItem == finishedItem else { return }
+                    loopingPlayer?.play()
+                }
+            case .advanceOrLeave:
                 broadcastStatus()
                 onDismiss()
+            case .ignored:
+                break
             }
         }
 
@@ -569,6 +605,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 }
                 return
             }
+            if cmd == "loop_on" || cmd == "loop_off" {
+                setLooping(cmd == "loop_on")
+                return
+            }
             if StillWatchingGate.isPrompting { return }
             guard let player else { return }
             switch cmd {
@@ -580,8 +620,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 broadcastStatus()
                 onExit()
                 return
-            case "loop_on": isLooping = true
-            case "loop_off": isLooping = false
             case "seek_forward": seek(by: 15)
             case "seek_back": seek(by: -15)
             case let c where c.hasPrefix("seek_to:"):

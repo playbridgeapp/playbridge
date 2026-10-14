@@ -46,9 +46,25 @@ class WebSocketServer: ObservableObject {
 
     @Published var currentPlayRequest: Playbridge_PlayPayload? {
         didSet {
+            if currentPlayRequest == nil { activePlaybackEngine = nil }
             // Keep the phone's now-playing context in sync without it having to poll.
-            broadcast(["type": "context", "active": currentPlayRequest != nil ? "player" : "idle"])
+            broadcast(playbackContextFrame())
         }
+    }
+    /// Engine id included on player `context` frames. Cleared when playback ends.
+    private var activePlaybackEngine: String?
+
+    func setPlaybackEngine(_ engine: String) {
+        guard currentPlayRequest != nil, activePlaybackEngine != engine, !engine.isEmpty else { return }
+        activePlaybackEngine = engine
+        broadcast(playbackContextFrame())
+    }
+
+    func playbackContextFrame() -> [String: Any] {
+        let active = currentPlayRequest != nil ? "player" : "idle"
+        return PlayerPlaybackReport.context(
+            active: active,
+            engine: active == "player" ? activePlaybackEngine : nil)
     }
     @Published var skipPreplayForCurrentRequest = false
     @Published var isAuthenticated = false
@@ -895,8 +911,8 @@ class WebSocketServer: ObservableObject {
                 self.send(json: response, to: connection)
             }
             // Re-sync now-playing for a client that connected mid-playback: context + a nudge
-            // for the active player to re-broadcast its status/tracks.
-            self.broadcast(["type": "context", "active": self.currentPlayRequest != nil ? "player" : "idle"])
+            // for the active player to re-broadcast its status, tracks, and settings.
+            self.broadcast(self.playbackContextFrame())
             // Sync the queue too, so a re-connecting phone can re-attach its episode queue.
             self.broadcastPlaylistStatus()
             NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
@@ -953,12 +969,13 @@ class WebSocketServer: ObservableObject {
             pendingCommandIDs.insert(requestID)
         }
 
-        // context_query carries no payload — answer it (player vs idle; Apple TV has no
-        // browser) before the payload guard below would otherwise reject it.
+        // context_query carries no payload — answer it (player vs idle, plus the active
+        // engine when one is on screen) and replay the queue and player snapshots.
         if action == "context_query" {
             DispatchQueue.main.async {
-                let active = self.currentPlayRequest != nil ? "player" : "idle"
-                self.send(json: ["type": "context", "active": active], to: connection)
+                self.send(json: self.playbackContextFrame(), to: connection)
+                self.broadcastPlaylistStatus(to: connection)
+                NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
             }
             return
         }
