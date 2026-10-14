@@ -22,6 +22,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
     let onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
     let initialLoop: Bool
+    /// Stored app-volume level, 0–1. Applied to mpv as 0–100.
+    let appLevel: Double
+    let appMuted: Bool
     let engineChrome: PlayerEngineChrome
 
     func makeUIViewController(context: Context) -> MPVViewController {
@@ -40,6 +43,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.onLoopChanged = onLoopChanged
         vc.onEndOfFile = onEndOfFile
         vc.initialLoop = initialLoop
+        vc.appLevel = appLevel
+        vc.appMuted = appMuted
         vc.bindEngineChrome(engineChrome)
         return vc
     }
@@ -53,6 +58,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.onBroadcast = onBroadcast
         uiViewController.onLoopChanged = onLoopChanged
         uiViewController.onEndOfFile = onEndOfFile
+        uiViewController.appLevel = appLevel
+        uiViewController.appMuted = appMuted
         uiViewController.bindEngineChrome(engineChrome)
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
@@ -112,6 +119,14 @@ class MPVViewController: UIViewController {
     private var statusTimer: Timer?
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
+    }
+    /// Shared session level. Writes are absolute and run on `mpvQueue`, so a
+    /// burst of steps cannot interleave a read-modify-write on the core.
+    var appLevel: Double = PlayerAppVolume.defaultLevel {
+        didSet { if appLevel != oldValue { applyAppVolumeProperty() } }
+    }
+    var appMuted: Bool = false {
+        didSet { if appMuted != oldValue { applyAudibleMute() } }
     }
 
     // MARK: MPV
@@ -460,7 +475,9 @@ class MPVViewController: UIViewController {
         loadStartTime = Date()
         configureAudioSession()
         let path = url.isFileURL ? url.path : url.absoluteString
-        let loadArguments = MPVAudioPolicy.loadArguments(path: path, isPreBuffering: isPreBuffering)
+        let volume = PlayerAppVolume.mpvVolumeString(level: appLevel)
+        let loadArguments = MPVAudioPolicy.loadArguments(
+            path: path, isPreBuffering: isPreBuffering, appMuted: appMuted)
         let startTime = fromStart ? 0 : initialTime
         let itemIdentity = mediaIdentity
 
@@ -484,8 +501,19 @@ class MPVViewController: UIViewController {
                 // resume point or the next file would start there too.
                 mpv_set_property_string(handle, "start", "none")
             }
+            mpv_set_property_string(handle, "volume", volume)
             self.mpvCommand(handle, loadArguments)
         }
+    }
+
+    /// Absolute mpv volume, 0–100, queued behind any load already on `mpvQueue`.
+    private func applyAppVolumeProperty() {
+        setPropertyAsync("volume", value: PlayerAppVolume.mpvVolumeString(level: appLevel))
+    }
+
+    private func applyAudibleMute() {
+        setPropertyAsync("mute", value: MPVAudioPolicy.muteValue(
+            isPreBuffering: isPreBuffering, appMuted: appMuted))
     }
 
     // MARK: - Event Loop
@@ -564,7 +592,8 @@ class MPVViewController: UIViewController {
         // the asynchronous load was in flight. Reused cores must clear mute too.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isMpvStopped else { return }
-            self.setPropertyAsync("mute", value: MPVAudioPolicy.muteValue(isPreBuffering: self.isPreBuffering))
+            self.applyAudibleMute()
+            self.applyAppVolumeProperty()
             self.activateAudioSession()
         }
 
@@ -895,7 +924,7 @@ class MPVViewController: UIViewController {
     }
 
     private func applyPreBufferingState() {
-        setPropertyAsync("mute", value: MPVAudioPolicy.muteValue(isPreBuffering: isPreBuffering))
+        applyAudibleMute()
         if isPreBuffering {
             playbackState.showUI = false
             hideControlsTimer?.invalidate()

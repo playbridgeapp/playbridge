@@ -14,6 +14,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Player/PlaybackEngine.swift" \
   "$source_root/Player/PlayerRemoteNavigation.swift" \
   "$source_root/Player/PlayerPlaybackReport.swift" \
+  "$source_root/Player/PlayerAppVolume.swift" \
   "$source_root/Network/PlaybackProgressWebhook.swift" \
   "$source_root/Player/MPVHTTPHeaders.swift" \
   "$source_root/Player/MPVAudioPolicy.swift" \

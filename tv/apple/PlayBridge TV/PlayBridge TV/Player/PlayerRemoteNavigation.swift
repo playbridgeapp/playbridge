@@ -57,6 +57,9 @@ enum PlayerRemoteEffect: Equatable {
     case scrubBackward
     case scrubForward
     case commitScrub
+    /// One relative app-volume step. Positive raises playback attenuation.
+    case adjustAppVolume(steps: Int)
+    case toggleAppMute
 }
 
 /// Live flags read from the engine that is on screen.
@@ -188,8 +191,29 @@ enum PlayerRemoteNavigation {
             }
             return .exitPlayback
         }
+        if let volume = appVolumeEffect(for: key, chrome: chrome) {
+            return volume
+        }
         guard let direction = Direction(key: key) else { return .ignored }
         return directional(direction, chrome: chrome)
+    }
+
+    /// Phone volume keys attenuate playback. They still do so while a menu,
+    /// the playlist, a scrub, or the AVPlayer sheet is open. A still-watching
+    /// prompt does not change app volume.
+    private static func appVolumeEffect(
+        for key: String,
+        chrome: PlayerChromeState
+    ) -> PlayerRemoteEffect? {
+        let effect: PlayerRemoteEffect
+        switch key {
+        case "volume_up": effect = .adjustAppVolume(steps: 1)
+        case "volume_down": effect = .adjustAppVolume(steps: -1)
+        case "mute": effect = .toggleAppMute
+        default: return nil
+        }
+        if chrome.stillWatching { return .ignored }
+        return effect
     }
 
     static func closing(_ effect: PlayerRemoteEffect, in chrome: inout PlayerChromeState) {
@@ -230,10 +254,12 @@ enum PlayerRemoteNavigation {
             }
         }
         if chrome.playlist { return verticalList(direction) }
-        // Playing, paused, pre-play, and either chrome state. Up and Down stay
-        // free for a later volume step.
+        // Playing, paused, and pre-play, with the transport showing or hidden.
+        // Up and Down step app volume. Menus, the playlist, scrub, and a
+        // presented sheet never reach this branch.
         switch direction {
-        case .up, .down: return .ignored
+        case .up: return .adjustAppVolume(steps: 1)
+        case .down: return .adjustAppVolume(steps: -1)
         case .center: return .togglePlayback
         case .left: return .seekBackward
         case .right: return .seekForward

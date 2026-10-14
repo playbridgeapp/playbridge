@@ -28,6 +28,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
     let onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
     let initialLoop: Bool
+    /// Stored app-volume level, 0–1. Mute is independent of this value.
+    let appLevel: Double
+    let appMuted: Bool
     let mediaIdentity: Int
     let engineChrome: PlayerEngineChrome
 
@@ -114,7 +117,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ? [loopAction, switchMenu, playlistAction]
             : [loopAction, externalSubtitleMenu, switchMenu, playlistAction]
 
-        player.isMuted = isPreBuffering
+        player.volume = PlayerAppVolume.avPlayerVolume(appLevel)
+        player.isMuted = isPreBuffering || appMuted
         context.coordinator.attach(player: player)
         context.coordinator.bindEngineChrome(
             engineChrome, controller: controller, isPreBuffering: isPreBuffering)
@@ -123,7 +127,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player?.isMuted = isPreBuffering
+        uiViewController.player?.volume = PlayerAppVolume.avPlayerVolume(appLevel)
+        uiViewController.player?.isMuted = isPreBuffering || appMuted
         context.coordinator.bindEngineChrome(
             engineChrome, controller: uiViewController, isPreBuffering: isPreBuffering)
         context.coordinator.mediaIdentity = mediaIdentity

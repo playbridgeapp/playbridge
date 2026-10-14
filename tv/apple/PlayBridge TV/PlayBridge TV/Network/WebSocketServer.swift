@@ -816,6 +816,8 @@ class WebSocketServer: ObservableObject {
     static let remoteKey = Notification.Name("PlayBridgeRemoteKey")
     /// Posted when a client (re)connects; the active player re-broadcasts status + tracks.
     static let resyncRequest = Notification.Name("PlayBridgeResync")
+    /// Absolute app volume. userInfo["level"] is a finite number in [0, 1].
+    static let appVolumeCommand = Notification.Name("PlayBridgeAppVolume")
 
     /// Broadcast the current queue as `playlist_status`, matching the Android receiver's
     /// format. Echoes each item's series context (season/episode/imdbId/bingeGroup) so the
@@ -981,6 +983,19 @@ class WebSocketServer: ObservableObject {
             DispatchQueue.main.async {
                 self.broadcastPlaylistStatus(to: connection)
                 self.completeCommand(requestID, ok: true, to: connection)
+            }
+            return
+        }
+        // Absolute app volume. Any other scope is ignored and is not applied
+        // to system volume or HDMI-CEC.
+        if action == "volume" {
+            let fields = payload as? [String: Any]
+            DispatchQueue.main.async {
+                guard self.currentPlayRequest != nil, let fields,
+                      let accepted = PlayerAppVolume.absoluteLevel(in: fields) else { return }
+                NotificationCenter.default.post(
+                    name: Self.appVolumeCommand, object: nil,
+                    userInfo: ["level": accepted])
             }
             return
         }
