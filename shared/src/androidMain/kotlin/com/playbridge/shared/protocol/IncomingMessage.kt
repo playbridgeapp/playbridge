@@ -430,6 +430,7 @@ fun createAuthResponseJson(
     mediaKinds: List<String> = emptyList(),
     screenMirrorWebRtc: Boolean = false,
     features: List<String> = emptyList(),
+    capabilities: JsonObject? = null,
 ): String =
     buildJsonObject {
         put("type", "auth_response")
@@ -440,6 +441,7 @@ fun createAuthResponseJson(
         if (mediaKinds.isNotEmpty()) put("mediaKinds", buildJsonArray { mediaKinds.forEach { add(it) } })
         if (screenMirrorWebRtc) put("screenMirrorWebRtc", true)
         if (features.isNotEmpty()) put("features", buildJsonArray { features.forEach { add(it) } })
+        if (capabilities != null) put("capabilities", capabilities)
     }.toString()
 
 fun createContextJson(active: String): String =

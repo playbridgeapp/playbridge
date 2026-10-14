@@ -1,6 +1,8 @@
 package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
+import com.playbridge.player.server.TvCapabilities
+import java.io.File
 import com.playbridge.shared.protocol.createAddSubtitleCommandJson
 import com.playbridge.shared.protocol.createLogsClearJson
 import com.playbridge.shared.protocol.createLogsJson
@@ -13,6 +15,7 @@ import com.playbridge.shared.protocol.createScreenMirrorReadyJson
 import com.playbridge.shared.protocol.createScreenMirrorStartJson
 import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -25,9 +28,43 @@ import playbridge.PlayPayload
 import playbridge.PlaylistPayload
 import playbridge.SubtitleResource
 
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
 class ProtocolJsonTest {
 
     private fun obj(json: String) = Json.parseToJsonElement(json).jsonObject
+
+    private fun oldCredentialBundleJson(
+        token: String,
+        certFingerprint: String?,
+        caps: TvCapabilities,
+    ): String = buildJsonObject {
+        put("token", token)
+        certFingerprint?.let { put("certFingerprint", it) }
+        put("players", buildJsonArray { caps.players.forEach { add(it) } })
+        put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
+        put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
+        put("features", buildJsonArray { caps.features.forEach { add(it) } })
+        if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
+    }.toString()
+
+    private fun newCredentialBundleJson(
+        token: String,
+        certFingerprint: String?,
+        caps: TvCapabilities,
+    ): String = buildJsonObject {
+        put("token", token)
+        certFingerprint?.let { put("certFingerprint", it) }
+        put("players", buildJsonArray { caps.players.forEach { add(it) } })
+        put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
+        put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
+        put("features", buildJsonArray { caps.features.forEach { add(it) } })
+        if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
+        put("capabilities", caps.capabilities)
+    }.toString()
 
     @Test
     fun lateSubtitleCarriesItsOwnHeadersWithoutChangingLegacyControl() {
@@ -276,4 +313,220 @@ class ProtocolJsonTest {
         assertTrue("diagnostic_logs_v1" in features)
         assertTrue("player_home_v1" in features)
     }
+
+    @Test
+    fun descriptorShapeAndPerEngineSetsMatchCodeDerivation() {
+        val caps = TvCapabilities(
+            players = listOf("exo", "mpv"),
+            browsers = listOf("webview", "gecko"),
+        )
+        val root = caps.capabilities
+
+        // 1. Top-level envelope
+        assertEquals(1, root["version"]?.jsonPrimitive?.content?.toInt())
+
+        // 2. Host
+        val host = root["host"]?.jsonObject
+        assertEquals("android", host?.get("osFamily")?.jsonPrimitive?.content)
+        assertEquals("tv", host?.get("deviceClass")?.jsonPrimitive?.content)
+
+        // 3. Volume
+        val volume = root["volume"]?.jsonObject
+        assertEquals("system", volume?.get("scope")?.jsonPrimitive?.content)
+        assertEquals(
+            listOf("relative_step", "mute_toggle"),
+            volume?.get("operations")?.jsonArray?.map { it.jsonPrimitive.content },
+        )
+
+        // 4. Companion hints
+        assertEquals(
+            listOf("android_tv_remote_v2"),
+            root["companionHints"]?.jsonArray?.map { it.jsonPrimitive.content },
+        )
+
+        // 5. Player surface & engines
+        val playerEngines = root["surfaces"]?.jsonObject?.get("player")?.jsonObject?.get("engines")?.jsonObject
+        assertEquals(setOf("exo", "mpv"), playerEngines?.keys)
+
+        val expectedPlayerTransport = listOf("play", "pause", "toggle", "stop", "seek_absolute", "seek_relative")
+        val expectedPlayerKeys = listOf("dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home")
+        val expectedPlayerSettings = listOf("loop", "engine", "speed", "scaling", "quality", "audio_boost", "subtitle_offset")
+        val expectedPlayerImageTransforms = listOf("pan", "scroll", "zoom", "rotate", "anchor", "reset")
+        val expectedPlayerTracks = listOf("audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add")
+        val expectedPlayerQueue = listOf("replace", "append", "jump_index", "jump_item", "remove", "move", "clear")
+        val expectedPlayerReporting = listOf("status", "context", "tracks", "playlist_status", "player_settings")
+
+        for (engineName in listOf("exo", "mpv")) {
+            val engine = playerEngines?.get(engineName)?.jsonObject
+            assertEquals(expectedPlayerTransport, engine?.get("transport")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerKeys, engine?.get("keys")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerSettings, engine?.get("settings")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerImageTransforms, engine?.get("imageTransforms")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerTracks, engine?.get("tracks")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerQueue, engine?.get("queue")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedPlayerReporting, engine?.get("reporting")?.jsonArray?.map { it.jsonPrimitive.content })
+
+            // Both engines implement quality and audio_boost in ExoRendererService & MpvRendererService
+            val settingsList = engine?.get("settings")?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+            assertTrue("quality in $engineName settings", "quality" in settingsList)
+            assertTrue("audio_boost in $engineName settings", "audio_boost" in settingsList)
+        }
+
+        // 6. Browser surface & engines
+        val browserEngines = root["surfaces"]?.jsonObject?.get("browser")?.jsonObject?.get("engines")?.jsonObject
+        assertEquals(setOf("webview", "gecko"), browserEngines?.keys)
+
+        val expectedBrowserTransport = listOf("toggle", "seek_absolute", "seek_relative")
+        val expectedBrowserKeys = listOf("dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home", "key_enter")
+        val expectedBrowserText = listOf("replace", "enter")
+        val expectedBrowserOperations = listOf("launch", "forward", "reload", "cycle_source", "unmute", "fullscreen", "manage_user_scripts", "manage_user_agent")
+        val expectedBrowserReporting = listOf("context", "status", "fullscreen")
+
+        for (engineName in listOf("webview", "gecko")) {
+            val engine = browserEngines?.get(engineName)?.jsonObject
+            assertEquals(expectedBrowserTransport, engine?.get("transport")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedBrowserKeys, engine?.get("keys")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedBrowserText, engine?.get("text")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedBrowserOperations, engine?.get("browser")?.jsonArray?.map { it.jsonPrimitive.content })
+            assertEquals(expectedBrowserReporting, engine?.get("reporting")?.jsonArray?.map { it.jsonPrimitive.content })
+        }
+
+        // Pointer differences: webview supports pinch-zoom; gecko does not
+        val webviewPointer = browserEngines?.get("webview")?.jsonObject?.get("pointer")?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        val geckoPointer = browserEngines?.get("gecko")?.jsonObject?.get("pointer")?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        assertEquals(listOf("move", "click", "down", "up", "scroll", "zoom"), webviewPointer)
+        assertEquals(listOf("move", "click", "down", "up", "scroll"), geckoPointer)
+        assertTrue("zoom" in webviewPointer)
+        assertFalse("zoom" in geckoPointer)
+    }
+
+    @Test
+    fun authResponseAndDecryptedBundleCarryIdenticalDescriptor() {
+        val caps = TvCapabilities(
+            players = listOf("exo", "mpv"),
+            browsers = listOf("webview", "gecko"),
+        )
+        val authObj = obj(createAuthResponseJson(
+            success = true,
+            certFingerprint = "test-cert",
+            players = caps.players,
+            browsers = caps.browsers,
+            mediaKinds = caps.mediaKinds,
+            screenMirrorWebRtc = caps.screenMirrorWebRtc,
+            features = caps.features,
+            capabilities = caps.capabilities,
+        ))
+        val bundleObj = obj(newCredentialBundleJson(
+            token = "test-token",
+            certFingerprint = "test-cert",
+            caps = caps,
+        ))
+
+        // Same descriptor in both
+        assertEquals(authObj["capabilities"], bundleObj["capabilities"])
+        assertEquals(caps.capabilities, authObj["capabilities"])
+        assertEquals(caps.capabilities, bundleObj["capabilities"])
+    }
+
+    @Test
+    fun descriptorWithGeckoAbsentOmitsGeckoEngine() {
+        val caps = TvCapabilities(
+            players = listOf("exo", "mpv"),
+            browsers = listOf("webview"),
+        )
+        val browserEngines = caps.capabilities["surfaces"]?.jsonObject?.get("browser")?.jsonObject?.get("engines")?.jsonObject
+        assertEquals(setOf("webview"), browserEngines?.keys)
+        assertFalse("gecko" in (browserEngines?.keys ?: emptySet()))
+
+        val playerEngines = caps.capabilities["surfaces"]?.jsonObject?.get("player")?.jsonObject?.get("engines")?.jsonObject
+        assertEquals(setOf("exo", "mpv"), playerEngines?.keys)
+    }
+
+    @Test
+    fun descriptorWithNoBrowsersOmitsBrowserSurface() {
+        val caps = TvCapabilities(
+            players = listOf("exo", "mpv"),
+            browsers = emptyList(),
+        )
+        val surfaces = caps.capabilities["surfaces"]?.jsonObject?.keys
+        assertEquals(setOf("player"), surfaces)
+    }
+
+    @Test
+    fun descriptorWithNoPlayersOmitsPlayerSurface() {
+        val caps = TvCapabilities(
+            players = emptyList(),
+            browsers = listOf("webview"),
+        )
+        val surfaces = caps.capabilities["surfaces"]?.jsonObject?.keys
+        assertEquals(setOf("browser"), surfaces)
+    }
+
+    @Test
+    fun decryptedBundlePlaintextExistingFieldsByteIdenticalToOldBuilder() {
+        val capsPopulated = TvCapabilities(
+            players = listOf("exo", "mpv"),
+            browsers = listOf("webview", "gecko"),
+            mediaKinds = listOf("video", "audio", "image"),
+            screenMirrorWebRtc = true,
+        )
+        val token = "TEST_TOKEN_12345"
+        val certFingerprint = "sha256/abcdef"
+
+        val oldPopulated = oldCredentialBundleJson(token, certFingerprint, capsPopulated)
+        val newPopulated = newCredentialBundleJson(token, certFingerprint, capsPopulated)
+
+        // Stripping the trailing ,"capabilities":{...} must result in exact byte identity
+        val suffix = ",\"capabilities\":${capsPopulated.capabilities}}"
+        assertTrue("new bundle ends with capabilities block", newPopulated.endsWith(suffix))
+        val strippedPopulated = newPopulated.removeSuffix(suffix) + "}"
+        assertEquals(oldPopulated, strippedPopulated)
+        assertTrue(oldPopulated.toByteArray().contentEquals(strippedPopulated.toByteArray()))
+
+        // Reconstructed JsonObject without capabilities retains exact keys and order
+        val filteredPopulated = JsonObject(obj(newPopulated).filterKeys { it != "capabilities" }).toString()
+        assertEquals(oldPopulated, filteredPopulated)
+
+        // Verify with empty arrays (old senders rely on empty arrays rather than absent keys)
+        val capsEmpty = TvCapabilities(
+            players = emptyList(),
+            browsers = emptyList(),
+            mediaKinds = emptyList(),
+            screenMirrorWebRtc = false,
+        )
+        val oldEmpty = oldCredentialBundleJson(token, null, capsEmpty)
+        val newEmpty = newCredentialBundleJson(token, null, capsEmpty)
+
+        val suffixEmpty = ",\"capabilities\":${capsEmpty.capabilities}}"
+        assertTrue("new empty bundle ends with capabilities block", newEmpty.endsWith(suffixEmpty))
+        val strippedEmpty = newEmpty.removeSuffix(suffixEmpty) + "}"
+        assertEquals(oldEmpty, strippedEmpty)
+        assertTrue(oldEmpty.toByteArray().contentEquals(strippedEmpty.toByteArray()))
+
+        // Explicitly assert empty arrays are preserved in the JSON
+        assertTrue(newEmpty.contains("\"players\":[]"))
+        assertTrue(newEmpty.contains("\"browsers\":[]"))
+        assertTrue(newEmpty.contains("\"mediaKinds\":[]"))
+        assertFalse(newEmpty.contains("\"screenMirrorWebRtc\""))
+    }
+
+    @Test
+    fun authResponseOmitsCapabilitiesWhenNull() {
+        val authWithout = createAuthResponseJson(
+            success = true,
+            certFingerprint = "fp",
+            players = listOf("exo", "mpv"),
+            browsers = listOf("webview"),
+            mediaKinds = listOf("video", "audio", "image"),
+            screenMirrorWebRtc = true,
+            features = listOf("queue_crud_v1"),
+            capabilities = null,
+        )
+        val authObj = obj(authWithout)
+        assertNull(authObj["capabilities"])
+        assertEquals("auth_response", authObj["type"]?.jsonPrimitive?.content)
+        assertEquals(true, authObj["success"]?.jsonPrimitive?.content?.toBoolean())
+        assertEquals("fp", authObj["certFingerprint"]?.jsonPrimitive?.content)
+    }
 }
+

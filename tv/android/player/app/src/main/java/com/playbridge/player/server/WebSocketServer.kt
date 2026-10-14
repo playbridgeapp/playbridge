@@ -526,6 +526,7 @@ class WebSocketServer(
                                 put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
                                 put("features", buildJsonArray { caps.features.forEach { add(it) } })
                                 if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
+                                put("capabilities", caps.capabilities)
                             }.toString().toByteArray()
                             val ciphertext = SasCrypto.aesGcmEncrypt(
                                 credentialKey, credentialNonce, plaintext, transcriptHash
@@ -620,6 +621,7 @@ class WebSocketServer(
                                 mediaKinds = caps.mediaKinds,
                                 screenMirrorWebRtc = caps.screenMirrorWebRtc,
                                 features = caps.features,
+                                capabilities = caps.capabilities,
                             ))
                         }
                         registerAuthed(conn)
