@@ -284,14 +284,26 @@ impl Shared {
         });
     }
 
-    fn is_authorized(&self, token: &str) -> bool {
+    fn authenticate_connection(&self, id: u64, token: &str) -> Result<Option<String>, String> {
         let digest = token_digest(token);
-        self.authorized_tokens.lock().is_ok_and(|tokens| {
-            tokens.iter().any(|stored| {
-                stored.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() == 1
-                    || stored.as_bytes().ct_eq(digest.as_bytes()).unwrap_u8() == 1
-            })
-        })
+        // Hold authorization through registration. Token replacement takes this
+        // lock before inspecting authenticated connections, so it either denies
+        // this auth or sees the registered digest and closes the connection.
+        let tokens = self
+            .authorized_tokens
+            .lock()
+            .map_err(|_| "credential registry failed")?;
+        if !tokens.iter().any(|stored| {
+            stored.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() == 1
+                || stored.as_bytes().ct_eq(digest.as_bytes()).unwrap_u8() == 1
+        }) {
+            return Ok(None);
+        }
+        self.authenticated
+            .lock()
+            .map_err(|_| "authentication registry failed")?
+            .insert(id, digest.clone());
+        Ok(Some(digest))
     }
 
     fn record_pairing_failure(&self, ip: &str) {
@@ -697,14 +709,13 @@ where
                 match frame {
                     SenderFrame::Ping => send_value(&mut socket, json!({"type":"pong"})).await?,
                     SenderFrame::Auth { token } if !authenticated => {
-                        authenticated = shared.is_authorized(&token);
+                        let digest = shared.authenticate_connection(id, &token)?;
+                        authenticated = digest.is_some();
                         send_value(
                             &mut socket,
                             shared.auth_response(authenticated),
                         ).await?;
-                        if authenticated {
-                            let digest = token_digest(&token);
-                            shared.authenticated.lock().map_err(|_| "authentication registry failed")?.insert(id, digest.clone());
+                        if let Some(digest) = digest {
                             shared.emit(ReceiverEvent::Authenticated {
                                 connection_id: id,
                                 token_digest: digest,
@@ -800,8 +811,9 @@ where
                             .lock()
                             .map_err(|_| "credential registry failed")?
                             .insert(token.clone());
+                        shared.authenticate_connection(id, &token)?
+                            .ok_or("paired credential was revoked")?;
                         authenticated = true;
-                        shared.authenticated.lock().map_err(|_| "authentication registry failed")?.insert(id, token_digest(&token));
                         send_frame(&mut socket, &approval).await?;
                         shared.emit(ReceiverEvent::Paired {
                             connection_id: id,
@@ -967,6 +979,61 @@ mod tests {
         secure_ws::SecureWebSocket,
     };
     use rcgen::{CertificateParams, KeyPair};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::{
+        io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf},
+        sync::oneshot,
+    };
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    // Writes the response bytes, but keeps send().await pending until the test
+    // releases flush. This exposes the original post-response registration gap
+    // deterministically, independent of executor scheduling or network latency.
+    struct HeldFlush {
+        stream: DuplexStream,
+        release: Option<oneshot::Receiver<()>>,
+    }
+
+    impl AsyncRead for HeldFlush {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.stream).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for HeldFlush {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Pin::new(&mut self.stream).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            if let Some(release) = &mut self.release {
+                if Pin::new(release).poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                self.release = None;
+            }
+            Pin::new(&mut self.stream).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.stream).poll_shutdown(cx)
+        }
+    }
 
     fn identity() -> ReceiverIdentity {
         let key = KeyPair::generate().unwrap();
@@ -978,6 +1045,163 @@ mod tests {
             certificate_der: certificate.der().to_vec(),
             private_key_der: key.serialize_der(),
             private_key_kind: PrivateKeyKind::Pkcs8,
+        }
+    }
+
+    #[tokio::test]
+    async fn revocation_immediately_after_auth_response_sees_pending_send() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        config.authorized_tokens = vec![TOKEN.into()];
+        let host = ReceiverHost::start(config).await.unwrap();
+        let (server, client) = tokio::io::duplex(4096);
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = WebSocketStream::from_raw_socket(
+            HeldFlush {
+                stream: server,
+                release: Some(release_rx),
+            },
+            Role::Server,
+            None,
+        )
+        .await;
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let (close_tx, close_rx) = watch::channel(false);
+        let close_probe = close_rx.clone();
+        let id = 1;
+        host.shared.connections.lock().unwrap().insert(
+            id,
+            ConnectionHandle {
+                outbound: outbound_tx,
+                close: close_tx,
+            },
+        );
+        let shared = host.shared.clone();
+        let task = tokio::spawn(async move {
+            let result = run_socket(
+                id,
+                "127.0.0.1".into(),
+                server,
+                ConnectionIo {
+                    outbound: outbound_rx,
+                    close: close_rx,
+                },
+                shared.clone(),
+                DEFAULT_PAIRING_TIMEOUT,
+                DEFAULT_MAX_MESSAGE_BYTES,
+            )
+            .await;
+            cleanup_connection(id, &shared);
+            result
+        });
+        client
+            .send(Message::Text(
+                serde_json::to_string(&SenderFrame::Auth {
+                    token: TOKEN.into(),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["success"], true);
+        host.replace_authorized_tokens(Vec::new());
+        // The server is still inside the auth send: revocation must already
+        // know this connection, before the send can return and events emit.
+        assert!(
+            *close_probe.borrow(),
+            "revocation missed the pending authenticated connection"
+        );
+        release_tx.send(()).unwrap();
+        let closed = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap();
+        assert!(matches!(
+            closed,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(host.shared.authenticated.lock().unwrap().is_empty());
+        assert!(host.shared.connections.lock().unwrap().is_empty());
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revoked_token_cannot_register_an_authenticated_connection() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        config.authorized_tokens = vec![TOKEN.into()];
+        let host = ReceiverHost::start(config).await.unwrap();
+        host.replace_authorized_tokens(Vec::new());
+        assert!(
+            host.shared
+                .authenticate_connection(1, TOKEN)
+                .unwrap()
+                .is_none()
+        );
+        assert!(host.shared.authenticated.lock().unwrap().is_empty());
+        // The atomic check retains support for persisted SHA-256 records.
+        host.replace_authorized_tokens([token_digest(TOKEN)]);
+        assert!(
+            host.shared
+                .authenticate_connection(1, TOKEN)
+                .unwrap()
+                .is_some()
+        );
+        cleanup_connection(1, &host.shared);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revocation_immediately_after_loopback_auth_closes_connection() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        for capabilities in [
+            None,
+            Some(
+                ReceiverCapabilities::from_json(json!({
+                    "version":1,"surfaces":{}
+                }))
+                .unwrap(),
+            ),
+        ] {
+            let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+            config.preferred_port = 0;
+            config.authorized_tokens = vec![TOKEN.into()];
+            config.capabilities = capabilities;
+            let host = ReceiverHost::start(config).await.unwrap();
+            let endpoint = format!("wss://127.0.0.1:{}/", host.port());
+            let mut socket = SecureWebSocket::connect_pinned(&endpoint, host.fingerprint())
+                .await
+                .unwrap();
+            socket
+                .send(&SenderFrame::Auth {
+                    token: TOKEN.into(),
+                })
+                .await
+                .unwrap();
+            assert!(matches!(
+                socket.receive().await.unwrap(),
+                Some(ReceiverFrame::AuthResponse { success: true, .. })
+            ));
+            host.replace_authorized_tokens(Vec::new());
+            let closed = tokio::time::timeout(Duration::from_secs(2), socket.receive())
+                .await
+                .unwrap();
+            assert!(!matches!(closed, Ok(Some(_))));
+            host.shutdown().await;
         }
     }
 
