@@ -1,4 +1,5 @@
 [package]
+license = "MPL-2.0"
 name = "stream-proxy-rust"
 version = "0.15.0"
 edition = "2021"

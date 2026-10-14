@@ -60,4 +60,28 @@ If you have any questions about contributing or need help getting started, pleas
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the GNU General Public License v3.0.
+PlayBridge's own code is licensed under [MPL-2.0](LICENSE). Third-party code keeps
+its existing licences; preserve notices and identify any third-party material you add.
+Read [TRADEMARKS.md](TRADEMARKS.md) before publishing a fork: use a different name
+and icon and do not imply endorsement.
+
+## Contributor licence agreement
+
+Before a contribution is merged, its pull request author must sign the individual
+[CLA](CLA.md). You keep your copyright and grant the maintainer rights to use,
+modify, sublicense and distribute your contribution under MPL-2.0 or another
+licence, including future dual or commercial licensing.
+
+Sign by posting this exact comment on your pull request:
+
+> I have read the CLA Document and I hereby sign the CLA
+
+The workflow checks only the PR author. Commit co-author trailers, including AI
+tool attribution, do not require separate signatures. The project owner and the
+listed automation bots are exempt. A stored signature covers later contributions
+under the same CLA version; comment `recheck` to rerun the check.
+
+Signatures (GitHub identity, comment/time and PR reference) are stored publicly in
+`signatures/cla-v1.json` on the repository's `cla-signatures` branch. Do not submit
+an employer's or another person's work unless you have authority to grant these
+rights. See the CLA for details.

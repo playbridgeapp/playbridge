@@ -23,6 +23,14 @@ The Apple TV app has its own checklist: [`tvos-app-store-readiness-audit.md`](tv
 - **Disk-space API not yet declared.** The statically linked media stack references `fstatfs` (`NSPrivacyAccessedAPICategoryDiskSpace`); the app's own code does not. It is left undeclared because no reason code honestly fits mpv's network-filesystem check. Watch the first upload for `ITMS-91053`.
 - Correction: the phone links the standard LGPL **MPVKit** product. SPM also downloads the `*-GPL` artifacts, but they are not embedded.
 
+## First-party licence update
+
+PlayBridge's own code is now [MPL-2.0](../LICENSE), and its bundled own-code
+licence text is `Licenses/MPL-2.0.txt`. The standard LGPL MPVKit licence and notices
+remain unchanged. Relicensing first-party code does not resolve LGPL source,
+relinking/reverse-engineering or App Store distribution obligations; review
+[THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) before submission.
+
 ## Executive summary
 
 The September 22 audit found two probable upload blockers, three likely App Review blockers, and several App Store Connect requirements that could not be verified from the repository alone. The source fixes above address several findings; this document remains a submission checklist, not approval to submit.

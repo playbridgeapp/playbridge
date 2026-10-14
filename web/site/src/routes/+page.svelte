@@ -16,7 +16,7 @@
     operatingSystem: 'Android, Android TV, tvOS, macOS, Windows, Linux',
     url: SITE.url,
     downloadUrl: `${SITE.url}/receivers`,
-    license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+    license: 'https://www.mozilla.org/MPL/2.0/',
     isAccessibleForFree: true,
     offers: {
       '@type': 'Offer',

@@ -1,5 +1,6 @@
 {
   "name": "playbridge-extension",
+  "license": "MPL-2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.2",

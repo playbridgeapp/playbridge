@@ -8,6 +8,14 @@
 
 Companion to [`ios-app-store-readiness-audit.md`](ios-app-store-readiness-audit.md). The September 9 source review ([`tv/apple/REVIEW-2026-09-09.md`](../tv/apple/REVIEW-2026-09-09.md)) covers receiver security and playback correctness. This document covers App Store submission only.
 
+## First-party licence update
+
+PlayBridge's own code is now [MPL-2.0](../LICENSE), and its bundled own-code
+licence text is `Licenses/MPL-2.0.txt`. The standard LGPL MPVKit licence and notices
+remain unchanged. Relicensing first-party code does not resolve LGPL source,
+relinking/reverse-engineering or App Store distribution obligations; review
+[THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) before submission.
+
 ## Executive summary
 
 The Release build for `generic/platform=tvOS` compiles and links (Xcode 26.4.1, unsigned). Icons, the App Store icon, Top Shelf images, local-network declarations and the privacy manifest are present. This audit fixed two source-side gaps: the in-app privacy policy entry and an undeclared required-reason API.
@@ -25,7 +33,7 @@ The TV now links the same standard **LGPL** MPVKit 1.0.0 product as the phone, t
 
 - MPV renders with `vo=gpu-next` and uses AVFoundation audio, like the phone.
 - The **Fix Embedded Framework Minimum OS** build phase clamps the 27 MPVKit frameworks from `MinimumOSVersion = 100.0` to the tvOS deployment target, as on iOS.
-- The app bundles `Licenses/MPVKit-LICENSE.txt`, `MPVKit-NOTICE.txt` and `COPYING-GPL-3.0.txt`.
+- The app bundles `Licenses/MPVKit-LICENSE.txt`, `MPVKit-NOTICE.txt` and `MPL-2.0.txt`.
 - HDR display switching now waits for mpv's decoded colorimetry. Before this fix, HDR files always played with the display in SDR mode.
 - Verified on an Apple TV 4K (A15) over HDMI with a 2160p HEVC HDR10/Dolby Vision remux: VideoToolbox decoding, HDR10 display mode with correct colours, audible AVFoundation audio, smooth playback, and video resumed after returning from the Home Screen.
 

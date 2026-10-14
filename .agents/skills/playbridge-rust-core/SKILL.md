@@ -32,7 +32,7 @@ description: Work on the PlayBridge Rust casting core, reusable receiver runtime
 3. Preserve persisted TLS identities and SPKI pins. Accept legacy raw tokens and `sha256:<hex>` records during credential migrations.
 4. Keep receiver connection, message, and outbound-queue limits bounded. Credential removal must terminate sessions authenticated by the removed token.
 5. Ensure FFI bindings remain thread-safe and panic-safe. Bump the matching Cast Core, sender-services, proxy-upstream, or receiver-runtime ABI version for incompatible C/JSON changes.
-6. Maintain compatibility with AGPL-3.0 licensing constraints across all core components.
+6. Keep first-party core components under MPL-2.0 and preserve third-party licence notices and distribution obligations.
 7. Preserve Google Cast readiness, `STOP` versus `END_RECEIVER`, stale-session teardown, and Android `network_handle` behavior across consumer adapters.
 
 ## Verify

@@ -1,4 +1,5 @@
 name: playbridge_protocol
+license: MPL-2.0
 description: Generated protobuf bindings for the PlayBridge WebSocket protocol.
 version: 0.1.0
 publish_to: none
