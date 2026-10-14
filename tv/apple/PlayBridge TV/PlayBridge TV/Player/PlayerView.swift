@@ -38,6 +38,7 @@ struct PlayerView: View {
     @State private var sessionEngine: PlaybackEngine? = nil
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
+    @State private var playlistHighlight: Int = 0
     @State private var latestPlaybackIsPlaying = false
     @State private var mediaGeneration = 0
     @State private var engineChrome = PlayerEngineChrome()
@@ -185,7 +186,7 @@ struct PlayerView: View {
         switch effect {
         case .ignored:
             break
-        case .dismissStillWatching:
+        case .dismissStillWatching, .resumeStillWatching:
             stillWatching.continueWatching()
         case .dismissPlaylist:
             withAnimation { showPlaylist = false }
@@ -200,9 +201,30 @@ struct PlayerView: View {
                     leaveToIdle: leave
                 )
             }
+        case .moveHighlight, .activateHighlight:
+            if engineChrome.apply(effect) { break }
+            applyPlaylistHighlight(effect)
         case .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
-             .dismissSettingsSheet, .dismissScrub, .dismissControls:
-            _ = engineChrome.applyDismiss(effect)
+             .dismissSettingsSheet, .dismissScrub, .dismissControls,
+             .togglePlayback, .seekBackward, .seekForward,
+             .scrubBackward, .scrubForward, .commitScrub:
+            _ = engineChrome.apply(effect)
+        }
+    }
+
+    private func applyPlaylistHighlight(_ effect: PlayerRemoteEffect) {
+        let count = playlistStore.items.count
+        switch effect {
+        case .moveHighlight(let delta):
+            playlistHighlight = PlayerHighlightList(count: count, index: playlistHighlight)
+                .moving(delta).index
+        case .activateHighlight:
+            let index = PlayerHighlightList(count: count, index: playlistHighlight).moving(0).index
+            guard playlistStore.items.indices.contains(index) else { return }
+            playlistHighlight = index
+            handleJump(to: index)
+        default:
+            break
         }
     }
 
@@ -267,6 +289,7 @@ struct PlayerView: View {
 
             if showPlaylist {
                 PlaylistOverlay(
+                    highlightedIndex: $playlistHighlight,
                     onItemSelected: { index in
                         handleJump(to: index)
                     },
@@ -306,6 +329,9 @@ struct PlayerView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
             guard !stillWatching.isPrompting else { return }
+            if !showPlaylist {
+                playlistHighlight = playlistStore.currentIndex
+            }
             withAnimation { showPlaylist.toggle() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .playBridgePlaybackActivity)) { note in

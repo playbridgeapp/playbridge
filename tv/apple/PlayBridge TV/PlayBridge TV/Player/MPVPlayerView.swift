@@ -841,27 +841,10 @@ class MPVViewController: UIViewController {
         let overlay = PlayerControlsOverlay(
             data: playbackState,
             onSelectSubtitle: { [weak self] trackId in
-                guard let self else { return }
-                if let option = self.externalSubtitleCatalog.option(for: trackId) {
-                    // `cached` selects an existing file if the user taps again while loading.
-                    // The track-list observer replaces this menu entry once loading succeeds.
-                    self.mpvQueue.async { [weak self] in
-                        guard let self, let handle = self.mpv else { return }
-                        self.mpvCommandAsync(handle, ["sub-add", option.url, "cached", option.name])
-                    }
-                    TrackPreferences.shared.subtitlesOff = false
-                    TrackPreferences.shared.subtitleName = option.name
-                    return
-                }
-                self.setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
-                self.playbackState.currentSubtitleIndex = trackId
-                self.recordSubtitlePreference(id: trackId)
+                self?.selectSubtitleTrack(trackId)
             },
             onSelectAudio: { [weak self] trackId in
-                guard let self else { return }
-                self.setPropertyAsync("aid", value: String(trackId))
-                self.playbackState.currentAudioIndex = trackId
-                self.recordAudioPreference(id: trackId)
+                self?.selectAudioTrack(trackId)
             },
             onTogglePlayPause: { [weak self] in self?.togglePlayPause() },
             onSwitchEngine: { [weak self] target in
@@ -936,21 +919,30 @@ class MPVViewController: UIViewController {
 
     private func skipForward() {
         guard !playbackState.userPaused else { return }
-        let cap = playbackState.duration > 0 ? playbackState.duration - 2.0 : Double.infinity
-        let target = min(playbackState.currentTime + 15.0, cap)
-        playbackState.currentTime = target
-        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
-        seekAsync(to: target)
-        showUI()
+        seekRelative(by: 15)
     }
 
     private func skipBackward() {
         guard !playbackState.userPaused else { return }
-        let target = max(0, playbackState.currentTime - 15.0)
+        seekRelative(by: -15)
+    }
+
+    /// Network Left/Right seek while paused. The physical skip helpers above stay
+    /// idle in that state so a Siri arrow still moves focus along the button row.
+    private func seekRelative(by delta: Double) {
+        let target: Double
+        if delta >= 0 {
+            let cap = playbackState.duration > 0 ? playbackState.duration - 2.0 : Double.infinity
+            target = min(playbackState.currentTime + delta, cap)
+        } else {
+            target = max(0, playbackState.currentTime + delta)
+        }
         playbackState.currentTime = target
         ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
         seekAsync(to: target)
-        showUI()
+        let menuOpen = playbackState.showSubtitleMenu || playbackState.showAudioMenu
+            || playbackState.showEngineMenu
+        if !menuOpen { showUI(autoHide: !playbackState.userPaused) }
     }
 
     private func seekAsync(to seconds: Double) {
@@ -1149,9 +1141,6 @@ class MPVViewController: UIViewController {
             self, selector: #selector(onControlNotification(_:)),
             name: WebSocketServer.controlCommand, object: nil)
         NotificationCenter.default.addObserver(
-            self, selector: #selector(onRemoteNotification(_:)),
-            name: WebSocketServer.remoteKey, object: nil)
-        NotificationCenter.default.addObserver(
             self, selector: #selector(onResyncRequest),
             name: WebSocketServer.resyncRequest, object: nil)
         NotificationCenter.default.addObserver(
@@ -1259,20 +1248,6 @@ class MPVViewController: UIViewController {
         handleControlCommand(cmd)
     }
 
-    @objc private func onRemoteNotification(_ note: Notification) {
-        guard let key = note.userInfo?["key"] as? String else { return }
-        if StillWatchingGate.isPrompting { return }
-        switch key {
-        case "dpad_center": togglePlayPause()
-        case "dpad_left":   skipBackward()
-        case "dpad_right":  skipForward()
-        case "back", "home":
-            // PlayerView owns network Back and Home for both engines.
-            break
-        default:            break
-        }
-    }
-
     func bindEngineChrome(_ chrome: PlayerEngineChrome) {
         engineChrome = chrome
         chrome.snapshot = { [weak self] in
@@ -1286,13 +1261,14 @@ class MPVViewController: UIViewController {
                 controlsVisible: self.playbackState.showUI && !self.isPreBuffering
             )
         }
-        chrome.applyDismiss = { [weak self] effect in
-            self?.applyRemoteDismiss(effect) ?? false
+        chrome.apply = { [weak self] effect in
+            self?.applyRemoteEffect(effect) ?? false
         }
     }
 
     /// Network Back closes one MPV overlay. Scrub cancel matches the physical Menu path.
-    private func applyRemoteDismiss(_ effect: PlayerRemoteEffect) -> Bool {
+    /// Directional keys move the same menus the focus ring uses.
+    private func applyRemoteEffect(_ effect: PlayerRemoteEffect) -> Bool {
         switch effect {
         case .dismissSubtitleMenu:
             guard playbackState.showSubtitleMenu else { return false }
@@ -1311,15 +1287,149 @@ class MPVViewController: UIViewController {
             cancelVirtualScrub()
             return true
         case .dismissControls:
-            guard playbackState.showUI, !isPreBuffering else { return false }
-            hideControlsTimer?.invalidate()
-            hideControlsTimer = nil
-            playbackState.showUI = false
-            setNeedsFocusUpdate()
+            return hideRemoteControls()
+        case .moveHighlight(let delta):
+            return moveOpenMenu(delta)
+        case .activateHighlight:
+            return activateOpenMenu()
+        case .togglePlayback:
+            togglePlayPause()
+            return true
+        case .seekBackward:
+            seekRelative(by: -15)
+            return true
+        case .seekForward:
+            seekRelative(by: 15)
+            return true
+        case .scrubBackward:
+            guard playbackState.isVirtualScrubbing else { return false }
+            showUI(autoHide: false)
+            increaseScrubMultiplier(false)
+            return true
+        case .scrubForward:
+            guard playbackState.isVirtualScrubbing else { return false }
+            showUI(autoHide: false)
+            increaseScrubMultiplier(true)
+            return true
+        case .commitScrub:
+            guard playbackState.isVirtualScrubbing else { return false }
+            commitVirtualScrub()
             return true
         default:
             return false
         }
+    }
+
+    private func hideRemoteControls() -> Bool {
+        guard playbackState.showUI, !isPreBuffering else { return false }
+        hideControlsTimer?.invalidate()
+        hideControlsTimer = nil
+        playbackState.showUI = false
+        setNeedsFocusUpdate()
+        return true
+    }
+
+    private func subtitleRowIDs() -> [Int] {
+        PlayerRemoteNavigation.menuRowIDs(
+            trackIDs: playbackState.subtitleTracks.map(\.id) + playbackState.externalSubtitleTracks.map(\.id),
+            includeOff: true
+        )
+    }
+
+    private func audioRowIDs() -> [Int] {
+        PlayerRemoteNavigation.menuRowIDs(trackIDs: playbackState.audioTracks.map(\.id), includeOff: false)
+    }
+
+    private func engineRowIDs() -> [Int] {
+        PlayerRemoteNavigation.menuRowIDs(
+            trackIDs: PlaybackEngine.menuOrder(current: .mpv).map(\.menuID),
+            includeOff: false
+        )
+    }
+
+    private func moveOpenMenu(_ delta: Int) -> Bool {
+        if playbackState.showSubtitleMenu {
+            let count = subtitleRowIDs().count
+            guard count > 0 else { return false }
+            playbackState.subtitleHighlight = PlayerHighlightList(
+                count: count, index: playbackState.subtitleHighlight
+            ).moving(delta).index
+            return true
+        }
+        if playbackState.showAudioMenu {
+            let count = audioRowIDs().count
+            guard count > 0 else { return false }
+            playbackState.audioHighlight = PlayerHighlightList(
+                count: count, index: playbackState.audioHighlight
+            ).moving(delta).index
+            return true
+        }
+        if playbackState.showEngineMenu {
+            let count = engineRowIDs().count
+            guard count > 0 else { return false }
+            playbackState.engineHighlight = PlayerHighlightList(
+                count: count, index: playbackState.engineHighlight
+            ).moving(delta).index
+            return true
+        }
+        return false
+    }
+
+    private func activateOpenMenu() -> Bool {
+        if playbackState.showSubtitleMenu {
+            let ids = subtitleRowIDs()
+            let index = PlayerHighlightList(count: ids.count, index: playbackState.subtitleHighlight).moving(0).index
+            guard ids.indices.contains(index) else { return false }
+            playbackState.subtitleHighlight = index
+            selectSubtitleTrack(ids[index])
+            playbackState.showSubtitleMenu = false
+            return true
+        }
+        if playbackState.showAudioMenu {
+            let ids = audioRowIDs()
+            let index = PlayerHighlightList(count: ids.count, index: playbackState.audioHighlight).moving(0).index
+            guard ids.indices.contains(index) else { return false }
+            playbackState.audioHighlight = index
+            selectAudioTrack(ids[index])
+            playbackState.showAudioMenu = false
+            return true
+        }
+        if playbackState.showEngineMenu {
+            let ids = engineRowIDs()
+            let index = PlayerHighlightList(count: ids.count, index: playbackState.engineHighlight).moving(0).index
+            guard ids.indices.contains(index) else { return false }
+            playbackState.engineHighlight = index
+            let id = ids[index]
+            playbackState.showEngineMenu = false
+            if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != .mpv {
+                onSwitch?(target, playbackState.currentTime)
+            }
+            return true
+        }
+        return false
+    }
+
+    private func selectSubtitleTrack(_ trackId: Int) {
+        if let option = externalSubtitleCatalog.option(for: trackId) {
+            // `cached` selects an existing file if the user taps again while loading.
+            // The track-list observer replaces this menu entry once loading succeeds.
+            mpvQueue.async { [weak self] in
+                guard let self, let handle = self.mpv else { return }
+                self.mpvCommandAsync(handle, ["sub-add", option.url, "cached", option.name])
+            }
+            TrackPreferences.shared.subtitlesOff = false
+            TrackPreferences.shared.subtitleName = option.name
+            return
+        }
+        setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
+        playbackState.currentSubtitleIndex = trackId
+        recordSubtitlePreference(id: trackId)
+    }
+
+    private func selectAudioTrack(_ trackId: Int) {
+        setPropertyAsync("aid", value: String(trackId))
+        playbackState.currentAudioIndex = trackId
+        recordAudioPreference(id: trackId)
     }
 
     private func cancelVirtualScrub() {

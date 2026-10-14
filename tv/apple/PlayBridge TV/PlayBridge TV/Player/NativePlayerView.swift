@@ -187,9 +187,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 self, selector: #selector(onControl(_:)),
                 name: WebSocketServer.controlCommand, object: nil)
             NotificationCenter.default.addObserver(
-                self, selector: #selector(onRemote(_:)),
-                name: WebSocketServer.remoteKey, object: nil)
-            NotificationCenter.default.addObserver(
                 self, selector: #selector(onResync),
                 name: WebSocketServer.resyncRequest, object: nil)
             NotificationCenter.default.addObserver(
@@ -617,21 +614,6 @@ struct NativePlayerView: UIViewControllerRepresentable {
             broadcastStatus()
         }
 
-        @objc private func onRemote(_ note: Notification) {
-            guard let key = note.userInfo?["key"] as? String, let player else { return }
-            if StillWatchingGate.isPrompting { return }
-            switch key {
-            case "dpad_center":
-                if player.timeControlStatus == .playing { player.pause() } else { player.play() }
-            case "dpad_left":  seek(by: -15)
-            case "dpad_right": seek(by: 15)
-            case "back", "home":
-                // PlayerView owns network Back and Home for both engines.
-                break
-            default: break
-            }
-        }
-
         func bindEngineChrome(
             _ chrome: PlayerEngineChrome,
             controller: AVPlayerViewController,
@@ -650,28 +632,44 @@ struct NativePlayerView: UIViewControllerRepresentable {
                     controlsVisible: controls
                 )
             }
-            chrome.applyDismiss = { [weak self] effect in
-                self?.applyRemoteDismiss(effect) ?? false
+            chrome.apply = { [weak self] effect in
+                self?.applyRemoteEffect(effect) ?? false
             }
         }
 
         /// Network Back closes a presented sheet, then the system transport.
         /// Track menus drawn inside that transport go away with it.
-        private func applyRemoteDismiss(_ effect: PlayerRemoteEffect) -> Bool {
+        private func applyRemoteEffect(_ effect: PlayerRemoteEffect) -> Bool {
             switch effect {
             case .dismissSettingsSheet:
                 guard playerController?.presentedViewController != nil else { return false }
                 playerController?.dismiss(animated: true)
                 return true
             case .dismissControls:
-                guard !remoteControlsHidden, !controlsSuppressedByPreplay,
-                      playerController?.showsPlaybackControls == true else { return false }
-                remoteControlsHidden = true
-                playerController?.showsPlaybackControls = false
+                return hideRemoteControls()
+            case .togglePlayback:
+                guard let player else { return false }
+                if player.timeControlStatus == .playing { player.pause() } else { player.play() }
+                return true
+            case .seekBackward:
+                guard player != nil else { return false }
+                seek(by: -15)
+                return true
+            case .seekForward:
+                guard player != nil else { return false }
+                seek(by: 15)
                 return true
             default:
                 return false
             }
+        }
+
+        private func hideRemoteControls() -> Bool {
+            guard !remoteControlsHidden, !controlsSuppressedByPreplay,
+                  playerController?.showsPlaybackControls == true else { return false }
+            remoteControlsHidden = true
+            playerController?.showsPlaybackControls = false
+            return true
         }
 
         @objc private func onStillWatchingPause() { player?.pause(); broadcastStatus() }

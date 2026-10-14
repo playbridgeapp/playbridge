@@ -31,6 +31,11 @@ class PlayerControlsData: ObservableObject {
     @Published var currentAudioIndex: Int = -1
     @Published var showAudioMenu: Bool = false
     @Published var showEngineMenu: Bool = false
+
+    /// Row index inside the open menu. The network remote and the focus ring share it.
+    @Published var subtitleHighlight: Int = 0
+    @Published var audioHighlight: Int = 0
+    @Published var engineHighlight: Int = 0
 }
 
 struct TrackMenuView: View {
@@ -40,9 +45,14 @@ struct TrackMenuView: View {
     let currentId: Int
     let includeOff: Bool
     var showCurrentLabel: Bool = false
+    @Binding var highlightedIndex: Int
     let onSelect: (Int) -> Void
 
     @FocusState private var focusedId: Int?
+
+    private var rowIDs: [Int] {
+        PlayerRemoteNavigation.menuRowIDs(trackIDs: tracks.map(\.id), includeOff: includeOff)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +90,15 @@ struct TrackMenuView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 focusedId = currentId
             }
+        }
+        .onChange(of: highlightedIndex) { _, index in
+            let ids = rowIDs
+            guard ids.indices.contains(index), focusedId != ids[index] else { return }
+            focusedId = ids[index]
+        }
+        .onChange(of: focusedId) { _, id in
+            guard let id, let index = rowIDs.firstIndex(of: id), highlightedIndex != index else { return }
+            highlightedIndex = index
         }
         .frame(width: 540, height: min(CGFloat(tracks.count + (includeOff ? 1 : 0)) * 80 + 120, 620))
         .background(.ultraThinMaterial)
@@ -241,6 +260,7 @@ struct PlayerControlsOverlay: View {
                                 // Subtitles button
                                 if !data.subtitleTracks.isEmpty || !data.externalSubtitleTracks.isEmpty {
                                     Button(action: {
+                                        data.subtitleHighlight = subtitleRowIndex
                                         data.showSubtitleMenu.toggle()
                                         data.showAudioMenu = false
                                         data.showEngineMenu = false
@@ -259,6 +279,7 @@ struct PlayerControlsOverlay: View {
                                 // Audio tracks button
                                 if data.audioTracks.count > 1 {
                                     Button(action: {
+                                        data.audioHighlight = audioRowIndex
                                         data.showAudioMenu.toggle()
                                         data.showSubtitleMenu = false
                                         data.showEngineMenu = false
@@ -290,6 +311,7 @@ struct PlayerControlsOverlay: View {
                                 
                                 // Switch Engine button
                                 Button(action: {
+                                    data.engineHighlight = engineRowIndex
                                     data.showEngineMenu.toggle()
                                     data.showSubtitleMenu = false
                                     data.showAudioMenu = false
@@ -335,7 +357,8 @@ struct PlayerControlsOverlay: View {
                     icon: "captions.bubble.fill",
                     tracks: data.subtitleTracks + data.externalSubtitleTracks,
                     currentId: data.currentSubtitleIndex,
-                    includeOff: true
+                    includeOff: true,
+                    highlightedIndex: $data.subtitleHighlight
                 ) { id in
                     onSelectSubtitle(id)
                     data.showSubtitleMenu = false
@@ -352,7 +375,8 @@ struct PlayerControlsOverlay: View {
                     icon: "waveform",
                     tracks: data.audioTracks,
                     currentId: data.currentAudioIndex,
-                    includeOff: false
+                    includeOff: false,
+                    highlightedIndex: $data.audioHighlight
                 ) { id in
                     onSelectAudio(id)
                     data.showAudioMenu = false
@@ -370,7 +394,8 @@ struct PlayerControlsOverlay: View {
                     tracks: PlaybackEngine.menuOrder(current: engine).map { ($0.menuID, $0.name) },
                     currentId: engine.menuID,
                     includeOff: false,
-                    showCurrentLabel: true
+                    showCurrentLabel: true,
+                    highlightedIndex: $data.engineHighlight
                 ) { id in
                     data.showEngineMenu = false
                     if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != engine {
@@ -386,6 +411,27 @@ struct PlayerControlsOverlay: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showAudioMenu)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showEngineMenu)
         .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
+    }
+
+    private var subtitleRowIndex: Int {
+        let ids = PlayerRemoteNavigation.menuRowIDs(
+            trackIDs: data.subtitleTracks.map(\.id) + data.externalSubtitleTracks.map(\.id),
+            includeOff: true
+        )
+        return ids.firstIndex(of: data.currentSubtitleIndex) ?? 0
+    }
+
+    private var audioRowIndex: Int {
+        let ids = PlayerRemoteNavigation.menuRowIDs(trackIDs: data.audioTracks.map(\.id), includeOff: false)
+        return ids.firstIndex(of: data.currentAudioIndex) ?? 0
+    }
+
+    private var engineRowIndex: Int {
+        let ids = PlayerRemoteNavigation.menuRowIDs(
+            trackIDs: PlaybackEngine.menuOrder(current: engine).map(\.menuID),
+            includeOff: false
+        )
+        return ids.firstIndex(of: engine.menuID) ?? 0
     }
 
     private var playerBadge: some View {

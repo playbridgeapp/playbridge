@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PlaylistOverlay: View {
     @EnvironmentObject var playlistStore: PlaylistStore
+    @Binding var highlightedIndex: Int
     let onItemSelected: (Int) -> Void
     let onDismiss: () -> Void
     
@@ -74,10 +75,20 @@ struct PlaylistOverlay: View {
                         .padding(.bottom, 40)
                     }
                     .onAppear {
-                        focusedIndex = playlistStore.currentIndex
-                        proxy.scrollTo(playlistStore.currentIndex, anchor: .center)
+                        let start = playlistStore.currentIndex
+                        if highlightedIndex != start { highlightedIndex = start }
+                        focusedIndex = start
+                        proxy.scrollTo(start, anchor: .center)
+                    }
+                    .onChange(of: highlightedIndex) { _, index in
+                        if focusedIndex != index { focusedIndex = index }
+                        proxy.scrollTo(index, anchor: .center)
                     }
                 }
+            }
+            .onChange(of: focusedIndex) { _, index in
+                guard let index, highlightedIndex != index else { return }
+                highlightedIndex = index
             }
             .frame(width: 450)
             .background(
