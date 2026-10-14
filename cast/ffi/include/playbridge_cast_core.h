@@ -172,7 +172,17 @@ int32_t pb_proxy_upstream_checked_callbacks_registered(void);
 void pb_proxy_upstream_clear_callbacks(void);
 int32_t pb_proxy_upstream_callbacks_registered(void);
 
-/* Secure PlayBridge receiver runtime. Commands and events are UTF-8 JSON. */
+/* Secure PlayBridge receiver runtime, ABI 1. Commands and events are UTF-8 JSON.
+ * RuntimeConfig accepts optional `capabilities`, a native ReceiverCapabilities
+ * v1 JSON object (protocol/docs/RECEIVER_CAPABILITIES.md). Omit it or use null
+ * for exact legacy auth/protected-credential envelopes. Validated static JSON
+ * is published identically on successful auth and inside encrypted credentials;
+ * it is never added to the plaintext pairing_approved envelope or event logs.
+ * Limits: 64 KiB serialized UTF-8, 16 surfaces/engines per map, 64 unique IDs
+ * per set, 1-64 Unicode characters per ID. Invalid/unsupported descriptors
+ * cause start to return NULL; unknown top-level config fields remain tolerated.
+ * This additive optional JSON field does not change ABI 1 functions, ownership,
+ * commands or events. Dynamic descriptor updates are not supported. */
 uint32_t pb_receiver_runtime_abi_version(void);
 ReceiverRuntime *pb_receiver_runtime_start(const char *config_json);
 bool pb_receiver_runtime_submit_json(const ReceiverRuntime *runtime,

@@ -30,3 +30,24 @@ The receiver identity is caller-owned and must remain stable across restarts so
 existing senders retain a valid SPKI pin. The receiver crate never owns playback:
 the CLI adapts events to external mpv, while Flutter Desktop adapts them to
 `PlayerController`.
+
+## Optional receiver descriptor
+
+`ReceiverConfig.capabilities` defaults to `None`, retaining the old auth and
+protected credential JSON without a `capabilities` property. Hosts can supply
+`playbridge_cast_core::playbridge::ReceiverCapabilities::from_json(value)` after
+implementing the operations they advertise. Desktop and CLI do not supply one
+yet; their truthful builders are a separate rollout step.
+
+The validated static v1 JSON is retained in shared runtime state and sent
+identically on successful auth and in AES-GCM-protected first-pairing credentials.
+It is never placed on plaintext `pairing_approved`, sent on failed auth, or used
+to change authentication, token revocation, pairing transcripts or command dispatch.
+No dynamic update API is provided. Unknown identifiers are open case-sensitive
+strings; known v1 shapes, unique sets and 64 KiB/16-map/64-ID limits follow
+`protocol/docs/RECEIVER_CAPABILITIES.md`. Debug output omits descriptor contents.
+
+Rust sender models inspect the raw version before constructing the validated
+wrapper. Absent, unsupported, malformed or oversized optional advertisements
+decode to `None` without changing legacy authentication behavior. Hosts/config
+producers instead reject invalid or unsupported descriptors before startup.

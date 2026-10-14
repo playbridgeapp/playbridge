@@ -37,6 +37,7 @@ final class ReceiverRuntimeConfig {
     this.features = const [],
     this.screenMirrorWebRtc = false,
     this.advertise = false,
+    this.capabilities,
   });
 
   final String name;
@@ -54,6 +55,10 @@ final class ReceiverRuntimeConfig {
   final bool screenMirrorWebRtc;
   final bool advertise;
 
+  /// Optional static v1 native advertisement. The runtime validates its bounds/shape.
+  /// Host hints confer no trust. Do not publish operations before implementing them.
+  final Map<String, Object?>? capabilities;
+
   Map<String, Object?> toJson() => {
         'name': name,
         'uuid': uuid,
@@ -69,6 +74,7 @@ final class ReceiverRuntimeConfig {
         'features': features,
         'screenMirrorWebRtc': screenMirrorWebRtc,
         'advertise': advertise,
+        if (capabilities != null) 'capabilities': capabilities,
       };
 }
 

@@ -15,6 +15,7 @@ pub mod native_discovery;
 pub mod net;
 pub mod playbridge;
 pub mod progress;
+mod receiver_capabilities;
 pub mod roku;
 pub mod secure_ws;
 pub mod session;

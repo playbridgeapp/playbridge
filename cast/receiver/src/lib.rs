@@ -16,7 +16,9 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
-use playbridge_cast_core::playbridge::{CredentialBundle, ReceiverPairingSession, SenderFrame};
+use playbridge_cast_core::playbridge::{
+    CredentialBundle, ReceiverCapabilities, ReceiverPairingSession, SenderFrame,
+};
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer},
@@ -69,6 +71,8 @@ pub struct ReceiverConfig {
     pub media_kinds: Vec<String>,
     pub features: Vec<String>,
     pub screen_mirror_web_rtc: bool,
+    /// Static authenticated advertisement; absent keeps the exact legacy envelopes.
+    pub capabilities: Option<ReceiverCapabilities>,
     pub advertise: bool,
     pub max_connections: usize,
     pub max_message_bytes: usize,
@@ -89,6 +93,7 @@ impl ReceiverConfig {
             media_kinds: Vec::new(),
             features: Vec::new(),
             screen_mirror_web_rtc: false,
+            capabilities: None,
             advertise: false,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
@@ -244,6 +249,7 @@ struct Shared {
     media_kinds: Vec<String>,
     features: Vec<String>,
     screen_mirror_web_rtc: bool,
+    capabilities: Option<ReceiverCapabilities>,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
     authenticated: Mutex<HashMap<u64, String>>,
@@ -253,6 +259,18 @@ struct Shared {
 }
 
 impl Shared {
+    fn auth_response(&self, success: bool) -> Value {
+        let mut response = json!({
+            "type":"auth_response", "success":success, "certFingerprint":self.fingerprint,
+            "players":self.players, "browsers":self.browsers, "mediaKinds":self.media_kinds,
+            "features":self.features, "screenMirrorWebRtc":self.screen_mirror_web_rtc,
+        });
+        if success && let Some(capabilities) = &self.capabilities {
+            response["capabilities"] = capabilities.as_json().clone();
+        }
+        response
+    }
+
     fn emit(&self, event: ReceiverEvent) {
         let _ = self.events.send(event);
     }
@@ -322,6 +340,7 @@ impl ReceiverHost {
             media_kinds: config.media_kinds.clone(),
             features: config.features.clone(),
             screen_mirror_web_rtc: config.screen_mirror_web_rtc,
+            capabilities: config.capabilities.clone(),
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
             authenticated: Mutex::new(HashMap::new()),
@@ -681,16 +700,7 @@ where
                         authenticated = shared.is_authorized(&token);
                         send_value(
                             &mut socket,
-                            json!({
-                                "type":"auth_response",
-                                "success":authenticated,
-                                "certFingerprint":shared.fingerprint,
-                                "players":shared.players,
-                                "browsers":shared.browsers,
-                                "mediaKinds":shared.media_kinds,
-                                "features":shared.features,
-                                "screenMirrorWebRtc":shared.screen_mirror_web_rtc,
-                            }),
+                            shared.auth_response(authenticated),
                         ).await?;
                         if authenticated {
                             let digest = token_digest(&token);
@@ -781,6 +791,7 @@ where
                                     media_kinds: shared.media_kinds.clone(),
                                     screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
                                     features: shared.features.clone(),
+                                    capabilities: shared.capabilities.clone(),
                                 },
                             )
                             .map_err(|_| "pairing confirmation was invalid".to_owned())?;
@@ -1081,12 +1092,28 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_pairs_authenticates_and_emits_typed_commands() {
+        exercise_pairing_and_auth(None).await;
+    }
+
+    #[tokio::test]
+    async fn receiver_publishes_identical_descriptor_in_protected_pairing_and_auth() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../protocol/tests/fixtures/receiver-capabilities/unknown-identifiers-auth-v1.json"
+        )).unwrap();
+        exercise_pairing_and_auth(Some(
+            ReceiverCapabilities::from_json(fixture["capabilities"].clone()).unwrap(),
+        ))
+        .await;
+    }
+
+    async fn exercise_pairing_and_auth(capabilities: Option<ReceiverCapabilities>) {
         let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
         config.preferred_port = 0;
         config.fallback_attempts = 1;
         config.players = vec!["internal_mpv".into()];
         config.media_kinds = vec!["video".into(), "audio".into(), "image".into()];
         config.screen_mirror_web_rtc = true;
+        config.capabilities = capabilities.clone();
         let host = ReceiverHost::start(config).await.unwrap();
         let mut events = host.subscribe();
         let endpoint = format!("wss://127.0.0.1:{}/", host.port());
@@ -1138,6 +1165,20 @@ mod tests {
             .unwrap();
         assert_eq!(credentials.media_kinds, ["video", "audio", "image"]);
         assert!(credentials.screen_mirror_web_rtc);
+        assert_eq!(credentials.capabilities, capabilities);
+        let serialized = serde_json::to_value(&credentials).unwrap();
+        assert_eq!(
+            serialized.get("capabilities"),
+            capabilities.as_ref().map(ReceiverCapabilities::as_json)
+        );
+        assert_eq!(
+            serde_json::to_value(ReceiverFrame::PairingApproved { nonce, ciphertext })
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
         socket
             .send(&SenderFrame::Command {
                 action: "control".into(),
@@ -1187,14 +1228,14 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(
-            authenticated.receive().await.unwrap(),
-            Some(ReceiverFrame::AuthResponse {
-                success: true,
-                screen_mirror_web_rtc: true,
-                ..
-            })
-        ));
+        let response = authenticated.receive().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&response).unwrap().get("capabilities"),
+            serialized.get("capabilities")
+        );
+        assert!(matches!(response, ReceiverFrame::AuthResponse {
+            success: true, screen_mirror_web_rtc: true, capabilities: advertised, ..
+        } if advertised == capabilities));
         host.replace_authorized_tokens(Vec::new());
         let revoked = tokio::time::timeout(Duration::from_secs(2), authenticated.receive())
             .await
@@ -1203,6 +1244,23 @@ mod tests {
             !matches!(revoked, Ok(Some(_))),
             "revoked connection received another frame"
         );
+        let mut revoked = SecureWebSocket::connect_pinned(&endpoint, &pin)
+            .await
+            .unwrap();
+        revoked
+            .send(&SenderFrame::Auth {
+                token: credentials.token,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            revoked.receive().await.unwrap(),
+            Some(ReceiverFrame::AuthResponse {
+                success: false,
+                capabilities: None,
+                ..
+            })
+        ));
         host.shutdown().await;
     }
 }

@@ -12,6 +12,7 @@ use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+pub use crate::receiver_capabilities::ReceiverCapabilities;
 use crate::{CastError, Result};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -74,6 +75,12 @@ pub enum ReceiverFrame {
         screen_mirror_web_rtc: bool,
         #[serde(default)]
         features: Vec<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::receiver_capabilities::deserialize_optional"
+        )]
+        capabilities: Option<ReceiverCapabilities>,
     },
     #[serde(rename = "status")]
     Status {
@@ -163,6 +170,12 @@ pub struct CredentialBundle {
     pub screen_mirror_web_rtc: bool,
     #[serde(default)]
     pub features: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::receiver_capabilities::deserialize_optional"
+    )]
+    pub capabilities: Option<ReceiverCapabilities>,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -658,6 +671,7 @@ mod tests {
             media_kinds: vec!["video".into(), "audio".into(), "image".into()],
             screen_mirror_web_rtc: true,
             features: vec!["queue_crud_v1".into()],
+            capabilities: None,
         };
         let ReceiverFrame::PairingApproved { nonce, ciphertext } =
             receiver.approve(&mac, &credentials).unwrap()

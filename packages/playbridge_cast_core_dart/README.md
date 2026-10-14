@@ -50,3 +50,13 @@ final receiver = ReceiverRuntime.start(
 receiver.events.listen(handleReceiverEvent);
 final port = await receiver.started;
 ```
+
+`ReceiverRuntimeConfig.capabilities` optionally accepts the static native v1 JSON
+descriptor from `protocol/docs/RECEIVER_CAPABILITIES.md`. Omission/null leaves the
+config JSON and receiver advertisements in legacy mode. Rust validates the
+descriptor and publishes the same JSON on successful auth and inside protected
+pairing credentials. Invalid/unsupported descriptors reject startup; unknown
+top-level config fields remain tolerated. The receiver ABI remains exactly **1**:
+this optional JSON field changes no C signatures, ownership, commands or events.
+Desktop and CLI continue to omit it until their truthful host builders are ready.
+Never log config credentials or descriptors; hints are not trust or support gates.
