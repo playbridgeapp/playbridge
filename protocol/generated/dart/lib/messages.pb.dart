@@ -1840,16 +1840,49 @@ class StatusMessage extends $pb.GeneratedMessage {
   void clearFullscreen() => $_clearField(9);
 }
 
-/// Android TV player_settings. The live JSON object has more fields; this message
-/// records the additive loop flag. Field numbers start at 1 because the message is new.
+/// Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
+/// subtitleOffsetMs/engine remain required. Unsupported controls use neutral
+/// values with honest availability flags; active loop/engine stay in state.
 class PlayerSettingsMessage extends $pb.GeneratedMessage {
   factory PlayerSettingsMessage({
     $core.String? type,
     $core.bool? loop,
+    $core.double? speed,
+    $core.String? scaling,
+    $core.bool? audioBoost,
+    $fixnum.Int64? subtitleOffsetMs,
+    $core.String? engine,
+    $core.int? qualityMaxHeight,
+    $core.int? currentVideoHeight,
+    $core.bool? isLive,
+    $core.bool? isSeekable,
+    $core.bool? speedAvailable,
+    $core.bool? scalingAvailable,
+    $core.bool? audioBoostAvailable,
+    $core.bool? qualityAvailable,
+    $core.bool? subtitleOffsetAvailable,
+    $core.bool? engineAvailable,
+    $core.bool? loopAvailable,
   }) {
     final result = create();
     if (type != null) result.type = type;
     if (loop != null) result.loop = loop;
+    if (speed != null) result.speed = speed;
+    if (scaling != null) result.scaling = scaling;
+    if (audioBoost != null) result.audioBoost = audioBoost;
+    if (subtitleOffsetMs != null) result.subtitleOffsetMs = subtitleOffsetMs;
+    if (engine != null) result.engine = engine;
+    if (qualityMaxHeight != null) result.qualityMaxHeight = qualityMaxHeight;
+    if (currentVideoHeight != null) result.currentVideoHeight = currentVideoHeight;
+    if (isLive != null) result.isLive = isLive;
+    if (isSeekable != null) result.isSeekable = isSeekable;
+    if (speedAvailable != null) result.speedAvailable = speedAvailable;
+    if (scalingAvailable != null) result.scalingAvailable = scalingAvailable;
+    if (audioBoostAvailable != null) result.audioBoostAvailable = audioBoostAvailable;
+    if (qualityAvailable != null) result.qualityAvailable = qualityAvailable;
+    if (subtitleOffsetAvailable != null) result.subtitleOffsetAvailable = subtitleOffsetAvailable;
+    if (engineAvailable != null) result.engineAvailable = engineAvailable;
+    if (loopAvailable != null) result.loopAvailable = loopAvailable;
     return result;
   }
 
@@ -1861,6 +1894,22 @@ class PlayerSettingsMessage extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PlayerSettingsMessage', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'type')
     ..aOB(2, _omitFieldNames ? '' : 'loop')
+    ..a<$core.double>(3, _omitFieldNames ? '' : 'speed', $pb.PbFieldType.OD)
+    ..aOS(4, _omitFieldNames ? '' : 'scaling')
+    ..aOB(5, _omitFieldNames ? '' : 'audioBoost')
+    ..aInt64(6, _omitFieldNames ? '' : 'subtitleOffsetMs')
+    ..aOS(7, _omitFieldNames ? '' : 'engine')
+    ..a<$core.int>(8, _omitFieldNames ? '' : 'qualityMaxHeight', $pb.PbFieldType.O3)
+    ..a<$core.int>(9, _omitFieldNames ? '' : 'currentVideoHeight', $pb.PbFieldType.O3)
+    ..aOB(10, _omitFieldNames ? '' : 'isLive')
+    ..aOB(11, _omitFieldNames ? '' : 'isSeekable')
+    ..aOB(12, _omitFieldNames ? '' : 'speedAvailable')
+    ..aOB(13, _omitFieldNames ? '' : 'scalingAvailable')
+    ..aOB(14, _omitFieldNames ? '' : 'audioBoostAvailable')
+    ..aOB(15, _omitFieldNames ? '' : 'qualityAvailable')
+    ..aOB(16, _omitFieldNames ? '' : 'subtitleOffsetAvailable')
+    ..aOB(17, _omitFieldNames ? '' : 'engineAvailable')
+    ..aOB(18, _omitFieldNames ? '' : 'loopAvailable')
     ..hasRequiredFields = false
   ;
 
@@ -1898,16 +1947,162 @@ class PlayerSettingsMessage extends $pb.GeneratedMessage {
   $core.bool hasLoop() => $_has(1);
   @$pb.TagNumber(2)
   void clearLoop() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.double get speed => $_getN(2);
+  @$pb.TagNumber(3)
+  set speed($core.double value) => $_setDouble(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSpeed() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSpeed() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get scaling => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set scaling($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasScaling() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearScaling() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.bool get audioBoost => $_getBF(4);
+  @$pb.TagNumber(5)
+  set audioBoost($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasAudioBoost() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearAudioBoost() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $fixnum.Int64 get subtitleOffsetMs => $_getI64(5);
+  @$pb.TagNumber(6)
+  set subtitleOffsetMs($fixnum.Int64 value) => $_setInt64(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasSubtitleOffsetMs() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearSubtitleOffsetMs() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get engine => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set engine($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasEngine() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearEngine() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.int get qualityMaxHeight => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set qualityMaxHeight($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasQualityMaxHeight() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearQualityMaxHeight() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.int get currentVideoHeight => $_getIZ(8);
+  @$pb.TagNumber(9)
+  set currentVideoHeight($core.int value) => $_setSignedInt32(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasCurrentVideoHeight() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearCurrentVideoHeight() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.bool get isLive => $_getBF(9);
+  @$pb.TagNumber(10)
+  set isLive($core.bool value) => $_setBool(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasIsLive() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearIsLive() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  $core.bool get isSeekable => $_getBF(10);
+  @$pb.TagNumber(11)
+  set isSeekable($core.bool value) => $_setBool(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasIsSeekable() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearIsSeekable() => $_clearField(11);
+
+  @$pb.TagNumber(12)
+  $core.bool get speedAvailable => $_getBF(11);
+  @$pb.TagNumber(12)
+  set speedAvailable($core.bool value) => $_setBool(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasSpeedAvailable() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearSpeedAvailable() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  $core.bool get scalingAvailable => $_getBF(12);
+  @$pb.TagNumber(13)
+  set scalingAvailable($core.bool value) => $_setBool(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasScalingAvailable() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearScalingAvailable() => $_clearField(13);
+
+  @$pb.TagNumber(14)
+  $core.bool get audioBoostAvailable => $_getBF(13);
+  @$pb.TagNumber(14)
+  set audioBoostAvailable($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasAudioBoostAvailable() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearAudioBoostAvailable() => $_clearField(14);
+
+  @$pb.TagNumber(15)
+  $core.bool get qualityAvailable => $_getBF(14);
+  @$pb.TagNumber(15)
+  set qualityAvailable($core.bool value) => $_setBool(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasQualityAvailable() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearQualityAvailable() => $_clearField(15);
+
+  @$pb.TagNumber(16)
+  $core.bool get subtitleOffsetAvailable => $_getBF(15);
+  @$pb.TagNumber(16)
+  set subtitleOffsetAvailable($core.bool value) => $_setBool(15, value);
+  @$pb.TagNumber(16)
+  $core.bool hasSubtitleOffsetAvailable() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearSubtitleOffsetAvailable() => $_clearField(16);
+
+  @$pb.TagNumber(17)
+  $core.bool get engineAvailable => $_getBF(16);
+  @$pb.TagNumber(17)
+  set engineAvailable($core.bool value) => $_setBool(16, value);
+  @$pb.TagNumber(17)
+  $core.bool hasEngineAvailable() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearEngineAvailable() => $_clearField(17);
+
+  @$pb.TagNumber(18)
+  $core.bool get loopAvailable => $_getBF(17);
+  @$pb.TagNumber(18)
+  set loopAvailable($core.bool value) => $_setBool(17, value);
+  @$pb.TagNumber(18)
+  $core.bool hasLoopAvailable() => $_has(17);
+  @$pb.TagNumber(18)
+  void clearLoopAvailable() => $_clearField(18);
 }
 
 class ContextMessage extends $pb.GeneratedMessage {
   factory ContextMessage({
     $core.String? type,
     $core.String? active,
+    $core.String? engine,
   }) {
     final result = create();
     if (type != null) result.type = type;
     if (active != null) result.active = active;
+    if (engine != null) result.engine = engine;
     return result;
   }
 
@@ -1919,6 +2114,7 @@ class ContextMessage extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ContextMessage', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'type')
     ..aOS(2, _omitFieldNames ? '' : 'active')
+    ..aOS(3, _omitFieldNames ? '' : 'engine')
     ..hasRequiredFields = false
   ;
 
@@ -1957,6 +2153,15 @@ class ContextMessage extends $pb.GeneratedMessage {
   $core.bool hasActive() => $_has(1);
   @$pb.TagNumber(2)
   void clearActive() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get engine => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set engine($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasEngine() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearEngine() => $_clearField(3);
 }
 
 class PlaylistItemInfo extends $pb.GeneratedMessage {
@@ -2400,6 +2605,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     $core.bool? screenMirrorWebRtc,
     $core.Iterable<$core.String>? mediaKinds,
     $core.Iterable<$core.String>? features,
+    ReceiverCapabilities? capabilities,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -2411,6 +2617,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     if (screenMirrorWebRtc != null) result.screenMirrorWebRtc = screenMirrorWebRtc;
     if (mediaKinds != null) result.mediaKinds.addAll(mediaKinds);
     if (features != null) result.features.addAll(features);
+    if (capabilities != null) result.capabilities = capabilities;
     return result;
   }
 
@@ -2429,6 +2636,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     ..aOB(7, _omitFieldNames ? '' : 'screenMirrorWebRtc')
     ..pPS(8, _omitFieldNames ? '' : 'mediaKinds')
     ..pPS(9, _omitFieldNames ? '' : 'features')
+    ..aOM<ReceiverCapabilities>(10, _omitFieldNames ? '' : 'capabilities', subBuilder: ReceiverCapabilities.create)
     ..hasRequiredFields = false
   ;
 
@@ -2507,6 +2715,18 @@ class AuthResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(9)
   $pb.PbList<$core.String> get features => $_getList(8);
+
+  /// Optional authenticated descriptor; existing fields and tags stay unchanged.
+  @$pb.TagNumber(10)
+  ReceiverCapabilities get capabilities => $_getN(9);
+  @$pb.TagNumber(10)
+  set capabilities(ReceiverCapabilities value) => $_setField(10, value);
+  @$pb.TagNumber(10)
+  $core.bool hasCapabilities() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearCapabilities() => $_clearField(10);
+  @$pb.TagNumber(10)
+  ReceiverCapabilities ensureCapabilities() => $_ensure(9);
 }
 
 /// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
@@ -3077,6 +3297,617 @@ class PongMessage extends $pb.GeneratedMessage {
   $core.bool hasType() => $_has(0);
   @$pb.TagNumber(1)
   void clearType() => $_clearField(1);
+}
+
+/// ==================== Receiver capabilities v1 ====================
+/// These are JSON model helpers, not a protobuf WSS transport. Read descriptor
+/// version from raw JSON first: unknown versions use frozen legacy behavior.
+/// Never add descriptor plaintext to PairingApprovedMessage or SAS transcript/AAD.
+class CredentialBundle extends $pb.GeneratedMessage {
+  @$core.override
+  $core.String toString() => 'CredentialBundle([redacted])';
+  factory CredentialBundle({
+    $core.String? token,
+    $core.String? certFingerprint,
+    $core.Iterable<$core.String>? players,
+    $core.Iterable<$core.String>? browsers,
+    $core.bool? screenMirrorWebRtc,
+    $core.Iterable<$core.String>? mediaKinds,
+    $core.Iterable<$core.String>? features,
+    ReceiverCapabilities? capabilities,
+  }) {
+    final result = create();
+    if (token != null) result.token = token;
+    if (certFingerprint != null) result.certFingerprint = certFingerprint;
+    if (players != null) result.players.addAll(players);
+    if (browsers != null) result.browsers.addAll(browsers);
+    if (screenMirrorWebRtc != null) result.screenMirrorWebRtc = screenMirrorWebRtc;
+    if (mediaKinds != null) result.mediaKinds.addAll(mediaKinds);
+    if (features != null) result.features.addAll(features);
+    if (capabilities != null) result.capabilities = capabilities;
+    return result;
+  }
+
+  CredentialBundle._();
+
+  factory CredentialBundle.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory CredentialBundle.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'CredentialBundle', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'token')
+    ..aOS(2, _omitFieldNames ? '' : 'certFingerprint')
+    ..pPS(3, _omitFieldNames ? '' : 'players')
+    ..pPS(4, _omitFieldNames ? '' : 'browsers')
+    ..aOB(5, _omitFieldNames ? '' : 'screenMirrorWebRtc')
+    ..pPS(6, _omitFieldNames ? '' : 'mediaKinds')
+    ..pPS(7, _omitFieldNames ? '' : 'features')
+    ..aOM<ReceiverCapabilities>(8, _omitFieldNames ? '' : 'capabilities', subBuilder: ReceiverCapabilities.create)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CredentialBundle clone() => CredentialBundle()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CredentialBundle copyWith(void Function(CredentialBundle) updates) => super.copyWith((message) => updates(message as CredentialBundle)) as CredentialBundle;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CredentialBundle create() => CredentialBundle._();
+  @$core.override
+  CredentialBundle createEmptyInstance() => create();
+  static $pb.PbList<CredentialBundle> createRepeated() => $pb.PbList<CredentialBundle>();
+  @$core.pragma('dart2js:noInline')
+  static CredentialBundle getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CredentialBundle>(create);
+  static CredentialBundle? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get token => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set token($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasToken() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearToken() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get certFingerprint => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set certFingerprint($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasCertFingerprint() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearCertFingerprint() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<$core.String> get players => $_getList(2);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<$core.String> get browsers => $_getList(3);
+
+  @$pb.TagNumber(5)
+  $core.bool get screenMirrorWebRtc => $_getBF(4);
+  @$pb.TagNumber(5)
+  set screenMirrorWebRtc($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasScreenMirrorWebRtc() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearScreenMirrorWebRtc() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $pb.PbList<$core.String> get mediaKinds => $_getList(5);
+
+  @$pb.TagNumber(7)
+  $pb.PbList<$core.String> get features => $_getList(6);
+
+  @$pb.TagNumber(8)
+  ReceiverCapabilities get capabilities => $_getN(7);
+  @$pb.TagNumber(8)
+  set capabilities(ReceiverCapabilities value) => $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCapabilities() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearCapabilities() => $_clearField(8);
+  @$pb.TagNumber(8)
+  ReceiverCapabilities ensureCapabilities() => $_ensure(7);
+}
+
+class ReceiverCapabilities extends $pb.GeneratedMessage {
+  factory ReceiverCapabilities({
+    $core.int? version,
+    $core.Iterable<$core.MapEntry<$core.String, ReceiverSurfaceCapabilities>>? surfaces,
+    ReceiverVolumeCapabilities? volume,
+    ReceiverHostInfo? host,
+    $core.Iterable<$core.String>? companionHints,
+  }) {
+    final result = create();
+    if (version != null) result.version = version;
+    if (surfaces != null) result.surfaces.addEntries(surfaces);
+    if (volume != null) result.volume = volume;
+    if (host != null) result.host = host;
+    if (companionHints != null) result.companionHints.addAll(companionHints);
+    return result;
+  }
+
+  ReceiverCapabilities._();
+
+  factory ReceiverCapabilities.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverCapabilities.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverCapabilities', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..a<$core.int>(1, _omitFieldNames ? '' : 'version', $pb.PbFieldType.OU3)
+    ..m<$core.String, ReceiverSurfaceCapabilities>(2, _omitFieldNames ? '' : 'surfaces', entryClassName: 'ReceiverCapabilities.SurfacesEntry', keyFieldType: $pb.PbFieldType.OS, valueFieldType: $pb.PbFieldType.OM, valueCreator: ReceiverSurfaceCapabilities.create, valueDefaultOrMaker: ReceiverSurfaceCapabilities.getDefault, packageName: const $pb.PackageName('playbridge'))
+    ..aOM<ReceiverVolumeCapabilities>(3, _omitFieldNames ? '' : 'volume', subBuilder: ReceiverVolumeCapabilities.create)
+    ..aOM<ReceiverHostInfo>(4, _omitFieldNames ? '' : 'host', subBuilder: ReceiverHostInfo.create)
+    ..pPS(5, _omitFieldNames ? '' : 'companionHints')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverCapabilities clone() => ReceiverCapabilities()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverCapabilities copyWith(void Function(ReceiverCapabilities) updates) => super.copyWith((message) => updates(message as ReceiverCapabilities)) as ReceiverCapabilities;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverCapabilities create() => ReceiverCapabilities._();
+  @$core.override
+  ReceiverCapabilities createEmptyInstance() => create();
+  static $pb.PbList<ReceiverCapabilities> createRepeated() => $pb.PbList<ReceiverCapabilities>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverCapabilities getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverCapabilities>(create);
+  static ReceiverCapabilities? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.int get version => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set version($core.int value) => $_setUnsignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasVersion() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearVersion() => $_clearField(1);
+
+  /// Single authority; empty/absent engine operation sets are unsupported.
+  @$pb.TagNumber(2)
+  $pb.PbMap<$core.String, ReceiverSurfaceCapabilities> get surfaces => $_getMap(1);
+
+  @$pb.TagNumber(3)
+  ReceiverVolumeCapabilities get volume => $_getN(2);
+  @$pb.TagNumber(3)
+  set volume(ReceiverVolumeCapabilities value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasVolume() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearVolume() => $_clearField(3);
+  @$pb.TagNumber(3)
+  ReceiverVolumeCapabilities ensureVolume() => $_ensure(2);
+
+  @$pb.TagNumber(4)
+  ReceiverHostInfo get host => $_getN(3);
+  @$pb.TagNumber(4)
+  set host(ReceiverHostInfo value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasHost() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearHost() => $_clearField(4);
+  @$pb.TagNumber(4)
+  ReceiverHostInfo ensureHost() => $_ensure(3);
+
+  @$pb.TagNumber(5)
+  $pb.PbList<$core.String> get companionHints => $_getList(4);
+}
+
+class ReceiverSurfaceCapabilities extends $pb.GeneratedMessage {
+  factory ReceiverSurfaceCapabilities({
+    $core.Iterable<$core.MapEntry<$core.String, ReceiverEngineCapabilities>>? engines,
+  }) {
+    final result = create();
+    if (engines != null) result.engines.addEntries(engines);
+    return result;
+  }
+
+  ReceiverSurfaceCapabilities._();
+
+  factory ReceiverSurfaceCapabilities.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverSurfaceCapabilities.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverSurfaceCapabilities', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..m<$core.String, ReceiverEngineCapabilities>(1, _omitFieldNames ? '' : 'engines', entryClassName: 'ReceiverSurfaceCapabilities.EnginesEntry', keyFieldType: $pb.PbFieldType.OS, valueFieldType: $pb.PbFieldType.OM, valueCreator: ReceiverEngineCapabilities.create, valueDefaultOrMaker: ReceiverEngineCapabilities.getDefault, packageName: const $pb.PackageName('playbridge'))
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverSurfaceCapabilities clone() => ReceiverSurfaceCapabilities()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverSurfaceCapabilities copyWith(void Function(ReceiverSurfaceCapabilities) updates) => super.copyWith((message) => updates(message as ReceiverSurfaceCapabilities)) as ReceiverSurfaceCapabilities;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverSurfaceCapabilities create() => ReceiverSurfaceCapabilities._();
+  @$core.override
+  ReceiverSurfaceCapabilities createEmptyInstance() => create();
+  static $pb.PbList<ReceiverSurfaceCapabilities> createRepeated() => $pb.PbList<ReceiverSurfaceCapabilities>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverSurfaceCapabilities getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverSurfaceCapabilities>(create);
+  static ReceiverSurfaceCapabilities? _defaultInstance;
+
+  /// Presence means available. Active engine belongs to context/player_settings.
+  @$pb.TagNumber(1)
+  $pb.PbMap<$core.String, ReceiverEngineCapabilities> get engines => $_getMap(0);
+}
+
+class ReceiverEngineCapabilities extends $pb.GeneratedMessage {
+  factory ReceiverEngineCapabilities({
+    $core.Iterable<$core.String>? transport,
+    $core.Iterable<$core.String>? keys,
+    $core.Iterable<$core.String>? pointer,
+    $core.Iterable<$core.String>? imageTransforms,
+    $core.Iterable<$core.String>? text,
+    $core.Iterable<$core.String>? settings,
+    $core.Iterable<$core.String>? tracks,
+    $core.Iterable<$core.String>? queue,
+    $core.Iterable<$core.String>? browser,
+    $core.Iterable<$core.String>? reporting,
+  }) {
+    final result = create();
+    if (transport != null) result.transport.addAll(transport);
+    if (keys != null) result.keys.addAll(keys);
+    if (pointer != null) result.pointer.addAll(pointer);
+    if (imageTransforms != null) result.imageTransforms.addAll(imageTransforms);
+    if (text != null) result.text.addAll(text);
+    if (settings != null) result.settings.addAll(settings);
+    if (tracks != null) result.tracks.addAll(tracks);
+    if (queue != null) result.queue.addAll(queue);
+    if (browser != null) result.browser.addAll(browser);
+    if (reporting != null) result.reporting.addAll(reporting);
+    return result;
+  }
+
+  ReceiverEngineCapabilities._();
+
+  factory ReceiverEngineCapabilities.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverEngineCapabilities.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverEngineCapabilities', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..pPS(1, _omitFieldNames ? '' : 'transport')
+    ..pPS(2, _omitFieldNames ? '' : 'keys')
+    ..pPS(3, _omitFieldNames ? '' : 'pointer')
+    ..pPS(4, _omitFieldNames ? '' : 'imageTransforms')
+    ..pPS(5, _omitFieldNames ? '' : 'text')
+    ..pPS(6, _omitFieldNames ? '' : 'settings')
+    ..pPS(7, _omitFieldNames ? '' : 'tracks')
+    ..pPS(8, _omitFieldNames ? '' : 'queue')
+    ..pPS(9, _omitFieldNames ? '' : 'browser')
+    ..pPS(10, _omitFieldNames ? '' : 'reporting')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverEngineCapabilities clone() => ReceiverEngineCapabilities()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverEngineCapabilities copyWith(void Function(ReceiverEngineCapabilities) updates) => super.copyWith((message) => updates(message as ReceiverEngineCapabilities)) as ReceiverEngineCapabilities;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverEngineCapabilities create() => ReceiverEngineCapabilities._();
+  @$core.override
+  ReceiverEngineCapabilities createEmptyInstance() => create();
+  static $pb.PbList<ReceiverEngineCapabilities> createRepeated() => $pb.PbList<ReceiverEngineCapabilities>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverEngineCapabilities getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverEngineCapabilities>(create);
+  static ReceiverEngineCapabilities? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<$core.String> get transport => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<$core.String> get keys => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $pb.PbList<$core.String> get pointer => $_getList(2);
+
+  @$pb.TagNumber(4)
+  $pb.PbList<$core.String> get imageTransforms => $_getList(3);
+
+  @$pb.TagNumber(5)
+  $pb.PbList<$core.String> get text => $_getList(4);
+
+  @$pb.TagNumber(6)
+  $pb.PbList<$core.String> get settings => $_getList(5);
+
+  @$pb.TagNumber(7)
+  $pb.PbList<$core.String> get tracks => $_getList(6);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<$core.String> get queue => $_getList(7);
+
+  @$pb.TagNumber(9)
+  $pb.PbList<$core.String> get browser => $_getList(8);
+
+  @$pb.TagNumber(10)
+  $pb.PbList<$core.String> get reporting => $_getList(9);
+}
+
+class ReceiverVolumeCapabilities extends $pb.GeneratedMessage {
+  factory ReceiverVolumeCapabilities({
+    $core.String? scope,
+    $core.Iterable<$core.String>? operations,
+    $core.double? step,
+    $core.String? fallbackScope,
+  }) {
+    final result = create();
+    if (scope != null) result.scope = scope;
+    if (operations != null) result.operations.addAll(operations);
+    if (step != null) result.step = step;
+    if (fallbackScope != null) result.fallbackScope = fallbackScope;
+    return result;
+  }
+
+  ReceiverVolumeCapabilities._();
+
+  factory ReceiverVolumeCapabilities.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverVolumeCapabilities.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverVolumeCapabilities', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'scope')
+    ..pPS(2, _omitFieldNames ? '' : 'operations')
+    ..a<$core.double>(3, _omitFieldNames ? '' : 'step', $pb.PbFieldType.OD)
+    ..aOS(4, _omitFieldNames ? '' : 'fallbackScope')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverVolumeCapabilities clone() => ReceiverVolumeCapabilities()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverVolumeCapabilities copyWith(void Function(ReceiverVolumeCapabilities) updates) => super.copyWith((message) => updates(message as ReceiverVolumeCapabilities)) as ReceiverVolumeCapabilities;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverVolumeCapabilities create() => ReceiverVolumeCapabilities._();
+  @$core.override
+  ReceiverVolumeCapabilities createEmptyInstance() => create();
+  static $pb.PbList<ReceiverVolumeCapabilities> createRepeated() => $pb.PbList<ReceiverVolumeCapabilities>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverVolumeCapabilities getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverVolumeCapabilities>(create);
+  static ReceiverVolumeCapabilities? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get scope => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set scope($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasScope() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearScope() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<$core.String> get operations => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $core.double get step => $_getN(2);
+  @$pb.TagNumber(3)
+  set step($core.double value) => $_setDouble(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasStep() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearStep() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get fallbackScope => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set fallbackScope($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasFallbackScope() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearFallbackScope() => $_clearField(4);
+}
+
+class ReceiverHostInfo extends $pb.GeneratedMessage {
+  factory ReceiverHostInfo({
+    $core.String? osFamily,
+    $core.String? deviceClass,
+  }) {
+    final result = create();
+    if (osFamily != null) result.osFamily = osFamily;
+    if (deviceClass != null) result.deviceClass = deviceClass;
+    return result;
+  }
+
+  ReceiverHostInfo._();
+
+  factory ReceiverHostInfo.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverHostInfo.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverHostInfo', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'osFamily')
+    ..aOS(2, _omitFieldNames ? '' : 'deviceClass')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverHostInfo clone() => ReceiverHostInfo()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverHostInfo copyWith(void Function(ReceiverHostInfo) updates) => super.copyWith((message) => updates(message as ReceiverHostInfo)) as ReceiverHostInfo;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverHostInfo create() => ReceiverHostInfo._();
+  @$core.override
+  ReceiverHostInfo createEmptyInstance() => create();
+  static $pb.PbList<ReceiverHostInfo> createRepeated() => $pb.PbList<ReceiverHostInfo>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverHostInfo getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverHostInfo>(create);
+  static ReceiverHostInfo? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get osFamily => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set osFamily($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasOsFamily() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearOsFamily() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get deviceClass => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set deviceClass($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDeviceClass() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDeviceClass() => $_clearField(2);
+}
+
+/// Native command/volume payload. Scoped absolute level is normalized 0..1.
+class VolumePayload extends $pb.GeneratedMessage {
+  factory VolumePayload({
+    $core.String? scope,
+    $core.double? level,
+  }) {
+    final result = create();
+    if (scope != null) result.scope = scope;
+    if (level != null) result.level = level;
+    return result;
+  }
+
+  VolumePayload._();
+
+  factory VolumePayload.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory VolumePayload.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'VolumePayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'scope')
+    ..a<$core.double>(2, _omitFieldNames ? '' : 'level', $pb.PbFieldType.OD)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  VolumePayload clone() => VolumePayload()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  VolumePayload copyWith(void Function(VolumePayload) updates) => super.copyWith((message) => updates(message as VolumePayload)) as VolumePayload;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static VolumePayload create() => VolumePayload._();
+  @$core.override
+  VolumePayload createEmptyInstance() => create();
+  static $pb.PbList<VolumePayload> createRepeated() => $pb.PbList<VolumePayload>();
+  @$core.pragma('dart2js:noInline')
+  static VolumePayload getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<VolumePayload>(create);
+  static VolumePayload? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get scope => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set scope($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasScope() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearScope() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.double get level => $_getN(1);
+  @$pb.TagNumber(2)
+  set level($core.double value) => $_setDouble(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasLevel() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearLevel() => $_clearField(2);
+}
+
+class VolumeStateMessage extends $pb.GeneratedMessage {
+  factory VolumeStateMessage({
+    $core.String? type,
+    $core.String? scope,
+    $core.double? level,
+    $core.bool? muted,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (scope != null) result.scope = scope;
+    if (level != null) result.level = level;
+    if (muted != null) result.muted = muted;
+    return result;
+  }
+
+  VolumeStateMessage._();
+
+  factory VolumeStateMessage.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory VolumeStateMessage.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'VolumeStateMessage', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'type')
+    ..aOS(2, _omitFieldNames ? '' : 'scope')
+    ..a<$core.double>(3, _omitFieldNames ? '' : 'level', $pb.PbFieldType.OD)
+    ..aOB(4, _omitFieldNames ? '' : 'muted')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  VolumeStateMessage clone() => VolumeStateMessage()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  VolumeStateMessage copyWith(void Function(VolumeStateMessage) updates) => super.copyWith((message) => updates(message as VolumeStateMessage)) as VolumeStateMessage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static VolumeStateMessage create() => VolumeStateMessage._();
+  @$core.override
+  VolumeStateMessage createEmptyInstance() => create();
+  static $pb.PbList<VolumeStateMessage> createRepeated() => $pb.PbList<VolumeStateMessage>();
+  @$core.pragma('dart2js:noInline')
+  static VolumeStateMessage getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<VolumeStateMessage>(create);
+  static VolumeStateMessage? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get type => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set type($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get scope => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set scope($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasScope() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearScope() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.double get level => $_getN(2);
+  @$pb.TagNumber(3)
+  set level($core.double value) => $_setDouble(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasLevel() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearLevel() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.bool get muted => $_getBF(3);
+  @$pb.TagNumber(4)
+  set muted($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasMuted() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearMuted() => $_clearField(4);
 }
 
 

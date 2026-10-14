@@ -1,0 +1,8 @@
+{
+  "type": "player_settings",
+  "speed": 1,
+  "scaling": "Fit",
+  "audioBoost": false,
+  "subtitleOffsetMs": 0,
+  "engine": "avplayer"
+}

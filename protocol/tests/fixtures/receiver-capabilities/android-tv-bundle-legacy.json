@@ -1,0 +1,26 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "exo",
+    "mpv"
+  ],
+  "browsers": [
+    "webview",
+    "gecko"
+  ],
+  "mediaKinds": [
+    "video",
+    "audio",
+    "image"
+  ],
+  "screenMirrorWebRtc": true,
+  "features": [
+    "queue_crud_v1",
+    "stable_item_ids",
+    "command_results",
+    "subtitle_resource_add_v1",
+    "progress_webhook_v1",
+    "diagnostic_logs_v1",
+    "player_home_v1"
+  ]
+}

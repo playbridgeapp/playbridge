@@ -74,6 +74,16 @@ public class AuthResponse(
   public val screen_mirror_web_rtc: Boolean? = null,
   media_kinds: List<String> = emptyList(),
   features: List<String> = emptyList(),
+  /**
+   * Optional authenticated descriptor; existing fields and tags stay unchanged.
+   */
+  @field:WireField(
+    tag = 10,
+    adapter = "playbridge.ReceiverCapabilities#ADAPTER",
+    label = WireField.Label.OMIT_IDENTITY,
+    schemaIndex = 9,
+  )
+  public val capabilities: ReceiverCapabilities? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<AuthResponse, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -129,6 +139,7 @@ public class AuthResponse(
     if (screen_mirror_web_rtc != other.screen_mirror_web_rtc) return false
     if (media_kinds != other.media_kinds) return false
     if (features != other.features) return false
+    if (capabilities != other.capabilities) return false
     return true
   }
 
@@ -145,6 +156,7 @@ public class AuthResponse(
       result = result * 37 + (screen_mirror_web_rtc?.hashCode() ?: 0)
       result = result * 37 + media_kinds.hashCode()
       result = result * 37 + features.hashCode()
+      result = result * 37 + (capabilities?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -161,6 +173,7 @@ public class AuthResponse(
     if (screen_mirror_web_rtc != null) result += """screen_mirror_web_rtc=$screen_mirror_web_rtc"""
     if (media_kinds.isNotEmpty()) result += """media_kinds=${sanitize(media_kinds)}"""
     if (features.isNotEmpty()) result += """features=${sanitize(features)}"""
+    if (capabilities != null) result += """capabilities=$capabilities"""
     return result.joinToString(prefix = "AuthResponse{", separator = ", ", postfix = "}")
   }
 
@@ -174,9 +187,10 @@ public class AuthResponse(
     screen_mirror_web_rtc: Boolean? = this.screen_mirror_web_rtc,
     media_kinds: List<String> = this.media_kinds,
     features: List<String> = this.features,
+    capabilities: ReceiverCapabilities? = this.capabilities,
     unknownFields: ByteString = this.unknownFields,
   ): AuthResponse = AuthResponse(type, success, token, cert_fingerprint, players, browsers,
-      screen_mirror_web_rtc, media_kinds, features, unknownFields)
+      screen_mirror_web_rtc, media_kinds, features, capabilities, unknownFields)
 
   public companion object {
     @JvmField
@@ -203,6 +217,9 @@ public class AuthResponse(
         size += ProtoAdapter.BOOL.encodedSizeWithTag(7, value.screen_mirror_web_rtc)
         size += ProtoAdapter.STRING.asRepeated().encodedSizeWithTag(8, value.media_kinds)
         size += ProtoAdapter.STRING.asRepeated().encodedSizeWithTag(9, value.features)
+        if (value.capabilities != null) {
+          size += ReceiverCapabilities.ADAPTER.encodedSizeWithTag(10, value.capabilities)
+        }
         return size
       }
 
@@ -220,11 +237,17 @@ public class AuthResponse(
         ProtoAdapter.BOOL.encodeWithTag(writer, 7, value.screen_mirror_web_rtc)
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 8, value.media_kinds)
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 9, value.features)
+        if (value.capabilities != null) {
+          ReceiverCapabilities.ADAPTER.encodeWithTag(writer, 10, value.capabilities)
+        }
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: AuthResponse) {
         writer.writeBytes(value.unknownFields)
+        if (value.capabilities != null) {
+          ReceiverCapabilities.ADAPTER.encodeWithTag(writer, 10, value.capabilities)
+        }
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 9, value.features)
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 8, value.media_kinds)
         ProtoAdapter.BOOL.encodeWithTag(writer, 7, value.screen_mirror_web_rtc)
@@ -250,6 +273,7 @@ public class AuthResponse(
         var screen_mirror_web_rtc: Boolean? = null
         val media_kinds = mutableListOf<String>()
         val features = mutableListOf<String>()
+        var capabilities: ReceiverCapabilities? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -261,6 +285,7 @@ public class AuthResponse(
             7 -> screen_mirror_web_rtc = ProtoAdapter.BOOL.decode(reader)
             8 -> media_kinds.add(ProtoAdapter.STRING.decode(reader))
             9 -> features.add(ProtoAdapter.STRING.decode(reader))
+            10 -> capabilities = ReceiverCapabilities.ADAPTER.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -274,11 +299,13 @@ public class AuthResponse(
           screen_mirror_web_rtc = screen_mirror_web_rtc,
           media_kinds = media_kinds,
           features = features,
+          capabilities = capabilities,
           unknownFields = unknownFields
         )
       }
 
       override fun redact(`value`: AuthResponse): AuthResponse = value.copy(
+        capabilities = value.capabilities?.let(ReceiverCapabilities.ADAPTER::redact),
         unknownFields = ByteString.EMPTY
       )
     }

@@ -1,0 +1,338 @@
+{
+  "components": {
+    "schemas": {
+      "AuthResponse": {
+        "type": "object",
+        "required": [
+          "type",
+          "success"
+        ],
+        "properties": {
+          "type": {
+            "const": "auth_response"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "certFingerprint": {
+            "$ref": "#/components/schemas/SpkiPin"
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "browsers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenMirrorWebRtc": {
+            "type": "boolean",
+            "default": false
+          },
+          "mediaKinds": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "video",
+                "audio",
+                "image"
+              ]
+            }
+          },
+          "features": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "queue_crud_v1",
+                "stable_item_ids",
+                "command_results",
+                "progress_webhook_v1",
+                "diagnostic_logs_v1",
+                "player_home_v1"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CredentialBundle": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "certFingerprint": {
+            "$ref": "#/components/schemas/SpkiPin"
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "browsers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenMirrorWebRtc": {
+            "type": "boolean",
+            "default": false
+          },
+          "mediaKinds": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "video",
+                "audio",
+                "image"
+              ]
+            }
+          },
+          "features": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "queue_crud_v1",
+                "stable_item_ids",
+                "command_results",
+                "progress_webhook_v1"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SpkiPin": {
+        "type": "string",
+        "pattern": "^sha256/[A-Za-z0-9+/]{43}=$",
+        "description": "Base64 SHA-256 of DER SubjectPublicKeyInfo, prefixed with sha256/."
+      },
+      "BrowserCapabilitiesFrame": {
+        "type": "object",
+        "required": [
+          "type",
+          "capabilities"
+        ],
+        "properties": {
+          "type": {
+            "const": "capabilities"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/BrowserCapabilities"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserCapabilities": {
+        "type": "object",
+        "required": [
+          "nativeHls",
+          "mediaSource",
+          "hlsJs",
+          "dashJs",
+          "webVtt",
+          "volumeControl",
+          "mimeTypes"
+        ],
+        "properties": {
+          "nativeHls": {
+            "type": "boolean"
+          },
+          "mediaSource": {
+            "type": "boolean"
+          },
+          "hlsJs": {
+            "type": "boolean"
+          },
+          "dashJs": {
+            "type": "boolean"
+          },
+          "webVtt": {
+            "type": "boolean"
+          },
+          "volumeControl": {
+            "type": "boolean"
+          },
+          "mimeTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlayerSettings": {
+        "type": "object",
+        "required": [
+          "type",
+          "speed",
+          "scaling",
+          "audioBoost",
+          "subtitleOffsetMs",
+          "engine"
+        ],
+        "properties": {
+          "type": {
+            "const": "player_settings"
+          },
+          "speed": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "scaling": {
+            "type": "string"
+          },
+          "audioBoost": {
+            "type": "boolean"
+          },
+          "subtitleOffsetMs": {
+            "type": "integer"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "qualityMaxHeight": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentVideoHeight": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "isLive": {
+            "type": "boolean"
+          },
+          "isSeekable": {
+            "type": "boolean"
+          },
+          "speedAvailable": {
+            "type": "boolean"
+          },
+          "scalingAvailable": {
+            "type": "boolean"
+          },
+          "audioBoostAvailable": {
+            "type": "boolean"
+          },
+          "qualityAvailable": {
+            "type": "boolean"
+          },
+          "loop": {
+            "type": "boolean",
+            "description": "Repeat-one. Omitted when the receiver does not report loop state."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "type",
+          "state",
+          "position",
+          "duration"
+        ],
+        "properties": {
+          "type": {
+            "const": "status"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "buffering",
+              "playing",
+              "paused",
+              "stopped",
+              "ended",
+              "error"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds."
+          },
+          "duration": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds; 0 when unknown or live."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mediaKind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "video",
+              "audio",
+              "image",
+              null
+            ]
+          },
+          "playbackId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currentItemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fullscreen": {
+            "type": "boolean",
+            "description": "Native browser fullscreen. Omitted by the player and by receivers that do not report it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PairingApproved": {
+        "description": "Protected credentials. Decrypt CredentialBundle as specified in docs/WSS_FLOW.md.",
+        "type": "object",
+        "required": [
+          "type",
+          "nonce",
+          "ciphertext"
+        ],
+        "properties": {
+          "type": {
+            "const": "pairing_approved"
+          },
+          "nonce": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "12-byte AES-GCM nonce."
+          },
+          "ciphertext": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "AES-256-GCM ciphertext followed by its 16-byte tag."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

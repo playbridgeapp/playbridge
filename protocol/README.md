@@ -45,6 +45,8 @@ Run the dependency-free structural check locally:
 
 ```bash
 ruby scripts/check-spec.rb
+# In an existing Python environment with PyYAML and jsonschema:
+python scripts/validate-fixtures.py
 ```
 
 Breaking changes include renamed fields, changed JSON types or units, removed values, and any
@@ -81,3 +83,15 @@ implementation helpers; their protobuf binary encoding is not used on the WSS wi
 - `pairing_approved` contains AES-256-GCM-protected credentials, not plaintext token fields.
 - Ephemeral X25519 keys, nonces, shared secrets, and derived keys must be cleared after completion,
   failure, replacement, or close.
+
+## Stage 5 receiver descriptor contract
+
+[Receiver capabilities](docs/RECEIVER_CAPABILITIES.md) specifies optional static auth/protected-
+credential descriptors, complete per-engine operation sets, state/volume rules and reserved later
+push naming. This contract does not enable receiver or sender behavior. [Tests/fixtures](tests/README.md)
+include real JSON Schema positive/negative validation and retained-parser compatibility checks;
+`check-spec.rb` remains a structural/reference checker, not a payload validator.
+
+The retained generator writes Kotlin, Dart and Swift models. There are no retained TypeScript or
+Go message models in this repository; `constants/constants.go` is hand-maintained. `PROTOC` may
+select an already installed compiler; no tool installation is part of generation verification.

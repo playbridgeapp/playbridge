@@ -1,0 +1,112 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "avplayer",
+    "mpv"
+  ],
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "avplayer": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          },
+          "mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "tvos",
+      "deviceClass": "tv"
+    },
+    "volume": {
+      "scope": "app",
+      "operations": [
+        "relative_step",
+        "absolute",
+        "mute_toggle",
+        "level_report",
+        "mute_report"
+      ],
+      "step": 0.05
+    }
+  }
+}

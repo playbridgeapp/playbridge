@@ -1,0 +1,5 @@
+{
+  "type": "player_settings",
+  "loop": true,
+  "engine": "avplayer"
+}

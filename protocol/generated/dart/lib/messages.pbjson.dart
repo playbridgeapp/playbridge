@@ -550,16 +550,66 @@ const PlayerSettingsMessage$json = {
   '2': [
     {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
     {'1': 'loop', '3': 2, '4': 1, '5': 8, '9': 0, '10': 'loop', '17': true},
+    {'1': 'speed', '3': 3, '4': 1, '5': 1, '9': 1, '10': 'speed', '17': true},
+    {'1': 'scaling', '3': 4, '4': 1, '5': 9, '9': 2, '10': 'scaling', '17': true},
+    {'1': 'audio_boost', '3': 5, '4': 1, '5': 8, '9': 3, '10': 'audioBoost', '17': true},
+    {'1': 'subtitle_offset_ms', '3': 6, '4': 1, '5': 3, '9': 4, '10': 'subtitleOffsetMs', '17': true},
+    {'1': 'engine', '3': 7, '4': 1, '5': 9, '9': 5, '10': 'engine', '17': true},
+    {'1': 'quality_max_height', '3': 8, '4': 1, '5': 5, '9': 6, '10': 'qualityMaxHeight', '17': true},
+    {'1': 'current_video_height', '3': 9, '4': 1, '5': 5, '9': 7, '10': 'currentVideoHeight', '17': true},
+    {'1': 'is_live', '3': 10, '4': 1, '5': 8, '9': 8, '10': 'isLive', '17': true},
+    {'1': 'is_seekable', '3': 11, '4': 1, '5': 8, '9': 9, '10': 'isSeekable', '17': true},
+    {'1': 'speed_available', '3': 12, '4': 1, '5': 8, '9': 10, '10': 'speedAvailable', '17': true},
+    {'1': 'scaling_available', '3': 13, '4': 1, '5': 8, '9': 11, '10': 'scalingAvailable', '17': true},
+    {'1': 'audio_boost_available', '3': 14, '4': 1, '5': 8, '9': 12, '10': 'audioBoostAvailable', '17': true},
+    {'1': 'quality_available', '3': 15, '4': 1, '5': 8, '9': 13, '10': 'qualityAvailable', '17': true},
+    {'1': 'subtitle_offset_available', '3': 16, '4': 1, '5': 8, '9': 14, '10': 'subtitleOffsetAvailable', '17': true},
+    {'1': 'engine_available', '3': 17, '4': 1, '5': 8, '9': 15, '10': 'engineAvailable', '17': true},
+    {'1': 'loop_available', '3': 18, '4': 1, '5': 8, '9': 16, '10': 'loopAvailable', '17': true},
   ],
   '8': [
     {'1': '_loop'},
+    {'1': '_speed'},
+    {'1': '_scaling'},
+    {'1': '_audio_boost'},
+    {'1': '_subtitle_offset_ms'},
+    {'1': '_engine'},
+    {'1': '_quality_max_height'},
+    {'1': '_current_video_height'},
+    {'1': '_is_live'},
+    {'1': '_is_seekable'},
+    {'1': '_speed_available'},
+    {'1': '_scaling_available'},
+    {'1': '_audio_boost_available'},
+    {'1': '_quality_available'},
+    {'1': '_subtitle_offset_available'},
+    {'1': '_engine_available'},
+    {'1': '_loop_available'},
   ],
 };
 
 /// Descriptor for `PlayerSettingsMessage`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List playerSettingsMessageDescriptor = $convert.base64Decode(
     'ChVQbGF5ZXJTZXR0aW5nc01lc3NhZ2USEgoEdHlwZRgBIAEoCVIEdHlwZRIXCgRsb29wGAIgAS'
-    'gISABSBGxvb3CIAQFCBwoFX2xvb3A=');
+    'gISABSBGxvb3CIAQESGQoFc3BlZWQYAyABKAFIAVIFc3BlZWSIAQESHQoHc2NhbGluZxgEIAEo'
+    'CUgCUgdzY2FsaW5niAEBEiQKC2F1ZGlvX2Jvb3N0GAUgASgISANSCmF1ZGlvQm9vc3SIAQESMQ'
+    'oSc3VidGl0bGVfb2Zmc2V0X21zGAYgASgDSARSEHN1YnRpdGxlT2Zmc2V0TXOIAQESGwoGZW5n'
+    'aW5lGAcgASgJSAVSBmVuZ2luZYgBARIxChJxdWFsaXR5X21heF9oZWlnaHQYCCABKAVIBlIQcX'
+    'VhbGl0eU1heEhlaWdodIgBARI1ChRjdXJyZW50X3ZpZGVvX2hlaWdodBgJIAEoBUgHUhJjdXJy'
+    'ZW50VmlkZW9IZWlnaHSIAQESHAoHaXNfbGl2ZRgKIAEoCEgIUgZpc0xpdmWIAQESJAoLaXNfc2'
+    'Vla2FibGUYCyABKAhICVIKaXNTZWVrYWJsZYgBARIsCg9zcGVlZF9hdmFpbGFibGUYDCABKAhI'
+    'ClIOc3BlZWRBdmFpbGFibGWIAQESMAoRc2NhbGluZ19hdmFpbGFibGUYDSABKAhIC1IQc2NhbG'
+    'luZ0F2YWlsYWJsZYgBARI3ChVhdWRpb19ib29zdF9hdmFpbGFibGUYDiABKAhIDFITYXVkaW9C'
+    'b29zdEF2YWlsYWJsZYgBARIwChFxdWFsaXR5X2F2YWlsYWJsZRgPIAEoCEgNUhBxdWFsaXR5QX'
+    'ZhaWxhYmxliAEBEj8KGXN1YnRpdGxlX29mZnNldF9hdmFpbGFibGUYECABKAhIDlIXc3VidGl0'
+    'bGVPZmZzZXRBdmFpbGFibGWIAQESLgoQZW5naW5lX2F2YWlsYWJsZRgRIAEoCEgPUg9lbmdpbm'
+    'VBdmFpbGFibGWIAQESKgoObG9vcF9hdmFpbGFibGUYEiABKAhIEFINbG9vcEF2YWlsYWJsZYgB'
+    'AUIHCgVfbG9vcEIICgZfc3BlZWRCCgoIX3NjYWxpbmdCDgoMX2F1ZGlvX2Jvb3N0QhUKE19zdW'
+    'J0aXRsZV9vZmZzZXRfbXNCCQoHX2VuZ2luZUIVChNfcXVhbGl0eV9tYXhfaGVpZ2h0QhcKFV9j'
+    'dXJyZW50X3ZpZGVvX2hlaWdodEIKCghfaXNfbGl2ZUIOCgxfaXNfc2Vla2FibGVCEgoQX3NwZW'
+    'VkX2F2YWlsYWJsZUIUChJfc2NhbGluZ19hdmFpbGFibGVCGAoWX2F1ZGlvX2Jvb3N0X2F2YWls'
+    'YWJsZUIUChJfcXVhbGl0eV9hdmFpbGFibGVCHAoaX3N1YnRpdGxlX29mZnNldF9hdmFpbGFibG'
+    'VCEwoRX2VuZ2luZV9hdmFpbGFibGVCEQoPX2xvb3BfYXZhaWxhYmxl');
 
 @$core.Deprecated('Use contextMessageDescriptor instead')
 const ContextMessage$json = {
@@ -567,13 +617,17 @@ const ContextMessage$json = {
   '2': [
     {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
     {'1': 'active', '3': 2, '4': 1, '5': 9, '10': 'active'},
+    {'1': 'engine', '3': 3, '4': 1, '5': 9, '9': 0, '10': 'engine', '17': true},
+  ],
+  '8': [
+    {'1': '_engine'},
   ],
 };
 
 /// Descriptor for `ContextMessage`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List contextMessageDescriptor = $convert.base64Decode(
     'Cg5Db250ZXh0TWVzc2FnZRISCgR0eXBlGAEgASgJUgR0eXBlEhYKBmFjdGl2ZRgCIAEoCVIGYW'
-    'N0aXZl');
+    'N0aXZlEhsKBmVuZ2luZRgDIAEoCUgAUgZlbmdpbmWIAQFCCQoHX2VuZ2luZQ==');
 
 @$core.Deprecated('Use playlistItemInfoDescriptor instead')
 const PlaylistItemInfo$json = {
@@ -696,6 +750,7 @@ const AuthResponse$json = {
     {'1': 'screen_mirror_web_rtc', '3': 7, '4': 1, '5': 8, '9': 2, '10': 'screenMirrorWebRtc', '17': true},
     {'1': 'media_kinds', '3': 8, '4': 3, '5': 9, '10': 'mediaKinds'},
     {'1': 'features', '3': 9, '4': 3, '5': 9, '10': 'features'},
+    {'1': 'capabilities', '3': 10, '4': 1, '5': 11, '6': '.playbridge.ReceiverCapabilities', '10': 'capabilities'},
   ],
   '8': [
     {'1': '_token'},
@@ -711,8 +766,9 @@ final $typed_data.Uint8List authResponseDescriptor = $convert.base64Decode(
     'KAlIAVIPY2VydEZpbmdlcnByaW50iAEBEhgKB3BsYXllcnMYBSADKAlSB3BsYXllcnMSGgoIYn'
     'Jvd3NlcnMYBiADKAlSCGJyb3dzZXJzEjYKFXNjcmVlbl9taXJyb3Jfd2ViX3J0YxgHIAEoCEgC'
     'UhJzY3JlZW5NaXJyb3JXZWJSdGOIAQESHwoLbWVkaWFfa2luZHMYCCADKAlSCm1lZGlhS2luZH'
-    'MSGgoIZmVhdHVyZXMYCSADKAlSCGZlYXR1cmVzQggKBl90b2tlbkITChFfY2VydF9maW5nZXJw'
-    'cmludEIYChZfc2NyZWVuX21pcnJvcl93ZWJfcnRj');
+    'MSGgoIZmVhdHVyZXMYCSADKAlSCGZlYXR1cmVzEkQKDGNhcGFiaWxpdGllcxgKIAEoCzIgLnBs'
+    'YXlicmlkZ2UuUmVjZWl2ZXJDYXBhYmlsaXRpZXNSDGNhcGFiaWxpdGllc0IICgZfdG9rZW5CEw'
+    'oRX2NlcnRfZmluZ2VycHJpbnRCGAoWX3NjcmVlbl9taXJyb3Jfd2ViX3J0Yw==');
 
 @$core.Deprecated('Use pairingRequestMessageDescriptor instead')
 const PairingRequestMessage$json = {
@@ -844,4 +900,197 @@ const PongMessage$json = {
 /// Descriptor for `PongMessage`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List pongMessageDescriptor = $convert.base64Decode(
     'CgtQb25nTWVzc2FnZRISCgR0eXBlGAEgASgJUgR0eXBl');
+
+@$core.Deprecated('Use credentialBundleDescriptor instead')
+const CredentialBundle$json = {
+  '1': 'CredentialBundle',
+  '2': [
+    {'1': 'token', '3': 1, '4': 1, '5': 9, '10': 'token'},
+    {'1': 'cert_fingerprint', '3': 2, '4': 1, '5': 9, '9': 0, '10': 'certFingerprint', '17': true},
+    {'1': 'players', '3': 3, '4': 3, '5': 9, '10': 'players'},
+    {'1': 'browsers', '3': 4, '4': 3, '5': 9, '10': 'browsers'},
+    {'1': 'screen_mirror_web_rtc', '3': 5, '4': 1, '5': 8, '9': 1, '10': 'screenMirrorWebRtc', '17': true},
+    {'1': 'media_kinds', '3': 6, '4': 3, '5': 9, '10': 'mediaKinds'},
+    {'1': 'features', '3': 7, '4': 3, '5': 9, '10': 'features'},
+    {'1': 'capabilities', '3': 8, '4': 1, '5': 11, '6': '.playbridge.ReceiverCapabilities', '10': 'capabilities'},
+  ],
+  '8': [
+    {'1': '_cert_fingerprint'},
+    {'1': '_screen_mirror_web_rtc'},
+  ],
+};
+
+/// Descriptor for `CredentialBundle`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List credentialBundleDescriptor = $convert.base64Decode(
+    'ChBDcmVkZW50aWFsQnVuZGxlEhQKBXRva2VuGAEgASgJUgV0b2tlbhIuChBjZXJ0X2Zpbmdlcn'
+    'ByaW50GAIgASgJSABSD2NlcnRGaW5nZXJwcmludIgBARIYCgdwbGF5ZXJzGAMgAygJUgdwbGF5'
+    'ZXJzEhoKCGJyb3dzZXJzGAQgAygJUghicm93c2VycxI2ChVzY3JlZW5fbWlycm9yX3dlYl9ydG'
+    'MYBSABKAhIAVISc2NyZWVuTWlycm9yV2ViUnRjiAEBEh8KC21lZGlhX2tpbmRzGAYgAygJUgpt'
+    'ZWRpYUtpbmRzEhoKCGZlYXR1cmVzGAcgAygJUghmZWF0dXJlcxJECgxjYXBhYmlsaXRpZXMYCC'
+    'ABKAsyIC5wbGF5YnJpZGdlLlJlY2VpdmVyQ2FwYWJpbGl0aWVzUgxjYXBhYmlsaXRpZXNCEwoR'
+    'X2NlcnRfZmluZ2VycHJpbnRCGAoWX3NjcmVlbl9taXJyb3Jfd2ViX3J0Yw==');
+
+@$core.Deprecated('Use receiverCapabilitiesDescriptor instead')
+const ReceiverCapabilities$json = {
+  '1': 'ReceiverCapabilities',
+  '2': [
+    {'1': 'version', '3': 1, '4': 1, '5': 13, '10': 'version'},
+    {'1': 'surfaces', '3': 2, '4': 3, '5': 11, '6': '.playbridge.ReceiverCapabilities.SurfacesEntry', '10': 'surfaces'},
+    {'1': 'volume', '3': 3, '4': 1, '5': 11, '6': '.playbridge.ReceiverVolumeCapabilities', '10': 'volume'},
+    {'1': 'host', '3': 4, '4': 1, '5': 11, '6': '.playbridge.ReceiverHostInfo', '10': 'host'},
+    {'1': 'companion_hints', '3': 5, '4': 3, '5': 9, '10': 'companionHints'},
+  ],
+  '3': [ReceiverCapabilities_SurfacesEntry$json],
+};
+
+@$core.Deprecated('Use receiverCapabilitiesDescriptor instead')
+const ReceiverCapabilities_SurfacesEntry$json = {
+  '1': 'SurfacesEntry',
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 11, '6': '.playbridge.ReceiverSurfaceCapabilities', '10': 'value'},
+  ],
+  '7': {'7': true},
+};
+
+/// Descriptor for `ReceiverCapabilities`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverCapabilitiesDescriptor = $convert.base64Decode(
+    'ChRSZWNlaXZlckNhcGFiaWxpdGllcxIYCgd2ZXJzaW9uGAEgASgNUgd2ZXJzaW9uEkoKCHN1cm'
+    'ZhY2VzGAIgAygLMi4ucGxheWJyaWRnZS5SZWNlaXZlckNhcGFiaWxpdGllcy5TdXJmYWNlc0Vu'
+    'dHJ5UghzdXJmYWNlcxI+CgZ2b2x1bWUYAyABKAsyJi5wbGF5YnJpZGdlLlJlY2VpdmVyVm9sdW'
+    '1lQ2FwYWJpbGl0aWVzUgZ2b2x1bWUSMAoEaG9zdBgEIAEoCzIcLnBsYXlicmlkZ2UuUmVjZWl2'
+    'ZXJIb3N0SW5mb1IEaG9zdBInCg9jb21wYW5pb25faGludHMYBSADKAlSDmNvbXBhbmlvbkhpbn'
+    'RzGmQKDVN1cmZhY2VzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSPQoFdmFsdWUYAiABKAsyJy5w'
+    'bGF5YnJpZGdlLlJlY2VpdmVyU3VyZmFjZUNhcGFiaWxpdGllc1IFdmFsdWU6AjgB');
+
+@$core.Deprecated('Use receiverSurfaceCapabilitiesDescriptor instead')
+const ReceiverSurfaceCapabilities$json = {
+  '1': 'ReceiverSurfaceCapabilities',
+  '2': [
+    {'1': 'engines', '3': 1, '4': 3, '5': 11, '6': '.playbridge.ReceiverSurfaceCapabilities.EnginesEntry', '10': 'engines'},
+  ],
+  '3': [ReceiverSurfaceCapabilities_EnginesEntry$json],
+};
+
+@$core.Deprecated('Use receiverSurfaceCapabilitiesDescriptor instead')
+const ReceiverSurfaceCapabilities_EnginesEntry$json = {
+  '1': 'EnginesEntry',
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 11, '6': '.playbridge.ReceiverEngineCapabilities', '10': 'value'},
+  ],
+  '7': {'7': true},
+};
+
+/// Descriptor for `ReceiverSurfaceCapabilities`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverSurfaceCapabilitiesDescriptor = $convert.base64Decode(
+    'ChtSZWNlaXZlclN1cmZhY2VDYXBhYmlsaXRpZXMSTgoHZW5naW5lcxgBIAMoCzI0LnBsYXlicm'
+    'lkZ2UuUmVjZWl2ZXJTdXJmYWNlQ2FwYWJpbGl0aWVzLkVuZ2luZXNFbnRyeVIHZW5naW5lcxpi'
+    'CgxFbmdpbmVzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSPAoFdmFsdWUYAiABKAsyJi5wbGF5Yn'
+    'JpZGdlLlJlY2VpdmVyRW5naW5lQ2FwYWJpbGl0aWVzUgV2YWx1ZToCOAE=');
+
+@$core.Deprecated('Use receiverEngineCapabilitiesDescriptor instead')
+const ReceiverEngineCapabilities$json = {
+  '1': 'ReceiverEngineCapabilities',
+  '2': [
+    {'1': 'transport', '3': 1, '4': 3, '5': 9, '10': 'transport'},
+    {'1': 'keys', '3': 2, '4': 3, '5': 9, '10': 'keys'},
+    {'1': 'pointer', '3': 3, '4': 3, '5': 9, '10': 'pointer'},
+    {'1': 'image_transforms', '3': 4, '4': 3, '5': 9, '10': 'imageTransforms'},
+    {'1': 'text', '3': 5, '4': 3, '5': 9, '10': 'text'},
+    {'1': 'settings', '3': 6, '4': 3, '5': 9, '10': 'settings'},
+    {'1': 'tracks', '3': 7, '4': 3, '5': 9, '10': 'tracks'},
+    {'1': 'queue', '3': 8, '4': 3, '5': 9, '10': 'queue'},
+    {'1': 'browser', '3': 9, '4': 3, '5': 9, '10': 'browser'},
+    {'1': 'reporting', '3': 10, '4': 3, '5': 9, '10': 'reporting'},
+  ],
+};
+
+/// Descriptor for `ReceiverEngineCapabilities`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverEngineCapabilitiesDescriptor = $convert.base64Decode(
+    'ChpSZWNlaXZlckVuZ2luZUNhcGFiaWxpdGllcxIcCgl0cmFuc3BvcnQYASADKAlSCXRyYW5zcG'
+    '9ydBISCgRrZXlzGAIgAygJUgRrZXlzEhgKB3BvaW50ZXIYAyADKAlSB3BvaW50ZXISKQoQaW1h'
+    'Z2VfdHJhbnNmb3JtcxgEIAMoCVIPaW1hZ2VUcmFuc2Zvcm1zEhIKBHRleHQYBSADKAlSBHRleH'
+    'QSGgoIc2V0dGluZ3MYBiADKAlSCHNldHRpbmdzEhYKBnRyYWNrcxgHIAMoCVIGdHJhY2tzEhQK'
+    'BXF1ZXVlGAggAygJUgVxdWV1ZRIYCgdicm93c2VyGAkgAygJUgdicm93c2VyEhwKCXJlcG9ydG'
+    'luZxgKIAMoCVIJcmVwb3J0aW5n');
+
+@$core.Deprecated('Use receiverVolumeCapabilitiesDescriptor instead')
+const ReceiverVolumeCapabilities$json = {
+  '1': 'ReceiverVolumeCapabilities',
+  '2': [
+    {'1': 'scope', '3': 1, '4': 1, '5': 9, '10': 'scope'},
+    {'1': 'operations', '3': 2, '4': 3, '5': 9, '10': 'operations'},
+    {'1': 'step', '3': 3, '4': 1, '5': 1, '9': 0, '10': 'step', '17': true},
+    {'1': 'fallback_scope', '3': 4, '4': 1, '5': 9, '9': 1, '10': 'fallbackScope', '17': true},
+  ],
+  '8': [
+    {'1': '_step'},
+    {'1': '_fallback_scope'},
+  ],
+};
+
+/// Descriptor for `ReceiverVolumeCapabilities`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverVolumeCapabilitiesDescriptor = $convert.base64Decode(
+    'ChpSZWNlaXZlclZvbHVtZUNhcGFiaWxpdGllcxIUCgVzY29wZRgBIAEoCVIFc2NvcGUSHgoKb3'
+    'BlcmF0aW9ucxgCIAMoCVIKb3BlcmF0aW9ucxIXCgRzdGVwGAMgASgBSABSBHN0ZXCIAQESKgoO'
+    'ZmFsbGJhY2tfc2NvcGUYBCABKAlIAVINZmFsbGJhY2tTY29wZYgBAUIHCgVfc3RlcEIRCg9fZm'
+    'FsbGJhY2tfc2NvcGU=');
+
+@$core.Deprecated('Use receiverHostInfoDescriptor instead')
+const ReceiverHostInfo$json = {
+  '1': 'ReceiverHostInfo',
+  '2': [
+    {'1': 'os_family', '3': 1, '4': 1, '5': 9, '9': 0, '10': 'osFamily', '17': true},
+    {'1': 'device_class', '3': 2, '4': 1, '5': 9, '9': 1, '10': 'deviceClass', '17': true},
+  ],
+  '8': [
+    {'1': '_os_family'},
+    {'1': '_device_class'},
+  ],
+};
+
+/// Descriptor for `ReceiverHostInfo`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverHostInfoDescriptor = $convert.base64Decode(
+    'ChBSZWNlaXZlckhvc3RJbmZvEiAKCW9zX2ZhbWlseRgBIAEoCUgAUghvc0ZhbWlseYgBARImCg'
+    'xkZXZpY2VfY2xhc3MYAiABKAlIAVILZGV2aWNlQ2xhc3OIAQFCDAoKX29zX2ZhbWlseUIPCg1f'
+    'ZGV2aWNlX2NsYXNz');
+
+@$core.Deprecated('Use volumePayloadDescriptor instead')
+const VolumePayload$json = {
+  '1': 'VolumePayload',
+  '2': [
+    {'1': 'scope', '3': 1, '4': 1, '5': 9, '10': 'scope'},
+    {'1': 'level', '3': 2, '4': 1, '5': 1, '9': 0, '10': 'level', '17': true},
+  ],
+  '8': [
+    {'1': '_level'},
+  ],
+};
+
+/// Descriptor for `VolumePayload`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List volumePayloadDescriptor = $convert.base64Decode(
+    'Cg1Wb2x1bWVQYXlsb2FkEhQKBXNjb3BlGAEgASgJUgVzY29wZRIZCgVsZXZlbBgCIAEoAUgAUg'
+    'VsZXZlbIgBAUIICgZfbGV2ZWw=');
+
+@$core.Deprecated('Use volumeStateMessageDescriptor instead')
+const VolumeStateMessage$json = {
+  '1': 'VolumeStateMessage',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
+    {'1': 'scope', '3': 2, '4': 1, '5': 9, '10': 'scope'},
+    {'1': 'level', '3': 3, '4': 1, '5': 1, '9': 0, '10': 'level', '17': true},
+    {'1': 'muted', '3': 4, '4': 1, '5': 8, '9': 1, '10': 'muted', '17': true},
+  ],
+  '8': [
+    {'1': '_level'},
+    {'1': '_muted'},
+  ],
+};
+
+/// Descriptor for `VolumeStateMessage`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List volumeStateMessageDescriptor = $convert.base64Decode(
+    'ChJWb2x1bWVTdGF0ZU1lc3NhZ2USEgoEdHlwZRgBIAEoCVIEdHlwZRIUCgVzY29wZRgCIAEoCV'
+    'IFc2NvcGUSGQoFbGV2ZWwYAyABKAFIAFIFbGV2ZWyIAQESGQoFbXV0ZWQYBCABKAhIAVIFbXV0'
+    'ZWSIAQFCCAoGX2xldmVsQggKBl9tdXRlZA==');
 

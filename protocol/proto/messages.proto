@@ -196,17 +196,35 @@ message StatusMessage {
   optional bool fullscreen = 9;
 }
 
-// Android TV player_settings. The live JSON object has more fields; this message
-// records the additive loop flag. Field numbers start at 1 because the message is new.
+// Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
+// subtitleOffsetMs/engine remain required. Unsupported controls use neutral
+// values with honest availability flags; active loop/engine stay in state.
 message PlayerSettingsMessage {
   string type = 1;
   optional bool loop = 2;
+  optional double speed = 3;
+  optional string scaling = 4;
+  optional bool audio_boost = 5 [json_name = "audioBoost"];
+  optional int64 subtitle_offset_ms = 6 [json_name = "subtitleOffsetMs"];
+  optional string engine = 7;
+  optional int32 quality_max_height = 8 [json_name = "qualityMaxHeight"];
+  optional int32 current_video_height = 9 [json_name = "currentVideoHeight"];
+  optional bool is_live = 10 [json_name = "isLive"];
+  optional bool is_seekable = 11 [json_name = "isSeekable"];
+  optional bool speed_available = 12 [json_name = "speedAvailable"];
+  optional bool scaling_available = 13 [json_name = "scalingAvailable"];
+  optional bool audio_boost_available = 14 [json_name = "audioBoostAvailable"];
+  optional bool quality_available = 15 [json_name = "qualityAvailable"];
+  optional bool subtitle_offset_available = 16 [json_name = "subtitleOffsetAvailable"];
+  optional bool engine_available = 17 [json_name = "engineAvailable"];
+  optional bool loop_available = 18 [json_name = "loopAvailable"];
 }
 
 message ContextMessage {
   string type = 1;
   // player | browser | idle
   string active = 2;
+  optional string engine = 3;
 }
 
 message PlaylistItemInfo {
@@ -260,6 +278,8 @@ message AuthResponse {
   optional bool screen_mirror_web_rtc = 7 [json_name = "screenMirrorWebRtc"];
   repeated string media_kinds = 8 [json_name = "mediaKinds"];
   repeated string features = 9;
+  // Optional authenticated descriptor; existing fields and tags stay unchanged.
+  ReceiverCapabilities capabilities = 10;
 }
 
 // Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
@@ -343,3 +363,72 @@ enum MouseEventType {
   // negative coordinates clear the touch anchor.
   MOUSE_TRANSFORM_ANCHOR = 8;
 }
+
+// ==================== Receiver capabilities v1 ====================
+// These are JSON model helpers, not a protobuf WSS transport. Read descriptor
+// version from raw JSON first: unknown versions use frozen legacy behavior.
+// Never add descriptor plaintext to PairingApprovedMessage or SAS transcript/AAD.
+message CredentialBundle {
+  string token = 1;
+  optional string cert_fingerprint = 2 [json_name = "certFingerprint"];
+  repeated string players = 3;
+  repeated string browsers = 4;
+  optional bool screen_mirror_web_rtc = 5 [json_name = "screenMirrorWebRtc"];
+  repeated string media_kinds = 6 [json_name = "mediaKinds"];
+  repeated string features = 7;
+  ReceiverCapabilities capabilities = 8;
+}
+
+message ReceiverCapabilities {
+  uint32 version = 1;
+  // Single authority; empty/absent engine operation sets are unsupported.
+  map<string, ReceiverSurfaceCapabilities> surfaces = 2;
+  ReceiverVolumeCapabilities volume = 3;
+  ReceiverHostInfo host = 4;
+  repeated string companion_hints = 5 [json_name = "companionHints"];
+}
+
+message ReceiverSurfaceCapabilities {
+  // Presence means available. Active engine belongs to context/player_settings.
+  map<string, ReceiverEngineCapabilities> engines = 1;
+}
+
+message ReceiverEngineCapabilities {
+  repeated string transport = 1;
+  repeated string keys = 2;
+  repeated string pointer = 3;
+  repeated string image_transforms = 4 [json_name = "imageTransforms"];
+  repeated string text = 5;
+  repeated string settings = 6;
+  repeated string tracks = 7;
+  repeated string queue = 8;
+  repeated string browser = 9;
+  repeated string reporting = 10;
+}
+
+message ReceiverVolumeCapabilities {
+  string scope = 1;
+  repeated string operations = 2;
+  optional double step = 3;
+  optional string fallback_scope = 4 [json_name = "fallbackScope"];
+}
+
+message ReceiverHostInfo {
+  optional string os_family = 1 [json_name = "osFamily"];
+  optional string device_class = 2 [json_name = "deviceClass"];
+}
+
+// Native command/volume payload. Scoped absolute level is normalized 0..1.
+message VolumePayload {
+  string scope = 1;
+  optional double level = 2;
+}
+
+message VolumeStateMessage {
+  string type = 1;
+  string scope = 2;
+  optional double level = 3;
+  optional bool muted = 4;
+}
+// Reserved only: receiver_capabilities / ReceiverCapabilitiesFrame.
+// No native push frame is defined or registered in this version.

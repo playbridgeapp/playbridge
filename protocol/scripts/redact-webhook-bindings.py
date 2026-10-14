@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply deterministic secret-safe diagnostics to generated webhook models.
+"""Apply deterministic secret-safe diagnostics to generated credential models.
 
 Wire/Dart default message diagnostics include every field. Keep serialization
 unchanged, but don't expose session credentials when a parent message is logged.
@@ -16,4 +16,14 @@ p = root / 'dart/lib/messages.pb.dart'
 s = p.read_text().replace('class ProgressWebhook extends $pb.GeneratedMessage {', '''class ProgressWebhook extends $pb.GeneratedMessage {
   @$core.override
   $core.String toString() => 'ProgressWebhook([redacted])';''')
+p.write_text(s)
+
+p = root / 'kotlin/playbridge/CredentialBundle.kt'
+s = p.read_text()
+s = s.replace('result += """token=${sanitize(token)}"""', 'result += "token=[redacted]"')
+p.write_text(s)
+p = root / 'dart/lib/messages.pb.dart'
+s = p.read_text().replace('class CredentialBundle extends $pb.GeneratedMessage {', """class CredentialBundle extends $pb.GeneratedMessage {
+  @$core.override
+  $core.String toString() => 'CredentialBundle([redacted])';""")
 p.write_text(s)

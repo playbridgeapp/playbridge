@@ -1,0 +1,15 @@
+// Inject the protocol's isolated test harness without editing consumer source/build files.
+gradle.beforeProject { p ->
+    if (p.path == ':app') {
+        def protocolRoot = new File(p.rootProject.projectDir, '../../protocol').canonicalFile
+        p.pluginManager.withPlugin('com.android.application') {
+            p.dependencies.add('testImplementation', 'com.squareup.wire:wire-moshi-adapter:5.1.0')
+        }
+        p.tasks.matching { it.name == 'compileFossDebugUnitTestKotlin' }.configureEach { t ->
+            t.source(new File(protocolRoot, 'tests/kotlin'))
+        }
+        p.tasks.matching { it.name == 'testFossDebugUnitTest' }.configureEach { t ->
+            t.systemProperty('stage5.fixtureDir', new File(protocolRoot, 'tests/fixtures/receiver-capabilities').absolutePath)
+        }
+    }
+}

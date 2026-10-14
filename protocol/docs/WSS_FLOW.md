@@ -229,7 +229,8 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 | `playlist_status` | Queue replacement, append, index change, reconnect, or clear |
 | `command_result` | Targeted acknowledgement or structured rejection of a command carrying `requestId` |
 | `tracks` | Audio/subtitle track list or selection changes |
-| `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, live capability, and optional `loop` changes |
+| `player_settings` | Complete settings snapshot, honest availability, active engine and optional `loop` |
+| `volume_state` | Scoped normalized volume/mute after native reporting support is implemented |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
 | `pong` | Response to application-level `ping` |
 | `screen_mirror_ready` | Peer + renderer/pipe created; sent before the phone offers |
@@ -314,9 +315,10 @@ or replacement by a new connection.
 - `proto/messages.proto` still describes plaintext `token` / `certFingerprint` fields on
   `PairingApprovedMessage`. The live protocol uses only protected `nonce` + `ciphertext`; new code
   must follow AsyncAPI and must not reintroduce plaintext credentials.
-- Protobuf does not model `tracks`, the full `player_settings` object, browser administration, capability arrays,
-  protected credential bundles, or the enriched `season` / `episode` / `imdbId` / `bingeGroup`
-  fields in `playlist_status`. `PlayerSettingsMessage` records `type` and optional `loop` only.
+- Protobuf does not model `tracks` or all browser administration. It now includes native capability
+  descriptors/protected credential bundles and complete player-settings helper fields; AsyncAPI
+  remains authoritative for required JSON snapshot fields. Generated protobuf JSON adapters may
+  need to normalize integer/default/presence representation before emitting canonical WSS frames.
   `StatusMessage.fullscreen` is optional and is sent by browser surfaces.
 - Android TV advertises `player_home_v1` when remote Home finishes the player and returns to the receiver idle screen. Receivers that omit the feature keep Home unavailable in the player.
 - Legacy receivers may have included the `token` in `auth_response`. Current receivers must never
@@ -325,7 +327,8 @@ or replacement by a new connection.
   emit a one-item `playlist` instead.
 - Only Android TV currently emits `player_settings` and implements receiver-browser/user-script
   actions. Capability negotiation and tolerant unknown-message handling are therefore required.
-- There is no protocol-version field negotiated on the wire today. `asyncapi.yaml` versioning,
+- There is no overall protocol-version field negotiated on the wire today. The optional native
+  descriptor's `version` governs only that descriptor and is not a WSS/SAS version. `asyncapi.yaml` versioning,
   additive evolution, capability arrays, and tolerant readers are the current compatibility
   mechanisms until an explicit version-negotiation message is introduced.
 - Runtime implementations do not yet validate every frame against AsyncAPI. Existing focused
@@ -416,3 +419,40 @@ Cast web receiver can only call origins approved in its deployment's
 cross-origin requests from that receiver. The default allowlist is empty. A browser
 receiver hosted on the sender posts through its native host so credentials do not
 enter the local browser connection.
+
+## Optional native receiver capabilities (Stage 5 contract)
+
+The versioned `capabilities` descriptor is optional in the existing `auth_response` and in the
+AES-GCM-protected `CredentialBundle`. Auth fields/required lists, token/SPKI meaning, SAS transcript,
+HKDF labels and AAD are unchanged. Never expose the descriptor outside the protected
+`pairing_approved` envelope. Senders inspect the raw descriptor version first: absent or unknown
+version retains the frozen legacy sender behavior; recognized version 1 uses complete declared
+operation sets without per-field platform fallback.
+
+`surfaces` is the sole authority, mapping surface IDs to available engine maps and per-engine
+transport, exact keys, pointer/image, text, settings, tracks, queue, browser and reporting sets.
+Missing/empty sets are unsupported. Active surface/engine remain state (`context.engine` and
+`player_settings.engine`). Informational host fields and advisory companion hints never confer
+operations/trust, veto a paired/discovered OS channel, or replace independent Full control evidence.
+
+Player-only receivers send complete `player_settings` snapshots with the existing required fields
+and honest availability flags. Unsupported settings use neutral compatibility values with false
+flags. Loop lives in `player_settings.loop`, never `status.loop`. This retains old snapshot parsers;
+a loop-only frame is invalid.
+
+Common volume is separate from surfaces: `scope: system` is system media volume; `scope: app` is
+app attenuation. Native values use normalized 0–1 units. Relative steps and mute reuse remote
+`volume_up/down` and `mute` on the advertised route. App steps default to 0.05 unless a stable step
+is declared; system steps retain one native increment. New scoped absolute `command/volume`
+uses payload `{scope, level}` only after `absolute` is advertised. New `volume_state` reports actual
+scope with level and/or muted, only as reporting is implemented. No current values belong in auth.
+App controls must be labelled App volume; they do not control tvOS system/HDMI-CEC volume.
+
+Reserve `receiver_capabilities` / `ReceiverCapabilitiesFrame` for a later native push; no frame is
+shipped or registered in this step. `BrowserCapabilitiesFrame` is unchanged. Static descriptors
+refresh at each authenticated connection/pairing; later pushes need coherent replacement/revision/
+session semantics before implementation.
+
+See [Receiver capabilities v1](RECEIVER_CAPABILITIES.md) for the complete shape, known identifiers,
+wire mappings, settings/volume decisions, and rollout/strict-parser qualification, and
+[contract fixtures](../tests/README.md) for real schema validation and retained parser checks.

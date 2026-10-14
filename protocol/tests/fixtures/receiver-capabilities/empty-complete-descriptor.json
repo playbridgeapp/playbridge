@@ -1,0 +1,8 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "capabilities": {
+    "version": 1,
+    "surfaces": {}
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "future_engine"
+  ],
+  "features": [
+    "future_feature",
+    "subtitle_resource_add_v1"
+  ]
+}

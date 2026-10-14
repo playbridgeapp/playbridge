@@ -292,6 +292,7 @@ components:
         - $ref: '#/components/schemas/QueueMoveCommand'
         - $ref: '#/components/schemas/QueueClearCommand'
         - $ref: '#/components/schemas/ControlCommand'
+        - $ref: '#/components/schemas/VolumeCommand'
         - $ref: '#/components/schemas/RemoteCommand'
         - $ref: '#/components/schemas/MouseCommand'
         - $ref: '#/components/schemas/BrowserCommand'
@@ -320,6 +321,7 @@ components:
         - $ref: '#/components/schemas/CommandResult'
         - $ref: '#/components/schemas/Tracks'
         - $ref: '#/components/schemas/PlayerSettings'
+        - $ref: '#/components/schemas/VolumeState'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
         - $ref: '#/components/schemas/Logs'
@@ -363,11 +365,8 @@ components:
         mediaKinds:
           type: array
           items: { enum: [video, audio, image] }
-        features:
-          type: array
-          uniqueItems: true
-          items:
-            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1, diagnostic_logs_v1, player_home_v1]
+        features: { $ref: '#/components/schemas/ReceiverFeatures' }
+        capabilities: { $ref: '#/components/schemas/ReceiverCapabilities' }
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -448,11 +447,8 @@ components:
         mediaKinds:
           type: array
           items: { enum: [video, audio, image] }
-        features:
-          type: array
-          uniqueItems: true
-          items:
-            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1]
+        features: { $ref: '#/components/schemas/ReceiverFeatures' }
+        capabilities: { $ref: '#/components/schemas/ReceiverCapabilities' }
       additionalProperties: false
     CommandEnvelope:
       type: object
@@ -612,7 +608,7 @@ components:
               type: object
               required: [event]
               properties:
-                event: { enum: [move, click, scroll, down, up] }
+                event: { type: string, description: "Open implemented event IDs: move, click, scroll, down, up, zoom, rotate, transform_anchor, reset. Unknown events do not confer support." }
                 dx: { type: number, default: 0 }
                 dy: { type: number, default: 0 }
               additionalProperties: false
@@ -642,7 +638,7 @@ components:
               type: object
               required: [action]
               properties:
-                action: { enum: [refresh, toggle_ublock] }
+                action: { type: string, description: "Open implemented action IDs: refresh, toggle_ublock, forward, video_target_cycle, video_unmute, maximize_video, restore_video, toggle_play, seek_to:<milliseconds>. Support requires the active engine operation set." }
               additionalProperties: false
     ContextQueryCommand:
       allOf:
@@ -887,6 +883,7 @@ components:
       properties:
         type: { const: context }
         active: { enum: [idle, player, browser, screen_mirror] }
+        engine: { type: string, description: Active surface engine ID; omitted if not reported. }
       additionalProperties: false
     ScreenMirrorReady:
       type: object
@@ -1005,6 +1002,9 @@ components:
         scalingAvailable: { type: boolean }
         audioBoostAvailable: { type: boolean }
         qualityAvailable: { type: boolean }
+        subtitleOffsetAvailable: { type: boolean }
+        engineAvailable: { type: boolean }
+        loopAvailable: { type: boolean }
         loop:
           type: boolean
           description: Repeat-one. Omitted when the receiver does not report loop state.
@@ -1106,3 +1106,212 @@ components:
       type: string
       contentEncoding: base64
       description: Exactly 32 bytes after decoding.
+
+    ReceiverFeatures:
+      description: 'Extensible legacy feature tokens shared by auth and protected credentials. Known values: queue_crud_v1,
+        stable_item_ids, command_results, subtitle_resource_add_v1, progress_webhook_v1, diagnostic_logs_v1, player_home_v1.
+        Unknown strings are preserved or ignored safely. These remain canonical for legacy feature/acknowledgement
+        semantics.'
+      type: array
+      uniqueItems: true
+      items:
+        type: string
+    CapabilityIdentifier:
+      description: Open, case-sensitive identifier. Known values and wire mappings are documented in docs/RECEIVER_CAPABILITIES.md;
+        unknown identifiers are preserved and ignored for execution, never rejected as enum values.
+      type: string
+      minLength: 1
+      maxLength: 64
+    CapabilityIdentifiers:
+      type: array
+      maxItems: 64
+      uniqueItems: true
+      items: &id001
+        $ref: '#/components/schemas/CapabilityIdentifier'
+    ReceiverCapabilities:
+      description: 'Optional authenticated static descriptor. Missing or unsupported version selects frozen legacy
+        behavior. Inspect version before typed parsing. A recognized version is complete: absent/empty operation
+        sets mean unsupported; no field-by-field platform fallback. Runtime state is excluded.'
+      oneOf:
+      - $ref: '#/components/schemas/ReceiverCapabilitiesV1'
+      - $ref: '#/components/schemas/ReceiverCapabilitiesFuture'
+    ReceiverCapabilitiesV1:
+      type: object
+      required:
+      - version
+      - surfaces
+      properties:
+        version:
+          type: integer
+          const: 1
+        surfaces:
+          description: Single surface authority. Keys currently player and browser; unknown surface IDs are safely
+            preserved/ignored. Presence declares a surface, whose available engines own complete operation sets.
+            There is no second surface list or top-level player/browser block.
+          type: object
+          maxProperties: 16
+          propertyNames: *id001
+          additionalProperties:
+            $ref: '#/components/schemas/ReceiverSurfaceCapabilities'
+        volume:
+          $ref: '#/components/schemas/ReceiverVolumeCapabilities'
+        host:
+          $ref: '#/components/schemas/ReceiverHostInfo'
+        companionHints:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: Advisory may-be-available hints, e.g. android_tv_remote_v2. Absence is not a negative statement;
+            hints never veto a paired/discovered channel or confer trust/command support.
+      additionalProperties: false
+    ReceiverCapabilitiesFuture:
+      description: 'Opaque unsupported version: sender preserves/ignores the object and uses frozen legacy behavior.
+        Future versions may change shape, so do not decode them as v1.'
+      type: object
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          minimum: 2
+          maximum: 4294967295
+      additionalProperties: true
+    ReceiverHostInfo:
+      description: Informational only, never an operation or trust gate. Known osFamily values android, tvos, macos,
+        windows, linux; known deviceClass values tv, desktop, cli. All are open identifiers.
+      type: object
+      properties:
+        osFamily: *id001
+        deviceClass: *id001
+      additionalProperties: false
+    ReceiverSurfaceCapabilities:
+      type: object
+      required:
+      - engines
+      properties:
+        engines:
+          description: Available engine IDs mapped to complete operation sets. Known IDs exo, mpv, avplayer, internal_mpv,
+            webview, gecko. Omit unavailable engines; active engine belongs to state reports. Do not union engine
+            operation sets or inherit absent operations.
+          type: object
+          maxProperties: 16
+          propertyNames: *id001
+          additionalProperties:
+            $ref: '#/components/schemas/ReceiverEngineCapabilities'
+      additionalProperties: false
+    ReceiverEngineCapabilities:
+      description: Complete operation sets for this available engine. Every absent/empty set is unsupported. Eligibility
+        still depends on active context/media/readiness and state availability flags; no OS-derived fallback.
+      type: object
+      properties:
+        transport:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: play, pause, toggle, stop, seek_absolute, seek_relative.'
+        keys:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: Exact wire key IDs, including dpad_up/down/left/right/center, back, home, key_enter. Home
+            is PlayBridge app idle, not device Home.
+        pointer:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Browser pointer operations: move, click, down, up, scroll, zoom. Drag requires both down
+            and up as well as move.'
+        imageTransforms:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Player image operations: pan, scroll, zoom, rotate, anchor, reset; not browser pointer
+            support.'
+        text:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: replace, delete, enter. Replace does not imply standalone delete or append.'
+        settings:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: loop, engine, quality, speed, scaling, audio_boost, subtitle_offset; state values
+            and availability are in player_settings.'
+        tracks:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: audio_select, subtitle_select, subtitle_url_add, subtitle_resource_add. State reporting
+            is separate.'
+        queue:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: replace, append, jump_index, jump_item, remove, move, clear. Legacy feature tokens
+            still govern acknowledgement/stable-item/guard semantics.'
+        browser:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: launch, forward, reload, cycle_source, unmute, fullscreen, manage_user_scripts,
+            manage_user_agent. Navigation keys are in keys.'
+        reporting:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: status, context, tracks, playlist_status, player_settings, fullscreen. Not a promise
+            of a currently active media item.'
+      additionalProperties: false
+    ReceiverVolumeCapabilities:
+      description: Common native volume route, independent of player/browser. Known scopes system and app; unknown
+        scopes are ignored. No volume support follows from host OS or engine. App volume is attenuation, not HDMI-CEC/system
+        volume.
+      type: object
+      required:
+      - scope
+      properties:
+        scope: *id001
+        operations:
+          $ref: '#/components/schemas/CapabilityIdentifiers'
+          description: 'Known: relative_step, absolute, mute_toggle, level_report, mute_report. Absent/empty is
+            unsupported.'
+        step:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          description: Stable normalized increment for one relative key. App default is 0.05 if omitted; system
+            omission means one native platform increment.
+        fallbackScope:
+          $ref: '#/components/schemas/CapabilityIdentifier'
+          description: Optional explicit relative-step fallback only; currently app for a system route. Does not
+            authorize absolute/mute commands on another scope.
+      additionalProperties: false
+    VolumeCommand:
+      description: Native scoped absolute volume, only when the authenticated descriptor declares absolute for
+        this scope. Not the hosted-browser set_volume command. No implementation is added by this contract.
+      allOf:
+      - $ref: '#/components/schemas/CommandEnvelope'
+      - type: object
+        required:
+        - payload
+        properties:
+          action:
+            const: volume
+          payload:
+            $ref: '#/components/schemas/VolumePayload'
+    VolumePayload:
+      type: object
+      required:
+      - scope
+      - level
+      properties:
+        scope: *id001
+        level:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalized level, not percent. 0 is silence and 1 is unattenuated app level or maximum system
+            media level.
+      additionalProperties: false
+    VolumeState:
+      description: Native volume report for the actual route. A receiver sends only fields it can report, on initial
+        sync, change and resync. Mute is independent of level. Not part of the static descriptor.
+      type: object
+      required:
+      - type
+      - scope
+      properties:
+        type:
+          const: volume_state
+        scope: *id001
+        level:
+          type: number
+          minimum: 0
+          maximum: 1
+        muted:
+          type: boolean
+      anyOf:
+      - required:
+        - level
+      - required:
+        - muted
+      additionalProperties: false

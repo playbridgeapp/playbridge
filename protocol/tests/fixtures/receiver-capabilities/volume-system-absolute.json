@@ -1,0 +1,8 @@
+{
+  "type": "command",
+  "action": "volume",
+  "payload": {
+    "scope": "system",
+    "level": 1
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "internal_mpv"
+  ],
+  "browsers": [],
+  "mediaKinds": [],
+  "screenMirrorWebRtc": false,
+  "features": [
+    "progress_webhook_v1"
+  ]
+}

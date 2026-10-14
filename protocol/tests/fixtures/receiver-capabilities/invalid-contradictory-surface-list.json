@@ -1,0 +1,24 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "capabilities": {
+    "version": 1,
+    "surfaces": [
+      "player"
+    ],
+    "host": {
+      "osFamily": "android",
+      "deviceClass": "tv"
+    },
+    "volume": {
+      "scope": "system",
+      "operations": [
+        "relative_step",
+        "mute_toggle"
+      ]
+    },
+    "companionHints": [
+      "android_tv_remote_v2"
+    ]
+  }
+}
