@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart';
@@ -8,6 +9,76 @@ void main() {
   final library = File(
     'native/cast_core/macos/libplaybridge_cast_core_ffi.dylib',
   );
+
+  for (final descriptor in <Map<String, Object?>?>[
+    null,
+    {
+      'version': 1,
+      'surfaces': {
+        'future_surface': {
+          'engines': {
+            'future_engine': {
+              'keys': ['future_key']
+            },
+          },
+        },
+      },
+    },
+  ]) {
+    test(
+      'native ABI 1 loopback auth ${descriptor == null ? 'omits' : 'carries'} descriptor',
+      () async {
+        final directory =
+            await Directory.systemTemp.createTemp('receiver-descriptor-test-');
+        final certificate = await CertManager.loadOrCreate(
+          commonName: 'Loopback Receiver Test',
+          dir: directory,
+        );
+        final runtime = ReceiverRuntime.start(
+          ReceiverRuntimeConfig(
+            name: 'Loopback Receiver Test',
+            uuid: 'loopback-receiver',
+            certificateDer: certificate.certificateDer,
+            privateKeyDer: certificate.privateKeyDer,
+            privateKeyKind: certificate.privateKeyKind,
+            preferredPort: 0,
+            authorizedTokens: const ['TEST_ONLY_NOT_A_CREDENTIAL'],
+            capabilities: descriptor,
+          ),
+          libraryPath: library.absolute.path,
+        );
+        final http = HttpClient()
+          ..badCertificateCallback = (cert, host, port) =>
+              host == '127.0.0.1' &&
+              base64Encode(cert.der) == certificate.certificateDer;
+        WebSocket? socket;
+        try {
+          final port =
+              await runtime.started.timeout(const Duration(seconds: 5));
+          socket = await WebSocket.connect('wss://127.0.0.1:$port/',
+              customClient: http);
+          socket.add(jsonEncode({
+            'type': 'auth',
+            'token': 'TEST_ONLY_NOT_A_CREDENTIAL',
+          }));
+          final response = jsonDecode(
+              await socket.first.timeout(const Duration(seconds: 5))
+                  as String) as Map<String, dynamic>;
+          expect(response['success'], isTrue);
+          expect(response.containsKey('capabilities'), descriptor != null);
+          expect(response['capabilities'], descriptor);
+        } finally {
+          await socket?.close();
+          http.close(force: true);
+          runtime.dispose();
+          await directory.delete(recursive: true);
+        }
+      },
+      skip: !Platform.isMacOS || !library.existsSync()
+          ? 'The packaged macOS native library is unavailable'
+          : false,
+    );
+  }
 
   test(
     'shared Rust receiver starts with the Desktop TLS identity',

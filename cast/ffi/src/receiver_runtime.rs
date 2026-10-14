@@ -10,6 +10,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use playbridge_cast_core::playbridge::ReceiverCapabilities;
 use playbridge_cast_receiver::{
     PrivateKeyKind, ReceiverConfig, ReceiverEvent, ReceiverHost, ReceiverIdentity,
 };
@@ -45,6 +46,8 @@ struct RuntimeConfig {
     screen_mirror_web_rtc: bool,
     #[serde(default)]
     advertise: bool,
+    #[serde(default)]
+    capabilities: Option<ReceiverCapabilities>,
 }
 
 impl RuntimeConfig {
@@ -72,6 +75,7 @@ impl RuntimeConfig {
         config.features = self.features;
         config.screen_mirror_web_rtc = self.screen_mirror_web_rtc;
         config.advertise = self.advertise;
+        config.capabilities = self.capabilities;
         Ok(config)
     }
 }
@@ -331,6 +335,117 @@ mod tests {
         let config = runtime.into_receiver_config().unwrap();
         assert_eq!(config.media_kinds, ["video", "audio", "image"]);
         assert!(config.screen_mirror_web_rtc);
+        assert!(config.capabilities.is_none());
+    }
+
+    #[test]
+    fn old_runtime_config_and_unknown_fields_remain_accepted() {
+        let config: RuntimeConfig = serde_json::from_value(json!({
+            "name":"Desktop", "uuid":"test", "certificateDer":"", "privateKeyDer":"",
+            "futureField":{"future":[true]},
+        }))
+        .unwrap();
+        let config = config.into_receiver_config().unwrap();
+        assert!(config.capabilities.is_none());
+        assert_eq!(config.preferred_port, 8765);
+        assert!(!config.advertise);
+    }
+
+    #[test]
+    fn runtime_config_forwards_valid_descriptor_and_rejects_invalid_advertisements() {
+        let descriptor = json!({"version":1,"surfaces":{"future_surface":{"engines":{"future_engine":{"keys":["future_key"]}}}}});
+        let mut value = json!({"name":"Desktop", "uuid":"test", "certificateDer":"", "privateKeyDer":"", "capabilities":descriptor});
+        let config = serde_json::from_value::<RuntimeConfig>(value.clone())
+            .unwrap()
+            .into_receiver_config()
+            .unwrap();
+        assert_eq!(config.capabilities.unwrap().as_json(), &descriptor);
+        for invalid in [
+            json!({"version":2,"surfaces":[]}),
+            json!({"version":1,"surfaces":[]}),
+            json!({"version":1}),
+        ] {
+            value["capabilities"] = invalid;
+            assert!(serde_json::from_value::<RuntimeConfig>(value.clone()).is_err());
+            let encoded = CString::new(value.to_string()).unwrap();
+            assert!(unsafe { pb_receiver_runtime_start(encoded.as_ptr()) }.is_null());
+        }
+    }
+
+    #[test]
+    fn c_abi_loopback_start_auth_and_revocation_with_and_without_descriptor() {
+        use playbridge_cast_core::{
+            playbridge::{ReceiverFrame, SenderFrame},
+            secure_ws::SecureWebSocket,
+        };
+        use rcgen::{CertificateParams, KeyPair};
+        for descriptor in [None, Some(json!({"version":1,"surfaces":{}}))] {
+            let key = KeyPair::generate().unwrap();
+            let certificate = CertificateParams::new(vec!["localhost".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
+            let mut config = json!({
+                "name":"Loopback Test", "uuid":"loopback-test", "preferredPort":0,
+                "certificateDer":BASE64.encode(certificate.der()), "privateKeyDer":BASE64.encode(key.serialize_der()),
+                "authorizedTokens":["TEST_ONLY_NOT_A_CREDENTIAL"], "advertise":false,
+            });
+            if let Some(value) = &descriptor {
+                config["capabilities"] = value.clone();
+            }
+            let encoded = CString::new(config.to_string()).unwrap();
+            let runtime = unsafe { pb_receiver_runtime_start(encoded.as_ptr()) };
+            assert!(!runtime.is_null());
+            let started = loop {
+                let pointer = unsafe { pb_receiver_runtime_next_json(runtime, 5_000) };
+                assert!(!pointer.is_null(), "runtime did not start");
+                let text = unsafe { CStr::from_ptr(pointer) }
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                unsafe { crate::pb_string_free(pointer) };
+                let event: Value = serde_json::from_str(&text).unwrap();
+                if event["event"] == "started" {
+                    break event;
+                }
+                assert_ne!(event["event"], "error", "runtime startup failed");
+            };
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let endpoint = format!("wss://127.0.0.1:{}/", started["port"].as_u64().unwrap());
+                let mut socket = SecureWebSocket::connect_pinned(
+                    &endpoint,
+                    started["fingerprint"].as_str().unwrap(),
+                )
+                .await
+                .unwrap();
+                socket
+                    .send(&SenderFrame::Auth {
+                        token: "TEST_ONLY_NOT_A_CREDENTIAL".into(),
+                    })
+                    .await
+                    .unwrap();
+                let response = socket.receive().await.unwrap().unwrap();
+                assert_eq!(
+                    serde_json::to_value(&response).unwrap().get("capabilities"),
+                    descriptor.as_ref()
+                );
+                assert!(matches!(
+                    response,
+                    ReceiverFrame::AuthResponse { success: true, .. }
+                ));
+                let revoke =
+                    CString::new(r#"{"command":"replace_authorized_tokens","tokens":[]}"#).unwrap();
+                assert!(unsafe { pb_receiver_runtime_submit_json(runtime, revoke.as_ptr()) });
+                let closed = tokio::time::timeout(Duration::from_secs(2), socket.receive())
+                    .await
+                    .unwrap();
+                assert!(!matches!(closed, Ok(Some(_))));
+            });
+            unsafe {
+                pb_receiver_runtime_cancel(runtime);
+                pb_receiver_runtime_free(runtime);
+            }
+        }
     }
 
     #[test]

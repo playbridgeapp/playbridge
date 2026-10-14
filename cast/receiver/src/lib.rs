@@ -16,7 +16,9 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
-use playbridge_cast_core::playbridge::{CredentialBundle, ReceiverPairingSession, SenderFrame};
+use playbridge_cast_core::playbridge::{
+    CredentialBundle, ReceiverCapabilities, ReceiverPairingSession, SenderFrame,
+};
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer},
@@ -69,6 +71,8 @@ pub struct ReceiverConfig {
     pub media_kinds: Vec<String>,
     pub features: Vec<String>,
     pub screen_mirror_web_rtc: bool,
+    /// Static authenticated advertisement; absent keeps the exact legacy envelopes.
+    pub capabilities: Option<ReceiverCapabilities>,
     pub advertise: bool,
     pub max_connections: usize,
     pub max_message_bytes: usize,
@@ -89,6 +93,7 @@ impl ReceiverConfig {
             media_kinds: Vec::new(),
             features: Vec::new(),
             screen_mirror_web_rtc: false,
+            capabilities: None,
             advertise: false,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
@@ -244,6 +249,7 @@ struct Shared {
     media_kinds: Vec<String>,
     features: Vec<String>,
     screen_mirror_web_rtc: bool,
+    capabilities: Option<ReceiverCapabilities>,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
     authenticated: Mutex<HashMap<u64, String>>,
@@ -253,6 +259,18 @@ struct Shared {
 }
 
 impl Shared {
+    fn auth_response(&self, success: bool) -> Value {
+        let mut response = json!({
+            "type":"auth_response", "success":success, "certFingerprint":self.fingerprint,
+            "players":self.players, "browsers":self.browsers, "mediaKinds":self.media_kinds,
+            "features":self.features, "screenMirrorWebRtc":self.screen_mirror_web_rtc,
+        });
+        if success && let Some(capabilities) = &self.capabilities {
+            response["capabilities"] = capabilities.as_json().clone();
+        }
+        response
+    }
+
     fn emit(&self, event: ReceiverEvent) {
         let _ = self.events.send(event);
     }
@@ -266,14 +284,26 @@ impl Shared {
         });
     }
 
-    fn is_authorized(&self, token: &str) -> bool {
+    fn authenticate_connection(&self, id: u64, token: &str) -> Result<Option<String>, String> {
         let digest = token_digest(token);
-        self.authorized_tokens.lock().is_ok_and(|tokens| {
-            tokens.iter().any(|stored| {
-                stored.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() == 1
-                    || stored.as_bytes().ct_eq(digest.as_bytes()).unwrap_u8() == 1
-            })
-        })
+        // Hold authorization through registration. Token replacement takes this
+        // lock before inspecting authenticated connections, so it either denies
+        // this auth or sees the registered digest and closes the connection.
+        let tokens = self
+            .authorized_tokens
+            .lock()
+            .map_err(|_| "credential registry failed")?;
+        if !tokens.iter().any(|stored| {
+            stored.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() == 1
+                || stored.as_bytes().ct_eq(digest.as_bytes()).unwrap_u8() == 1
+        }) {
+            return Ok(None);
+        }
+        self.authenticated
+            .lock()
+            .map_err(|_| "authentication registry failed")?
+            .insert(id, digest.clone());
+        Ok(Some(digest))
     }
 
     fn record_pairing_failure(&self, ip: &str) {
@@ -322,6 +352,7 @@ impl ReceiverHost {
             media_kinds: config.media_kinds.clone(),
             features: config.features.clone(),
             screen_mirror_web_rtc: config.screen_mirror_web_rtc,
+            capabilities: config.capabilities.clone(),
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
             authenticated: Mutex::new(HashMap::new()),
@@ -678,23 +709,13 @@ where
                 match frame {
                     SenderFrame::Ping => send_value(&mut socket, json!({"type":"pong"})).await?,
                     SenderFrame::Auth { token } if !authenticated => {
-                        authenticated = shared.is_authorized(&token);
+                        let digest = shared.authenticate_connection(id, &token)?;
+                        authenticated = digest.is_some();
                         send_value(
                             &mut socket,
-                            json!({
-                                "type":"auth_response",
-                                "success":authenticated,
-                                "certFingerprint":shared.fingerprint,
-                                "players":shared.players,
-                                "browsers":shared.browsers,
-                                "mediaKinds":shared.media_kinds,
-                                "features":shared.features,
-                                "screenMirrorWebRtc":shared.screen_mirror_web_rtc,
-                            }),
+                            shared.auth_response(authenticated),
                         ).await?;
-                        if authenticated {
-                            let digest = token_digest(&token);
-                            shared.authenticated.lock().map_err(|_| "authentication registry failed")?.insert(id, digest.clone());
+                        if let Some(digest) = digest {
                             shared.emit(ReceiverEvent::Authenticated {
                                 connection_id: id,
                                 token_digest: digest,
@@ -781,6 +802,7 @@ where
                                     media_kinds: shared.media_kinds.clone(),
                                     screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
                                     features: shared.features.clone(),
+                                    capabilities: shared.capabilities.clone(),
                                 },
                             )
                             .map_err(|_| "pairing confirmation was invalid".to_owned())?;
@@ -789,8 +811,9 @@ where
                             .lock()
                             .map_err(|_| "credential registry failed")?
                             .insert(token.clone());
+                        shared.authenticate_connection(id, &token)?
+                            .ok_or("paired credential was revoked")?;
                         authenticated = true;
-                        shared.authenticated.lock().map_err(|_| "authentication registry failed")?.insert(id, token_digest(&token));
                         send_frame(&mut socket, &approval).await?;
                         shared.emit(ReceiverEvent::Paired {
                             connection_id: id,
@@ -956,6 +979,61 @@ mod tests {
         secure_ws::SecureWebSocket,
     };
     use rcgen::{CertificateParams, KeyPair};
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::{
+        io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf},
+        sync::oneshot,
+    };
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    // Writes the response bytes, but keeps send().await pending until the test
+    // releases flush. This exposes the original post-response registration gap
+    // deterministically, independent of executor scheduling or network latency.
+    struct HeldFlush {
+        stream: DuplexStream,
+        release: Option<oneshot::Receiver<()>>,
+    }
+
+    impl AsyncRead for HeldFlush {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.stream).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for HeldFlush {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Pin::new(&mut self.stream).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            if let Some(release) = &mut self.release {
+                if Pin::new(release).poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                self.release = None;
+            }
+            Pin::new(&mut self.stream).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.stream).poll_shutdown(cx)
+        }
+    }
 
     fn identity() -> ReceiverIdentity {
         let key = KeyPair::generate().unwrap();
@@ -967,6 +1045,163 @@ mod tests {
             certificate_der: certificate.der().to_vec(),
             private_key_der: key.serialize_der(),
             private_key_kind: PrivateKeyKind::Pkcs8,
+        }
+    }
+
+    #[tokio::test]
+    async fn revocation_immediately_after_auth_response_sees_pending_send() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        config.authorized_tokens = vec![TOKEN.into()];
+        let host = ReceiverHost::start(config).await.unwrap();
+        let (server, client) = tokio::io::duplex(4096);
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = WebSocketStream::from_raw_socket(
+            HeldFlush {
+                stream: server,
+                release: Some(release_rx),
+            },
+            Role::Server,
+            None,
+        )
+        .await;
+        let mut client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let (outbound_tx, outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let (close_tx, close_rx) = watch::channel(false);
+        let close_probe = close_rx.clone();
+        let id = 1;
+        host.shared.connections.lock().unwrap().insert(
+            id,
+            ConnectionHandle {
+                outbound: outbound_tx,
+                close: close_tx,
+            },
+        );
+        let shared = host.shared.clone();
+        let task = tokio::spawn(async move {
+            let result = run_socket(
+                id,
+                "127.0.0.1".into(),
+                server,
+                ConnectionIo {
+                    outbound: outbound_rx,
+                    close: close_rx,
+                },
+                shared.clone(),
+                DEFAULT_PAIRING_TIMEOUT,
+                DEFAULT_MAX_MESSAGE_BYTES,
+            )
+            .await;
+            cleanup_connection(id, &shared);
+            result
+        });
+        client
+            .send(Message::Text(
+                serde_json::to_string(&SenderFrame::Auth {
+                    token: TOKEN.into(),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["success"], true);
+        host.replace_authorized_tokens(Vec::new());
+        // The server is still inside the auth send: revocation must already
+        // know this connection, before the send can return and events emit.
+        assert!(
+            *close_probe.borrow(),
+            "revocation missed the pending authenticated connection"
+        );
+        release_tx.send(()).unwrap();
+        let closed = tokio::time::timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap();
+        assert!(matches!(
+            closed,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+        ));
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(host.shared.authenticated.lock().unwrap().is_empty());
+        assert!(host.shared.connections.lock().unwrap().is_empty());
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revoked_token_cannot_register_an_authenticated_connection() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        config.authorized_tokens = vec![TOKEN.into()];
+        let host = ReceiverHost::start(config).await.unwrap();
+        host.replace_authorized_tokens(Vec::new());
+        assert!(
+            host.shared
+                .authenticate_connection(1, TOKEN)
+                .unwrap()
+                .is_none()
+        );
+        assert!(host.shared.authenticated.lock().unwrap().is_empty());
+        // The atomic check retains support for persisted SHA-256 records.
+        host.replace_authorized_tokens([token_digest(TOKEN)]);
+        assert!(
+            host.shared
+                .authenticate_connection(1, TOKEN)
+                .unwrap()
+                .is_some()
+        );
+        cleanup_connection(1, &host.shared);
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revocation_immediately_after_loopback_auth_closes_connection() {
+        const TOKEN: &str = "TEST_ONLY_NOT_A_CREDENTIAL";
+        for capabilities in [
+            None,
+            Some(
+                ReceiverCapabilities::from_json(json!({
+                    "version":1,"surfaces":{}
+                }))
+                .unwrap(),
+            ),
+        ] {
+            let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+            config.preferred_port = 0;
+            config.authorized_tokens = vec![TOKEN.into()];
+            config.capabilities = capabilities;
+            let host = ReceiverHost::start(config).await.unwrap();
+            let endpoint = format!("wss://127.0.0.1:{}/", host.port());
+            let mut socket = SecureWebSocket::connect_pinned(&endpoint, host.fingerprint())
+                .await
+                .unwrap();
+            socket
+                .send(&SenderFrame::Auth {
+                    token: TOKEN.into(),
+                })
+                .await
+                .unwrap();
+            assert!(matches!(
+                socket.receive().await.unwrap(),
+                Some(ReceiverFrame::AuthResponse { success: true, .. })
+            ));
+            host.replace_authorized_tokens(Vec::new());
+            let closed = tokio::time::timeout(Duration::from_secs(2), socket.receive())
+                .await
+                .unwrap();
+            assert!(!matches!(closed, Ok(Some(_))));
+            host.shutdown().await;
         }
     }
 
@@ -1081,12 +1316,28 @@ mod tests {
 
     #[tokio::test]
     async fn receiver_pairs_authenticates_and_emits_typed_commands() {
+        exercise_pairing_and_auth(None).await;
+    }
+
+    #[tokio::test]
+    async fn receiver_publishes_identical_descriptor_in_protected_pairing_and_auth() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../protocol/tests/fixtures/receiver-capabilities/unknown-identifiers-auth-v1.json"
+        )).unwrap();
+        exercise_pairing_and_auth(Some(
+            ReceiverCapabilities::from_json(fixture["capabilities"].clone()).unwrap(),
+        ))
+        .await;
+    }
+
+    async fn exercise_pairing_and_auth(capabilities: Option<ReceiverCapabilities>) {
         let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
         config.preferred_port = 0;
         config.fallback_attempts = 1;
         config.players = vec!["internal_mpv".into()];
         config.media_kinds = vec!["video".into(), "audio".into(), "image".into()];
         config.screen_mirror_web_rtc = true;
+        config.capabilities = capabilities.clone();
         let host = ReceiverHost::start(config).await.unwrap();
         let mut events = host.subscribe();
         let endpoint = format!("wss://127.0.0.1:{}/", host.port());
@@ -1138,6 +1389,20 @@ mod tests {
             .unwrap();
         assert_eq!(credentials.media_kinds, ["video", "audio", "image"]);
         assert!(credentials.screen_mirror_web_rtc);
+        assert_eq!(credentials.capabilities, capabilities);
+        let serialized = serde_json::to_value(&credentials).unwrap();
+        assert_eq!(
+            serialized.get("capabilities"),
+            capabilities.as_ref().map(ReceiverCapabilities::as_json)
+        );
+        assert_eq!(
+            serde_json::to_value(ReceiverFrame::PairingApproved { nonce, ciphertext })
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
         socket
             .send(&SenderFrame::Command {
                 action: "control".into(),
@@ -1187,14 +1452,14 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(matches!(
-            authenticated.receive().await.unwrap(),
-            Some(ReceiverFrame::AuthResponse {
-                success: true,
-                screen_mirror_web_rtc: true,
-                ..
-            })
-        ));
+        let response = authenticated.receive().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&response).unwrap().get("capabilities"),
+            serialized.get("capabilities")
+        );
+        assert!(matches!(response, ReceiverFrame::AuthResponse {
+            success: true, screen_mirror_web_rtc: true, capabilities: advertised, ..
+        } if advertised == capabilities));
         host.replace_authorized_tokens(Vec::new());
         let revoked = tokio::time::timeout(Duration::from_secs(2), authenticated.receive())
             .await
@@ -1203,6 +1468,23 @@ mod tests {
             !matches!(revoked, Ok(Some(_))),
             "revoked connection received another frame"
         );
+        let mut revoked = SecureWebSocket::connect_pinned(&endpoint, &pin)
+            .await
+            .unwrap();
+        revoked
+            .send(&SenderFrame::Auth {
+                token: credentials.token,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            revoked.receive().await.unwrap(),
+            Some(ReceiverFrame::AuthResponse {
+                success: false,
+                capabilities: None,
+                ..
+            })
+        ));
         host.shutdown().await;
     }
 }
