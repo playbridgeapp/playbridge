@@ -284,5 +284,172 @@ struct ReceiverReviewTests {
         assert(srt.text(at: 2) == "Hi")
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
+
+        runRemoteNavigationTests()
     }
+}
+
+private func pumpMain() {
+    let until = Date().addingTimeInterval(0.05)
+    while Date() < until {
+        RunLoop.current.run(mode: .default, before: until)
+    }
+}
+
+private func runRemoteNavigationTests() {
+    let overlays: [(String, WritableKeyPath<PlayerChromeState, Bool>, PlayerRemoteEffect)] = [
+        ("still watching", \.stillWatching, .dismissStillWatching),
+        ("subtitle menu", \.subtitleMenu, .dismissSubtitleMenu),
+        ("audio menu", \.audioMenu, .dismissAudioMenu),
+        ("engine menu", \.engineMenu, .dismissEngineMenu),
+        ("settings sheet", \.settingsSheet, .dismissSettingsSheet),
+        ("scrub", \.scrubbing, .dismissScrub),
+        ("playlist", \.playlist, .dismissPlaylist),
+        ("controls", \.controlsVisible, .dismissControls),
+    ]
+
+    for (name, path, expected) in overlays {
+        var only = PlayerChromeState(sessionMatches: true)
+        only[keyPath: path] = true
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: only)
+        assert(effect == expected, "Back should close \(name)")
+        var closed = only
+        PlayerRemoteNavigation.closing(effect, in: &closed)
+        assert(closed[keyPath: path] == false, "Back should clear \(name)")
+        assert(closed.sessionMatches, "Closing \(name) should stay in the player")
+        for (otherName, otherPath, _) in overlays where otherPath != path {
+            assert(closed[keyPath: otherPath] == false, "Closing \(name) should leave \(otherName) untouched")
+        }
+        assert(PlayerRemoteNavigation.effect(for: "home", chrome: only) == .exitPlayback,
+               "Home should leave from \(name)")
+
+        var stacked = PlayerChromeState(
+            sessionMatches: true,
+            stillWatching: true,
+            subtitleMenu: true,
+            audioMenu: true,
+            engineMenu: true,
+            settingsSheet: true,
+            scrubbing: true,
+            playlist: true,
+            controlsVisible: true
+        )
+        stacked[keyPath: path] = false
+        // The highest remaining overlay is the one Back closes.
+        if let top = overlays.first(where: { stacked[keyPath: $0.1] }) {
+            assert(PlayerRemoteNavigation.effect(for: "back", chrome: stacked) == top.2,
+                   "Back with \(name) already closed should close \(top.0)")
+        }
+    }
+
+    let everything = PlayerChromeState(
+        sessionMatches: true,
+        stillWatching: true,
+        subtitleMenu: true,
+        audioMenu: true,
+        engineMenu: true,
+        settingsSheet: true,
+        scrubbing: true,
+        playlist: true,
+        controlsVisible: true
+    )
+    var walk = everything
+    for (_, path, expected) in overlays {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: walk)
+        assert(effect == expected, "Stacked Back should close one level at a time")
+        let beforeClose = walk
+        PlayerRemoteNavigation.closing(effect, in: &walk)
+        assert(walk[keyPath: path] == false)
+        for (_, otherPath, _) in overlays where otherPath != path {
+            assert(walk[keyPath: otherPath] == beforeClose[keyPath: otherPath],
+                   "Back should leave the other overlays open")
+        }
+    }
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: walk) == .exitPlayback,
+           "Back with nothing open should exit")
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: everything) == .exitPlayback)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: PlayerChromeState(sessionMatches: true)) == .exitPlayback)
+
+    var stale = everything
+    stale.sessionMatches = false
+    let staleBefore = stale
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: stale) == .ignored)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: stale) == .ignored)
+    assert(stale == staleBefore, "A stale key leaves every overlay where it is")
+    for key in ["dpad_up", "dpad_down", "volume_up", "Back", "Home", ""] {
+        assert(PlayerRemoteNavigation.effect(for: key, chrome: everything) == .ignored,
+               "\(key) stays outside Back/Home")
+    }
+    print("PASS: Back closes one overlay, Home exits, stale and other keys are ignored")
+
+    let gate = PlayerRemoteExitGate()
+    gate.note(engine: .avplayer, generation: 1)
+    var exits = 0
+    gate.scheduleExit(engine: .avplayer, generation: 1) { exits += 1 }
+    gate.note(engine: .mpv, generation: 2)
+    pumpMain()
+    assert(exits == 0 && !gate.didExit, "A key queued for the previous item must not exit")
+    gate.scheduleExit(engine: .mpv, generation: 2) { exits += 1 }
+    pumpMain()
+    assert(exits == 1 && gate.didExit)
+    gate.scheduleExit(engine: .mpv, generation: 2) { exits += 1 }
+    assert(gate.beginExit() == false)
+    pumpMain()
+    assert(exits == 1, "A second Home after exit must not run the owner path again")
+    print("PASS: stale generation and a repeated exit are ignored")
+
+    var events: [[String: Any]] = []
+    let webhook = PlaybackProgressWebhook(send: { _, _, data in
+        events.append(try! JSONSerialization.jsonObject(with: data) as! [String: Any])
+    })
+    webhook.configure(url: "https://example.com/progress", token: "test-token", playbackID: "cast-remote")
+    let identity: [String: Any] = ["type": "movie", "contentId": "movie", "videoId": "movie-1"]
+    webhook.sample(itemID: "movie-1", content: identity, state: "playing", position: 120_000, duration: 600_000)
+
+    let suite = "PlayBridgeTVRemoteExit.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let provider = TestHistoryKeyProvider(key: SymmetricKey(size: .bits256))
+    let store = HistoryStore(defaults: defaults, keyProvider: provider)
+    let url = URL(string: "https://example.com/remote-exit.mp4")!
+    store.addToHistory(url: url, title: "Remote", headers: nil)
+    store.updateProgress(url: url, positionMs: 120_000, durationMs: 600_000)
+    let beforeFlush = HistoryStore(defaults: defaults, keyProvider: provider)
+    assert(beforeFlush.history.first?.resumePositionMs == nil,
+           "Progress stays unsaved until the exit flush")
+
+    var progressFinishes = 0
+    var historyFlushes = 0
+    var idleBroadcasts = 0
+    let owner = PlayerRemoteExitGate()
+    owner.note(engine: .avplayer, generation: 4)
+    func ownerExit() {
+        guard owner.beginExit() else { return }
+        PlayerSessionExit.perform(
+            finishProgress: {
+                progressFinishes += 1
+                webhook.finish(clear: true)
+            },
+            flushHistory: {
+                historyFlushes += 1
+                store.flushProgress()
+            },
+            leaveToIdle: {
+                // The screen dismiss finishes progress again and publishes idle once.
+                webhook.finish(clear: true)
+                idleBroadcasts += 1
+            }
+        )
+    }
+    ownerExit()
+    ownerExit()
+    assert(progressFinishes == 1 && historyFlushes == 1 && idleBroadcasts == 1)
+    assert(events.compactMap { $0["event"] as? String } == ["started", "stopped"])
+    let afterFlush = HistoryStore(defaults: defaults, keyProvider: provider)
+    assert(afterFlush.history.first?.resumePositionMs == 120_000)
+    let saved = defaults.data(forKey: "pb_playback_history_encrypted_v1")
+    ownerExit()
+    assert(defaults.data(forKey: "pb_playback_history_encrypted_v1") == saved)
+    assert(progressFinishes == 1 && historyFlushes == 1 && idleBroadcasts == 1)
+    print("PASS: exit saves progress and history once and broadcasts idle once")
 }

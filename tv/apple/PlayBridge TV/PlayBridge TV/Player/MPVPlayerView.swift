@@ -19,6 +19,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
+    let engineChrome: PlayerEngineChrome
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -33,6 +34,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.onExit = onExit
         vc.onSwitch = onSwitch
         vc.onBroadcast = onBroadcast
+        vc.bindEngineChrome(engineChrome)
         return vc
     }
 
@@ -43,6 +45,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.onExit = onExit
         uiViewController.onSwitch = onSwitch
         uiViewController.onBroadcast = onBroadcast
+        uiViewController.bindEngineChrome(engineChrome)
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
@@ -90,6 +93,7 @@ class MPVViewController: UIViewController {
     var onExit: (() -> Void)?
     var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
+    private var engineChrome: PlayerEngineChrome?
     private var statusTimer: Timer?
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
@@ -1023,13 +1027,7 @@ class MPVViewController: UIViewController {
             if playbackState.showAudioMenu     { playbackState.showAudioMenu = false; return }
             if playbackState.showEngineMenu    { playbackState.showEngineMenu = false; return }
             if playbackState.isVirtualScrubbing {
-                virtualScrubTickTimer?.invalidate()
-                virtualScrubTickTimer = nil
-                playbackState.isVirtualScrubbing = false
-                playbackState.scrubMultiplier = 0
-                setPropertyAsync("pause", value: "no")
-                playbackState.userPaused = false
-                showUI(autoHide: true)
+                cancelVirtualScrub()
                 return
             }
             broadcastStatus()
@@ -1268,8 +1266,70 @@ class MPVViewController: UIViewController {
         case "dpad_center": togglePlayPause()
         case "dpad_left":   skipBackward()
         case "dpad_right":  skipForward()
+        case "back", "home":
+            // PlayerView owns network Back and Home for both engines.
+            break
         default:            break
         }
+    }
+
+    func bindEngineChrome(_ chrome: PlayerEngineChrome) {
+        engineChrome = chrome
+        chrome.snapshot = { [weak self] in
+            guard let self else { return PlayerEngineChromeSnapshot() }
+            return PlayerEngineChromeSnapshot(
+                subtitleMenu: self.playbackState.showSubtitleMenu,
+                audioMenu: self.playbackState.showAudioMenu,
+                engineMenu: self.playbackState.showEngineMenu,
+                settingsSheet: false,
+                scrubbing: self.playbackState.isVirtualScrubbing,
+                controlsVisible: self.playbackState.showUI && !self.isPreBuffering
+            )
+        }
+        chrome.applyDismiss = { [weak self] effect in
+            self?.applyRemoteDismiss(effect) ?? false
+        }
+    }
+
+    /// Network Back closes one MPV overlay. Scrub cancel matches the physical Menu path.
+    private func applyRemoteDismiss(_ effect: PlayerRemoteEffect) -> Bool {
+        switch effect {
+        case .dismissSubtitleMenu:
+            guard playbackState.showSubtitleMenu else { return false }
+            playbackState.showSubtitleMenu = false
+            return true
+        case .dismissAudioMenu:
+            guard playbackState.showAudioMenu else { return false }
+            playbackState.showAudioMenu = false
+            return true
+        case .dismissEngineMenu:
+            guard playbackState.showEngineMenu else { return false }
+            playbackState.showEngineMenu = false
+            return true
+        case .dismissScrub:
+            guard playbackState.isVirtualScrubbing else { return false }
+            cancelVirtualScrub()
+            return true
+        case .dismissControls:
+            guard playbackState.showUI, !isPreBuffering else { return false }
+            hideControlsTimer?.invalidate()
+            hideControlsTimer = nil
+            playbackState.showUI = false
+            setNeedsFocusUpdate()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func cancelVirtualScrub() {
+        virtualScrubTickTimer?.invalidate()
+        virtualScrubTickTimer = nil
+        playbackState.isVirtualScrubbing = false
+        playbackState.scrubMultiplier = 0
+        setPropertyAsync("pause", value: "no")
+        playbackState.userPaused = false
+        showUI(autoHide: true)
     }
 
     /// Map a phone `control` command to the player. Runs on main (posted from the WS server).

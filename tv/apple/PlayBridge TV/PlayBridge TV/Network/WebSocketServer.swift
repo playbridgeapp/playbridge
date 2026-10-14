@@ -1187,6 +1187,13 @@ class WebSocketServer: ObservableObject {
             if let p = try? Playbridge_RemotePayload(jsonString: payloadJson), !p.key.isEmpty {
                 DispatchQueue.main.async {
                     if StillWatchingGate.isPrompting {
+                        // Back dismisses the prompt. Home leaves playback for the idle screen.
+                        // Every other remote key resumes playback.
+                        if p.key == "back" || p.key == "home" {
+                            NotificationCenter.default.post(
+                                name: Self.remoteKey, object: nil, userInfo: ["key": p.key])
+                            return
+                        }
                         NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
                         return
                     }
