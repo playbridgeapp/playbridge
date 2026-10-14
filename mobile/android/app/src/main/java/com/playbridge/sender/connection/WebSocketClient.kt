@@ -656,10 +656,10 @@ class WebSocketClient(
     }
 
     /**
-     * Both release and debug logcat get only a known envelope type and size.
+     * Release logcat keeps summaries; debug logcat adds only allowlisted structure.
      */
     private fun logWireFrame(direction: String, frame: String) {
-        Log.d(TAG, "$direction ${WireFrameLog.summary(frame)}")
+        Log.d(TAG, "$direction ${WireFrameLog.format(frame, BuildConfig.DEBUG)}")
     }
 
     @Synchronized
