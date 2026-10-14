@@ -1,0 +1,13 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "internal_mpv"
+  ],
+  "browsers": [],
+  "mediaKinds": [],
+  "screenMirrorWebRtc": false,
+  "features": [
+    "progress_webhook_v1"
+  ]
+}

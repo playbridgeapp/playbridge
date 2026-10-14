@@ -1,0 +1,80 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "internal_mpv"
+  ],
+  "browsers": [],
+  "mediaKinds": [
+    "video",
+    "audio",
+    "image"
+  ],
+  "screenMirrorWebRtc": true,
+  "features": [
+    "queue_crud_v1",
+    "stable_item_ids",
+    "command_results",
+    "subtitle_resource_add_v1",
+    "progress_webhook_v1"
+  ],
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "internal_mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "imageTransforms": [
+              "pan",
+              "scroll",
+              "zoom",
+              "rotate",
+              "anchor",
+              "reset"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "macos",
+      "deviceClass": "desktop"
+    },
+    "volume": {
+      "scope": "system",
+      "fallbackScope": "app",
+      "operations": [
+        "relative_step"
+      ]
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "revision": "39934a056d04a79a00f31231e84d454a986f3508",
+  "fragments": [
+    {
+      "source": "mobile/android/app/src/main/java/com/playbridge/sender/connection/WebSocketClient.kt",
+      "file": "android-fields.kt.inc",
+      "sha256": "19a046e4bd8b52d42da0ab7e4da63322061fad002f4fa59a9f128c34a45d01e7",
+      "sourceSha256": "e3af0b31f84e2ee7dd6281fe3d8f2cbe03941315ce7e687d5966347807ba5dd2"
+    },
+    {
+      "source": "mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/WebSocketClient.swift",
+      "file": "apple-fields.swift.inc",
+      "sha256": "09dc8246f23d15c4e2c3f1f00f57ba849dc634b42bd659ddeab3e71fcbef9ba3",
+      "sourceSha256": "f8e2c11892819131413f661b8daec51eab7896f8ce6fbaa8c4c515953c36173e"
+    },
+    {
+      "source": "desktop/lib/tv_sender_client.dart",
+      "file": "desktop-auth.dart.inc",
+      "sha256": "66a4067242ab319611a0aa981294f35632856a0a169206b6b968d6b7bbdb56f9",
+      "sourceSha256": "7cfef569ededbd4abc3ba48a797111c1065b11b108ff65492d9bdfd7c625fad9"
+    },
+    {
+      "source": "cast/core/src/playbridge.rs",
+      "file": "rust-models.rs.inc",
+      "sha256": "e67ccb928d8909b7b7acbdc395cf8665a760a7de57891acdeb391c4138111398",
+      "sourceSha256": "ba51140603ed26de0eb1fed326a21e0e5030626d5733a90bd99544ee053ab784"
+    }
+  ]
+}

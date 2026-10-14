@@ -1,0 +1,46 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "internal_mpv"
+  ],
+  "browsers": [],
+  "mediaKinds": [],
+  "screenMirrorWebRtc": false,
+  "features": [
+    "progress_webhook_v1"
+  ],
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "internal_mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "playlist_status"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "linux",
+      "deviceClass": "cli"
+    }
+  }
+}

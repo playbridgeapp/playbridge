@@ -47,6 +47,12 @@ public class ContextMessage(
     schemaIndex = 1,
   )
   public val active: String = "",
+  @field:WireField(
+    tag = 3,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 2,
+  )
+  public val engine: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<ContextMessage, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -62,6 +68,7 @@ public class ContextMessage(
     if (unknownFields != other.unknownFields) return false
     if (type != other.type) return false
     if (active != other.active) return false
+    if (engine != other.engine) return false
     return true
   }
 
@@ -71,6 +78,7 @@ public class ContextMessage(
       result = unknownFields.hashCode()
       result = result * 37 + type.hashCode()
       result = result * 37 + active.hashCode()
+      result = result * 37 + (engine?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -80,14 +88,16 @@ public class ContextMessage(
     val result = mutableListOf<String>()
     result += """type=${sanitize(type)}"""
     result += """active=${sanitize(active)}"""
+    if (engine != null) result += """engine=${sanitize(engine)}"""
     return result.joinToString(prefix = "ContextMessage{", separator = ", ", postfix = "}")
   }
 
   public fun copy(
     type: String = this.type,
     active: String = this.active,
+    engine: String? = this.engine,
     unknownFields: ByteString = this.unknownFields,
-  ): ContextMessage = ContextMessage(type, active, unknownFields)
+  ): ContextMessage = ContextMessage(type, active, engine, unknownFields)
 
   public companion object {
     @JvmField
@@ -107,6 +117,7 @@ public class ContextMessage(
         if (value.active != "") {
           size += ProtoAdapter.STRING.encodedSizeWithTag(2, value.active)
         }
+        size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.engine)
         return size
       }
 
@@ -117,11 +128,13 @@ public class ContextMessage(
         if (value.active != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.active)
         }
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.engine)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: ContextMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.engine)
         if (value.active != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.active)
         }
@@ -133,16 +146,19 @@ public class ContextMessage(
       override fun decode(reader: ProtoReader): ContextMessage {
         var type: String = ""
         var active: String = ""
+        var engine: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
             2 -> active = ProtoAdapter.STRING.decode(reader)
+            3 -> engine = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return ContextMessage(
           type = type,
           active = active,
+          engine = engine,
           unknownFields = unknownFields
         )
       }

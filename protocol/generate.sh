@@ -19,6 +19,8 @@ export PATH="$PATH:$HOME/.pub-cache/bin"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROTO_DIR="$SCRIPT_DIR/proto"
+# Allow an already-installed compiler when the default executable is unavailable.
+PROTOC="${PROTOC:-protoc}"
 
 CHECK_MODE=0
 if [[ "$1" == "--check" ]]; then
@@ -31,14 +33,14 @@ fi
 
 echo "==> Generating Swift"
 mkdir -p "$OUT/swift"
-protoc \
+"$PROTOC" \
   --proto_path="$PROTO_DIR" \
   --swift_out="$OUT/swift" \
   messages.proto
 
 echo "==> Generating Dart"
 mkdir -p "$OUT/dart/lib"
-protoc \
+"$PROTOC" \
   --proto_path="$PROTO_DIR" \
   --dart_out="$OUT/dart/lib" \
   messages.proto

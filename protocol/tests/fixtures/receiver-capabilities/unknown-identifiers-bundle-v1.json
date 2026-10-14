@@ -1,0 +1,138 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "future_engine"
+  ],
+  "features": [
+    "future_feature",
+    "subtitle_resource_add_v1"
+  ],
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "avplayer": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          },
+          "mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          },
+          "future_engine": {
+            "transport": [
+              "future_transport"
+            ],
+            "settings": [
+              "future_setting"
+            ],
+            "keys": [
+              "future_key"
+            ],
+            "pointer": [
+              "future_pointer"
+            ],
+            "text": [
+              "future_edit"
+            ]
+          }
+        }
+      },
+      "future_surface": {
+        "engines": {
+          "future_browser": {
+            "browser": [
+              "future_operation"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "future_os",
+      "deviceClass": "future_device"
+    },
+    "companionHints": [
+      "future_companion"
+    ],
+    "volume": {
+      "scope": "future_scope",
+      "operations": [
+        "future_volume"
+      ]
+    }
+  }
+}

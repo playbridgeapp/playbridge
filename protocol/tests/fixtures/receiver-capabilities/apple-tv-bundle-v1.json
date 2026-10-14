@@ -1,0 +1,107 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "avplayer",
+    "mpv"
+  ],
+  "features": [
+    "queue_crud_v1",
+    "stable_item_ids",
+    "command_results",
+    "subtitle_resource_add_v1",
+    "progress_webhook_v1"
+  ],
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "avplayer": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          },
+          "mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_left",
+              "dpad_right",
+              "dpad_center"
+            ],
+            "settings": [
+              "loop",
+              "engine"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "tvos",
+      "deviceClass": "tv"
+    }
+  }
+}

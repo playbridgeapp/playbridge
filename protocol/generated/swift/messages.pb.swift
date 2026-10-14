@@ -1031,29 +1031,177 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   fileprivate var _fullscreen: Bool? = nil
 }
 
-/// Android TV player_settings. The live JSON object has more fields; this message
-/// records the additive loop flag. Field numbers start at 1 because the message is new.
-nonisolated struct Playbridge_PlayerSettingsMessage: Sendable {
+/// Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
+/// subtitleOffsetMs/engine remain required. Unsupported controls use neutral
+/// values with honest availability flags; active loop/engine stay in state.
+nonisolated struct Playbridge_PlayerSettingsMessage: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var type: String = String()
+  var type: String {
+    get {_storage._type}
+    set {_uniqueStorage()._type = newValue}
+  }
 
   var loop: Bool {
-    get {_loop ?? false}
-    set {_loop = newValue}
+    get {_storage._loop ?? false}
+    set {_uniqueStorage()._loop = newValue}
   }
   /// Returns true if `loop` has been explicitly set.
-  var hasLoop: Bool {self._loop != nil}
+  var hasLoop: Bool {_storage._loop != nil}
   /// Clears the value of `loop`. Subsequent reads from it will return its default value.
-  mutating func clearLoop() {self._loop = nil}
+  mutating func clearLoop() {_uniqueStorage()._loop = nil}
+
+  var speed: Double {
+    get {_storage._speed ?? 0}
+    set {_uniqueStorage()._speed = newValue}
+  }
+  /// Returns true if `speed` has been explicitly set.
+  var hasSpeed: Bool {_storage._speed != nil}
+  /// Clears the value of `speed`. Subsequent reads from it will return its default value.
+  mutating func clearSpeed() {_uniqueStorage()._speed = nil}
+
+  var scaling: String {
+    get {_storage._scaling ?? String()}
+    set {_uniqueStorage()._scaling = newValue}
+  }
+  /// Returns true if `scaling` has been explicitly set.
+  var hasScaling: Bool {_storage._scaling != nil}
+  /// Clears the value of `scaling`. Subsequent reads from it will return its default value.
+  mutating func clearScaling() {_uniqueStorage()._scaling = nil}
+
+  var audioBoost: Bool {
+    get {_storage._audioBoost ?? false}
+    set {_uniqueStorage()._audioBoost = newValue}
+  }
+  /// Returns true if `audioBoost` has been explicitly set.
+  var hasAudioBoost: Bool {_storage._audioBoost != nil}
+  /// Clears the value of `audioBoost`. Subsequent reads from it will return its default value.
+  mutating func clearAudioBoost() {_uniqueStorage()._audioBoost = nil}
+
+  var subtitleOffsetMs: Int64 {
+    get {_storage._subtitleOffsetMs ?? 0}
+    set {_uniqueStorage()._subtitleOffsetMs = newValue}
+  }
+  /// Returns true if `subtitleOffsetMs` has been explicitly set.
+  var hasSubtitleOffsetMs: Bool {_storage._subtitleOffsetMs != nil}
+  /// Clears the value of `subtitleOffsetMs`. Subsequent reads from it will return its default value.
+  mutating func clearSubtitleOffsetMs() {_uniqueStorage()._subtitleOffsetMs = nil}
+
+  var engine: String {
+    get {_storage._engine ?? String()}
+    set {_uniqueStorage()._engine = newValue}
+  }
+  /// Returns true if `engine` has been explicitly set.
+  var hasEngine: Bool {_storage._engine != nil}
+  /// Clears the value of `engine`. Subsequent reads from it will return its default value.
+  mutating func clearEngine() {_uniqueStorage()._engine = nil}
+
+  var qualityMaxHeight: Int32 {
+    get {_storage._qualityMaxHeight ?? 0}
+    set {_uniqueStorage()._qualityMaxHeight = newValue}
+  }
+  /// Returns true if `qualityMaxHeight` has been explicitly set.
+  var hasQualityMaxHeight: Bool {_storage._qualityMaxHeight != nil}
+  /// Clears the value of `qualityMaxHeight`. Subsequent reads from it will return its default value.
+  mutating func clearQualityMaxHeight() {_uniqueStorage()._qualityMaxHeight = nil}
+
+  var currentVideoHeight: Int32 {
+    get {_storage._currentVideoHeight ?? 0}
+    set {_uniqueStorage()._currentVideoHeight = newValue}
+  }
+  /// Returns true if `currentVideoHeight` has been explicitly set.
+  var hasCurrentVideoHeight: Bool {_storage._currentVideoHeight != nil}
+  /// Clears the value of `currentVideoHeight`. Subsequent reads from it will return its default value.
+  mutating func clearCurrentVideoHeight() {_uniqueStorage()._currentVideoHeight = nil}
+
+  var isLive: Bool {
+    get {_storage._isLive ?? false}
+    set {_uniqueStorage()._isLive = newValue}
+  }
+  /// Returns true if `isLive` has been explicitly set.
+  var hasIsLive: Bool {_storage._isLive != nil}
+  /// Clears the value of `isLive`. Subsequent reads from it will return its default value.
+  mutating func clearIsLive() {_uniqueStorage()._isLive = nil}
+
+  var isSeekable: Bool {
+    get {_storage._isSeekable ?? false}
+    set {_uniqueStorage()._isSeekable = newValue}
+  }
+  /// Returns true if `isSeekable` has been explicitly set.
+  var hasIsSeekable: Bool {_storage._isSeekable != nil}
+  /// Clears the value of `isSeekable`. Subsequent reads from it will return its default value.
+  mutating func clearIsSeekable() {_uniqueStorage()._isSeekable = nil}
+
+  var speedAvailable: Bool {
+    get {_storage._speedAvailable ?? false}
+    set {_uniqueStorage()._speedAvailable = newValue}
+  }
+  /// Returns true if `speedAvailable` has been explicitly set.
+  var hasSpeedAvailable: Bool {_storage._speedAvailable != nil}
+  /// Clears the value of `speedAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearSpeedAvailable() {_uniqueStorage()._speedAvailable = nil}
+
+  var scalingAvailable: Bool {
+    get {_storage._scalingAvailable ?? false}
+    set {_uniqueStorage()._scalingAvailable = newValue}
+  }
+  /// Returns true if `scalingAvailable` has been explicitly set.
+  var hasScalingAvailable: Bool {_storage._scalingAvailable != nil}
+  /// Clears the value of `scalingAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearScalingAvailable() {_uniqueStorage()._scalingAvailable = nil}
+
+  var audioBoostAvailable: Bool {
+    get {_storage._audioBoostAvailable ?? false}
+    set {_uniqueStorage()._audioBoostAvailable = newValue}
+  }
+  /// Returns true if `audioBoostAvailable` has been explicitly set.
+  var hasAudioBoostAvailable: Bool {_storage._audioBoostAvailable != nil}
+  /// Clears the value of `audioBoostAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearAudioBoostAvailable() {_uniqueStorage()._audioBoostAvailable = nil}
+
+  var qualityAvailable: Bool {
+    get {_storage._qualityAvailable ?? false}
+    set {_uniqueStorage()._qualityAvailable = newValue}
+  }
+  /// Returns true if `qualityAvailable` has been explicitly set.
+  var hasQualityAvailable: Bool {_storage._qualityAvailable != nil}
+  /// Clears the value of `qualityAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearQualityAvailable() {_uniqueStorage()._qualityAvailable = nil}
+
+  var subtitleOffsetAvailable: Bool {
+    get {_storage._subtitleOffsetAvailable ?? false}
+    set {_uniqueStorage()._subtitleOffsetAvailable = newValue}
+  }
+  /// Returns true if `subtitleOffsetAvailable` has been explicitly set.
+  var hasSubtitleOffsetAvailable: Bool {_storage._subtitleOffsetAvailable != nil}
+  /// Clears the value of `subtitleOffsetAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearSubtitleOffsetAvailable() {_uniqueStorage()._subtitleOffsetAvailable = nil}
+
+  var engineAvailable: Bool {
+    get {_storage._engineAvailable ?? false}
+    set {_uniqueStorage()._engineAvailable = newValue}
+  }
+  /// Returns true if `engineAvailable` has been explicitly set.
+  var hasEngineAvailable: Bool {_storage._engineAvailable != nil}
+  /// Clears the value of `engineAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearEngineAvailable() {_uniqueStorage()._engineAvailable = nil}
+
+  var loopAvailable: Bool {
+    get {_storage._loopAvailable ?? false}
+    set {_uniqueStorage()._loopAvailable = newValue}
+  }
+  /// Returns true if `loopAvailable` has been explicitly set.
+  var hasLoopAvailable: Bool {_storage._loopAvailable != nil}
+  /// Clears the value of `loopAvailable`. Subsequent reads from it will return its default value.
+  mutating func clearLoopAvailable() {_uniqueStorage()._loopAvailable = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _loop: Bool? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 nonisolated struct Playbridge_ContextMessage: Sendable {
@@ -1066,9 +1214,20 @@ nonisolated struct Playbridge_ContextMessage: Sendable {
   /// player | browser | idle
   var active: String = String()
 
+  var engine: String {
+    get {_engine ?? String()}
+    set {_engine = newValue}
+  }
+  /// Returns true if `engine` has been explicitly set.
+  var hasEngine: Bool {self._engine != nil}
+  /// Clears the value of `engine`. Subsequent reads from it will return its default value.
+  mutating func clearEngine() {self._engine = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _engine: String? = nil
 }
 
 nonisolated struct Playbridge_PlaylistItemInfo: Sendable {
@@ -1277,59 +1436,85 @@ nonisolated struct Playbridge_AuthMessage: Sendable {
   fileprivate var _token: String? = nil
 }
 
-nonisolated struct Playbridge_AuthResponse: Sendable {
+nonisolated struct Playbridge_AuthResponse: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var type: String = String()
+  var type: String {
+    get {_storage._type}
+    set {_uniqueStorage()._type = newValue}
+  }
 
-  var success: Bool = false
+  var success: Bool {
+    get {_storage._success}
+    set {_uniqueStorage()._success = newValue}
+  }
 
   var token: String {
-    get {_token ?? String()}
-    set {_token = newValue}
+    get {_storage._token ?? String()}
+    set {_uniqueStorage()._token = newValue}
   }
   /// Returns true if `token` has been explicitly set.
-  var hasToken: Bool {self._token != nil}
+  var hasToken: Bool {_storage._token != nil}
   /// Clears the value of `token`. Subsequent reads from it will return its default value.
-  mutating func clearToken() {self._token = nil}
+  mutating func clearToken() {_uniqueStorage()._token = nil}
 
   /// Lets the receiver re-assert (or rotate) its SPKI pin on reconnect. Same
   /// format as PairingApprovedMessage.cert_fingerprint. Optional during rollout.
   var certFingerprint: String {
-    get {_certFingerprint ?? String()}
-    set {_certFingerprint = newValue}
+    get {_storage._certFingerprint ?? String()}
+    set {_uniqueStorage()._certFingerprint = newValue}
   }
   /// Returns true if `certFingerprint` has been explicitly set.
-  var hasCertFingerprint: Bool {self._certFingerprint != nil}
+  var hasCertFingerprint: Bool {_storage._certFingerprint != nil}
   /// Clears the value of `certFingerprint`. Subsequent reads from it will return its default value.
-  mutating func clearCertFingerprint() {self._certFingerprint = nil}
+  mutating func clearCertFingerprint() {_uniqueStorage()._certFingerprint = nil}
 
-  var players: [String] = []
+  var players: [String] {
+    get {_storage._players}
+    set {_uniqueStorage()._players = newValue}
+  }
 
-  var browsers: [String] = []
+  var browsers: [String] {
+    get {_storage._browsers}
+    set {_uniqueStorage()._browsers = newValue}
+  }
 
   var screenMirrorWebRtc: Bool {
-    get {_screenMirrorWebRtc ?? false}
-    set {_screenMirrorWebRtc = newValue}
+    get {_storage._screenMirrorWebRtc ?? false}
+    set {_uniqueStorage()._screenMirrorWebRtc = newValue}
   }
   /// Returns true if `screenMirrorWebRtc` has been explicitly set.
-  var hasScreenMirrorWebRtc: Bool {self._screenMirrorWebRtc != nil}
+  var hasScreenMirrorWebRtc: Bool {_storage._screenMirrorWebRtc != nil}
   /// Clears the value of `screenMirrorWebRtc`. Subsequent reads from it will return its default value.
-  mutating func clearScreenMirrorWebRtc() {self._screenMirrorWebRtc = nil}
+  mutating func clearScreenMirrorWebRtc() {_uniqueStorage()._screenMirrorWebRtc = nil}
 
-  var mediaKinds: [String] = []
+  var mediaKinds: [String] {
+    get {_storage._mediaKinds}
+    set {_uniqueStorage()._mediaKinds = newValue}
+  }
 
-  var features: [String] = []
+  var features: [String] {
+    get {_storage._features}
+    set {_uniqueStorage()._features = newValue}
+  }
+
+  /// Optional authenticated descriptor; existing fields and tags stay unchanged.
+  var capabilities: Playbridge_ReceiverCapabilities {
+    get {_storage._capabilities ?? Playbridge_ReceiverCapabilities()}
+    set {_uniqueStorage()._capabilities = newValue}
+  }
+  /// Returns true if `capabilities` has been explicitly set.
+  var hasCapabilities: Bool {_storage._capabilities != nil}
+  /// Clears the value of `capabilities`. Subsequent reads from it will return its default value.
+  mutating func clearCapabilities() {_uniqueStorage()._capabilities = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _token: String? = nil
-  fileprivate var _certFingerprint: String? = nil
-  fileprivate var _screenMirrorWebRtc: Bool? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 /// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
@@ -1483,6 +1668,267 @@ nonisolated struct Playbridge_PongMessage: Sendable {
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+}
+
+/// ==================== Receiver capabilities v1 ====================
+/// These are JSON model helpers, not a protobuf WSS transport. Read descriptor
+/// version from raw JSON first: unknown versions use frozen legacy behavior.
+/// Never add descriptor plaintext to PairingApprovedMessage or SAS transcript/AAD.
+nonisolated struct Playbridge_CredentialBundle: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var token: String = String()
+
+  var certFingerprint: String {
+    get {_certFingerprint ?? String()}
+    set {_certFingerprint = newValue}
+  }
+  /// Returns true if `certFingerprint` has been explicitly set.
+  var hasCertFingerprint: Bool {self._certFingerprint != nil}
+  /// Clears the value of `certFingerprint`. Subsequent reads from it will return its default value.
+  mutating func clearCertFingerprint() {self._certFingerprint = nil}
+
+  var players: [String] = []
+
+  var browsers: [String] = []
+
+  var screenMirrorWebRtc: Bool {
+    get {_screenMirrorWebRtc ?? false}
+    set {_screenMirrorWebRtc = newValue}
+  }
+  /// Returns true if `screenMirrorWebRtc` has been explicitly set.
+  var hasScreenMirrorWebRtc: Bool {self._screenMirrorWebRtc != nil}
+  /// Clears the value of `screenMirrorWebRtc`. Subsequent reads from it will return its default value.
+  mutating func clearScreenMirrorWebRtc() {self._screenMirrorWebRtc = nil}
+
+  var mediaKinds: [String] = []
+
+  var features: [String] = []
+
+  var capabilities: Playbridge_ReceiverCapabilities {
+    get {_capabilities ?? Playbridge_ReceiverCapabilities()}
+    set {_capabilities = newValue}
+  }
+  /// Returns true if `capabilities` has been explicitly set.
+  var hasCapabilities: Bool {self._capabilities != nil}
+  /// Clears the value of `capabilities`. Subsequent reads from it will return its default value.
+  mutating func clearCapabilities() {self._capabilities = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _certFingerprint: String? = nil
+  fileprivate var _screenMirrorWebRtc: Bool? = nil
+  fileprivate var _capabilities: Playbridge_ReceiverCapabilities? = nil
+}
+
+nonisolated struct Playbridge_ReceiverCapabilities: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var version: UInt32 = 0
+
+  /// Single authority; empty/absent engine operation sets are unsupported.
+  var surfaces: Dictionary<String,Playbridge_ReceiverSurfaceCapabilities> = [:]
+
+  var volume: Playbridge_ReceiverVolumeCapabilities {
+    get {_volume ?? Playbridge_ReceiverVolumeCapabilities()}
+    set {_volume = newValue}
+  }
+  /// Returns true if `volume` has been explicitly set.
+  var hasVolume: Bool {self._volume != nil}
+  /// Clears the value of `volume`. Subsequent reads from it will return its default value.
+  mutating func clearVolume() {self._volume = nil}
+
+  var host: Playbridge_ReceiverHostInfo {
+    get {_host ?? Playbridge_ReceiverHostInfo()}
+    set {_host = newValue}
+  }
+  /// Returns true if `host` has been explicitly set.
+  var hasHost: Bool {self._host != nil}
+  /// Clears the value of `host`. Subsequent reads from it will return its default value.
+  mutating func clearHost() {self._host = nil}
+
+  var companionHints: [String] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _volume: Playbridge_ReceiverVolumeCapabilities? = nil
+  fileprivate var _host: Playbridge_ReceiverHostInfo? = nil
+}
+
+nonisolated struct Playbridge_ReceiverSurfaceCapabilities: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Presence means available. Active engine belongs to context/player_settings.
+  var engines: Dictionary<String,Playbridge_ReceiverEngineCapabilities> = [:]
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Playbridge_ReceiverEngineCapabilities: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var transport: [String] = []
+
+  var keys: [String] = []
+
+  var pointer: [String] = []
+
+  var imageTransforms: [String] = []
+
+  var text: [String] = []
+
+  var settings: [String] = []
+
+  var tracks: [String] = []
+
+  var queue: [String] = []
+
+  var browser: [String] = []
+
+  var reporting: [String] = []
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
+nonisolated struct Playbridge_ReceiverVolumeCapabilities: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var scope: String = String()
+
+  var operations: [String] = []
+
+  var step: Double {
+    get {_step ?? 0}
+    set {_step = newValue}
+  }
+  /// Returns true if `step` has been explicitly set.
+  var hasStep: Bool {self._step != nil}
+  /// Clears the value of `step`. Subsequent reads from it will return its default value.
+  mutating func clearStep() {self._step = nil}
+
+  var fallbackScope: String {
+    get {_fallbackScope ?? String()}
+    set {_fallbackScope = newValue}
+  }
+  /// Returns true if `fallbackScope` has been explicitly set.
+  var hasFallbackScope: Bool {self._fallbackScope != nil}
+  /// Clears the value of `fallbackScope`. Subsequent reads from it will return its default value.
+  mutating func clearFallbackScope() {self._fallbackScope = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _step: Double? = nil
+  fileprivate var _fallbackScope: String? = nil
+}
+
+nonisolated struct Playbridge_ReceiverHostInfo: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var osFamily: String {
+    get {_osFamily ?? String()}
+    set {_osFamily = newValue}
+  }
+  /// Returns true if `osFamily` has been explicitly set.
+  var hasOsFamily: Bool {self._osFamily != nil}
+  /// Clears the value of `osFamily`. Subsequent reads from it will return its default value.
+  mutating func clearOsFamily() {self._osFamily = nil}
+
+  var deviceClass: String {
+    get {_deviceClass ?? String()}
+    set {_deviceClass = newValue}
+  }
+  /// Returns true if `deviceClass` has been explicitly set.
+  var hasDeviceClass: Bool {self._deviceClass != nil}
+  /// Clears the value of `deviceClass`. Subsequent reads from it will return its default value.
+  mutating func clearDeviceClass() {self._deviceClass = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _osFamily: String? = nil
+  fileprivate var _deviceClass: String? = nil
+}
+
+/// Native command/volume payload. Scoped absolute level is normalized 0..1.
+nonisolated struct Playbridge_VolumePayload: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var scope: String = String()
+
+  var level: Double {
+    get {_level ?? 0}
+    set {_level = newValue}
+  }
+  /// Returns true if `level` has been explicitly set.
+  var hasLevel: Bool {self._level != nil}
+  /// Clears the value of `level`. Subsequent reads from it will return its default value.
+  mutating func clearLevel() {self._level = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _level: Double? = nil
+}
+
+nonisolated struct Playbridge_VolumeStateMessage: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var type: String = String()
+
+  var scope: String = String()
+
+  var level: Double {
+    get {_level ?? 0}
+    set {_level = newValue}
+  }
+  /// Returns true if `level` has been explicitly set.
+  var hasLevel: Bool {self._level != nil}
+  /// Clears the value of `level`. Subsequent reads from it will return its default value.
+  mutating func clearLevel() {self._level = nil}
+
+  var muted: Bool {
+    get {_muted ?? false}
+    set {_muted = newValue}
+  }
+  /// Returns true if `muted` has been explicitly set.
+  var hasMuted: Bool {self._muted != nil}
+  /// Clears the value of `muted`. Subsequent reads from it will return its default value.
+  mutating func clearMuted() {self._muted = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _level: Double? = nil
+  fileprivate var _muted: Bool? = nil
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
@@ -2682,7 +3128,196 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
 
 nonisolated extension Playbridge_PlayerSettingsMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayerSettingsMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}loop\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}loop\0\u{1}speed\0\u{1}scaling\0\u{3}audio_boost\0\u{3}subtitle_offset_ms\0\u{1}engine\0\u{3}quality_max_height\0\u{3}current_video_height\0\u{3}is_live\0\u{3}is_seekable\0\u{3}speed_available\0\u{3}scaling_available\0\u{3}audio_boost_available\0\u{3}quality_available\0\u{3}subtitle_offset_available\0\u{3}engine_available\0\u{3}loop_available\0")
+
+  fileprivate class _StorageClass {
+    var _type: String = String()
+    var _loop: Bool? = nil
+    var _speed: Double? = nil
+    var _scaling: String? = nil
+    var _audioBoost: Bool? = nil
+    var _subtitleOffsetMs: Int64? = nil
+    var _engine: String? = nil
+    var _qualityMaxHeight: Int32? = nil
+    var _currentVideoHeight: Int32? = nil
+    var _isLive: Bool? = nil
+    var _isSeekable: Bool? = nil
+    var _speedAvailable: Bool? = nil
+    var _scalingAvailable: Bool? = nil
+    var _audioBoostAvailable: Bool? = nil
+    var _qualityAvailable: Bool? = nil
+    var _subtitleOffsetAvailable: Bool? = nil
+    var _engineAvailable: Bool? = nil
+    var _loopAvailable: Bool? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _type = source._type
+      _loop = source._loop
+      _speed = source._speed
+      _scaling = source._scaling
+      _audioBoost = source._audioBoost
+      _subtitleOffsetMs = source._subtitleOffsetMs
+      _engine = source._engine
+      _qualityMaxHeight = source._qualityMaxHeight
+      _currentVideoHeight = source._currentVideoHeight
+      _isLive = source._isLive
+      _isSeekable = source._isSeekable
+      _speedAvailable = source._speedAvailable
+      _scalingAvailable = source._scalingAvailable
+      _audioBoostAvailable = source._audioBoostAvailable
+      _qualityAvailable = source._qualityAvailable
+      _subtitleOffsetAvailable = source._subtitleOffsetAvailable
+      _engineAvailable = source._engineAvailable
+      _loopAvailable = source._loopAvailable
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._type) }()
+        case 2: try { try decoder.decodeSingularBoolField(value: &_storage._loop) }()
+        case 3: try { try decoder.decodeSingularDoubleField(value: &_storage._speed) }()
+        case 4: try { try decoder.decodeSingularStringField(value: &_storage._scaling) }()
+        case 5: try { try decoder.decodeSingularBoolField(value: &_storage._audioBoost) }()
+        case 6: try { try decoder.decodeSingularInt64Field(value: &_storage._subtitleOffsetMs) }()
+        case 7: try { try decoder.decodeSingularStringField(value: &_storage._engine) }()
+        case 8: try { try decoder.decodeSingularInt32Field(value: &_storage._qualityMaxHeight) }()
+        case 9: try { try decoder.decodeSingularInt32Field(value: &_storage._currentVideoHeight) }()
+        case 10: try { try decoder.decodeSingularBoolField(value: &_storage._isLive) }()
+        case 11: try { try decoder.decodeSingularBoolField(value: &_storage._isSeekable) }()
+        case 12: try { try decoder.decodeSingularBoolField(value: &_storage._speedAvailable) }()
+        case 13: try { try decoder.decodeSingularBoolField(value: &_storage._scalingAvailable) }()
+        case 14: try { try decoder.decodeSingularBoolField(value: &_storage._audioBoostAvailable) }()
+        case 15: try { try decoder.decodeSingularBoolField(value: &_storage._qualityAvailable) }()
+        case 16: try { try decoder.decodeSingularBoolField(value: &_storage._subtitleOffsetAvailable) }()
+        case 17: try { try decoder.decodeSingularBoolField(value: &_storage._engineAvailable) }()
+        case 18: try { try decoder.decodeSingularBoolField(value: &_storage._loopAvailable) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._type.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._type, fieldNumber: 1)
+      }
+      try { if let v = _storage._loop {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
+      } }()
+      try { if let v = _storage._speed {
+        try visitor.visitSingularDoubleField(value: v, fieldNumber: 3)
+      } }()
+      try { if let v = _storage._scaling {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+      } }()
+      try { if let v = _storage._audioBoost {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 5)
+      } }()
+      try { if let v = _storage._subtitleOffsetMs {
+        try visitor.visitSingularInt64Field(value: v, fieldNumber: 6)
+      } }()
+      try { if let v = _storage._engine {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+      } }()
+      try { if let v = _storage._qualityMaxHeight {
+        try visitor.visitSingularInt32Field(value: v, fieldNumber: 8)
+      } }()
+      try { if let v = _storage._currentVideoHeight {
+        try visitor.visitSingularInt32Field(value: v, fieldNumber: 9)
+      } }()
+      try { if let v = _storage._isLive {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 10)
+      } }()
+      try { if let v = _storage._isSeekable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 11)
+      } }()
+      try { if let v = _storage._speedAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 12)
+      } }()
+      try { if let v = _storage._scalingAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 13)
+      } }()
+      try { if let v = _storage._audioBoostAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 14)
+      } }()
+      try { if let v = _storage._qualityAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 15)
+      } }()
+      try { if let v = _storage._subtitleOffsetAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 16)
+      } }()
+      try { if let v = _storage._engineAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 17)
+      } }()
+      try { if let v = _storage._loopAvailable {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 18)
+      } }()
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_PlayerSettingsMessage, rhs: Playbridge_PlayerSettingsMessage) -> Bool {
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._type != rhs_storage._type {return false}
+        if _storage._loop != rhs_storage._loop {return false}
+        if _storage._speed != rhs_storage._speed {return false}
+        if _storage._scaling != rhs_storage._scaling {return false}
+        if _storage._audioBoost != rhs_storage._audioBoost {return false}
+        if _storage._subtitleOffsetMs != rhs_storage._subtitleOffsetMs {return false}
+        if _storage._engine != rhs_storage._engine {return false}
+        if _storage._qualityMaxHeight != rhs_storage._qualityMaxHeight {return false}
+        if _storage._currentVideoHeight != rhs_storage._currentVideoHeight {return false}
+        if _storage._isLive != rhs_storage._isLive {return false}
+        if _storage._isSeekable != rhs_storage._isSeekable {return false}
+        if _storage._speedAvailable != rhs_storage._speedAvailable {return false}
+        if _storage._scalingAvailable != rhs_storage._scalingAvailable {return false}
+        if _storage._audioBoostAvailable != rhs_storage._audioBoostAvailable {return false}
+        if _storage._qualityAvailable != rhs_storage._qualityAvailable {return false}
+        if _storage._subtitleOffsetAvailable != rhs_storage._subtitleOffsetAvailable {return false}
+        if _storage._engineAvailable != rhs_storage._engineAvailable {return false}
+        if _storage._loopAvailable != rhs_storage._loopAvailable {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ContextMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ContextMessage"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}active\0\u{1}engine\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2691,7 +3326,8 @@ nonisolated extension Playbridge_PlayerSettingsMessage: SwiftProtobuf.Message, S
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularBoolField(value: &self._loop) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.active) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._engine) }()
       default: break
       }
     }
@@ -2705,50 +3341,19 @@ nonisolated extension Playbridge_PlayerSettingsMessage: SwiftProtobuf.Message, S
     if !self.type.isEmpty {
       try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
     }
-    try { if let v = self._loop {
-      try visitor.visitSingularBoolField(value: v, fieldNumber: 2)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: Playbridge_PlayerSettingsMessage, rhs: Playbridge_PlayerSettingsMessage) -> Bool {
-    if lhs.type != rhs.type {return false}
-    if lhs._loop != rhs._loop {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Playbridge_ContextMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ContextMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}active\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.active) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.type.isEmpty {
-      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
-    }
     if !self.active.isEmpty {
       try visitor.visitSingularStringField(value: self.active, fieldNumber: 2)
     }
+    try { if let v = self._engine {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_ContextMessage, rhs: Playbridge_ContextMessage) -> Bool {
     if lhs.type != rhs.type {return false}
     if lhs.active != rhs.active {return false}
+    if lhs._engine != rhs._engine {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2997,73 +3602,132 @@ nonisolated extension Playbridge_AuthMessage: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AuthResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0\u{1}features\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0\u{1}features\0\u{1}capabilities\0")
+
+  fileprivate class _StorageClass {
+    var _type: String = String()
+    var _success: Bool = false
+    var _token: String? = nil
+    var _certFingerprint: String? = nil
+    var _players: [String] = []
+    var _browsers: [String] = []
+    var _screenMirrorWebRtc: Bool? = nil
+    var _mediaKinds: [String] = []
+    var _features: [String] = []
+    var _capabilities: Playbridge_ReceiverCapabilities? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _type = source._type
+      _success = source._success
+      _token = source._token
+      _certFingerprint = source._certFingerprint
+      _players = source._players
+      _browsers = source._browsers
+      _screenMirrorWebRtc = source._screenMirrorWebRtc
+      _mediaKinds = source._mediaKinds
+      _features = source._features
+      _capabilities = source._capabilities
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
-      case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._token) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self._certFingerprint) }()
-      case 5: try { try decoder.decodeRepeatedStringField(value: &self.players) }()
-      case 6: try { try decoder.decodeRepeatedStringField(value: &self.browsers) }()
-      case 7: try { try decoder.decodeSingularBoolField(value: &self._screenMirrorWebRtc) }()
-      case 8: try { try decoder.decodeRepeatedStringField(value: &self.mediaKinds) }()
-      case 9: try { try decoder.decodeRepeatedStringField(value: &self.features) }()
-      default: break
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._type) }()
+        case 2: try { try decoder.decodeSingularBoolField(value: &_storage._success) }()
+        case 3: try { try decoder.decodeSingularStringField(value: &_storage._token) }()
+        case 4: try { try decoder.decodeSingularStringField(value: &_storage._certFingerprint) }()
+        case 5: try { try decoder.decodeRepeatedStringField(value: &_storage._players) }()
+        case 6: try { try decoder.decodeRepeatedStringField(value: &_storage._browsers) }()
+        case 7: try { try decoder.decodeSingularBoolField(value: &_storage._screenMirrorWebRtc) }()
+        case 8: try { try decoder.decodeRepeatedStringField(value: &_storage._mediaKinds) }()
+        case 9: try { try decoder.decodeRepeatedStringField(value: &_storage._features) }()
+        case 10: try { try decoder.decodeSingularMessageField(value: &_storage._capabilities) }()
+        default: break
+        }
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.type.isEmpty {
-      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
-    }
-    if self.success != false {
-      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 2)
-    }
-    try { if let v = self._token {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try { if let v = self._certFingerprint {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
-    } }()
-    if !self.players.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.players, fieldNumber: 5)
-    }
-    if !self.browsers.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.browsers, fieldNumber: 6)
-    }
-    try { if let v = self._screenMirrorWebRtc {
-      try visitor.visitSingularBoolField(value: v, fieldNumber: 7)
-    } }()
-    if !self.mediaKinds.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.mediaKinds, fieldNumber: 8)
-    }
-    if !self.features.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.features, fieldNumber: 9)
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._type.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._type, fieldNumber: 1)
+      }
+      if _storage._success != false {
+        try visitor.visitSingularBoolField(value: _storage._success, fieldNumber: 2)
+      }
+      try { if let v = _storage._token {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+      } }()
+      try { if let v = _storage._certFingerprint {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+      } }()
+      if !_storage._players.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._players, fieldNumber: 5)
+      }
+      if !_storage._browsers.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._browsers, fieldNumber: 6)
+      }
+      try { if let v = _storage._screenMirrorWebRtc {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 7)
+      } }()
+      if !_storage._mediaKinds.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._mediaKinds, fieldNumber: 8)
+      }
+      if !_storage._features.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._features, fieldNumber: 9)
+      }
+      try { if let v = _storage._capabilities {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_AuthResponse, rhs: Playbridge_AuthResponse) -> Bool {
-    if lhs.type != rhs.type {return false}
-    if lhs.success != rhs.success {return false}
-    if lhs._token != rhs._token {return false}
-    if lhs._certFingerprint != rhs._certFingerprint {return false}
-    if lhs.players != rhs.players {return false}
-    if lhs.browsers != rhs.browsers {return false}
-    if lhs._screenMirrorWebRtc != rhs._screenMirrorWebRtc {return false}
-    if lhs.mediaKinds != rhs.mediaKinds {return false}
-    if lhs.features != rhs.features {return false}
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._type != rhs_storage._type {return false}
+        if _storage._success != rhs_storage._success {return false}
+        if _storage._token != rhs_storage._token {return false}
+        if _storage._certFingerprint != rhs_storage._certFingerprint {return false}
+        if _storage._players != rhs_storage._players {return false}
+        if _storage._browsers != rhs_storage._browsers {return false}
+        if _storage._screenMirrorWebRtc != rhs_storage._screenMirrorWebRtc {return false}
+        if _storage._mediaKinds != rhs_storage._mediaKinds {return false}
+        if _storage._features != rhs_storage._features {return false}
+        if _storage._capabilities != rhs_storage._capabilities {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -3398,6 +4062,410 @@ nonisolated extension Playbridge_PongMessage: SwiftProtobuf.Message, SwiftProtob
 
   static func ==(lhs: Playbridge_PongMessage, rhs: Playbridge_PongMessage) -> Bool {
     if lhs.type != rhs.type {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_CredentialBundle: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CredentialBundle"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0\u{1}features\0\u{1}capabilities\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.token) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._certFingerprint) }()
+      case 3: try { try decoder.decodeRepeatedStringField(value: &self.players) }()
+      case 4: try { try decoder.decodeRepeatedStringField(value: &self.browsers) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self._screenMirrorWebRtc) }()
+      case 6: try { try decoder.decodeRepeatedStringField(value: &self.mediaKinds) }()
+      case 7: try { try decoder.decodeRepeatedStringField(value: &self.features) }()
+      case 8: try { try decoder.decodeSingularMessageField(value: &self._capabilities) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.token.isEmpty {
+      try visitor.visitSingularStringField(value: self.token, fieldNumber: 1)
+    }
+    try { if let v = self._certFingerprint {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    if !self.players.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.players, fieldNumber: 3)
+    }
+    if !self.browsers.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.browsers, fieldNumber: 4)
+    }
+    try { if let v = self._screenMirrorWebRtc {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 5)
+    } }()
+    if !self.mediaKinds.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.mediaKinds, fieldNumber: 6)
+    }
+    if !self.features.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.features, fieldNumber: 7)
+    }
+    try { if let v = self._capabilities {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_CredentialBundle, rhs: Playbridge_CredentialBundle) -> Bool {
+    if lhs.token != rhs.token {return false}
+    if lhs._certFingerprint != rhs._certFingerprint {return false}
+    if lhs.players != rhs.players {return false}
+    if lhs.browsers != rhs.browsers {return false}
+    if lhs._screenMirrorWebRtc != rhs._screenMirrorWebRtc {return false}
+    if lhs.mediaKinds != rhs.mediaKinds {return false}
+    if lhs.features != rhs.features {return false}
+    if lhs._capabilities != rhs._capabilities {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ReceiverCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReceiverCapabilities"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{1}surfaces\0\u{1}volume\0\u{1}host\0\u{3}companion_hints\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.version) }()
+      case 2: try { try decoder.decodeMapField(fieldType: SwiftProtobuf._ProtobufMessageMap<SwiftProtobuf.ProtobufString,Playbridge_ReceiverSurfaceCapabilities>.self, value: &self.surfaces) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._volume) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._host) }()
+      case 5: try { try decoder.decodeRepeatedStringField(value: &self.companionHints) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.version != 0 {
+      try visitor.visitSingularUInt32Field(value: self.version, fieldNumber: 1)
+    }
+    if !self.surfaces.isEmpty {
+      try visitor.visitMapField(fieldType: SwiftProtobuf._ProtobufMessageMap<SwiftProtobuf.ProtobufString,Playbridge_ReceiverSurfaceCapabilities>.self, value: self.surfaces, fieldNumber: 2)
+    }
+    try { if let v = self._volume {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._host {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    if !self.companionHints.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.companionHints, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ReceiverCapabilities, rhs: Playbridge_ReceiverCapabilities) -> Bool {
+    if lhs.version != rhs.version {return false}
+    if lhs.surfaces != rhs.surfaces {return false}
+    if lhs._volume != rhs._volume {return false}
+    if lhs._host != rhs._host {return false}
+    if lhs.companionHints != rhs.companionHints {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ReceiverSurfaceCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReceiverSurfaceCapabilities"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}engines\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeMapField(fieldType: SwiftProtobuf._ProtobufMessageMap<SwiftProtobuf.ProtobufString,Playbridge_ReceiverEngineCapabilities>.self, value: &self.engines) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.engines.isEmpty {
+      try visitor.visitMapField(fieldType: SwiftProtobuf._ProtobufMessageMap<SwiftProtobuf.ProtobufString,Playbridge_ReceiverEngineCapabilities>.self, value: self.engines, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ReceiverSurfaceCapabilities, rhs: Playbridge_ReceiverSurfaceCapabilities) -> Bool {
+    if lhs.engines != rhs.engines {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ReceiverEngineCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReceiverEngineCapabilities"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}transport\0\u{1}keys\0\u{1}pointer\0\u{3}image_transforms\0\u{1}text\0\u{1}settings\0\u{1}tracks\0\u{1}queue\0\u{1}browser\0\u{1}reporting\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedStringField(value: &self.transport) }()
+      case 2: try { try decoder.decodeRepeatedStringField(value: &self.keys) }()
+      case 3: try { try decoder.decodeRepeatedStringField(value: &self.pointer) }()
+      case 4: try { try decoder.decodeRepeatedStringField(value: &self.imageTransforms) }()
+      case 5: try { try decoder.decodeRepeatedStringField(value: &self.text) }()
+      case 6: try { try decoder.decodeRepeatedStringField(value: &self.settings) }()
+      case 7: try { try decoder.decodeRepeatedStringField(value: &self.tracks) }()
+      case 8: try { try decoder.decodeRepeatedStringField(value: &self.queue) }()
+      case 9: try { try decoder.decodeRepeatedStringField(value: &self.browser) }()
+      case 10: try { try decoder.decodeRepeatedStringField(value: &self.reporting) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.transport.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.transport, fieldNumber: 1)
+    }
+    if !self.keys.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.keys, fieldNumber: 2)
+    }
+    if !self.pointer.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.pointer, fieldNumber: 3)
+    }
+    if !self.imageTransforms.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.imageTransforms, fieldNumber: 4)
+    }
+    if !self.text.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.text, fieldNumber: 5)
+    }
+    if !self.settings.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.settings, fieldNumber: 6)
+    }
+    if !self.tracks.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.tracks, fieldNumber: 7)
+    }
+    if !self.queue.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.queue, fieldNumber: 8)
+    }
+    if !self.browser.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.browser, fieldNumber: 9)
+    }
+    if !self.reporting.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.reporting, fieldNumber: 10)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ReceiverEngineCapabilities, rhs: Playbridge_ReceiverEngineCapabilities) -> Bool {
+    if lhs.transport != rhs.transport {return false}
+    if lhs.keys != rhs.keys {return false}
+    if lhs.pointer != rhs.pointer {return false}
+    if lhs.imageTransforms != rhs.imageTransforms {return false}
+    if lhs.text != rhs.text {return false}
+    if lhs.settings != rhs.settings {return false}
+    if lhs.tracks != rhs.tracks {return false}
+    if lhs.queue != rhs.queue {return false}
+    if lhs.browser != rhs.browser {return false}
+    if lhs.reporting != rhs.reporting {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ReceiverVolumeCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReceiverVolumeCapabilities"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}scope\0\u{1}operations\0\u{1}step\0\u{3}fallback_scope\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.scope) }()
+      case 2: try { try decoder.decodeRepeatedStringField(value: &self.operations) }()
+      case 3: try { try decoder.decodeSingularDoubleField(value: &self._step) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._fallbackScope) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.scope.isEmpty {
+      try visitor.visitSingularStringField(value: self.scope, fieldNumber: 1)
+    }
+    if !self.operations.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.operations, fieldNumber: 2)
+    }
+    try { if let v = self._step {
+      try visitor.visitSingularDoubleField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._fallbackScope {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ReceiverVolumeCapabilities, rhs: Playbridge_ReceiverVolumeCapabilities) -> Bool {
+    if lhs.scope != rhs.scope {return false}
+    if lhs.operations != rhs.operations {return false}
+    if lhs._step != rhs._step {return false}
+    if lhs._fallbackScope != rhs._fallbackScope {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ReceiverHostInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ReceiverHostInfo"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}os_family\0\u{3}device_class\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._osFamily) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._deviceClass) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._osFamily {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._deviceClass {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ReceiverHostInfo, rhs: Playbridge_ReceiverHostInfo) -> Bool {
+    if lhs._osFamily != rhs._osFamily {return false}
+    if lhs._deviceClass != rhs._deviceClass {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_VolumePayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".VolumePayload"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}scope\0\u{1}level\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.scope) }()
+      case 2: try { try decoder.decodeSingularDoubleField(value: &self._level) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.scope.isEmpty {
+      try visitor.visitSingularStringField(value: self.scope, fieldNumber: 1)
+    }
+    try { if let v = self._level {
+      try visitor.visitSingularDoubleField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_VolumePayload, rhs: Playbridge_VolumePayload) -> Bool {
+    if lhs.scope != rhs.scope {return false}
+    if lhs._level != rhs._level {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_VolumeStateMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".VolumeStateMessage"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}scope\0\u{1}level\0\u{1}muted\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.scope) }()
+      case 3: try { try decoder.decodeSingularDoubleField(value: &self._level) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._muted) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.scope.isEmpty {
+      try visitor.visitSingularStringField(value: self.scope, fieldNumber: 2)
+    }
+    try { if let v = self._level {
+      try visitor.visitSingularDoubleField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._muted {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_VolumeStateMessage, rhs: Playbridge_VolumeStateMessage) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.scope != rhs.scope {return false}
+    if lhs._level != rhs._level {return false}
+    if lhs._muted != rhs._muted {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

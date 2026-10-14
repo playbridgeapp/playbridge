@@ -1,0 +1,26 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "avplayer"
+  ],
+  "features": [
+    "queue_crud_v1",
+    "stable_item_ids",
+    "command_results",
+    "subtitle_resource_add_v1",
+    "progress_webhook_v1"
+  ],
+  "capabilities": {
+    "version": 99,
+    "futureLayout": {
+      "surfaces": [
+        "not-v1-shape"
+      ],
+      "stateModel": "opaque"
+    },
+    "surfaces": [
+      "future_representation"
+    ]
+  }
+}

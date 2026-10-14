@@ -22,6 +22,7 @@ import kotlin.AssertionError
 import kotlin.Boolean
 import kotlin.Deprecated
 import kotlin.DeprecationLevel
+import kotlin.Double
 import kotlin.Int
 import kotlin.Long
 import kotlin.Nothing
@@ -30,8 +31,9 @@ import kotlin.Suppress
 import okio.ByteString
 
 /**
- * Android TV player_settings. The live JSON object has more fields; this message
- * records the additive loop flag. Field numbers start at 1 because the message is new.
+ * Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
+ * subtitleOffsetMs/engine remain required. Unsupported controls use neutral
+ * values with honest availability flags; active loop/engine stay in state.
  */
 public class PlayerSettingsMessage(
   @field:WireField(
@@ -47,6 +49,115 @@ public class PlayerSettingsMessage(
     schemaIndex = 1,
   )
   public val loop: Boolean? = null,
+  @field:WireField(
+    tag = 3,
+    adapter = "com.squareup.wire.ProtoAdapter#DOUBLE",
+    schemaIndex = 2,
+  )
+  public val speed: Double? = null,
+  @field:WireField(
+    tag = 4,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 3,
+  )
+  public val scaling: String? = null,
+  @field:WireField(
+    tag = 5,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "audioBoost",
+    schemaIndex = 4,
+  )
+  public val audio_boost: Boolean? = null,
+  @field:WireField(
+    tag = 6,
+    adapter = "com.squareup.wire.ProtoAdapter#INT64",
+    jsonName = "subtitleOffsetMs",
+    schemaIndex = 5,
+  )
+  public val subtitle_offset_ms: Long? = null,
+  @field:WireField(
+    tag = 7,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 6,
+  )
+  public val engine: String? = null,
+  @field:WireField(
+    tag = 8,
+    adapter = "com.squareup.wire.ProtoAdapter#INT32",
+    jsonName = "qualityMaxHeight",
+    schemaIndex = 7,
+  )
+  public val quality_max_height: Int? = null,
+  @field:WireField(
+    tag = 9,
+    adapter = "com.squareup.wire.ProtoAdapter#INT32",
+    jsonName = "currentVideoHeight",
+    schemaIndex = 8,
+  )
+  public val current_video_height: Int? = null,
+  @field:WireField(
+    tag = 10,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "isLive",
+    schemaIndex = 9,
+  )
+  public val is_live: Boolean? = null,
+  @field:WireField(
+    tag = 11,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "isSeekable",
+    schemaIndex = 10,
+  )
+  public val is_seekable: Boolean? = null,
+  @field:WireField(
+    tag = 12,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "speedAvailable",
+    schemaIndex = 11,
+  )
+  public val speed_available: Boolean? = null,
+  @field:WireField(
+    tag = 13,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "scalingAvailable",
+    schemaIndex = 12,
+  )
+  public val scaling_available: Boolean? = null,
+  @field:WireField(
+    tag = 14,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "audioBoostAvailable",
+    schemaIndex = 13,
+  )
+  public val audio_boost_available: Boolean? = null,
+  @field:WireField(
+    tag = 15,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "qualityAvailable",
+    schemaIndex = 14,
+  )
+  public val quality_available: Boolean? = null,
+  @field:WireField(
+    tag = 16,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "subtitleOffsetAvailable",
+    schemaIndex = 15,
+  )
+  public val subtitle_offset_available: Boolean? = null,
+  @field:WireField(
+    tag = 17,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "engineAvailable",
+    schemaIndex = 16,
+  )
+  public val engine_available: Boolean? = null,
+  @field:WireField(
+    tag = 18,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "loopAvailable",
+    schemaIndex = 17,
+  )
+  public val loop_available: Boolean? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlayerSettingsMessage, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -62,6 +173,22 @@ public class PlayerSettingsMessage(
     if (unknownFields != other.unknownFields) return false
     if (type != other.type) return false
     if (loop != other.loop) return false
+    if (speed != other.speed) return false
+    if (scaling != other.scaling) return false
+    if (audio_boost != other.audio_boost) return false
+    if (subtitle_offset_ms != other.subtitle_offset_ms) return false
+    if (engine != other.engine) return false
+    if (quality_max_height != other.quality_max_height) return false
+    if (current_video_height != other.current_video_height) return false
+    if (is_live != other.is_live) return false
+    if (is_seekable != other.is_seekable) return false
+    if (speed_available != other.speed_available) return false
+    if (scaling_available != other.scaling_available) return false
+    if (audio_boost_available != other.audio_boost_available) return false
+    if (quality_available != other.quality_available) return false
+    if (subtitle_offset_available != other.subtitle_offset_available) return false
+    if (engine_available != other.engine_available) return false
+    if (loop_available != other.loop_available) return false
     return true
   }
 
@@ -71,6 +198,22 @@ public class PlayerSettingsMessage(
       result = unknownFields.hashCode()
       result = result * 37 + type.hashCode()
       result = result * 37 + (loop?.hashCode() ?: 0)
+      result = result * 37 + (speed?.hashCode() ?: 0)
+      result = result * 37 + (scaling?.hashCode() ?: 0)
+      result = result * 37 + (audio_boost?.hashCode() ?: 0)
+      result = result * 37 + (subtitle_offset_ms?.hashCode() ?: 0)
+      result = result * 37 + (engine?.hashCode() ?: 0)
+      result = result * 37 + (quality_max_height?.hashCode() ?: 0)
+      result = result * 37 + (current_video_height?.hashCode() ?: 0)
+      result = result * 37 + (is_live?.hashCode() ?: 0)
+      result = result * 37 + (is_seekable?.hashCode() ?: 0)
+      result = result * 37 + (speed_available?.hashCode() ?: 0)
+      result = result * 37 + (scaling_available?.hashCode() ?: 0)
+      result = result * 37 + (audio_boost_available?.hashCode() ?: 0)
+      result = result * 37 + (quality_available?.hashCode() ?: 0)
+      result = result * 37 + (subtitle_offset_available?.hashCode() ?: 0)
+      result = result * 37 + (engine_available?.hashCode() ?: 0)
+      result = result * 37 + (loop_available?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -80,14 +223,50 @@ public class PlayerSettingsMessage(
     val result = mutableListOf<String>()
     result += """type=${sanitize(type)}"""
     if (loop != null) result += """loop=$loop"""
+    if (speed != null) result += """speed=$speed"""
+    if (scaling != null) result += """scaling=${sanitize(scaling)}"""
+    if (audio_boost != null) result += """audio_boost=$audio_boost"""
+    if (subtitle_offset_ms != null) result += """subtitle_offset_ms=$subtitle_offset_ms"""
+    if (engine != null) result += """engine=${sanitize(engine)}"""
+    if (quality_max_height != null) result += """quality_max_height=$quality_max_height"""
+    if (current_video_height != null) result += """current_video_height=$current_video_height"""
+    if (is_live != null) result += """is_live=$is_live"""
+    if (is_seekable != null) result += """is_seekable=$is_seekable"""
+    if (speed_available != null) result += """speed_available=$speed_available"""
+    if (scaling_available != null) result += """scaling_available=$scaling_available"""
+    if (audio_boost_available != null) result += """audio_boost_available=$audio_boost_available"""
+    if (quality_available != null) result += """quality_available=$quality_available"""
+    if (subtitle_offset_available != null) result +=
+        """subtitle_offset_available=$subtitle_offset_available"""
+    if (engine_available != null) result += """engine_available=$engine_available"""
+    if (loop_available != null) result += """loop_available=$loop_available"""
     return result.joinToString(prefix = "PlayerSettingsMessage{", separator = ", ", postfix = "}")
   }
 
   public fun copy(
     type: String = this.type,
     loop: Boolean? = this.loop,
+    speed: Double? = this.speed,
+    scaling: String? = this.scaling,
+    audio_boost: Boolean? = this.audio_boost,
+    subtitle_offset_ms: Long? = this.subtitle_offset_ms,
+    engine: String? = this.engine,
+    quality_max_height: Int? = this.quality_max_height,
+    current_video_height: Int? = this.current_video_height,
+    is_live: Boolean? = this.is_live,
+    is_seekable: Boolean? = this.is_seekable,
+    speed_available: Boolean? = this.speed_available,
+    scaling_available: Boolean? = this.scaling_available,
+    audio_boost_available: Boolean? = this.audio_boost_available,
+    quality_available: Boolean? = this.quality_available,
+    subtitle_offset_available: Boolean? = this.subtitle_offset_available,
+    engine_available: Boolean? = this.engine_available,
+    loop_available: Boolean? = this.loop_available,
     unknownFields: ByteString = this.unknownFields,
-  ): PlayerSettingsMessage = PlayerSettingsMessage(type, loop, unknownFields)
+  ): PlayerSettingsMessage = PlayerSettingsMessage(type, loop, speed, scaling, audio_boost,
+      subtitle_offset_ms, engine, quality_max_height, current_video_height, is_live, is_seekable,
+      speed_available, scaling_available, audio_boost_available, quality_available,
+      subtitle_offset_available, engine_available, loop_available, unknownFields)
 
   public companion object {
     @JvmField
@@ -106,6 +285,22 @@ public class PlayerSettingsMessage(
           size += ProtoAdapter.STRING.encodedSizeWithTag(1, value.type)
         }
         size += ProtoAdapter.BOOL.encodedSizeWithTag(2, value.loop)
+        size += ProtoAdapter.DOUBLE.encodedSizeWithTag(3, value.speed)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(4, value.scaling)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(5, value.audio_boost)
+        size += ProtoAdapter.INT64.encodedSizeWithTag(6, value.subtitle_offset_ms)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.engine)
+        size += ProtoAdapter.INT32.encodedSizeWithTag(8, value.quality_max_height)
+        size += ProtoAdapter.INT32.encodedSizeWithTag(9, value.current_video_height)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(10, value.is_live)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(11, value.is_seekable)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(12, value.speed_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(13, value.scaling_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(14, value.audio_boost_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(15, value.quality_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(16, value.subtitle_offset_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(17, value.engine_available)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(18, value.loop_available)
         return size
       }
 
@@ -114,11 +309,43 @@ public class PlayerSettingsMessage(
           ProtoAdapter.STRING.encodeWithTag(writer, 1, value.type)
         }
         ProtoAdapter.BOOL.encodeWithTag(writer, 2, value.loop)
+        ProtoAdapter.DOUBLE.encodeWithTag(writer, 3, value.speed)
+        ProtoAdapter.STRING.encodeWithTag(writer, 4, value.scaling)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 5, value.audio_boost)
+        ProtoAdapter.INT64.encodeWithTag(writer, 6, value.subtitle_offset_ms)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.engine)
+        ProtoAdapter.INT32.encodeWithTag(writer, 8, value.quality_max_height)
+        ProtoAdapter.INT32.encodeWithTag(writer, 9, value.current_video_height)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 10, value.is_live)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 11, value.is_seekable)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 12, value.speed_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 13, value.scaling_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 14, value.audio_boost_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 15, value.quality_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 16, value.subtitle_offset_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 17, value.engine_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 18, value.loop_available)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlayerSettingsMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 18, value.loop_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 17, value.engine_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 16, value.subtitle_offset_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 15, value.quality_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 14, value.audio_boost_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 13, value.scaling_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 12, value.speed_available)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 11, value.is_seekable)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 10, value.is_live)
+        ProtoAdapter.INT32.encodeWithTag(writer, 9, value.current_video_height)
+        ProtoAdapter.INT32.encodeWithTag(writer, 8, value.quality_max_height)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.engine)
+        ProtoAdapter.INT64.encodeWithTag(writer, 6, value.subtitle_offset_ms)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 5, value.audio_boost)
+        ProtoAdapter.STRING.encodeWithTag(writer, 4, value.scaling)
+        ProtoAdapter.DOUBLE.encodeWithTag(writer, 3, value.speed)
         ProtoAdapter.BOOL.encodeWithTag(writer, 2, value.loop)
         if (value.type != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 1, value.type)
@@ -128,16 +355,64 @@ public class PlayerSettingsMessage(
       override fun decode(reader: ProtoReader): PlayerSettingsMessage {
         var type: String = ""
         var loop: Boolean? = null
+        var speed: Double? = null
+        var scaling: String? = null
+        var audio_boost: Boolean? = null
+        var subtitle_offset_ms: Long? = null
+        var engine: String? = null
+        var quality_max_height: Int? = null
+        var current_video_height: Int? = null
+        var is_live: Boolean? = null
+        var is_seekable: Boolean? = null
+        var speed_available: Boolean? = null
+        var scaling_available: Boolean? = null
+        var audio_boost_available: Boolean? = null
+        var quality_available: Boolean? = null
+        var subtitle_offset_available: Boolean? = null
+        var engine_available: Boolean? = null
+        var loop_available: Boolean? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
             2 -> loop = ProtoAdapter.BOOL.decode(reader)
+            3 -> speed = ProtoAdapter.DOUBLE.decode(reader)
+            4 -> scaling = ProtoAdapter.STRING.decode(reader)
+            5 -> audio_boost = ProtoAdapter.BOOL.decode(reader)
+            6 -> subtitle_offset_ms = ProtoAdapter.INT64.decode(reader)
+            7 -> engine = ProtoAdapter.STRING.decode(reader)
+            8 -> quality_max_height = ProtoAdapter.INT32.decode(reader)
+            9 -> current_video_height = ProtoAdapter.INT32.decode(reader)
+            10 -> is_live = ProtoAdapter.BOOL.decode(reader)
+            11 -> is_seekable = ProtoAdapter.BOOL.decode(reader)
+            12 -> speed_available = ProtoAdapter.BOOL.decode(reader)
+            13 -> scaling_available = ProtoAdapter.BOOL.decode(reader)
+            14 -> audio_boost_available = ProtoAdapter.BOOL.decode(reader)
+            15 -> quality_available = ProtoAdapter.BOOL.decode(reader)
+            16 -> subtitle_offset_available = ProtoAdapter.BOOL.decode(reader)
+            17 -> engine_available = ProtoAdapter.BOOL.decode(reader)
+            18 -> loop_available = ProtoAdapter.BOOL.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return PlayerSettingsMessage(
           type = type,
           loop = loop,
+          speed = speed,
+          scaling = scaling,
+          audio_boost = audio_boost,
+          subtitle_offset_ms = subtitle_offset_ms,
+          engine = engine,
+          quality_max_height = quality_max_height,
+          current_video_height = current_video_height,
+          is_live = is_live,
+          is_seekable = is_seekable,
+          speed_available = speed_available,
+          scaling_available = scaling_available,
+          audio_boost_available = audio_boost_available,
+          quality_available = quality_available,
+          subtitle_offset_available = subtitle_offset_available,
+          engine_available = engine_available,
+          loop_available = loop_available,
           unknownFields = unknownFields
         )
       }

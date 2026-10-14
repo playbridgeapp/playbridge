@@ -1,0 +1,231 @@
+{
+  "type": "receiver_capabilities",
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "player": {
+        "engines": {
+          "exo": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_up",
+              "dpad_down",
+              "dpad_left",
+              "dpad_right",
+              "dpad_center",
+              "back",
+              "home"
+            ],
+            "settings": [
+              "loop",
+              "engine",
+              "speed",
+              "scaling",
+              "quality",
+              "subtitle_offset"
+            ],
+            "imageTransforms": [
+              "pan",
+              "scroll",
+              "zoom",
+              "rotate",
+              "anchor",
+              "reset"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status",
+              "player_settings"
+            ]
+          },
+          "mpv": {
+            "transport": [
+              "play",
+              "pause",
+              "toggle",
+              "stop",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_up",
+              "dpad_down",
+              "dpad_left",
+              "dpad_right",
+              "dpad_center",
+              "back",
+              "home"
+            ],
+            "settings": [
+              "loop",
+              "engine",
+              "speed",
+              "scaling",
+              "audio_boost",
+              "subtitle_offset"
+            ],
+            "imageTransforms": [
+              "pan",
+              "scroll",
+              "zoom",
+              "rotate",
+              "anchor",
+              "reset"
+            ],
+            "tracks": [
+              "audio_select",
+              "subtitle_select",
+              "subtitle_url_add",
+              "subtitle_resource_add"
+            ],
+            "queue": [
+              "replace",
+              "append",
+              "jump_index",
+              "jump_item",
+              "remove",
+              "move",
+              "clear"
+            ],
+            "reporting": [
+              "status",
+              "context",
+              "tracks",
+              "playlist_status",
+              "player_settings"
+            ]
+          }
+        }
+      },
+      "browser": {
+        "engines": {
+          "webview": {
+            "transport": [
+              "toggle",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_up",
+              "dpad_down",
+              "dpad_left",
+              "dpad_right",
+              "dpad_center",
+              "back",
+              "home",
+              "key_enter"
+            ],
+            "pointer": [
+              "move",
+              "click",
+              "down",
+              "up",
+              "scroll",
+              "zoom"
+            ],
+            "text": [
+              "replace",
+              "enter"
+            ],
+            "browser": [
+              "launch",
+              "forward",
+              "reload",
+              "cycle_source",
+              "unmute",
+              "fullscreen",
+              "manage_user_scripts",
+              "manage_user_agent"
+            ],
+            "reporting": [
+              "context",
+              "status",
+              "fullscreen"
+            ]
+          },
+          "gecko": {
+            "transport": [
+              "toggle",
+              "seek_absolute",
+              "seek_relative"
+            ],
+            "keys": [
+              "dpad_up",
+              "dpad_down",
+              "dpad_left",
+              "dpad_right",
+              "dpad_center",
+              "back",
+              "home",
+              "key_enter"
+            ],
+            "pointer": [
+              "move",
+              "click",
+              "down",
+              "up",
+              "scroll"
+            ],
+            "text": [
+              "replace",
+              "enter"
+            ],
+            "browser": [
+              "launch",
+              "forward",
+              "reload",
+              "cycle_source",
+              "unmute",
+              "fullscreen",
+              "manage_user_scripts",
+              "manage_user_agent"
+            ],
+            "reporting": [
+              "context",
+              "status",
+              "fullscreen"
+            ]
+          }
+        }
+      }
+    },
+    "host": {
+      "osFamily": "android",
+      "deviceClass": "tv"
+    },
+    "volume": {
+      "scope": "system",
+      "operations": [
+        "relative_step",
+        "mute_toggle"
+      ]
+    },
+    "companionHints": [
+      "android_tv_remote_v2"
+    ]
+  }
+}

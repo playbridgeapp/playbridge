@@ -18,6 +18,9 @@ required_schemas = %w[
   PairingConfirmation PairingApproved CredentialBundle Auth AuthResponse
   PlayPayload PlaylistPayload Status Context PlaylistStatus Tracks PlayerSettings
   BrowserHostFrame BrowserClientFrame BrowserMedia BrowserCapabilities
+  ReceiverCapabilities ReceiverCapabilitiesV1 ReceiverCapabilitiesFuture
+  ReceiverSurfaceCapabilities ReceiverEngineCapabilities ReceiverVolumeCapabilities
+  VolumeCommand VolumePayload VolumeState
 ]
 missing_schemas = required_schemas.reject { |name| schemas.key?(name) }
 abort "missing required schemas: #{missing_schemas.join(', ')}" unless missing_schemas.empty?

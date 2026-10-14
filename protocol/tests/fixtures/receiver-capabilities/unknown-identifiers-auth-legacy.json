@@ -1,0 +1,11 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "players": [
+    "future_engine"
+  ],
+  "features": [
+    "future_feature",
+    "subtitle_resource_add_v1"
+  ]
+}

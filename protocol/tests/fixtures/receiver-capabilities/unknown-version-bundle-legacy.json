@@ -1,0 +1,13 @@
+{
+  "token": "TEST_ONLY_NOT_A_CREDENTIAL",
+  "players": [
+    "avplayer"
+  ],
+  "features": [
+    "queue_crud_v1",
+    "stable_item_ids",
+    "command_results",
+    "subtitle_resource_add_v1",
+    "progress_webhook_v1"
+  ]
+}

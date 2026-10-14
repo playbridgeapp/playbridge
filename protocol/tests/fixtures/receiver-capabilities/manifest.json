@@ -1,0 +1,312 @@
+[
+  {
+    "file": "android-tv-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "android-tv-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "android-tv-auth-v1.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "android-tv-bundle-v1.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "apple-tv-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "apple-tv-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "apple-tv-auth-v1.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "apple-tv-bundle-v1.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "desktop-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "desktop-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "desktop-auth-v1.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "desktop-bundle-v1.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "cli-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "cli-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "cli-auth-v1.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "cli-bundle-v1.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "unknown-identifiers-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "unknown-identifiers-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "unknown-identifiers-auth-v1.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "unknown-identifiers-bundle-v1.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "unknown-version-auth-legacy.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "unknown-version-bundle-legacy.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "unknown-version-auth-future.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "unknown-version-bundle-future.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "minimal-auth.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "minimal-bundle.json",
+    "schema": "CredentialBundle",
+    "valid": true
+  },
+  {
+    "file": "empty-complete-descriptor.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "empty-complete-engine.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "future-apple-app-volume.json",
+    "schema": "AuthResponse",
+    "valid": true
+  },
+  {
+    "file": "volume-app-absolute.json",
+    "schema": "SenderFrame",
+    "valid": true
+  },
+  {
+    "file": "volume-system-absolute.json",
+    "schema": "SenderFrame",
+    "valid": true
+  },
+  {
+    "file": "volume-app-state.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "volume-mute-only-state.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "volume-level-only-state.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "browser-active-engine.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "future-apple-complete-settings.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "legacy-complete-settings.json",
+    "schema": "PlayerSettings",
+    "valid": true
+  },
+  {
+    "file": "invalid-missing-version.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-string-version.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-zero-version.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-oversized-version.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-missing-surfaces.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-contradictory-surface-list.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-duplicate-operations.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-nonstring-operation.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-transient-active-engine.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-transient-volume.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-transient-loop.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-missing-engine-map.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-empty-identifier.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-invalid-volume-step.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-wrong-companion-hint-type.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-auth-ok-instead-of-success.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-auth-missing-type.json",
+    "schema": "AuthResponse",
+    "valid": false
+  },
+  {
+    "file": "invalid-bundle-missing-token.json",
+    "schema": "CredentialBundle",
+    "valid": false
+  },
+  {
+    "file": "invalid-plaintext-pairing-descriptor.json",
+    "schema": "PairingApproved",
+    "valid": false
+  },
+  {
+    "file": "invalid-reserved-push.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-volume-percent-units.json",
+    "schema": "SenderFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-volume-missing-scope.json",
+    "schema": "VolumePayload",
+    "valid": false
+  },
+  {
+    "file": "invalid-empty-volume-state.json",
+    "schema": "VolumeState",
+    "valid": false
+  },
+  {
+    "file": "invalid-loop-only-settings.json",
+    "schema": "PlayerSettings",
+    "valid": false
+  },
+  {
+    "file": "invalid-status-loop.json",
+    "schema": "Status",
+    "valid": false
+  }
+]
