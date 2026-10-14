@@ -1,9 +1,12 @@
 package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
+import com.playbridge.player.server.ServerService
 import com.playbridge.player.server.TvCapabilities
 import java.io.File
 import com.playbridge.shared.protocol.createAddSubtitleCommandJson
+import com.playbridge.shared.protocol.createContextJson
+import com.playbridge.shared.protocol.createContextQueryJson
 import com.playbridge.shared.protocol.createLogsClearJson
 import com.playbridge.shared.protocol.createLogsJson
 import com.playbridge.shared.protocol.createLogsQueryJson
@@ -527,6 +530,149 @@ class ProtocolJsonTest {
         assertEquals("auth_response", authObj["type"]?.jsonPrimitive?.content)
         assertEquals(true, authObj["success"]?.jsonPrimitive?.content?.toBoolean())
         assertEquals("fp", authObj["certFingerprint"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun contextFrameCarriesEngineForPlayerAndBrowser() {
+        val exoObj = obj(createContextJson("player", "exo"))
+        assertEquals("context", exoObj["type"]?.jsonPrimitive?.content)
+        assertEquals("player", exoObj["active"]?.jsonPrimitive?.content)
+        assertEquals("exo", exoObj["engine"]?.jsonPrimitive?.content)
+        assertEquals(setOf("type", "active", "engine"), exoObj.keys)
+
+        val mpvObj = obj(createContextJson("player", "mpv"))
+        assertEquals("context", mpvObj["type"]?.jsonPrimitive?.content)
+        assertEquals("player", mpvObj["active"]?.jsonPrimitive?.content)
+        assertEquals("mpv", mpvObj["engine"]?.jsonPrimitive?.content)
+        assertEquals(setOf("type", "active", "engine"), mpvObj.keys)
+
+        val webviewObj = obj(createContextJson("browser", "webview"))
+        assertEquals("context", webviewObj["type"]?.jsonPrimitive?.content)
+        assertEquals("browser", webviewObj["active"]?.jsonPrimitive?.content)
+        assertEquals("webview", webviewObj["engine"]?.jsonPrimitive?.content)
+        assertEquals(setOf("type", "active", "engine"), webviewObj.keys)
+
+        val geckoObj = obj(createContextJson("browser", "gecko"))
+        assertEquals("context", geckoObj["type"]?.jsonPrimitive?.content)
+        assertEquals("browser", geckoObj["active"]?.jsonPrimitive?.content)
+        assertEquals("gecko", geckoObj["engine"]?.jsonPrimitive?.content)
+        assertEquals(setOf("type", "active", "engine"), geckoObj.keys)
+    }
+
+    @Test
+    fun contextFrameOmitsEngineForIdleScreenMirrorAndUnknown() {
+        val idleObj = obj(createContextJson("idle"))
+        assertEquals("context", idleObj["type"]?.jsonPrimitive?.content)
+        assertEquals("idle", idleObj["active"]?.jsonPrimitive?.content)
+        assertNull(idleObj["engine"])
+        assertEquals(setOf("type", "active"), idleObj.keys)
+
+        val screenMirrorObj = obj(createContextJson("screen_mirror"))
+        assertEquals("context", screenMirrorObj["type"]?.jsonPrimitive?.content)
+        assertEquals("screen_mirror", screenMirrorObj["active"]?.jsonPrimitive?.content)
+        assertNull(screenMirrorObj["engine"])
+        assertEquals(setOf("type", "active"), screenMirrorObj.keys)
+
+        val playerNullObj = obj(createContextJson("player", null))
+        assertEquals("context", playerNullObj["type"]?.jsonPrimitive?.content)
+        assertEquals("player", playerNullObj["active"]?.jsonPrimitive?.content)
+        assertNull(playerNullObj["engine"])
+        assertEquals(setOf("type", "active"), playerNullObj.keys)
+    }
+
+    @Test
+    fun serverServiceWireEngineAndContextMappingMatchesDescriptor() {
+        // Player context
+        assertEquals("player", ServerService.wireContext("player"))
+        assertEquals("exo", ServerService.wireEngine("player", "exo"))
+        assertEquals("mpv", ServerService.wireEngine("player", "mpv"))
+        assertNull(ServerService.wireEngine("player", null))
+        assertNull(ServerService.wireEngine("player", "unknown"))
+
+        // Browser context: internal WebView
+        assertEquals("browser", ServerService.wireContext("browser"))
+        assertEquals("webview", ServerService.wireEngine("browser"))
+
+        // Browser context: external GeckoView plugin maps to wire active "browser" and engine "gecko"
+        assertEquals("browser", ServerService.wireContext("browser_external"))
+        assertEquals("gecko", ServerService.wireEngine("browser_external"))
+
+        // Idle & Screen Mirror omit engine
+        assertEquals("idle", ServerService.wireContext("idle"))
+        assertNull(ServerService.wireEngine("idle"))
+        assertNull(ServerService.wireEngine("idle", "exo"))
+
+        assertEquals("screen_mirror", ServerService.wireContext("screen_mirror"))
+        assertNull(ServerService.wireEngine("screen_mirror"))
+        assertNull(ServerService.wireEngine("screen_mirror", "exo"))
+    }
+
+    @Test
+    fun engineSwitchEmitsUpdatedContextWithoutContextChange() {
+        // Player renderer switch (e.g. exo -> mpv)
+        val playerExoFrame = obj(createContextJson(
+            ServerService.wireContext("player"),
+            ServerService.wireEngine("player", "exo"),
+        ))
+        assertEquals("player", playerExoFrame["active"]?.jsonPrimitive?.content)
+        assertEquals("exo", playerExoFrame["engine"]?.jsonPrimitive?.content)
+
+        val playerMpvFrame = obj(createContextJson(
+            ServerService.wireContext("player"),
+            ServerService.wireEngine("player", "mpv"),
+        ))
+        assertEquals("player", playerMpvFrame["active"]?.jsonPrimitive?.content)
+        assertEquals("mpv", playerMpvFrame["engine"]?.jsonPrimitive?.content)
+        assertEquals(playerExoFrame["active"], playerMpvFrame["active"])
+
+        // Browser engine switch (e.g. webview -> gecko)
+        val browserWebviewFrame = obj(createContextJson(
+            ServerService.wireContext("browser"),
+            ServerService.wireEngine("browser"),
+        ))
+        assertEquals("browser", browserWebviewFrame["active"]?.jsonPrimitive?.content)
+        assertEquals("webview", browserWebviewFrame["engine"]?.jsonPrimitive?.content)
+
+        val browserGeckoFrame = obj(createContextJson(
+            ServerService.wireContext("browser_external"),
+            ServerService.wireEngine("browser_external"),
+        ))
+        assertEquals("browser", browserGeckoFrame["active"]?.jsonPrimitive?.content)
+        assertEquals("gecko", browserGeckoFrame["engine"]?.jsonPrimitive?.content)
+        assertEquals(browserWebviewFrame["active"], browserGeckoFrame["active"])
+    }
+
+    @Test
+    fun contextQueryReplyIncludesActiveEngine() {
+        val query = parseIncomingMessage(createContextQueryJson())
+        assertTrue(query is com.playbridge.shared.protocol.IncomingMessage.ContextQuery)
+
+        // Player with exo
+        val playerReply = obj(createContextJson(
+            ServerService.wireContext("player"),
+            ServerService.wireEngine("player", "exo"),
+        ))
+        assertEquals("context", playerReply["type"]?.jsonPrimitive?.content)
+        assertEquals("player", playerReply["active"]?.jsonPrimitive?.content)
+        assertEquals("exo", playerReply["engine"]?.jsonPrimitive?.content)
+
+        // Browser with gecko
+        val geckoReply = obj(createContextJson(
+            ServerService.wireContext("browser_external"),
+            ServerService.wireEngine("browser_external"),
+        ))
+        assertEquals("context", geckoReply["type"]?.jsonPrimitive?.content)
+        assertEquals("browser", geckoReply["active"]?.jsonPrimitive?.content)
+        assertEquals("gecko", geckoReply["engine"]?.jsonPrimitive?.content)
+
+        // Idle
+        val idleReply = obj(createContextJson(
+            ServerService.wireContext("idle"),
+            ServerService.wireEngine("idle"),
+        ))
+        assertEquals("context", idleReply["type"]?.jsonPrimitive?.content)
+        assertEquals("idle", idleReply["active"]?.jsonPrimitive?.content)
+        assertNull(idleReply["engine"])
     }
 }
 

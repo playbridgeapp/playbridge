@@ -796,6 +796,7 @@ class ServerService : Service() {
                     })
                     dismissBrowsers()
                     activeContext = "screen_mirror"
+                    activePlayerEngine = null
                     broadcastContext()
                 }
                 screenMirrorController.start(msg.sessionId)
@@ -817,7 +818,7 @@ class ServerService : Service() {
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
-                    webSocketServer?.sendTo(command.connectionId, createContextJson(wireContext(activeContext)))
+                    webSocketServer?.sendTo(command.connectionId, createContextJson(wireContext(activeContext), wireEngine(activeContext)))
                 }
                 // Ask the running player to re-broadcast playlist/tracks/status so a
                 // freshly (re)connected phone can repopulate its remote screen — these
@@ -842,9 +843,6 @@ class ServerService : Service() {
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
 
-                activeContext = "player"
-                broadcastContext()
-
                 // Single source of truth for the launch intent (sets PlaylistStore, picks the
                 // engine, maps every per-item extra). History replay builds the exact same
                 // intent from the stored payload — see PlayerLauncher.
@@ -856,6 +854,9 @@ class ServerService : Service() {
                     ?.takeIf { it == "mpv" || it == "exo" }
                     ?: "exo"
                 activePlayerEngine = targetPlayerEngine
+                activeContext = "player"
+                broadcastContext()
+
                 pendingQueueItems.clear() // discard any stale items from a previous session
                 val launchReason = "Playing playlist (${payload.items.size} items)"
                 if (!com.playbridge.player.player.PlayerHostActivity.isActive() &&
@@ -995,12 +996,13 @@ class ServerService : Service() {
      * (the GeckoView plugin) is an internal routing value; senders must see "browser", or
      * they show "Nothing playing" and hide the browser remote.
      */
-    private fun wireContext(context: String): String =
-        if (context == "browser_external") "browser" else context
+    private fun wireContext(context: String): String = Companion.wireContext(context)
+
+    private fun wireEngine(context: String): String? = Companion.wireEngine(context, activePlayerEngine)
 
     private fun broadcastContext() {
         scope.launch {
-            webSocketServer?.broadcastStatus(createContextJson(wireContext(activeContext)))
+            webSocketServer?.broadcastStatus(createContextJson(wireContext(activeContext), wireEngine(activeContext)))
         }
     }
 
@@ -1385,6 +1387,27 @@ class ServerService : Service() {
 
     companion object {
         @Volatile private var _screenMirrorController: ScreenMirrorReceiverController? = null
+
+        /**
+         * The protocol's context enum is idle/player/browser/screen_mirror. "browser_external"
+         * (the GeckoView plugin) is an internal routing value; senders must see "browser", or
+         * they show "Nothing playing" and hide the browser remote.
+         */
+        internal fun wireContext(context: String): String =
+            if (context == "browser_external") "browser" else context
+
+        /**
+         * The active engine reported on context frames. Matches descriptor IDs in TvCapabilities:
+         * player "exo"/"mpv", browser "webview"/"gecko". Omitted (null) for idle/screen_mirror
+         * or when genuinely unknown (never guess).
+         */
+        internal fun wireEngine(context: String, playerEngine: String? = null): String? = when (context) {
+            "player" -> playerEngine?.takeIf { it == "exo" || it == "mpv" }
+            "browser" -> "webview"
+            "browser_external" -> "gecko"
+            else -> null
+        }
+
         const val ACTION_PLAY = "com.playbridge.player.ACTION_PLAY"
         const val ACTION_BROWSER = "com.playbridge.player.ACTION_BROWSER"
         const val ACTION_CONTROL = "com.playbridge.player.ACTION_CONTROL"

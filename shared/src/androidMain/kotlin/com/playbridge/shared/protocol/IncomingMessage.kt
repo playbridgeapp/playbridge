@@ -444,10 +444,11 @@ fun createAuthResponseJson(
         if (capabilities != null) put("capabilities", capabilities)
     }.toString()
 
-fun createContextJson(active: String): String =
+fun createContextJson(active: String, engine: String? = null): String =
     buildJsonObject {
         put("type", "context")
         put("active", active)
+        if (engine != null) put("engine", engine)
     }.toString()
 
 fun createStatusJson(
