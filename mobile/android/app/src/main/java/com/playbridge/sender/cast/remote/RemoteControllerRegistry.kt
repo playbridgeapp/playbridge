@@ -100,7 +100,7 @@ class RemoteControllerRegistry(
                 val players = advertised.players.ifEmpty { device?.players.orEmpty() }
                 val config = NativeRemoteConfiguration(
                     RemoteReceiver(endpoint, device?.name ?: active?.name ?: "TV", detectRemoteProfile(players, advertised.features)),
-                    players, advertised.features,
+                    players, advertised.features, client.receiverProtocolState,
                 )
                 return RemoteNativeTarget(config, active)
             }

@@ -12,6 +12,7 @@ import com.playbridge.sender.cast.resolveRemoteTimeline
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.QueueCommandResult
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.connection.ReceiverProtocolState
 import com.playbridge.sender.library.PlaylistUiState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,6 +31,7 @@ class WebSocketNativeRemoteTransport(
         client.connectionState, coordinator.tvActiveContext, coordinator.tvPlayback, coordinator.tvPlaylistState,
         coordinator.tvVideoTracks, coordinator.tvAudioTracks, coordinator.tvSubtitleTracks,
         coordinator.tvPlayerSettings, coordinator.remoteObservation, sessions.screenMirrorState, linkedWebsite.uiState,
+        client.receiverProtocolState,
     )
     override val snapshot = combine<Any?, RemoteReceiverSnapshot>(sources) { read(it.toList()) }
         .stateIn(scope, SharingStarted.Eagerly, read(sources.map { it.value }))
@@ -61,6 +63,7 @@ class WebSocketNativeRemoteTransport(
         return RemoteReceiverSnapshot(
             RemoteUiState(
                 connection = connection, context = context,
+                receiverProtocol = if (connection.ready) values[11] as ReceiverProtocolState else ReceiverProtocolState(),
                 playback = (playback ?: if (context == RemoteContext.Player) TvPlaybackStatus("idle", 0L, 0L, "") else null)?.let {
                     RemotePlayback(
                         title = it.title?.takeIf { title -> title.isNotEmpty() }, mediaKind = remoteMediaKind(it.mediaKind), reportedState = remotePlaybackState(it.state),
