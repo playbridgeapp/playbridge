@@ -529,9 +529,7 @@ async fn run_receiver_mode(
     config.preferred_port = port;
     config.fallback_attempts = 10;
     config.authorized_tokens = state.tokens.iter().cloned().collect();
-    config.players = vec!["internal_mpv".into()];
-    config.features.push("progress_webhook_v1".into());
-    config.advertise = true;
+    configure_receiver_advertisements(&mut config)?;
     let host = ReceiverHost::start(config).await?;
     let mut events = host.subscribe();
     let mut playback = ReceiverPlayback::new(dashboard.is_some());
@@ -1029,6 +1027,30 @@ fn host_name() -> String {
         .unwrap_or_else(|_| "PlayBridge CLI".into())
 }
 
+/// WSS operations implemented by this CLI host, not the local dashboard or mpv
+/// in general. In particular, remote keys/volume, tracks and mouse are ignored.
+fn receiver_capabilities() -> Result<playbridge_cast_core::playbridge::ReceiverCapabilities, String>
+{
+    playbridge_cast_core::playbridge::ReceiverCapabilities::from_json(json!({
+        "version":1,
+        "surfaces":{"player":{"engines":{"internal_mpv":{
+            "transport":["play","pause","toggle","stop","seek_absolute","seek_relative"],
+            "queue":["replace","append","jump_index"],
+            "reporting":["status","context","playlist_status"]
+        }}}},
+        "host":{"osFamily":std::env::consts::OS,"deviceClass":"cli"}
+    }))
+    .map_err(str::to_owned)
+}
+
+fn configure_receiver_advertisements(config: &mut ReceiverConfig) -> Result<(), String> {
+    config.players = vec!["internal_mpv".into()];
+    config.features.push("progress_webhook_v1".into());
+    config.advertise = true;
+    config.capabilities = Some(receiver_capabilities()?);
+    Ok(())
+}
+
 fn is_routine_handshake_rejection(connection_id: Option<u64>, message: &str) -> bool {
     connection_id.is_some()
         && matches!(
@@ -1039,6 +1061,120 @@ fn is_routine_handshake_rejection(connection_id: Option<u64>, message: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use playbridge_cast_core::{
+        playbridge::{PairingSession, ReceiverFrame, SenderFrame},
+        secure_ws::SecureWebSocket,
+    };
+
+    #[test]
+    fn cli_descriptor_claims_only_its_wss_dispatch() {
+        let descriptor = receiver_capabilities().unwrap();
+        assert_eq!(
+            descriptor.as_json(),
+            &json!({
+                "version":1,
+                "surfaces":{"player":{"engines":{"internal_mpv":{
+                    "transport":["play","pause","toggle","stop","seek_absolute","seek_relative"],
+                    "queue":["replace","append","jump_index"],
+                    "reporting":["status","context","playlist_status"]
+                }}}},
+                "host":{"osFamily":std::env::consts::OS,"deviceClass":"cli"}
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn cli_production_advertisement_survives_protected_pairing_and_auth() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let key = KeyPair::generate().unwrap();
+            let certificate = CertificateParams::new(vec!["localhost".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
+            let identity = ReceiverIdentity {
+                certificate_der: certificate.der().to_vec(),
+                private_key_der: key.serialize_der(),
+                private_key_kind: PrivateKeyKind::Pkcs8,
+            };
+            let mut config =
+                ReceiverConfig::new("Loopback CLI".into(), "loopback-cli".into(), identity);
+            configure_receiver_advertisements(&mut config).unwrap();
+            assert_eq!(config.players, ["internal_mpv"]);
+            assert_eq!(config.features, ["progress_webhook_v1"]);
+            assert!(config.browsers.is_empty());
+            assert!(config.media_kinds.is_empty());
+            assert!(!config.screen_mirror_web_rtc);
+            assert!(config.advertise);
+            let expected = config.capabilities.clone().unwrap();
+            // Disable discovery for this synthetic loopback receiver only.
+            config.advertise = false;
+            config.preferred_port = 0;
+            let host = ReceiverHost::start(config).await.unwrap();
+            let endpoint = format!("wss://127.0.0.1:{}/", host.port());
+            let mut socket = SecureWebSocket::connect_for_pairing(&endpoint)
+                .await
+                .unwrap();
+            let pin = socket.served_spki_pin().to_owned();
+            let (mut pairing, commit) =
+                PairingSession::start("Loopback Sender".into(), "loopback-sender".into()).unwrap();
+            socket.send(&commit).await.unwrap();
+            let ReceiverFrame::PairingChallenge {
+                tv_eph_pub,
+                nonce_t,
+            } = socket.receive().await.unwrap().unwrap()
+            else {
+                panic!("expected loopback challenge");
+            };
+            let (sas, reveal) = pairing.accept_challenge(&tv_eph_pub, &nonce_t).unwrap();
+            socket.send(&reveal).await.unwrap();
+            socket
+                .send(&pairing.confirmation(&sas, &sas).unwrap())
+                .await
+                .unwrap();
+            let approval = socket.receive().await.unwrap().unwrap();
+            let envelope = serde_json::to_value(&approval).unwrap();
+            assert_eq!(envelope.as_object().unwrap().len(), 3);
+            assert!(envelope.get("capabilities").is_none());
+            let ReceiverFrame::PairingApproved { nonce, ciphertext } = approval else {
+                panic!("expected protected loopback credentials");
+            };
+            let credentials = pairing
+                .decrypt_credentials(&nonce, &ciphertext, Some(&pin))
+                .unwrap();
+            let bundle = serde_json::to_value(&credentials).unwrap();
+            socket.close().await.unwrap();
+            let mut socket = SecureWebSocket::connect_pinned(&endpoint, &pin)
+                .await
+                .unwrap();
+            socket
+                .send(&SenderFrame::Auth {
+                    token: credentials.token.clone(),
+                })
+                .await
+                .unwrap();
+            let response = socket.receive().await.unwrap().unwrap();
+            assert!(matches!(
+                &response,
+                ReceiverFrame::AuthResponse { success: true, .. }
+            ));
+            let auth = serde_json::to_value(&response).unwrap();
+            for message in [&bundle, &auth] {
+                assert_eq!(message.get("capabilities"), Some(expected.as_json()));
+                assert_eq!(message["players"], json!(["internal_mpv"]));
+                assert_eq!(message["browsers"], json!([]));
+                assert_eq!(message["mediaKinds"], json!([]));
+                assert_eq!(message["features"], json!(["progress_webhook_v1"]));
+                assert_eq!(message["screenMirrorWebRtc"], json!(false));
+            }
+            assert!(auth.get("token").is_none());
+            socket.close().await.unwrap();
+            host.shutdown().await;
+        })
+        .await
+        .expect("loopback pairing/auth timed out");
+    }
+
     #[test]
     fn mpv_seconds_are_reported_as_protocol_milliseconds() {
         assert_eq!(super::seconds_to_millis(Some(12.345)), 12_345);

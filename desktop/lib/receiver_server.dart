@@ -15,6 +15,7 @@ import 'system_volume.dart';
 import 'extension_request_debug_log.dart';
 import 'late_subtitle_loader.dart';
 import 'progress_webhook.dart';
+import 'receiver_capabilities.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
 
@@ -113,7 +114,7 @@ class ReceiverServer extends ChangeNotifier {
     if (_runtime != null) return _wssPort ?? kDefaultPort;
     final cert = await CertManager.loadOrCreate(commonName: store.deviceName);
     final runtime = rust.ReceiverRuntime.start(
-      rust.ReceiverRuntimeConfig(
+      buildDesktopReceiverRuntimeConfig(
         name: store.deviceName,
         uuid: store.deviceId,
         certificateDer: cert.certificateDer,
@@ -123,16 +124,6 @@ class ReceiverServer extends ChangeNotifier {
         authorizedTokens: [
           for (final device in store.pairedDevices) device.token,
         ],
-        players: const ['internal_mpv'],
-        mediaKinds: const ['video', 'audio', 'image'],
-        features: const [
-          'queue_crud_v1',
-          'stable_item_ids',
-          'command_results',
-          'subtitle_resource_add_v1',
-          'progress_webhook_v1',
-        ],
-        screenMirrorWebRtc: true,
       ),
     );
     _runtime = runtime;
@@ -149,8 +140,7 @@ class ReceiverServer extends ChangeNotifier {
       await store.setReceiverPort(boundPort);
       tlsError = null;
       debugPrint(
-        '[server] Rust WSS receiver listening on 0.0.0.0:$boundPort '
-        '(pin ${cert.fingerprint})',
+        '[server] Rust WSS receiver listening on 0.0.0.0:$boundPort',
       );
       _playbackBoundaries = player.playbackBoundaries.stream.listen((boundary) {
         _progressReporter.terminal(boundary.event,
@@ -735,7 +725,7 @@ class ReceiverServer extends ChangeNotifier {
       case 'volume_down':
         unawaited(_adjustVolume(up: false));
       default:
-        debugPrint('[server] ignoring remote key: $key');
+        debugPrint('[server] ignoring unsupported remote key');
     }
   }
 
