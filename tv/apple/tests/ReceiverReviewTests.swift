@@ -714,8 +714,17 @@ private func runPlayerSettingsTests() {
     assert(host?["osFamily"] as? String == "tvos", "Host osFamily must be tvos")
     assert(host?["deviceClass"] as? String == "tv", "Host deviceClass must be tv")
 
-    // 2. Volume and CompanionHints
-    assert(descriptor["volume"] == nil, "Volume block must be omitted until Step 4c app volume")
+    // 2. App volume and CompanionHints
+    guard let volume = descriptor["volume"] as? [String: Any] else {
+        fatalError("descriptor.volume missing")
+    }
+    assert(volume["scope"] as? String == "app")
+    assert(volume["operations"] as? [String] == [
+        "relative_step", "absolute", "mute_toggle", "level_report", "mute_report",
+    ])
+    assert(volume["step"] as? Double == 0.05)
+    assert(volume["fallbackScope"] == nil, "App volume has no fallback scope")
+    assert(Set(volume.keys) == ["scope", "operations", "step"])
     assert(descriptor["companionHints"] == nil, "Companion hints must be omitted for Apple TV")
 
     // 3. Surfaces & Engines
@@ -769,6 +778,14 @@ private func runPlayerSettingsTests() {
     let authCapsData = try! JSONSerialization.data(withJSONObject: authCaps!, options: [.sortedKeys])
     let bundleCapsData = try! JSONSerialization.data(withJSONObject: bundleCaps!, options: [.sortedKeys])
     assert(authCapsData == bundleCapsData, "Auth response and credential bundle must carry identical descriptor")
+    let authVolume = authCaps!["volume"] as? [String: Any]
+    let bundleVolume = bundleCaps!["volume"] as? [String: Any]
+    assert(authVolume != nil && bundleVolume != nil, "Auth and bundle both carry app volume")
+    let authVolumeData = try! JSONSerialization.data(withJSONObject: authVolume!, options: [.sortedKeys])
+    let bundleVolumeData = try! JSONSerialization.data(withJSONObject: bundleVolume!, options: [.sortedKeys])
+    assert(authVolumeData == bundleVolumeData, "Auth and bundle app volume blocks match")
+    assert(authVolume!["scope"] as? String == "app")
+    assert(authVolume!["fallbackScope"] == nil)
 
     // 5. Legacy fields unchanged
     assert(authResponse["type"] as? String == "auth_response")

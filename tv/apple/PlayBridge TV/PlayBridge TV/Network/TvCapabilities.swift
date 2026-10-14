@@ -60,6 +60,20 @@ enum TvCapabilities {
         "player_settings",
     ]
 
+    /// Common app-volume route. Independent of the player surface. No system
+    /// scope and no fallbackScope. `step` matches `PlayerAppVolume.step`.
+    private static let appVolume: [String: Any] = [
+        "scope": "app",
+        "operations": [
+            "relative_step",
+            "absolute",
+            "mute_toggle",
+            "level_report",
+            "mute_report",
+        ],
+        "step": PlayerAppVolume.step,
+    ]
+
     /// Builds the capability set for an engine. Both avplayer and mpv share the same
     /// base operations at this revision; per-engine differences are factored here.
     private static func buildPlayerEngineCapabilities(for engine: PlaybackEngine) -> [String: Any] {
@@ -87,7 +101,7 @@ enum TvCapabilities {
                     "engines": engineMap,
                 ]
             ],
-            // Volume block omitted: App volume is Step 4c and will be added here.
+            "volume": appVolume,
             "host": [
                 "osFamily": "tvos",
                 "deviceClass": "tv",
