@@ -61,6 +61,8 @@ sealed interface RemoteAction {
     data class OpenTvBrowser(val url: String, val engine: String? = null) : RemoteAction
     data object ManageUserScripts : RemoteAction
     data object ManageUserAgent : RemoteAction
+    data class UpdateUserScript(val name: String, val content: String) : RemoteAction
+    data class UpdateUserAgent(val name: String, val value: String, val save: Boolean) : RemoteAction
     data object UnlinkWebsite : RemoteAction
     data object RequestWholeTvControl : RemoteAction
     data class LaunchTvApp(val packageId: String) : RemoteAction

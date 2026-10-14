@@ -89,6 +89,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteAction
+import com.playbridge.sender.cast.remote.volumeLabel
 import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteLayoutSpec
 import com.playbridge.sender.cast.remote.RemotePlayback
@@ -122,6 +123,7 @@ internal fun SeekVolumeBar(
     timeDisplay: RemoteTimeDisplay = RemoteTimeDisplay.Duration,
     onTimeDisplay: (RemoteTimeDisplay) -> Unit = {},
     enablePlayPause: Boolean = true,
+    volumeTitle: String = "Volume",
 ) {
     val enabled = LocalRemoteControlsEnabled.current
     val hasDuration = durationMs > 0L && !isLive && isSeekable
@@ -193,7 +195,7 @@ internal fun SeekVolumeBar(
                 if (!dragging && activeAxis == null) latestPlayPause()
             }
             .semantics(mergeDescendants = true) {
-                contentDescription = "Playback seek and volume"
+                contentDescription = if (volumeTitle == "App volume") "Playback seek and App volume" else "Playback seek and volume"
                 stateDescription = if (isPlaying) "Playing" else "Paused"
                 if (!enabled) disabled()
                 if (hasDuration) {
@@ -496,9 +498,9 @@ internal fun SeekVolumeBar(
                     val volumeIcon = when (volumeDirection) { "down" -> Icons.AutoMirrored.Filled.VolumeDown else -> Icons.AutoMirrored.Filled.VolumeUp }
                     Icon(volumeIcon, contentDescription = null, tint = activeColor, modifier = Modifier.size(32.dp))
                     val volumeLabel = when (volumeDirection) {
-                        "up" -> if (fastVolume) "Volume Up (Fast)" else "Volume Up"
-                        "down" -> if (fastVolume) "Volume Down (Fast)" else "Volume Down"
-                        else -> "Volume"
+                        "up" -> if (fastVolume) "$volumeTitle Up (Fast)" else "$volumeTitle Up"
+                        "down" -> if (fastVolume) "$volumeTitle Down (Fast)" else "$volumeTitle Down"
+                        else -> volumeTitle
                     }
                     Text(volumeLabel, color = ink, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                 }
@@ -530,15 +532,23 @@ internal fun RemoteSeekBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispa
     val enabled = LocalRemoteControlsEnabled.current
     val haptics = rememberRemoteHaptics()
     key(state.sessionId, playback.mediaId, playback.title, playback.mediaKind) {
+    Column {
+    if (state.nativePolicy != null && state.capabilities.transport.seekRelative == com.playbridge.sender.cast.remote.Support.Supported && state.capabilities.transport.seekAbsolute != com.playbridge.sender.cast.remote.Support.Supported) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            LabeledIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Seek backward", MaterialTheme.colorScheme.onSurface) { dispatch(RemoteAction.SeekBy(-10_000L)) }
+            LabeledIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Seek forward", MaterialTheme.colorScheme.onSurface) { dispatch(RemoteAction.SeekBy(10_000L)) }
+        }
+    }
     SeekVolumeBar(
         positionMs = playback.displayedPositionMs, durationMs = playback.durationMs,
         isLive = playback.isLive,
-        isSeekable = playback.seekable == com.playbridge.sender.cast.remote.Support.Supported && playback.mediaKind != com.playbridge.sender.cast.remote.RemoteMediaKind.Image,
+        isSeekable = playback.seekable == com.playbridge.sender.cast.remote.Support.Supported && playback.mediaKind != com.playbridge.sender.cast.remote.RemoteMediaKind.Image && (state.nativePolicy == null || state.capabilities.transport.seekAbsolute == com.playbridge.sender.cast.remote.Support.Supported),
         isPlaying = playback.displayedPlaying,
         learnedGestures = state.preferences.learnedGestures, timeDisplay = state.preferences.timeDisplay,
         onTimeDisplay = { dispatch(RemoteAction.SetTimeDisplay(it)) },
         enablePlayPause = state.capabilities.transport.playPause == com.playbridge.sender.cast.remote.Support.Supported,
         enableVolume = layout.nav.volume.enabled && playback.mediaKind != com.playbridge.sender.cast.remote.RemoteMediaKind.Image,
+        volumeTitle = if (state.nativePolicy == null) "Volume" else state.volumeLabel(),
         onSeekTo = { dispatch(RemoteAction.SeekTo(it, RemoteLearnedGesture.SEEK)) },
         onVolumeUp = { dispatch(RemoteAction.AdjustVolume(1, RemoteLearnedGesture.VOLUME)) },
         onVolumeDown = { dispatch(RemoteAction.AdjustVolume(-1, RemoteLearnedGesture.VOLUME)) },
@@ -546,6 +556,7 @@ internal fun RemoteSeekBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispa
             if (enabled) { haptics.perform(RemoteFeedback.PLAY_PAUSE); dispatch(RemoteAction.TogglePlayPause) }
         },
     )
+    }
     }
 }
 

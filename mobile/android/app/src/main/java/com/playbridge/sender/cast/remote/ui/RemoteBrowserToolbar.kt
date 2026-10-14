@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.receiverActionSupported
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -58,31 +59,32 @@ internal fun RemoteBrowserToolbar(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LabeledIconButton(
+        if (state.receiverActionSupported(RemoteAction.Key(RemoteKey.Back))) LabeledIconButton(
             icon = Icons.AutoMirrored.Filled.ArrowBack,
             label = "Back",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { dispatch(RemoteAction.Key(RemoteKey.Back)) },
         )
-        LabeledIconButton(
+        if (state.receiverActionSupported(RemoteAction.Browser(BrowserAction.Forward))) LabeledIconButton(
             icon = Icons.AutoMirrored.Filled.ArrowForward,
             label = "Forward",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { dispatch(RemoteAction.Browser(BrowserAction.Forward)) },
         )
-        LabeledIconButton(
+        if (state.receiverActionSupported(RemoteAction.Browser(BrowserAction.Reload))) LabeledIconButton(
             icon = Icons.Default.Refresh,
             label = "Refresh",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { dispatch(RemoteAction.Browser(BrowserAction.Reload)) },
         )
-        LabeledIconButton(
+        if (state.receiverActionSupported(RemoteAction.SetBrowserFullscreen(!isFullscreen))) LabeledIconButton(
             icon = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
             label = if (isFullscreen) "Restore" else "Fullscreen",
             tint = MaterialTheme.colorScheme.onSurface,
             onClick = { dispatch(RemoteAction.SetBrowserFullscreen(!isFullscreen)) },
         )
-        LabeledIconButton(
+        if (state.nativePolicy == null || state.capabilities.browser.managers == com.playbridge.sender.cast.remote.Support.Supported ||
+            state.capabilities.browser.actions.any { it == BrowserAction.CycleSource || it == BrowserAction.Unmute }) LabeledIconButton(
             icon = Icons.Default.MoreHoriz,
             label = "More",
             tint = MaterialTheme.colorScheme.onSurface,

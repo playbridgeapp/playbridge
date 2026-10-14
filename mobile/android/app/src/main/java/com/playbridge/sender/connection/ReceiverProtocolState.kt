@@ -11,7 +11,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 
-/** Phone-owned, session-only metadata. Step 6 will interpret operations; no policy lives here. */
+/** Phone-owned session metadata; the native remote resolver owns operation policy. */
 data class ReceiverDescriptor(
     val version: Int,
     val surfaces: Map<String, ReceiverSurface>,
@@ -47,11 +47,12 @@ data class ReceiverSettingsAvailability(
     val loopAvailable: Boolean? = null,
 )
 data class ReceiverProtocolState(
-    /** null means LEGACY, including malformed/unsupported descriptors in Step 2. */
+    /** Absent/unknown versions are legacy; malformed recognized v1 is separately fail-closed. */
     val descriptor: ReceiverDescriptor? = null,
     val volume: ReceiverVolumeState? = null,
     val settingsAvailability: ReceiverSettingsAvailability = ReceiverSettingsAvailability(),
     val contextEngine: String? = null,
+    val malformedV1: Boolean = false,
 )
 
 /** Validate a bounded v1 object without decoding future versions as v1 or closing identifier sets. */
@@ -60,6 +61,11 @@ internal object ReceiverDescriptorParser {
     private val operationFields = setOf(
         "transport", "keys", "pointer", "imageTransforms", "text", "settings", "tracks", "queue", "browser", "reporting",
     )
+
+    fun recognizedV1(raw: JsonElement?): Boolean {
+        val version = (raw as? JsonObject)?.get("version") as? JsonPrimitive ?: return false
+        return !version.isString && version.content.toBigDecimalOrNull()?.compareTo(BigDecimal.ONE) == 0
+    }
 
     fun parse(raw: JsonElement?): ReceiverDescriptor? = runCatching {
         val json = raw as? JsonObject ?: return null
@@ -155,7 +161,12 @@ internal class ReceiverProtocolSession {
     @Synchronized fun acceptCredentials(session: Long, envelope: JsonObject): Boolean {
         if (session != generation) return false
         authenticated = true
-        mutableState.value = ReceiverProtocolState(descriptor = ReceiverDescriptorParser.parse(envelope["capabilities"]))
+        val raw = envelope["capabilities"]
+        val descriptor = ReceiverDescriptorParser.parse(raw)
+        mutableState.value = ReceiverProtocolState(
+            descriptor = descriptor,
+            malformedV1 = descriptor == null && ReceiverDescriptorParser.recognizedV1(raw),
+        )
         return true
     }
 

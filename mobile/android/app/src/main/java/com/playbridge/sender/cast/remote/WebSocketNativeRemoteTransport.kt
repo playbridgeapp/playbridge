@@ -94,9 +94,10 @@ class WebSocketNativeRemoteTransport(
         client.sendMouseCommand(event, x, y)
         return true // queued/coalesced is submission, not acknowledgement
     }
-    override fun endPointerGesture(): Boolean {
+    override fun endPointerGesture(): Boolean = endPointerGesture(resetAnchor = true)
+    override fun endPointerGesture(resetAnchor: Boolean): Boolean {
         if (client.connectionState.value !is WebSocketClient.ConnectionState.Connected) return false
-        client.endPointerGesture() // final coalesced movement precedes the (-1,-1) anchor reset
+        client.endPointerGesture(resetAnchor) // final coalesced movement precedes an optional anchor reset
         return true
     }
     override suspend fun confirmed(requestId: String, command: String, timeoutMs: Long): QueueCommandResult? =

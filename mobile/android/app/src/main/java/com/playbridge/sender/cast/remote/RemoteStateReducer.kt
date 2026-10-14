@@ -154,7 +154,10 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     /** Closing drops local drafts and disposes the ATV worker; reopening establishes a new baseline. */
     private fun displayWithKeyboardRoute(previous: RemoteUiState): RemoteUiState {
         display()
-        if (previous.sheet == RemoteSheet.Keyboard && previous.keyboardRoute() != state.keyboardRoute()) {
+        val advertisementOnly = previous.sessionId == state.sessionId && previous.context == state.context &&
+            previous.connection == state.connection && previous.fullControl?.connected == state.fullControl?.connected &&
+            (previous.receiverProtocol.descriptor != state.receiverProtocol.descriptor || previous.receiverProtocol.malformedV1 != state.receiverProtocol.malformedV1)
+        if (previous.sheet == RemoteSheet.Keyboard && previous.keyboardRoute() != state.keyboardRoute() && !advertisementOnly) {
             state = state.copy(sheet = null)
         }
         return state

@@ -1,5 +1,10 @@
 package com.playbridge.sender.browser
 
+import com.playbridge.sender.cast.remote.RemoteAction
+import com.playbridge.sender.cast.remote.RemoteController
+import com.playbridge.sender.cast.remote.RemoteControllerRegistry
+import com.playbridge.sender.cast.remote.receiverActionSupported
+import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.ui.UserScriptsSheet
 import com.playbridge.sender.cast.remote.ui.TvUserAgentSheet
 
@@ -225,6 +230,19 @@ fun AppNavHost(
 
     val context = LocalContext.current
 
+    // Manager reads and writes use the same live resolved receiver authority as Remote.
+    val managerRegistry: RemoteControllerRegistry = koinInject()
+    val managerController by managerRegistry.controller.collectAsStateWithLifecycle()
+    val managerState = managerController?.snapshot?.collectAsStateWithLifecycle()?.value?.state
+    fun canManage(action: RemoteAction) = managerState?.connection?.ready == true && managerState.receiverActionSupported(action)
+    fun sendManager(action: RemoteAction, owner: RemoteController? = managerController, complete: (Boolean) -> Unit = {}) {
+        if (owner == null || owner !== managerRegistry.controller.value) { complete(false); return }
+        scope.launch {
+            val result = if (owner === managerRegistry.controller.value) owner.execute(action) else null
+            complete(result == com.playbridge.sender.cast.remote.RemoteCommandResult.Submitted || result == com.playbridge.sender.cast.remote.RemoteCommandResult.Confirmed)
+        }
+    }
+    var scriptPickerOwner by remember { mutableStateOf<RemoteController?>(null) }
     val installedUserScripts by connectionCoordinator.installedUserScripts.collectAsStateWithLifecycle()
     var showUserScripts by remember { mutableStateOf(false) }
 
@@ -246,10 +264,11 @@ fun AppNavHost(
                 val content = context.contentResolver.openInputStream(uri)
                     ?.bufferedReader()?.use { it.readText() }
                 if (!content.isNullOrBlank()) {
-                    connectionViewModel.webSocketClient.send(
-                        com.playbridge.shared.protocol.createUserScriptJson(name, content)
-                    )
-                    android.widget.Toast.makeText(context, "Sent $name to TV", android.widget.Toast.LENGTH_SHORT).show()
+                    val owner = scriptPickerOwner
+                    scriptPickerOwner = null
+                    sendManager(RemoteAction.UpdateUserScript(name, content), owner) { sent ->
+                        android.widget.Toast.makeText(context, if (sent) "Sent $name to TV" else "TV browser is no longer available", android.widget.Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     android.widget.Toast.makeText(context, "Script file was empty", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -259,15 +278,13 @@ fun AppNavHost(
         }
     }
 
-    if (showUserScripts) {
+    if (showUserScripts && canManage(RemoteAction.ManageUserScripts)) {
         UserScriptsSheet(
             scripts = installedUserScripts,
-            onInstall = { userScriptPicker.launch("*/*") },
+            onInstall = { scriptPickerOwner = managerController; userScriptPicker.launch("*/*") },
             onRemove = { name ->
                 // Empty content tells the TV to delete that script.
-                connectionViewModel.webSocketClient.send(
-                    com.playbridge.shared.protocol.createUserScriptJson(name, "")
-                )
+                sendManager(RemoteAction.UpdateUserScript(name, ""))
             },
             onDismiss = { showUserScripts = false }
         )
@@ -276,33 +293,25 @@ fun AppNavHost(
     val tvUserAgentState by connectionCoordinator.tvUserAgentState.collectAsStateWithLifecycle()
     var showTvUserAgent by remember { mutableStateOf(false) }
 
-    if (showTvUserAgent) {
+    if (showTvUserAgent && canManage(RemoteAction.ManageUserAgent)) {
         TvUserAgentSheet(
             active = tvUserAgentState.active,
             savedEntries = tvUserAgentState.entries,
             onSelectDefault = {
-                connectionViewModel.webSocketClient.send(
-                    com.playbridge.shared.protocol.createUserAgentJson("", "", save = false)
-                )
+                sendManager(RemoteAction.UpdateUserAgent("", "", false))
             },
             onSelectPreset = { name, value ->
                 // Built-in presets apply without cluttering the TV's saved list.
-                connectionViewModel.webSocketClient.send(
-                    com.playbridge.shared.protocol.createUserAgentJson(name, value, save = false)
-                )
+                sendManager(RemoteAction.UpdateUserAgent(name, value, false))
             },
             onApplyNamed = { name, value ->
                 // Re-selecting a saved entry or adding a brand-new custom one — either way
                 // the TV applies it and (re)saves it under that name.
-                connectionViewModel.webSocketClient.send(
-                    com.playbridge.shared.protocol.createUserAgentJson(name, value, save = true)
-                )
+                sendManager(RemoteAction.UpdateUserAgent(name, value, true))
             },
             onRemove = { name ->
                 // Blank value tells the TV to delete that saved entry.
-                connectionViewModel.webSocketClient.send(
-                    com.playbridge.shared.protocol.createUserAgentJson(name, "", save = true)
-                )
+                sendManager(RemoteAction.UpdateUserAgent(name, "", true))
             },
             onDismiss = { showTvUserAgent = false }
         )

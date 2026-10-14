@@ -143,12 +143,17 @@ class RemoteViewModel(
         if (state.value.sessionId != controller.sessionId) mutableState.value = reducer.observe(controller.snapshot.value)
         val playback = state.value.playback
         val resolved = when (action) {
-            RemoteAction.TogglePlayPause -> RemoteAction.SetPlaying(playback?.displayedPlaying != true)
-            is RemoteAction.SeekBy -> RemoteAction.SeekTo(relativeRemoteSeek(playback?.displayedPositionMs ?: 0L, action.deltaMs, playback?.durationMs ?: 0L))
+            RemoteAction.TogglePlayPause -> if (state.value.nativePolicy == null) RemoteAction.SetPlaying(playback?.displayedPlaying != true) else action
+            is RemoteAction.SeekBy -> if (state.value.nativePolicy == null) RemoteAction.SeekTo(relativeRemoteSeek(playback?.displayedPositionMs ?: 0L, action.deltaMs, playback?.durationMs ?: 0L)) else action
             is RemoteAction.SeekTo -> action.copy(positionMs = boundedSeek(action.positionMs, playback?.durationMs ?: 0L))
             else -> action
         }
-        mutableState.value = reducer.begin(resolved)
+        val optimistic = when (resolved) {
+            RemoteAction.TogglePlayPause -> RemoteAction.SetPlaying(playback?.displayedPlaying != true)
+            is RemoteAction.SeekBy -> RemoteAction.SeekTo(relativeRemoteSeek(playback?.displayedPositionMs ?: 0L, resolved.deltaMs, playback?.durationMs ?: 0L))
+            else -> resolved
+        }
+        mutableState.value = reducer.begin(optimistic)
         val learnedGesture = when (action) {
             RemoteAction.TogglePlayPause -> RemoteLearnedGesture.TAP
             is RemoteAction.SeekTo -> action.learnedGesture
@@ -174,7 +179,7 @@ class RemoteViewModel(
         if (subtitle != null) mutableState.value = reducer.subtitlePending(ticket.token, false)
         // Only the command families tracked by stage 1 can invalidate a playback intent.
         val playbackFailure = when (ticket.action) {
-            is RemoteAction.SeekTo, is RemoteAction.SetPlaying, RemoteAction.StopPlayback, is RemoteAction.SetLoop,
+            is RemoteAction.SeekTo, is RemoteAction.SetPlaying, is RemoteAction.SeekBy, RemoteAction.TogglePlayPause, RemoteAction.StopPlayback, is RemoteAction.SetLoop,
             is RemoteAction.Browser, is RemoteAction.SetBrowserFullscreen -> true
             else -> false
         }
@@ -206,7 +211,7 @@ class RemoteViewModel(
             }
         }
         // Stage 1 opens these phone managers even if their refresh query cannot be sent.
-        when (ticket.action) {
+        if (state.value.nativePolicy == null || state.value.receiverActionSupported(ticket.action)) when (ticket.action) {
             RemoteAction.ManageUserScripts -> emit(RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserScripts))
             RemoteAction.ManageUserAgent -> emit(RemoteEffect.OpenManager(RemoteEffect.OpenManager.Manager.UserAgent))
             else -> Unit

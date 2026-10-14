@@ -119,7 +119,9 @@ data class RemoteUiState(
     val pending: RemotePendingState = RemotePendingState(), val sheet: RemoteSheet? = null,
     val notice: RemoteNotice? = null,
     val fullControl: FullControlStatus? = null,
-    /** Stored wire metadata for Step 6; independent of the active legacy capability policy. */
+    /** Authenticated session metadata consumed by the single native remote resolver. */
     val receiverProtocol: ReceiverProtocolState = ReceiverProtocolState(),
+    /** Resolved receiver authority; null preserves the frozen legacy path. Full control overlays later. */
+    val nativePolicy: DescriptorRemotePolicy? = null,
 )
 data class RemoteReceiverSnapshot(val state: RemoteUiState = RemoteUiState(), val observation: RemoteObservation = RemoteObservation())

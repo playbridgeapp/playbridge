@@ -38,6 +38,16 @@ class ReceiverProtocolPlumbingTest {
             ReceiverSettingsAvailability(false, false, false), "future_engine"),
     )
 
+    private val legacyMetadataVariants get() = listOf(
+        ReceiverProtocolState(),
+        ReceiverProtocolState(volume = ReceiverVolumeState("app", 0.75, true)),
+        ReceiverProtocolState(settingsAvailability = ReceiverSettingsAvailability(false, false, false)),
+        ReceiverProtocolState(contextEngine = "future_engine"),
+        ReceiverProtocolState(descriptor("unknown-version-auth-future.json")),
+        ReceiverProtocolState(volume = ReceiverVolumeState("app", 0.75, true),
+            settingsAvailability = ReceiverSettingsAvailability(false, false, false), contextEngine = "future_engine"),
+    )
+
     @Test fun legacyCapabilityGoldenBytesRemainIdenticalWithEveryMetadataVariant() = runTest {
         val golden = MessageDigest.getInstance("SHA-256")
         var comparisons = 0
@@ -61,7 +71,7 @@ class ReceiverProtocolPlumbingTest {
                 golden.update("$profile/$context/$kind/$runtime\n".toByteArray())
                 golden.update(bytes)
                 golden.update('\n'.code.toByte())
-                for (variant in metadataVariants) {
+                for (variant in legacyMetadataVariants) {
                     metadata.value = variant; runCurrent()
                     val state = controller.snapshot.value.state
                     assertEquals(variant, state.receiverProtocol)
@@ -107,7 +117,7 @@ class ReceiverProtocolPlumbingTest {
         assertEquals(before.state.sessionId, after.state.sessionId)
         assertEquals(before.state.playback?.mediaId, after.state.playback?.mediaId)
         assertEquals(owner.state.value, after.state.receiverProtocol)
-        assertEquals(before.state.capabilities, after.state.capabilities)
+        assertNotEquals(before.state.capabilities, after.state.capabilities)
         owner.clear(); runCurrent()
         assertEquals(ReceiverProtocolState(), controller.snapshot.value.state.receiverProtocol)
     }
@@ -149,7 +159,7 @@ class ReceiverProtocolPlumbingTest {
             for (context in listOf(RemoteContext.Player, RemoteContext.Browser)) {
                 val legacy = FakeNativeRemoteTransport(testSnapshot(context))
                 val plumbing = FakeNativeRemoteTransport(testSnapshot(context))
-                val metadata = MutableStateFlow(metadataVariants.last())
+                val metadata = MutableStateFlow(legacyMetadataVariants.last())
                 val config = testConfiguration(profile)
                 val id = RemoteSessionId(remoteTestEndpoint, 1)
                 val before = NativeProfileRemoteController(id, config, legacy, backgroundScope)
@@ -165,7 +175,7 @@ class ReceiverProtocolPlumbingTest {
         }
     }
 
-    @Test fun malformedDescriptorStillCarriesStateAlongsideExactLegacyCapabilities() = runTest {
+    @Test fun malformedV1CarriesReportsButFailsClosedForReceiverControls() = runTest {
         val owner = ReceiverProtocolSession()
         val session = owner.begin()
         owner.acceptCredentials(session, Json.parseToJsonElement("""{"type":"auth_response","success":true,"capabilities":{"version":1,"surfaces":[]}}""") as JsonObject)
@@ -175,7 +185,9 @@ class ReceiverProtocolPlumbingTest {
         val controller = NativeProfileRemoteController(RemoteSessionId(remoteTestEndpoint, 1), config, transport, backgroundScope)
         assertNull(controller.snapshot.value.state.receiverProtocol.descriptor)
         assertNotNull(controller.snapshot.value.state.receiverProtocol.volume)
-        assertEquals(nativeRemoteCapabilities(RemoteProfile.AndroidTv, RemoteContext.Player, RemoteMediaKind.Video, config.players,
-            config.features, observedQueue = transport.snapshot.value.state.queue), controller.snapshot.value.state.capabilities)
+        assertTrue(controller.snapshot.value.state.receiverProtocol.malformedV1)
+        assertEquals(Support.Unsupported, controller.snapshot.value.state.capabilities.transport.playPause)
+        assertEquals(Support.Unsupported, controller.snapshot.value.state.capabilities.volume.adjust)
+        assertTrue(controller.snapshot.value.state.capabilities.keys.isEmpty())
     }
 }

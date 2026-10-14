@@ -656,12 +656,10 @@ class WebSocketClient(
     }
 
     /**
-     * Release logcat gets the envelope type and size. A debug build may also log the
-     * frame after URLs and auth-like fields are removed.
+     * Release logcat keeps summaries; debug logcat adds only allowlisted structure.
      */
     private fun logWireFrame(direction: String, frame: String) {
-        Log.d(TAG, "$direction ${WireFrameLog.summary(frame)}")
-        if (BuildConfig.DEBUG) Log.d(TAG, "$direction frame ${WireFrameLog.redact(frame)}")
+        Log.d(TAG, "$direction ${WireFrameLog.format(frame, BuildConfig.DEBUG)}")
     }
 
     @Synchronized
@@ -752,15 +750,15 @@ class WebSocketClient(
     }
 
     /** Finish the transform around its last touch midpoint, then restore center anchoring. */
-    fun endPointerGesture() {
+    fun endPointerGesture(resetAnchor: Boolean = true) {
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
-            mainHandler.post { endPointerGesture() }
+            mainHandler.post { endPointerGesture(resetAnchor) }
             return
         }
         flushPendingMouseCommands()
         // Negative coordinates clear the touch anchor so discrete rotate buttons
         // continue to pivot around the image's own center.
-        sendMousePacket("transform_anchor", -1f, -1f)
+        if (resetAnchor) sendMousePacket("transform_anchor", -1f, -1f)
     }
 
     private fun flushPendingMouseCommands() {

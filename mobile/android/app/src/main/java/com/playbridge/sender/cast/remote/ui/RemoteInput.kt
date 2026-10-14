@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.receiverActionSupported
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
@@ -111,43 +112,47 @@ private fun FullRemoteInput(state: RemoteUiState, layout: RemoteLayoutSpec, disp
             state.fullControlSupports(RemoteAction.Key(it))
         }
     val enabled = (state.connection.ready || fullPad) && LocalRemoteMotionPolicy.current.resumed
-    val sendKey: (String) -> Unit = { dispatch(RemoteCallbackActions.key(it)) }
+    val guarded: (RemoteAction) -> Unit = { action ->
+        if (state.receiverActionSupported(action) || action == RemoteAction.PointerGestureEnd || action == RemoteAction.PointerUp) dispatch(action)
+    }
+    val sendKey: (String) -> Unit = { val action = RemoteCallbackActions.key(it); if (state.receiverActionSupported(action)) dispatch(action) }
     val image = state.playback?.mediaKind == RemoteMediaKind.Image
     val showSwitch = RemoteInputMode.Pad in layout.modes && RemoteInputMode.Pointer in layout.modes
-    val buttonPad = state.preferences.buttonPad
+    val partialPad = state.nativePolicy != null && !state.capabilities.keys.containsAll(setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok))
+    val buttonPad = state.preferences.buttonPad || partialPad
     Box(Modifier.fillMaxSize()) {
         key(layout.selectedMode, buttonPad, state.context, state.sessionId, state.playback?.mediaId, enabled) {
             when (layout.selectedMode) {
-                RemoteInputMode.Pad -> if (buttonPad) FittedButtonPad(sendKey, enabled) else RemoteGesturePad(enabled, sendKey, excludeModeToggle = true)
+                RemoteInputMode.Pad -> if (buttonPad) FittedButtonPad(sendKey, enabled, if (state.nativePolicy != null) state.capabilities.keys else null) else RemoteGesturePad(enabled, sendKey, excludeModeToggle = true)
                 RemoteInputMode.Pointer -> RemotePointerArea(
                     enabled = enabled,
-                    onMouseMove = { x, y -> dispatch(RemoteAction.PointerMove(x, y)) },
-                    onMouseClick = { dispatch(RemoteAction.PointerClick) },
-                    onMouseScroll = { x, y -> dispatch(RemoteAction.PointerScroll(x, y)) },
-                    onPinchZoom = { dispatch(RemoteAction.ImageZoom(it)) },
-                    onRotate = { dispatch(RemoteAction.ImageRotate(it)) },
-                    onTransformAnchor = { x, y -> dispatch(RemoteAction.ImageAnchor(x, y)) },
+                    onMouseMove = { x, y -> guarded(RemoteAction.PointerMove(x, y)) },
+                    onMouseClick = { guarded(RemoteAction.PointerClick) },
+                    onMouseScroll = { x, y -> guarded(RemoteAction.PointerScroll(x, y)) },
+                    onPinchZoom = { guarded(RemoteAction.ImageZoom(it)) },
+                    onRotate = { guarded(RemoteAction.ImageRotate(it)) },
+                    onTransformAnchor = { x, y -> guarded(RemoteAction.ImageAnchor(x, y)) },
                     onDoubleTap = {
-                        dispatch(if (image) RemoteAction.ResetImageTransform else RemoteAction.PointerClick)
+                        guarded(if (image) RemoteAction.ResetImageTransform else RemoteAction.PointerClick)
                     },
                     imageGestures = image,
-                    onMouseDown = { dispatch(RemoteAction.PointerDown) },
-                    onMouseUp = { dispatch(RemoteAction.PointerUp) },
-                    onGestureEnd = { dispatch(RemoteAction.PointerGestureEnd) },
+                    onMouseDown = { guarded(RemoteAction.PointerDown) },
+                    onMouseUp = { guarded(RemoteAction.PointerUp) },
+                    onGestureEnd = { guarded(RemoteAction.PointerGestureEnd) },
                 )
                 RemoteInputMode.Context, RemoteInputMode.Keyboard -> if (layout.idle) IdleEmptyState(state.receiver?.name)
             }
         }
-        if (layout.selectedMode == RemoteInputMode.Pad) {
+        if (layout.selectedMode == RemoteInputMode.Pad && !partialPad) {
             PadModeToggle(buttonPad, Modifier.align(Alignment.TopStart).padding(PadModeToggleInset)) {
-                dispatch(RemoteAction.SetButtonPad(!buttonPad))
+                guarded(RemoteAction.SetButtonPad(!buttonPad))
             }
         }
         if (showSwitch) {
             PadPointerSwitch(
                 selected = layout.selectedMode,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = if (image) 88.dp else 8.dp),
-                onSelect = { dispatch(RemoteAction.SelectInputMode(it)) },
+                onSelect = { guarded(RemoteAction.SelectInputMode(it)) },
             )
         }
     }
@@ -244,7 +249,7 @@ private fun IdleEmptyState(tvName: String?) {
 }
 
 @Composable
-private fun FittedButtonPad(onRemoteKey: (String) -> Unit, enabled: Boolean) {
+private fun FittedButtonPad(onRemoteKey: (String) -> Unit, enabled: Boolean, allowedKeys: Set<RemoteKey>? = null) {
     BoxWithConstraints(Modifier.fillMaxSize().testTag("remote.buttonPad"), contentAlignment = Alignment.Center) {
         val availableW = if (maxWidth == Dp.Infinity) ButtonPadExtent else maxWidth
         val availableH = if (maxHeight == Dp.Infinity) ButtonPadExtent else maxHeight
@@ -259,33 +264,33 @@ private fun FittedButtonPad(onRemoteKey: (String) -> Unit, enabled: Boolean) {
         } else 0.dp
         val scale = minOf((availableW - startInset) / ButtonPadExtent, availableH / ButtonPadExtent).coerceIn(0.01f, 1f)
         Box(Modifier.fillMaxSize().padding(start = startInset)) {
-            DpadArea(onRemoteKey, enabled, scale)
+            DpadArea(onRemoteKey, enabled, scale, allowedKeys)
         }
     }
 }
 
 @Composable
-internal fun DpadArea(onRemoteKey: (String) -> Unit, enabled: Boolean, scale: Float = 1f) {
+internal fun DpadArea(onRemoteKey: (String) -> Unit, enabled: Boolean, scale: Float = 1f, allowedKeys: Set<RemoteKey>? = null) {
     val s = scale.coerceIn(0.01f, 1f)
     val arrow = 64.dp * s
     val ok = 80.dp * s
     val gap = 8.dp * s
     Box(Modifier.fillMaxSize().remotePadExclusion(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
-            ArrowButton("dpad_up", "TV Up", Icons.Default.ArrowUpward, enabled, arrow, onRemoteKey)
+            ArrowButton("dpad_up", "TV Up", Icons.Default.ArrowUpward, enabled && (allowedKeys == null || RemoteKey.Up in allowedKeys), arrow, onRemoteKey)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) {
-                ArrowButton("dpad_left", "TV Left", Icons.Default.ChevronLeft, enabled, arrow, onRemoteKey)
+                ArrowButton("dpad_left", "TV Left", Icons.Default.ChevronLeft, enabled && (allowedKeys == null || RemoteKey.Left in allowedKeys), arrow, onRemoteKey)
                 val haptics = rememberRemoteHaptics()
                 val source = remember { MutableInteractionSource() }
                 IconButton(
                     onClick = { onRemoteKey("dpad_center"); haptics.perform(RemoteFeedback.PAD_STEP) },
-                    enabled = enabled,
+                    enabled = enabled && (allowedKeys == null || RemoteKey.Ok in allowedKeys),
                     interactionSource = source,
                     modifier = Modifier.size(ok).remotePressFeedback(source).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
                 ) { Text("OK", color = MaterialTheme.colorScheme.onPrimaryContainer) }
-                ArrowButton("dpad_right", "TV Right", Icons.Default.ChevronRight, enabled, arrow, onRemoteKey)
+                ArrowButton("dpad_right", "TV Right", Icons.Default.ChevronRight, enabled && (allowedKeys == null || RemoteKey.Right in allowedKeys), arrow, onRemoteKey)
             }
-            ArrowButton("dpad_down", "TV Down", Icons.Default.ArrowDownward, enabled, arrow, onRemoteKey)
+            ArrowButton("dpad_down", "TV Down", Icons.Default.ArrowDownward, enabled && (allowedKeys == null || RemoteKey.Down in allowedKeys), arrow, onRemoteKey)
         }
     }
 }

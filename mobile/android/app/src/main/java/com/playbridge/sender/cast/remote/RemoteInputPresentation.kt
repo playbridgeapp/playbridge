@@ -4,8 +4,9 @@ enum class RemoteInputPresentation { Absent, Full }
 
 /** A pad exists only for whole-device navigation (stage 4, and Roku ECP). PlayBridge playback keys are not a pad. */
 internal fun RemoteUiState.hasPadRoute(): Boolean =
-    capabilities.keyScope == ControlScope.WholeDevice &&
+    if (capabilities.keyScope == ControlScope.WholeDevice)
         capabilities.keys.containsAll(setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok))
+    else nativePolicy != null && capabilities.keys.any { it in setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok) }
 
 /** Receiver capability decides input size, never the viewport or a second UI owner. */
 fun resolveInputPresentation(state: RemoteUiState): RemoteInputPresentation {
@@ -14,7 +15,7 @@ fun resolveInputPresentation(state: RemoteUiState): RemoteInputPresentation {
     val image = state.playback?.mediaKind == RemoteMediaKind.Image
     val pad = state.hasPadRoute()
     val pointer = state.receiver?.profile != RemoteProfile.External &&
-        state.capabilities.pointer.move == Support.Supported
+        state.hasPointerRoute()
     return when {
         // Video and audio duplicate the wave, so they have no pad unless the TV is whole-device.
         player && !image -> if (pad) RemoteInputPresentation.Full else RemoteInputPresentation.Absent

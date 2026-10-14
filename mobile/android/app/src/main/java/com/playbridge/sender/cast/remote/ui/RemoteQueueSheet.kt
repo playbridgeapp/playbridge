@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.receiverActionSupported
+import com.playbridge.sender.cast.remote.queueJump
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -65,7 +67,7 @@ internal fun RemoteQueueSheet(
     val items = state.queue?.items.orEmpty()
     val currentIndex = state.queue?.currentIndex ?: 0
     val external = state.receiver?.profile == RemoteProfile.External
-    val canJump = !external && (state.capabilities.queue.jumpIndex != Support.Unsupported)
+    val canJump = !external && (state.capabilities.queue.jumpIndex != Support.Unsupported || state.nativePolicy != null && state.capabilities.queue.jumpItem == Support.Supported)
 
     val currentEpisode = items.firstOrNull { it.index == currentIndex }
     val seasons = remember(items) { items.mapNotNull { it.season }.distinct().sorted() }
@@ -141,9 +143,9 @@ internal fun RemoteQueueSheet(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .combinedClickable(
-                                enabled = LocalRemoteControlsEnabled.current && canJump,
+                                enabled = LocalRemoteControlsEnabled.current && canJump && (state.nativePolicy == null || state.receiverActionSupported(state.queueJump(ep.index, ep.itemId))),
                                 onClick = {
-                                    dispatch(RemoteAction.JumpToEpisode(ep.index, ep.itemId))
+                                    dispatch(state.queueJump(ep.index, ep.itemId))
                                     dispatch(RemoteAction.CloseSheet)
                                 },
                                 onLongClick = {
