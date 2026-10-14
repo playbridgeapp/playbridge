@@ -270,7 +270,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
-				DEVELOPMENT_TEAM = W89Q48RSC4;
+				DEVELOPMENT_TEAM = 4VL6AT677Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PlayBridge Phone/Info.plist";
@@ -295,7 +295,7 @@
 					"-liconv",
 					"-lresolv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
+				PRODUCT_BUNDLE_IDENTIFIER = app.playbridge.phone;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -311,7 +311,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
-				DEVELOPMENT_TEAM = W89Q48RSC4;
+				DEVELOPMENT_TEAM = 4VL6AT677Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PlayBridge Phone/Info.plist";
@@ -336,7 +336,7 @@
 					"-liconv",
 					"-lresolv",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
+				PRODUCT_BUNDLE_IDENTIFIER = app.playbridge.phone;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

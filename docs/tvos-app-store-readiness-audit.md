@@ -73,7 +73,7 @@ The app plays arbitrary URLs sent by the phone, including HTTP media allowed by 
 
 ## App Store Connect checklist
 
-- Register the bundle ID `com.playbridge.PlayBridge-TV`, then create distribution certificates and profiles.
+- Register the bundle ID `app.playbridge.tv`, then create distribution certificates and profiles.
 - Add the Support URL and Privacy Policy URL.
 - Complete the App Privacy disclosures. The app stores no account data, has no analytics and does no tracking.
 - Answer the age-rating questionnaire. There is no built-in browser, but the app plays user-supplied media.

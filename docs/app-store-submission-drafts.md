@@ -4,8 +4,8 @@ Paste-ready text for the steps that need the paid Apple Developer account. Repla
 
 | App | Bundle ID | Version (build) |
 |---|---|---|
-| PlayBridge Phone (iOS) | `com.playbridge.PlayBridge-Phone` | 0.15.0 (7) |
-| PlayBridge TV (tvOS) | `com.playbridge.PlayBridge-TV` | 0.15.0 (6) |
+| PlayBridge Phone (iOS) | `app.playbridge.phone` | 0.15.0 (7) |
+| PlayBridge TV (tvOS) | `app.playbridge.tv` | 0.15.0 (6) |
 
 Version numbers come from the Xcode projects at the time of writing; use the values of the build you upload.
 
@@ -17,7 +17,7 @@ After approval, set `PB_MULTICAST_ENTITLEMENT = YES` in `mobile/apple/PlayBridge
 
 **App name:** PlayBridge
 
-**Bundle ID:** com.playbridge.PlayBridge-Phone
+**Bundle ID:** app.playbridge.phone
 
 **Describe your app and why it needs multicast networking:**
 

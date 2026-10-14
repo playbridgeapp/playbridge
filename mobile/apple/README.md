@@ -1,7 +1,7 @@
 # PlayBridge — iOS Phone App (Apple sender)
 
 The iOS **sender** in the PlayBridge suite — the Apple counterpart to [`mobile/android`](../android/).
-A native SwiftUI app (`com.playbridge.PlayBridge-Phone`) that discovers a PlayBridge receiver
+A native SwiftUI app (`app.playbridge.phone`) that discovers a PlayBridge receiver
 (Android TV, tvOS, or desktop) on the LAN, pairs with it, and then casts links and acts as a
 remote. It mirrors `tv/apple` (the tvOS receiver) in layout and conventions.
 
