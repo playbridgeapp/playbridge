@@ -19,6 +19,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
+    let onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
+    let onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
+    let initialLoop: Bool
     let engineChrome: PlayerEngineChrome
 
     func makeUIViewController(context: Context) -> MPVViewController {
@@ -34,6 +37,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.onExit = onExit
         vc.onSwitch = onSwitch
         vc.onBroadcast = onBroadcast
+        vc.onLoopChanged = onLoopChanged
+        vc.onEndOfFile = onEndOfFile
+        vc.initialLoop = initialLoop
         vc.bindEngineChrome(engineChrome)
         return vc
     }
@@ -45,6 +51,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.onExit = onExit
         uiViewController.onSwitch = onSwitch
         uiViewController.onBroadcast = onBroadcast
+        uiViewController.onLoopChanged = onLoopChanged
+        uiViewController.onEndOfFile = onEndOfFile
         uiViewController.bindEngineChrome(engineChrome)
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
@@ -93,6 +101,13 @@ class MPVViewController: UIViewController {
     var onExit: (() -> Void)?
     var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
+    var onLoopChanged: ((Bool, PlayerReportIdentity) -> Bool)?
+    var onEndOfFile: ((PlayerReportIdentity) -> PlayerEndDecision)?
+    var initialLoop = false
+    /// Item generation of the file mpv has actually opened. Touched only on `mpvQueue`.
+    /// Stays at the previous item until FILE_LOADED, so a late EOF cannot adopt the next item.
+    private var loadedIdentity = -1
+    private var pendingLoadedIdentity = -1
     private var engineChrome: PlayerEngineChrome?
     private var statusTimer: Timer?
     var isPreBuffering: Bool = false {
@@ -160,6 +175,7 @@ class MPVViewController: UIViewController {
         videoView.layer.addSublayer(metalLayer)
 
         playbackState.title = mediaTitle ?? ""
+        playbackState.isLooping = initialLoop
         externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
@@ -434,7 +450,7 @@ class MPVViewController: UIViewController {
         }
     }
 
-    private func loadFile(_ url: URL) {
+    private func loadFile(_ url: URL, fromStart: Bool = false) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
         timelineUpdateGate.reset()
@@ -445,9 +461,12 @@ class MPVViewController: UIViewController {
         configureAudioSession()
         let path = url.isFileURL ? url.path : url.absoluteString
         let loadArguments = MPVAudioPolicy.loadArguments(path: path, isPreBuffering: isPreBuffering)
+        let startTime = fromStart ? 0 : initialTime
+        let itemIdentity = mediaIdentity
 
         mpvQueue.async { [weak self] in
             guard let self, let handle = self.mpv else { return }
+            self.pendingLoadedIdentity = itemIdentity
 
             // User-Agent must go via the dedicated "user-agent" option, not http-header-fields.
             // Fall back to a browser UA — some servers reject mpv's default "Lavf/..." agent.
@@ -458,8 +477,8 @@ class MPVViewController: UIViewController {
 
             self.setHTTPHeaders(self.headers, on: handle)
 
-            if self.initialTime > 0 {
-                mpv_set_property_string(handle, "start", String(format: "%.2f", self.initialTime))
+            if startTime > 0 {
+                mpv_set_property_string(handle, "start", String(format: "%.2f", startTime))
             } else {
                 // The handle persists across episodes now — clear a previous item's
                 // resume point or the next file would start there too.
@@ -488,6 +507,7 @@ class MPVViewController: UIViewController {
     private func handleEvent(_ event: mpv_event) {
         switch event.event_id {
         case MPV_EVENT_FILE_LOADED:
+            loadedIdentity = pendingLoadedIdentity
             onFileLoaded()
 
         case MPV_EVENT_END_FILE:
@@ -502,12 +522,16 @@ class MPVViewController: UIViewController {
                     break
                 }
             }
+            let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: loadedIdentity)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isMpvStopped else { return }
-                if self.playbackState.isLooping {
-                    if let url = self.url { self.loadFile(url) }
-                } else {
+                switch self.onEndOfFile?(identity) ?? .ignored {
+                case .repeatCurrentItem:
+                    if let url = self.url { self.loadFile(url, fromStart: true) }
+                case .advanceOrLeave:
                     self.onDismiss?()
+                case .ignored:
+                    break
                 }
             }
 
@@ -853,6 +877,10 @@ class MPVViewController: UIViewController {
             },
             onTogglePlaylist: {
                 NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
+            },
+            onLoopToggle: { [weak self] in
+                guard let self else { return }
+                self.setLooping(!self.playbackState.isLooping)
             },
             engine: .mpv
         )
@@ -1244,6 +1272,10 @@ class MPVViewController: UIViewController {
             }
             return
         }
+        if cmd == "loop_on" || cmd == "loop_off" {
+            setLooping(cmd == "loop_on")
+            return
+        }
         if StillWatchingGate.isPrompting { return }
         handleControlCommand(cmd)
     }
@@ -1442,6 +1474,14 @@ class MPVViewController: UIViewController {
         showUI(autoHide: true)
     }
 
+    /// Repeat-one for this item. A report from a replaced engine or item is ignored.
+    private func setLooping(_ enabled: Bool) {
+        guard !isMpvStopped else { return }
+        let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: mediaIdentity)
+        guard onLoopChanged?(enabled, identity) == true else { return }
+        playbackState.isLooping = enabled
+    }
+
     /// Map a phone `control` command to the player. Runs on main (posted from the WS server).
     /// Speed/scaling/filter/audio_boost/sub_offset are not yet supported on Apple MPV → ignored.
     private func handleControlCommand(_ cmd: String) {
@@ -1454,10 +1494,6 @@ class MPVViewController: UIViewController {
         case "stop":
             broadcastStatus()
             onExit?()
-        case "loop_on":
-            playbackState.isLooping = true
-        case "loop_off":
-            playbackState.isLooping = false
         case "seek_forward":
             skipForward()
         case "seek_back":

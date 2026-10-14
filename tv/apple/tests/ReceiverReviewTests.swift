@@ -286,6 +286,7 @@ struct ReceiverReviewTests {
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
         runRemoteNavigationTests()
+        runPlayerSettingsTests()
     }
 }
 
@@ -562,4 +563,125 @@ private func runRemoteDirectionTests() {
     assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: true) == [-1, 3, 5])
     assert(PlayerRemoteNavigation.menuRowIDs(trackIDs: [3, 5], includeOff: false) == [3, 5])
     print("PASS: Up/Down/center follow the open surface, and a stale session leaves the highlight")
+}
+
+private func jsonObject(at url: URL) -> [String: Any] {
+    let data = try! Data(contentsOf: url)
+    return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+}
+
+private func canonicalJSON(_ object: [String: Any]) -> Data {
+    try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func runPlayerSettingsTests() {
+    let fixtureRoot = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+    let future = jsonObject(at: fixtureRoot.appendingPathComponent("future-apple-complete-settings.json"))
+    let legacy = jsonObject(at: fixtureRoot.appendingPathComponent("legacy-complete-settings.json"))
+    let loopOnly = jsonObject(at: fixtureRoot.appendingPathComponent("invalid-loop-only-settings.json"))
+
+    let avplayer = PlayerPlaybackReport.settings(engine: "avplayer", loop: false)
+    assert(PlayerPlaybackReport.isValidSnapshot(avplayer))
+    assert(PlayerPlaybackReport.isValidSnapshot(future))
+    assert(PlayerPlaybackReport.isValidSnapshot(legacy))
+    assert(!PlayerPlaybackReport.isValidSnapshot(loopOnly), "A loop-only frame is not a snapshot")
+    assert(!PlayerPlaybackReport.isValidSnapshot([
+        "type": "status", "state": "playing", "position": 0, "duration": 0, "loop": true,
+    ]), "Loop does not belong on status")
+    assert(canonicalJSON(avplayer) == canonicalJSON(future))
+    assert(PlayerPlaybackReport.requiredFields.allSatisfy { avplayer[$0] != nil })
+    for key in ["speedAvailable", "scalingAvailable", "audioBoostAvailable", "qualityAvailable", "subtitleOffsetAvailable"] {
+        assert(avplayer[key] as? Bool == false, "\(key) stays false")
+    }
+    assert(avplayer["engineAvailable"] as? Bool == true)
+    assert(avplayer["loopAvailable"] as? Bool == true)
+    assert(avplayer["speed"] as? Int == 1)
+    assert(avplayer["scaling"] as? String == "Fit")
+    assert(avplayer["audioBoost"] as? Bool == false)
+    assert(avplayer["subtitleOffsetMs"] as? Int == 0)
+    assert(avplayer["state"] == nil)
+
+    let looping = PlayerPlaybackReport.settings(engine: "mpv", loop: true)
+    assert(PlayerPlaybackReport.isValidSnapshot(looping))
+    assert(looping["engine"] as? String == "mpv")
+    assert(looping["loop"] as? Bool == true)
+    assert(PlayerPlaybackReport.requiredFields.allSatisfy { looping[$0] != nil })
+
+    let playerContext = PlayerPlaybackReport.context(active: "player", engine: "mpv")
+    assert(playerContext["type"] as? String == "context")
+    assert(playerContext["active"] as? String == "player")
+    assert(playerContext["engine"] as? String == "mpv")
+    assert(playerContext["loop"] == nil)
+    assert(PlayerPlaybackReport.context(active: "player", engine: nil)["engine"] == nil)
+    assert(PlayerPlaybackReport.context(active: "player", engine: "")["engine"] == nil)
+    let idle = PlayerPlaybackReport.context(active: "idle", engine: "mpv")
+    assert(idle["active"] as? String == "idle")
+    assert(idle["engine"] == nil)
+    assert(Set(idle.keys) == ["type", "active"])
+
+    let reporter = PlayerSettingsReporter(engine: "avplayer", generation: 4)
+    let avplayerIdentity = PlayerReportIdentity(engine: "avplayer", generation: 4)
+    let staleEngine = PlayerReportIdentity(engine: "mpv", generation: 4)
+    let staleItem = PlayerReportIdentity(engine: "avplayer", generation: 3)
+    assert(reporter.resync(identity: avplayerIdentity)!["loop"] as? Bool == false)
+    assert(reporter.resync(identity: staleEngine) == nil)
+    assert(reporter.resync(identity: staleItem) == nil)
+    assert(reporter.setLoop(true, identity: staleEngine) == nil)
+    assert(reporter.loop == false, "A stale engine cannot change loop")
+    assert(reporter.endOfFile(identity: staleEngine).0 == .ignored)
+    assert(reporter.endOfFile(identity: staleItem).1 == nil)
+
+    let enabled = reporter.setLoop(true, identity: avplayerIdentity)!
+    assert(enabled["type"] as? String == "player_settings")
+    assert(enabled["loop"] as? Bool == true)
+    assert(enabled["engine"] as? String == "avplayer")
+    assert(PlayerPlaybackReport.isValidSnapshot(enabled))
+    assert(reporter.endOfFile(identity: avplayerIdentity).0 == .repeatCurrentItem)
+
+    let switched = reporter.switchEngine(from: avplayerIdentity, to: "mpv")!
+    assert(switched["engine"] as? String == "mpv")
+    assert(switched["loop"] as? Bool == true, "Engine switch keeps repeat-one")
+    assert(PlayerPlaybackReport.isValidSnapshot(switched))
+    assert(reporter.switchEngine(from: avplayerIdentity, to: "mpv") == nil)
+    assert(reporter.setLoop(false, identity: avplayerIdentity) == nil)
+    assert(reporter.loop == true)
+
+    let mpvIdentity = PlayerReportIdentity(engine: "mpv", generation: 4)
+    let resync = reporter.resync(identity: mpvIdentity)!
+    assert(resync["engine"] as? String == "mpv")
+    assert(resync["loop"] as? Bool == true)
+    assert(reporter.resync(identity: PlayerReportIdentity(engine: "mpv", generation: 5)) == nil)
+
+    reporter.note(engine: "mpv", generation: 9)
+    assert(reporter.loop == true, "The next item keeps repeat-one")
+    assert(reporter.resync(identity: mpvIdentity) == nil, "The previous item cannot report")
+    let nextItem = PlayerReportIdentity(engine: "mpv", generation: 9)
+    assert(reporter.resync(identity: nextItem)!["loop"] as? Bool == true)
+    let repeated = reporter.endOfFile(identity: nextItem)
+    assert(repeated.0 == .repeatCurrentItem)
+    assert(repeated.1?["loop"] as? Bool == true)
+    assert(reporter.setLoop(false, identity: nextItem) != nil)
+
+    func outcome(loopOn: Bool, hasNextItem: Bool, identity: PlayerReportIdentity) -> String {
+        let decision = loopOn
+            ? PlayerEndDecision.repeatCurrentItem
+            : PlayerEndDecision.advanceOrLeave
+        let actual = reporter.endOfFile(identity: identity).0
+        guard actual == decision || actual == .ignored else {
+            return "unexpected"
+        }
+        switch actual {
+        case .repeatCurrentItem: return "repeat"
+        case .advanceOrLeave: return hasNextItem ? "advance" : "leave"
+        case .ignored: return "ignored"
+        }
+    }
+    assert(outcome(loopOn: false, hasNextItem: true, identity: nextItem) == "advance")
+    assert(outcome(loopOn: false, hasNextItem: false, identity: nextItem) == "leave")
+    assert(reporter.setLoop(true, identity: nextItem) != nil)
+    assert(outcome(loopOn: true, hasNextItem: true, identity: nextItem) == "repeat")
+    assert(outcome(loopOn: true, hasNextItem: false, identity: nextItem) == "repeat")
+    assert(outcome(loopOn: true, hasNextItem: true, identity: mpvIdentity) == "ignored")
+
+    print("PASS: player settings snapshot, loop, engine switch, resync, and stale engine")
 }

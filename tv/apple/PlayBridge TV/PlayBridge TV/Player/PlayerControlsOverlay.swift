@@ -143,6 +143,7 @@ struct PlayerControlsOverlay: View {
     let onTogglePlayPause: () -> Void
     let onSwitchEngine: (PlaybackEngine) -> Void
     let onTogglePlaylist: () -> Void
+    let onLoopToggle: () -> Void
     /// Active playback engine, also shown in the controls badge.
     let engine: PlaybackEngine
 
@@ -296,7 +297,7 @@ struct PlayerControlsOverlay: View {
                                 }
 
                                 // Loop button
-                                Button(action: { data.isLooping.toggle() }) {
+                                Button(action: onLoopToggle) {
                                     VStack(spacing: 6) {
                                         Image(systemName: "repeat")
                                             .font(.system(size: 26))
