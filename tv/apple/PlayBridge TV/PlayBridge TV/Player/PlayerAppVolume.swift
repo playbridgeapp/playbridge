@@ -34,10 +34,10 @@ enum PlayerAppVolume {
         String(format: "%.3f", mpvVolumeUnits(level))
     }
 
-    /// AVPlayer.volume is already 0–1. Mute is a separate flag, so this stays
-    /// at the stored level while playback is muted.
+    /// AVPlayer.volume is linear amplitude gain. Cube the normalized level to
+    /// match mpv's software-volume curve; mute remains a separate flag.
     static func avPlayerVolume(_ level: Double) -> Float {
-        Float(clamp(level))
+        Float(pow(clamp(level), 3))
     }
 
     static func volumeState(level: Double, muted: Bool) -> [String: Any] {
