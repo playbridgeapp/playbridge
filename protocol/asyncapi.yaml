@@ -7,8 +7,8 @@ info:
     Text frames are UTF-8 JSON. High-frequency pointer input may use the documented
     9-byte binary frame. Field names and JSON types in this document are normative.
   license:
-    name: GPL-3.0
-    url: https://www.gnu.org/licenses/gpl-3.0.html
+    name: MPL-2.0
+    url: https://www.mozilla.org/MPL/2.0/
 defaultContentType: application/json
 servers:
   discoveredReceiver:

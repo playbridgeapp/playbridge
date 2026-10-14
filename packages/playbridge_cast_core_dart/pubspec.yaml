@@ -1,4 +1,5 @@
 name: playbridge_cast_core
+license: MPL-2.0
 description: Reusable Dart FFI bindings for PlayBridge Cast Core discovery and sessions.
 version: 0.1.0
 publish_to: none

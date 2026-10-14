@@ -36,7 +36,7 @@
         <ul>
           <li><a href="/privacy">Privacy</a></li>
           <li><a href="/security">Security</a></li>
-          <li><a href="https://www.gnu.org/licenses/gpl-3.0.html" rel="noopener">License (GPL-3.0)</a></li>
+          <li><a href="https://www.mozilla.org/MPL/2.0/" rel="noopener">License (MPL-2.0)</a></li>
           <li><a href="mailto:{SITE.email}">{SITE.email}</a></li>
         </ul>
       </div>

@@ -1,5 +1,6 @@
 {
   "name": "playbridge-browser-receiver-web",
+  "license": "MPL-2.0",
   "private": true,
   "type": "module",
   "scripts": {

@@ -4,7 +4,7 @@ version = "0.15.0"
 edition = "2024"
 rust-version.workspace = true
 publish = false
-license = "AGPL-3.0-or-later"
+license = "MPL-2.0"
 description = "Cross-platform command-line client for PlayBridge Cast Core"
 
 [[bin]]

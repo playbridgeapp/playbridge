@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha">
-  <img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3">
+  <img src="https://img.shields.io/badge/license-MPL--2.0-blue" alt="License: MPL-2.0">
   <a href="https://discord.gg/4U6WPSdSa9"><img src="https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white" alt="Discord Community"></a>
   <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support me on Ko-fi"></a>
 </p>
@@ -164,7 +164,7 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 - **Downloads**: save streams to your phone with a WorkManager-backed queue, on-the-fly HLS→MP4 transmuxing, and publishing to your gallery.
 - **Dual player engines**: ExoPlayer and MPV on the TV, with automatic fallback when a stream misbehaves.
 - **Secure pairing**: connections are verified with a short 6-digit code and encrypted over `wss://` with certificate pinning.
-- **Private by design**: everything stays on your local network — no account, no cloud, GPLv3.
+- **Private by design**: everything stays on your local network — no account, no cloud, MPL-2.0.
 
 ## Sender feature matrix
 
@@ -312,9 +312,23 @@ All trademarks and copyrights belong to their respective owners.
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0** (GPLv3). See the [LICENSE](LICENSE) file for details.
+PlayBridge's own code is licensed under the **Mozilla Public License 2.0 (MPL-2.0)**.
+See [LICENSE](LICENSE). Third-party components keep their own licences; see
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for notices and distribution obligations.
 
-It also bundles third-party software under their own (GPLv3-compatible) licenses — including GeckoView (MPL-2.0), FFmpeg and mpv/libmpv (LGPL/GPL), and uBlock Origin (GPL-3.0). See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full list.
+This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+If a copy of the MPL was not distributed with this file, You can obtain one at
+https://mozilla.org/MPL/2.0/.
+
+The Android TV player APK bundles GPL-3.0 components (mpv-android and nextlib), so
+that distributed APK as a whole is subject to GPL-3.0 terms. This does not change
+the MPL-2.0 licence of PlayBridge's own source. The TV browser bundles uBlock
+Origin (GPL-3.0) as a separate component with its own notices and source obligations.
+Other native media builds also require release-specific licence verification.
+
+The PlayBridge name and logos identify the official apps; see
+[TRADEMARKS.md](TRADEMARKS.md) for the fork and redistribution policy.
+Contributors must read and sign [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contact
 
