@@ -5,14 +5,19 @@ pull request, you agree to the following terms for contributions you intentional
 submit to PlayBridge. A contribution may include code, documentation, tests or
 other project material; clearly mark material you do not intend as a contribution.
 
+**“Maintainer”** means the owner of the PlayBridge project, identified as whoever
+controls the `playbridgeapp` account on GitHub and the `playbridge.app` domain,
+together with any successor or assignee of their rights in PlayBridge, including a
+legal entity the owner forms to hold the project.
+
 1. **You keep ownership.** You retain copyright in your contributions.
-2. **Copyright grant.** You grant the PlayBridge maintainer a perpetual, worldwide,
+2. **Copyright grant.** You grant the Maintainer a perpetual, worldwide,
    non-exclusive, royalty-free, irrevocable licence to use, reproduce, modify,
    prepare derivative works, display, perform, sublicense and distribute your
-   contributions and derivative works. The maintainer may do so under MPL-2.0 or
+   contributions and derivative works. The Maintainer may do so under MPL-2.0 or
    any other licence, including future licence changes, dual licensing and
    commercial licensing.
-3. **Patent grant.** On the same terms, you grant the maintainer a licence under
+3. **Patent grant.** On the same terms, you grant the Maintainer a licence under
    patent claims you control that are necessarily infringed by your contributions,
    alone or combined with the project to which you submit them, to make, have made,
    use, sell, offer for sale, import, sublicense and distribute them.
