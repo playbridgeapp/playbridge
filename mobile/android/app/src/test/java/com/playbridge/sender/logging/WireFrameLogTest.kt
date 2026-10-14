@@ -6,6 +6,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WireFrameLogTest {
+    @Test fun debugFramesNeverRetainTypedTextOrPinsOrProtectedCredentials() {
+        val frames = listOf(
+            """{"type":"command","action":"remote","payload":{"key":"text:U1lOVEhFVElDX1RFWFQ="}}""",
+            """{"type":"auth_response","success":true,"certFingerprint":"sha256/TEST_PIN","pin":"TEST_PIN","token":"TEST_TOKEN"}""",
+            """{"type":"pairing_approved","nonce":"TEST_NONCE","ciphertext":"TEST_CIPHERTEXT"}""",
+            """{"type":"user_agent","name":"TEST_NAME","value":"TEST_TYPED_AGENT"}""",
+            """{"type":"user_script","name":"TEST_NAME","content":"TEST_TYPED_SCRIPT"}""",
+        )
+        for (frame in frames) {
+            val redacted = WireFrameLog.redact(frame)
+            assertEquals(WireFrameLog.summary(frame), redacted)
+            assertFalse(redacted.contains("TEST_"))
+            assertFalse(redacted.contains("U1lOVEhFVElDX1RFWFQ="))
+        }
+    }
+
+    @Test fun untrustedEnvelopeTypeCannotInjectContentIntoLogs() {
+        val frame = """{"type":"TEST_TYPED_SECRET"}"""
+        assertEquals("type=unknown bytes=${frame.toByteArray(Charsets.UTF_8).size}", WireFrameLog.summary(frame))
+    }
     @Test fun authLoggingOmitsDescriptorAndCredentialsEvenInDebugFrames() {
         val frame = """{"type":"auth_response","success":true,"token":"TEST_SECRET","capabilities":{"version":1,"surfaces":{"PRIVATE_SURFACE":{"engines":{}}}}}"""
         assertFalse(WireFrameLog.summary(frame).contains("PRIVATE_SURFACE"))

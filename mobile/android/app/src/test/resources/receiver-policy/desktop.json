@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "surfaces": {
+    "player": {
+      "engines": {
+        "internal_mpv": {
+          "transport": [
+            "play",
+            "pause",
+            "toggle",
+            "stop",
+            "seek_absolute",
+            "seek_relative"
+          ],
+          "imageTransforms": [
+            "pan",
+            "scroll",
+            "zoom",
+            "rotate",
+            "anchor",
+            "reset"
+          ],
+          "tracks": [
+            "audio_select",
+            "subtitle_select",
+            "subtitle_url_add",
+            "subtitle_resource_add"
+          ],
+          "queue": [
+            "replace",
+            "append",
+            "jump_index",
+            "jump_item",
+            "remove",
+            "move",
+            "clear"
+          ],
+          "reporting": [
+            "status",
+            "context",
+            "tracks",
+            "playlist_status"
+          ]
+        }
+      }
+    }
+  },
+  "volume": {
+    "scope": "system",
+    "operations": [
+      "relative_step"
+    ],
+    "fallbackScope": "app"
+  },
+  "host": {
+    "osFamily": "macos",
+    "deviceClass": "desktop"
+  }
+}

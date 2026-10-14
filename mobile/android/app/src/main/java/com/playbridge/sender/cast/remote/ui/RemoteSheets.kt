@@ -1,5 +1,10 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.RemoteCapabilities
+import com.playbridge.sender.cast.remote.PlayerSetting
+import com.playbridge.sender.cast.remote.Support
+import com.playbridge.sender.cast.remote.BrowserAction
+import com.playbridge.sender.cast.remote.receiverActionSupported
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -94,7 +99,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun BrowserMoreSheet(onBrowserControl: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun BrowserMoreSheet(onBrowserControl: (String) -> Unit, onDismiss: () -> Unit, supported: (RemoteAction) -> Boolean = { true }) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         RemoteDialogVolumeKeys()
         Text("More controls", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 24.dp, bottom = 4.dp))
@@ -103,10 +108,10 @@ internal fun BrowserMoreSheet(onBrowserControl: (String) -> Unit, onDismiss: () 
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            LabeledIconButton(icon = Icons.Default.Layers, label = "Source", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_target_cycle"); onDismiss() })
-            LabeledIconButton(icon = Icons.AutoMirrored.Filled.VolumeUp, label = "Unmute", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_unmute"); onDismiss() })
-            LabeledIconButton(icon = Icons.Default.Code, label = "Scripts", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("manage_user_scripts"); onDismiss() })
-            LabeledIconButton(icon = Icons.Default.Language, label = "User Agent", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("manage_user_agent"); onDismiss() })
+            if (supported(RemoteAction.Browser(BrowserAction.CycleSource))) LabeledIconButton(icon = Icons.Default.Layers, label = "Source", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_target_cycle"); onDismiss() })
+            if (supported(RemoteAction.Browser(BrowserAction.Unmute))) LabeledIconButton(icon = Icons.AutoMirrored.Filled.VolumeUp, label = "Unmute", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_unmute"); onDismiss() })
+            if (supported(RemoteAction.ManageUserScripts)) LabeledIconButton(icon = Icons.Default.Code, label = "Scripts", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("manage_user_scripts"); onDismiss() })
+            if (supported(RemoteAction.ManageUserAgent)) LabeledIconButton(icon = Icons.Default.Language, label = "User Agent", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("manage_user_agent"); onDismiss() })
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -131,6 +136,7 @@ private fun PlayerSettingsSheet(
     showAddSubtitle: Boolean,
     onAddSubtitle: () -> Unit,
     onDismiss: () -> Unit,
+    capabilities: RemoteCapabilities? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         RemoteDialogVolumeKeys()
@@ -209,7 +215,7 @@ private fun PlayerSettingsSheet(
                         }
                     }
                 }
-                Button(
+                if (capabilities == null || capabilities.transport.stop == Support.Supported) Button(
                     enabled = LocalRemoteControlsEnabled.current,
                     onClick = onStop,
                     modifier = Modifier.fillMaxWidth(),
@@ -252,7 +258,7 @@ private fun PlayerSettingsSheet(
 
             // 3. Audio group: Audio Boost, Engine
             val showAudioBoost = showSettings && settings.audioBoostAvailable
-            val showEngine = showSettings && settings.engine != null
+            val showEngine = showSettings && (capabilities?.let { PlayerSetting.Engine in it.settings } ?: (settings.engine != null))
             if (showAudioBoost || showEngine) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -281,7 +287,7 @@ private fun PlayerSettingsSheet(
                     if (showEngine) {
                         SettingRow("Player engine") {
                             ChipGroup(
-                                options = listOf("ExoPlayer" to "exo", "MPV" to "mpv"),
+                                options = capabilities?.engines?.map { id -> (when (id) { "exo" -> "ExoPlayer"; "avplayer" -> "AVPlayer"; else -> "MPV" }) to id } ?: listOf("ExoPlayer" to "exo", "MPV" to "mpv"),
                                 selectedKey = settings.engine,
                                 onSelect = onSwitchEngine,
                             )
@@ -291,7 +297,7 @@ private fun PlayerSettingsSheet(
             }
 
             // 4. Subtitles group: Offset / Delay, Add Subtitle
-            val showOffset = showSettings
+            val showOffset = showSettings && (capabilities == null || PlayerSetting.SubtitleOffset in capabilities.settings)
             if (showOffset || showAddSubtitle) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -618,8 +624,10 @@ private fun SubtitlesBottomSheet(
     onSelect: (String) -> Unit,
     onAdd: () -> Unit,
     onDismiss: () -> Unit,
+    showAdd: Boolean = true,
+    showSelection: Boolean = true,
 ) {
-    val groups = remember(tracks) { groupSubtitleTracks(tracks) }
+    val groups = remember(tracks, showSelection) { if (showSelection) groupSubtitleTracks(tracks) else emptyList() }
     val initialGroupKey = remember(groups) {
         groups.firstOrNull { g -> g.tracks.any { it.selected } && g.key != OFF_KEY }?.key
             ?: groups.firstOrNull { it.key != OFF_KEY }?.key
@@ -644,7 +652,7 @@ private fun SubtitlesBottomSheet(
                     fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(enabled = LocalRemoteControlsEnabled.current, onClick = onAdd) {
+                if (showAdd) TextButton(enabled = LocalRemoteControlsEnabled.current, onClick = onAdd) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Add")
@@ -742,7 +750,7 @@ internal fun RemoteSheets(
         state.sheet == RemoteSheet.OpenTvApp && state.fullControlReady
     CompositionLocalProvider(LocalRemoteControlsEnabled provides enabled) {
         when (state.sheet) {
-            RemoteSheet.More -> PlayerSettingsSheet(
+            RemoteSheet.More -> if (layout.tracks.more) PlayerSettingsSheet(
                 settings = state.screenSettings(), videoTracks = state.tracks.video.map { it.screenTrack() },
                 onSetVideoQuality = { dispatch(RemoteAction.SetVideoQuality(it.takeIf { value -> value > 0 })) },
                 onSetSpeed = { dispatch(RemoteAction.SetSpeed(it)) },
@@ -750,36 +758,43 @@ internal fun RemoteSheets(
                 onToggleAudioBoost = { dispatch(RemoteAction.ToggleAudioBoost) },
                 onAdjustSubtitleOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
                 onSwitchEngine = { dispatch(RemoteAction.SwitchEngine(it)) },
-                showSettings = !external && !image, showLoop = !external && !image && state.playback?.isLive != true,
+                showSettings = !external && !image, showLoop = !external && !image && state.playback?.isLive != true && (state.nativePolicy == null || PlayerSetting.Loop in state.capabilities.settings),
                 loopEnabled = state.settings.loopEnabled,
                 onLoop = { dispatch(RemoteAction.SetLoop(it)) },
                 onStop = { dispatch(RemoteAction.StopPlayback); close() },
-                showAddSubtitle = !external && !image && !audio,
+                showAddSubtitle = !external && !image && !audio && (state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported),
                 onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
+                capabilities = state.capabilities.takeIf { state.nativePolicy != null },
             )
-            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled) {
+            RemoteSheet.Keyboard -> if (layout.nav.keys.enabled || state.nativePolicy != null && state.connection.ready) {
                 val route = remember { state.keyboardRoute() }
                 val context = remember { state.context }
+                val receiverText = state.fullControl?.receiverText ?: state.capabilities.text
                 RemoteKeyboardSheet(
                     dispatch = { dispatch(RemoteAction.KeyboardInput(it, route, context)) },
                     onDismiss = close,
                     imeKeys = route == RemoteKeyboardRoute.FullControl,
+                    canReplace = route == RemoteKeyboardRoute.FullControl || receiverText.replace == Support.Supported,
+                    canEnter = route == RemoteKeyboardRoute.FullControl || state.nativePolicy == null || receiverText.enter == Support.Supported ||
+                        state.nativePolicy.operations.keys.contains("key_enter"),
                     execute = { execute(RemoteAction.KeyboardInput(it, route, context)) },
                 )
             }
             RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
             RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
-            RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close)
-            RemoteSheet.Subtitles -> if (!image && !audio) SubtitlesBottomSheet(
-                tracks = state.tracks.subtitles.map { it.screenTrack() },
+            RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close, state::receiverActionSupported)
+            RemoteSheet.Subtitles -> if (!image && !audio && layout.tracks.subtitles) SubtitlesBottomSheet(
+                tracks = if (state.nativePolicy == null || state.capabilities.tracks.subtitle == Support.Supported) state.tracks.subtitles.map { it.screenTrack() } else emptyList(),
                 onSelect = { dispatch(RemoteAction.SelectSubtitle(it)) },
                 onAdd = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
+                showAdd = state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported,
+                showSelection = state.nativePolicy == null || state.capabilities.tracks.subtitle == Support.Supported,
             )
-            RemoteSheet.AddSubtitle -> if (!image && !audio) AddSubtitleDialog(
-                detectedSubtitles = detectedSubtitles,
+            RemoteSheet.AddSubtitle -> if (!image && !audio && (state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported)) AddSubtitleDialog(
+                detectedSubtitles = if (state.nativePolicy == null || state.capabilities.tracks.addResource == Support.Supported) detectedSubtitles else detectedSubtitles.filter { subtitleResourceForDetected(it).headers.isEmpty() },
                 onSubmitResource = { dispatch(RemoteAction.AddSubtitle(it)) },
                 onAddResource = { dispatch(RemoteAction.AddSubtitle(it)); true },
-                onAddLocalUrl = { dispatch(RemoteAction.AddSubtitle(playbridge.SubtitleResource(url = it), legacyUrlOnly = true)) },
+                onAddLocalUrl = { dispatch(RemoteAction.AddSubtitle(playbridge.SubtitleResource(url = it), legacyUrlOnly = state.nativePolicy == null || state.capabilities.tracks.addResource != Support.Supported)) },
                 onDismiss = close,
             )
             RemoteSheet.Queue -> if (layout.showQueue) RemoteQueueSheet(state, dispatch)

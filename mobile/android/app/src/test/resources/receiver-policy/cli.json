@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "surfaces": {
+    "player": {
+      "engines": {
+        "internal_mpv": {
+          "transport": [
+            "play",
+            "pause",
+            "toggle",
+            "stop",
+            "seek_absolute",
+            "seek_relative"
+          ],
+          "queue": [
+            "replace",
+            "append",
+            "jump_index"
+          ],
+          "reporting": [
+            "status",
+            "context",
+            "playlist_status"
+          ]
+        }
+      }
+    }
+  },
+  "host": {
+    "osFamily": "macos",
+    "deviceClass": "cli"
+  }
+}

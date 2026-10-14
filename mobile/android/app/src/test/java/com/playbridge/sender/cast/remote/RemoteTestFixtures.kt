@@ -25,6 +25,7 @@ internal class FakeNativeRemoteTransport(initial: RemoteReceiverSnapshot = testS
     val commands = mutableListOf<String>()
     val pointers = mutableListOf<Triple<String, Float, Float>>()
     val ordering = mutableListOf<String>()
+    val anchorResets = mutableListOf<Boolean>()
     val confirmations = mutableListOf<Triple<String, String, Long>>()
     var accepted = true
     var mirrorStops = 0
@@ -32,6 +33,7 @@ internal class FakeNativeRemoteTransport(initial: RemoteReceiverSnapshot = testS
     override fun send(command: String): Boolean { commands += command; ordering += command; return accepted }
     override fun pointer(event: String, x: Float, y: Float): Boolean { pointers += Triple(event, x, y); ordering += event; return accepted }
     override fun endPointerGesture(): Boolean { ordering += "final-flush"; return accepted }
+    override fun endPointerGesture(resetAnchor: Boolean): Boolean { anchorResets += resetAnchor; return endPointerGesture() }
     override suspend fun confirmed(requestId: String, command: String, timeoutMs: Long): QueueCommandResult? {
         confirmations += Triple(requestId, command, timeoutMs)
         return confirmation()

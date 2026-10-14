@@ -74,13 +74,15 @@ internal fun RemoteKeyboardSheet(
     dispatch: (RemoteAction) -> Unit,
     onDismiss: () -> Unit = { dispatch(RemoteAction.CloseSheet) },
     imeKeys: Boolean = false,
+    canReplace: Boolean = true,
+    canEnter: Boolean = true,
     execute: suspend (RemoteAction) -> RemoteCommandResult = { action -> dispatch(action); RemoteCommandResult.Submitted },
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         RemoteDialogVolumeKeys()
         KeyboardSheetContent(
-            dispatch = dispatch, imeKeys = imeKeys, execute = execute,
+            dispatch = dispatch, imeKeys = imeKeys, canReplace = canReplace, canEnter = canEnter, execute = execute,
             focusReady = sheetState.currentValue == SheetValue.Expanded && sheetState.targetValue == SheetValue.Expanded,
         )
     }
@@ -90,6 +92,8 @@ internal fun RemoteKeyboardSheet(
 internal fun KeyboardSheetContent(
     dispatch: (RemoteAction) -> Unit,
     imeKeys: Boolean = false,
+    canReplace: Boolean = true,
+    canEnter: Boolean = true,
     execute: suspend (RemoteAction) -> RemoteCommandResult = { action -> dispatch(action); RemoteCommandResult.Submitted },
     focusReady: Boolean = true,
 ) {
@@ -137,11 +141,11 @@ internal fun KeyboardSheetContent(
     }
 
     fun handleEnter() {
-        if (editor != null) editor.enter() else dispatch(RemoteAction.Key(RemoteKey.Enter))
+        if (canEnter) { if (editor != null) editor.enter() else dispatch(RemoteAction.Key(RemoteKey.Enter)) }
     }
 
     val value = draft?.value ?: textFieldValue
-    val enabled = LocalRemoteControlsEnabled.current && draft?.failed != true
+    val enabled = LocalRemoteControlsEnabled.current && draft?.failed != true && canReplace
 
     Column(
         modifier = Modifier
@@ -226,7 +230,7 @@ internal fun KeyboardSheetContent(
                 }
 
                 Button(
-                    enabled = enabled,
+                    enabled = enabled && canEnter,
                     onClick = { handleEnter() },
                     modifier = Modifier.weight(1f),
                 ) {

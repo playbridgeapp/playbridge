@@ -132,7 +132,7 @@ class ReceiverProtocolStateTest {
         assertNull(parse("""{"version":1.0000000000000000001,"surfaces":{}}"""))
     }
 
-    @Test fun malformedRecognizedV1AndInvalidShapesBecomeLegacy() {
+    @Test fun malformedRecognizedV1AndInvalidShapesAreRejected() {
         val cases = listOf(
             "missing-version", "string-version", "zero-version", "oversized-version", "missing-surfaces",
             "contradictory-surface-list", "duplicate-operations", "nonstring-operation", "transient-active-engine",
@@ -144,6 +144,7 @@ class ReceiverProtocolStateTest {
         val (owner, session) = authenticatedSession()
         owner.acceptCredentials(session, auth("""{"version":1,"surfaces":[]}"""))
         assertNull(owner.state.value.descriptor)
+        assertTrue(owner.state.value.malformedV1)
     }
 
     @Test fun mapArrayAndIdentifierBoundsAreEnforced() {

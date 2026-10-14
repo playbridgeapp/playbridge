@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.receiverActionSupported
+import com.playbridge.sender.cast.remote.queueJump
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -148,8 +150,8 @@ private fun QueueEpisodes(
                             color = if (isCurrent) MaterialTheme.colorScheme.primary else Color.Transparent,
                             shape = RoundedCornerShape(12.dp),
                         )
-                        .clickable(enabled = LocalRemoteControlsEnabled.current) {
-                            dispatch(RemoteAction.JumpToEpisode(ep.index, ep.itemId))
+                        .clickable(enabled = LocalRemoteControlsEnabled.current && (state.nativePolicy == null || state.receiverActionSupported(state.queueJump(ep.index, ep.itemId)))) {
+                            dispatch(state.queueJump(ep.index, ep.itemId))
                         },
                     shape = RoundedCornerShape(12.dp),
                     color = if (isCurrent) {

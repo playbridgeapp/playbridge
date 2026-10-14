@@ -9,6 +9,8 @@ import com.playbridge.shared.protocol.createControlCommandJson
 import com.playbridge.shared.protocol.createPlaylistJumpCommandJson
 import com.playbridge.shared.protocol.createRemoteCommandJson
 import com.playbridge.shared.protocol.createUserAgentQueryJson
+import com.playbridge.shared.protocol.createUserAgentJson
+import com.playbridge.shared.protocol.createUserScriptJson
 import com.playbridge.shared.protocol.createUserScriptQueryJson
 import java.util.Base64
 import java.util.UUID
@@ -39,23 +41,20 @@ open class NativeProfileRemoteController(
 ) : RemoteController {
     private var pointerActive = false
     private var pointerHeld = false
+    private var pointerAnchorActive = false
 
     private fun decorate(
         raw: RemoteReceiverSnapshot, protocol: ReceiverProtocolState = raw.state.receiverProtocol,
     ): RemoteReceiverSnapshot {
         val state = raw.state
-        return raw.copy(state = state.copy(
+        val decorated = state.copy(
             sessionId = sessionId, receiver = configuration.receiver,
             receiverProtocol = if (state.connection.ready) protocol else ReceiverProtocolState(),
             playback = state.playback?.let { playback ->
                 playback.copy(mediaId = RemoteMediaId(sessionId, state.queue?.playbackId, state.queue?.currentItemId, raw.observation.mediaGeneration))
             },
-            capabilities = nativeRemoteCapabilities(
-                configuration.receiver.profile, state.context, state.playback?.mediaKind ?: RemoteMediaKind.Video,
-                configuration.players, configuration.features, state.settings,
-                state.browser?.engine ?: RemoteBrowserEngine.Unknown, state.tracks, state.queue,
-            ),
-        ))
+        )
+        return raw.copy(state = resolveReceiverRemotePolicy(decorated, configuration.players, configuration.features))
     }
     final override val snapshot: StateFlow<RemoteReceiverSnapshot> = (configuration.receiverProtocol?.let { protocol ->
         combine(transport.snapshot, protocol) { raw, metadata -> decorate(raw, metadata) }
@@ -80,19 +79,29 @@ open class NativeProfileRemoteController(
                 pointerActive = true
                 if (event == "down") pointerHeld = true
                 if (event == "up") pointerHeld = false
+                if (event == "transform_anchor") pointerAnchorActive = x >= 0f && y >= 0f
+                if (event == "reset") pointerAnchorActive = false
                 RemoteCommandResult.Submitted
             } else RemoteCommandResult.Failed("Could not send pointer command")
         }
         fun setting(setting: PlayerSetting, command: String) = if (setting in caps.settings) control(command) else unsupported()
         val playback = state.playback
+        // An in-flight pointer still needs release when context/authority changes.
+        if (state.nativePolicy != null && !state.receiverActionSupported(action) &&
+            !(action == RemoteAction.PointerUp && pointerHeld || action == RemoteAction.PointerGestureEnd && pointerActive)) return unsupported()
         return when (action) {
             RemoteAction.TogglePlayPause, is RemoteAction.SetPlaying -> {
-                if (caps.transport.playPause != Support.Supported) unsupported()
-                else if (state.context == RemoteContext.Browser) browser("toggle_play")
+                if (state.nativePolicy != null && action == RemoteAction.TogglePlayPause && "toggle" in state.nativePolicy.operations.transport)
+                    if (state.context == RemoteContext.Browser) browser("toggle_play") else control("toggle")
+                else if (state.nativePolicy == null && caps.transport.playPause != Support.Supported) unsupported()
+                else if (state.context == RemoteContext.Browser) browser(if (state.nativePolicy == null) "toggle_play"
+                    else if ((action as? RemoteAction.SetPlaying)?.playing ?: (playback?.displayedPlaying != true)) "play" else "pause")
                 else control(if ((action as? RemoteAction.SetPlaying)?.playing ?: (playback?.displayedPlaying != true)) "play" else "pause")
             }
             is RemoteAction.SeekTo, is RemoteAction.SeekBy -> {
-                if (caps.transport.seekAbsolute != Support.Supported || playback?.seekable != Support.Supported || playback.isLive || playback.mediaKind == RemoteMediaKind.Image) unsupported()
+                if ((state.nativePolicy == null || action is RemoteAction.SeekTo) && caps.transport.seekAbsolute != Support.Supported || playback?.seekable != Support.Supported || playback.isLive || playback.mediaKind == RemoteMediaKind.Image) unsupported()
+                else if (state.nativePolicy != null && action is RemoteAction.SeekBy && state.context != RemoteContext.Browser && caps.transport.seekAbsolute != Support.Supported)
+                    control(if (action.deltaMs >= 0) "seek_forward" else "seek_back")
                 else {
                     val target = when (action) {
                         is RemoteAction.SeekTo -> boundedSeek(action.positionMs, playback.durationMs)
@@ -105,7 +114,8 @@ open class NativeProfileRemoteController(
             is RemoteAction.JumpToEpisode -> {
                 val item = state.queue?.items?.firstOrNull { it.index == action.index }
                 when {
-                    caps.queue.jumpIndex != Support.Supported -> unsupported()
+                    state.nativePolicy == null && caps.queue.jumpIndex != Support.Supported -> unsupported()
+                    action.itemId == null && caps.queue.jumpIndex != Support.Supported -> unsupported()
                     action.index < 0 || item == null || action.itemId != null && item.itemId != action.itemId -> RemoteCommandResult.Failed("Episode is no longer in this queue")
                     action.itemId == null -> send(createPlaylistJumpCommandJson(action.index))
                     caps.queue.jumpItem != Support.Supported -> unsupported()
@@ -160,10 +170,15 @@ open class NativeProfileRemoteController(
                     result
                 }
             }
-            is RemoteAction.SetVolume -> unsupported()
+            is RemoteAction.SetVolume -> if (state.nativePolicy == null || caps.volume.absolute != Support.Supported) unsupported()
+                else if (action.percent !in 0..100) RemoteCommandResult.Failed("Invalid volume level")
+                else send(buildJsonObject {
+                    put("type", "command"); put("action", "volume")
+                    put("payload", buildJsonObject { put("scope", state.nativePolicy.volume!!.scope); put("level", action.percent / 100.0) })
+                }.toString())
             is RemoteAction.ReplaceText -> if (caps.text.replace == Support.Supported)
                 send(createRemoteCommandJson("text:${Base64.getEncoder().encodeToString(action.text.toByteArray(Charsets.UTF_8))}")) else unsupported()
-            RemoteAction.DeleteText -> unsupported()
+            RemoteAction.DeleteText -> if (state.nativePolicy != null && caps.text.delete == Support.Supported) send(createRemoteCommandJson("key_delete")) else unsupported()
             is RemoteAction.PointerMove -> if (caps.pointer.move == Support.Supported) pointer("move", action.dx, action.dy) else unsupported()
             RemoteAction.PointerClick -> if (caps.pointer.click == Support.Supported) pointer("click") else unsupported()
             is RemoteAction.PointerScroll -> if (caps.pointer.scroll == Support.Supported) pointer("scroll", action.dx, action.dy) else unsupported()
@@ -173,12 +188,12 @@ open class NativeProfileRemoteController(
                 caps.pointer.drag == Support.Supported -> RemoteCommandResult.Submitted // already released by gesture cleanup
                 else -> unsupported()
             }
-            RemoteAction.PointerGestureEnd -> if (configuration.receiver.profile !in setOf(RemoteProfile.AndroidTv, RemoteProfile.Desktop)) unsupported()
+            RemoteAction.PointerGestureEnd -> if (state.nativePolicy == null && configuration.receiver.profile !in setOf(RemoteProfile.AndroidTv, RemoteProfile.Desktop)) unsupported()
                 else if (!pointerActive) RemoteCommandResult.Submitted
                 else {
                     if (pointerHeld) pointer("up")
-                    val finished = current() && transport.endPointerGesture()
-                    pointerActive = false; pointerHeld = false
+                    val finished = current() && if (state.nativePolicy == null) transport.endPointerGesture() else transport.endPointerGesture(pointerAnchorActive)
+                    pointerActive = false; pointerHeld = false; pointerAnchorActive = false
                     if (finished) RemoteCommandResult.Submitted else RemoteCommandResult.Failed("Could not finish pointer gesture")
                 }
             is RemoteAction.ImageZoom -> if (caps.pointer.zoom != Support.Supported) unsupported()
@@ -188,9 +203,12 @@ open class NativeProfileRemoteController(
             RemoteAction.ResetImageTransform -> if (caps.pointer.reset == Support.Supported) pointer("reset") else unsupported()
             is RemoteAction.Browser -> if (action.action in caps.browser.actions) browser(action.action.wireValue) else unsupported()
             is RemoteAction.SetBrowserFullscreen -> if (caps.browser.fullscreen == Support.Supported) browser(if (action.fullscreen) "maximize_video" else "restore_video") else unsupported()
-            is RemoteAction.OpenTvBrowser -> if (caps.browser.launch == Support.Supported) send(createBrowserCommandJson(action.url, action.engine)) else unsupported()
+            is RemoteAction.OpenTvBrowser -> if (caps.browser.launch == Support.Supported) send(createBrowserCommandJson(action.url,
+                action.engine ?: state.nativePolicy?.launchEngines?.firstOrNull())) else unsupported()
             RemoteAction.ManageUserScripts -> if (caps.browser.managers == Support.Supported) send(createUserScriptQueryJson()) else unsupported()
             RemoteAction.ManageUserAgent -> if (caps.browser.managers == Support.Supported) send(createUserAgentQueryJson()) else unsupported()
+            is RemoteAction.UpdateUserScript -> send(createUserScriptJson(action.name, action.content))
+            is RemoteAction.UpdateUserAgent -> send(createUserAgentJson(action.name, action.value, action.save))
             RemoteAction.Resync -> send(createContextQueryJson())
             is RemoteAction.Unavailable -> RemoteCommandResult.Unsupported(action.reason)
             else -> unsupported()

@@ -79,7 +79,8 @@ internal fun TrackChipsRow(
     showSubtitles: Boolean,
     onSelectAudio: (String) -> Unit,
     onSubtitlesClick: () -> Unit,
-    onMore: () -> Unit
+    onMore: () -> Unit,
+    showMore: Boolean = true,
 ) {
     val subtitleInteraction = remember { MutableInteractionSource() }
     val moreInteraction = remember { MutableInteractionSource() }
@@ -120,7 +121,7 @@ internal fun TrackChipsRow(
         if (trackCount == 0) {
             Spacer(modifier = Modifier.weight(1f))
         }
-        Surface(enabled = LocalRemoteControlsEnabled.current,
+        if (showMore) Surface(enabled = LocalRemoteControlsEnabled.current,
             interactionSource = moreInteraction,
             onClick = onMore,
             shape = RoundedCornerShape(20.dp),
@@ -194,6 +195,7 @@ internal fun RemoteMediaInfo(state: RemoteUiState, layout: RemoteLayoutSpec, dis
             onSelectAudio = { dispatch(RemoteAction.SelectAudio(it)) },
             onSubtitlesClick = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Subtitles)) },
             onMore = { dispatch(RemoteAction.OpenSheet(RemoteSheet.More)) },
+            showMore = layout.tracks.more,
         )
     }
 }

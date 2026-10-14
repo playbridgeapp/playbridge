@@ -39,8 +39,9 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val audio = playback?.mediaKind == RemoteMediaKind.Audio
     val keys = state.capabilities.keys
     val whole = state.capabilities.keyScope == ControlScope.WholeDevice
+    val descriptor = state.nativePolicy != null
     val hasPad = state.hasPadRoute()
-    val pointer = !external && (browser || player && image) && state.capabilities.pointer.move == Support.Supported
+    val pointer = !external && (browser || player && image) && state.hasPointerRoute()
     val modes = buildList {
         if (idle && !hasPad) add(RemoteInputMode.Context)
         if (hasPad) add(RemoteInputMode.Pad)
@@ -76,15 +77,20 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
         ),
         transport = RemoteTransportSpec(
             visible = false, enabled = state.connection.ready,
-            seek = player && !image && playback?.isLive != true && playback?.seekable == Support.Supported,
-            playPause = player && (!image || playback.durationMs > 0L),
-            previous = if (!external && current > 0) indices[current - 1] else null,
-            next = if (!external && current >= 0) indices.getOrNull(current + 1) else null,
+            seek = player && !image && playback?.isLive != true && playback?.seekable == Support.Supported && (!descriptor || state.capabilities.transport.seekAbsolute == Support.Supported),
+            playPause = player && (!image || playback.durationMs > 0L) && (!descriptor || state.receiverActionSupported(RemoteAction.TogglePlayPause)),
+            previous = if (!external && current > 0 && (!descriptor || state.capabilities.queue.jumpIndex == Support.Supported)) indices[current - 1] else null,
+            next = if (!external && current >= 0 && (!descriptor || state.capabilities.queue.jumpIndex == Support.Supported)) indices.getOrNull(current + 1) else null,
         ),
         idle = idle, info = player || browserTitle(browser, playback) != null,
-        wave = player && (!image || playback.durationMs > 0L) || browserVideo(browser, playback),
-        tracks = RemoteTrackChipSpec(player && !external && !image && state.tracks.audio.isNotEmpty(), player && !external && !image && !audio, player),
-        browserRow = browser, showQueue = player && !external && indices.size > 1,
+        wave = (player && (!image || playback.durationMs > 0L) || browserVideo(browser, playback)) &&
+            (!descriptor || state.capabilities.transport.playPause == Support.Supported || state.capabilities.transport.seekAbsolute == Support.Supported || state.capabilities.transport.seekRelative == Support.Supported || state.capabilities.volume.adjust == Support.Supported),
+        tracks = RemoteTrackChipSpec(
+            player && !external && !image && state.tracks.audio.isNotEmpty() && (!descriptor || state.capabilities.tracks.audio == Support.Supported),
+            player && !external && !image && !audio && (!descriptor || state.capabilities.tracks.subtitle == Support.Supported || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported),
+            player && (!descriptor || state.capabilities.settings.isNotEmpty() || state.capabilities.transport.stop == Support.Supported || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported)),
+        browserRow = browser && (!descriptor || state.capabilities.browser.actions.isNotEmpty() || state.capabilities.browser.fullscreen == Support.Supported || state.capabilities.browser.managers == Support.Supported || RemoteKey.Back in keys),
+        showQueue = player && !external && indices.size > 1 && (!descriptor || state.capabilities.queue.jumpIndex == Support.Supported || state.capabilities.queue.jumpItem == Support.Supported),
     )
 }
 
