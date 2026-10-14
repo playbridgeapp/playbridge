@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.16.0] — 2026-10-13 (versionCode 229)
 
-> **Works best together**: Player Home, the TV-reported Loop switch, browser fullscreen state, and typing and fullscreen inside embedded web players need the next PlayBridge TV Player update. Older TVs keep working: those controls stay hidden or use the older behaviour. Full Android TV control works with any Android TV or Google TV, whether or not PlayBridge is installed on it.
+> **Works best together**: Player Home, the TV-reported Loop switch, browser fullscreen state, and typing and fullscreen inside embedded web players need the next PlayBridge TV Player update. Older TVs keep working: those controls stay hidden or use the older behaviour. Full Android TV control works with any Android TV or Google TV, whether or not PlayBridge is installed on it. The remote also adapts to what each PlayBridge receiver reports it supports; receivers that don't report this keep the previous remote. Zoom in the TV's GeckoView browser needs PlayBridge TV Player 0.16.0 with GeckoView Plugin 0.15.0.
 
 ### Added
 - **Android TV full control**: Pair directly with any Android TV or Google TV using the on-screen code to control the directional pad, Home, Back, volume level, the keyboard, and open apps.
@@ -14,6 +14,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Remote haptics**: Feel tactile vibration feedback on remote presses, with customizable intensity (light, medium, or strong) in Settings → TV → Remote.
 - **Button pad**: Switch between the directional swipe pad and traditional arrow buttons directly from the on-pad toggle.
 - **Up next queue**: View upcoming items with watched and progress state, or open the All sheet with season tabs to jump ahead or manage the queue.
+- **Remote that matches the receiver**: The remote shows only the keys, player settings, browser controls and volume control that the connected PlayBridge receiver says it supports, and follows the engine that is active on the TV.
+- **Apple TV remote**: Control PlayBridge on Apple TV with Home, Back, all four arrows and OK, and change its app volume with steps and mute.
+- **Volume line**: One line above the remote buttons shows the volume and mute state, such as "TV volume 40/100 · Unmuted" or "App volume 60/100 · Muted" for receivers that control their own volume.
 
 ### Changed
 - **Remote redesign**: The remote adapts cleanly across portrait and landscape, replacing separate transport controls with a unified wave seek bar for playback, seeking, and volume while hiding the pad during video playback.
