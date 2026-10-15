@@ -51,9 +51,7 @@ const noSubtitlesMsg = document.getElementById('no-subtitles-msg');
 const masterPlayBtn = document.getElementById('master-play-btn');
 const actionBar = document.getElementById('action-bar');
 
-const openCurrentTabBtn = document.getElementById('open-current-tab-btn');
 const customUrlInput = document.getElementById('custom-url-input');
-const openUrlBrowserBtn = document.getElementById('open-url-browser-btn');
 const openUrlPlayerBtn = document.getElementById('open-url-player-btn');
 
 const refreshBtn = document.getElementById('refresh-btn');
@@ -935,45 +933,6 @@ masterPlayBtn.addEventListener('click', async () => {
     }).catch(err => {
         console.error("Error sending play command:", err);
         showToast('Error sending play command');
-    });
-});
-
-openCurrentTabBtn.addEventListener('click', async () => {
-    browser.runtime.sendMessage({ action: 'getCurrentTabUrl' }).then(res => {
-        const url = res?.url;
-        if (url) {
-            browser.runtime.sendMessage({
-                action: 'wsSendToTv',
-                url: url,
-                target: 'browser'
-            }).then(sendRes => {
-                reportPlaybackResult(sendRes, 'Opening tab on TV');
-            }).catch(err => {
-                console.error("Error sending open command:", err);
-                showToast('Error sending open command');
-            });
-        } else {
-            showToast('Cannot get current tab URL');
-        }
-    }).catch(err => console.error("Error asking bg for tab url:", err));
-});
-
-openUrlBrowserBtn.addEventListener('click', async () => {
-    const url = customUrlInput.value.trim();
-    if (!url) {
-        showToast('Please enter a URL');
-        return;
-    }
-    
-    browser.runtime.sendMessage({
-        action: 'wsSendToTv',
-        url: url,
-        target: 'browser'
-    }).then(res => {
-        reportPlaybackResult(res, 'Opening URL on TV');
-    }).catch(err => {
-        console.error("Error sending open command:", err);
-        showToast('Error sending open command');
     });
 });
 
