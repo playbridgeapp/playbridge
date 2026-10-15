@@ -8,6 +8,7 @@ import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 import 'engines/tv_cast_media_preparer.dart';
 import 'pairing_store.dart';
 import 'protocol.dart';
+import 'receiver_capability_policy.dart';
 import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
@@ -372,6 +373,67 @@ class TvSenderController extends ChangeNotifier {
   // optimistically when we cast). Drives the Now Playing tab's item list.
   List<({int index, String title})> _castPlaylist = const [];
   int _castIndex = -1;
+
+  // Receiver capability and state metadata.
+  String? _remoteContext;
+  String? _contextEngine;
+  String? _settingsEngine;
+  ReceiverSettingsAvailability _settingsAvailability =
+      const ReceiverSettingsAvailability();
+  ReceiverVolumeState? _volumeState;
+  bool? _loopEnabled;
+  String? _mediaKind;
+  bool _isLive = false;
+
+  /// Pure resolved capability policy for the active TV receiver.
+  ResolvedReceiverPolicy get policy {
+    Map<String, dynamic>? transportCaps;
+    try {
+      if (_transport.capabilities.isNotEmpty) {
+        transportCaps = _transport.capabilities;
+      }
+    } catch (_) {
+      transportCaps = null;
+    }
+    final rawCaps = _activeTv?.capabilities.isNotEmpty == true
+        ? _activeTv!.capabilities
+        : transportCaps;
+    return resolveReceiverCapabilityPolicy(
+      rawDescriptor: rawCaps,
+      activeSurface: _remoteContext ??
+          (_remoteState.isNotEmpty && !_terminalStates.contains(_remoteState)
+              ? 'player'
+              : null),
+      activeEngine: _contextEngine ?? _settingsEngine,
+      settingsAvailability: _settingsAvailability,
+      volumeState: _volumeState,
+      mediaKind: _mediaKind,
+      isLive: _isLive,
+      hasDuration: _remoteDurationMs > 0,
+      isPlaying: _remoteState == 'playing',
+    );
+  }
+
+  bool get canPlayPause => policy.canPlayPause;
+  bool get canPlay => policy.canPlay;
+  bool get canPause => policy.canPause;
+  bool get canStop => policy.canStop;
+  bool get canSeekAbsolute => policy.canSeekAbsolute;
+  bool get canSeekRelative => policy.canSeekRelative;
+  bool get hasVolume => policy.hasVolume;
+  bool get canAdjustVolume => policy.canAdjustVolume;
+  bool get canSetVolume => policy.canSetVolume;
+  bool get canToggleMute => policy.canToggleMute;
+  String? get volumeLabel => policy.volumeLabel;
+  double? get volumeLevel => policy.currentVolumeLevel;
+  bool? get isMuted => policy.isMuted;
+  bool get canLoop => policy.canLoop;
+  bool? get isLoopEnabled => _loopEnabled;
+  bool get canSwitchEngine => policy.canSwitchEngine;
+  Set<String> get availablePlayerEngines => policy.availablePlayerEngines;
+  bool get canLaunchBrowser => policy.canLaunchBrowser;
+  Set<String> get launchBrowserEngines => policy.launchBrowserEngines;
+  bool canSendKey(String key) => policy.canSendKey(key);
 
   /// Discovered TVs on the LAN, always excluding this app's own receiver
   /// advertisement. Local playback is the default when nothing is linked
@@ -974,11 +1036,128 @@ class TvSenderController extends ChangeNotifier {
     }
   }
 
-  Future<bool> playlistJump(int index) => _transport.playlistJump(index);
+  Future<bool> playlistJump(int index) {
+    if (!policy.isLegacy && !policy.canPlaylistJumpIndex) {
+      return Future.value(false);
+    }
+    return _transport.playlistJump(index);
+  }
+
+  /// Whether [command] is permitted by the current receiver capabilities policy.
+  bool canSendControl(String command) {
+    if (policy.isLegacy) return true;
+    if (policy.isMalformedV1) return false;
+    if (command == 'play') return policy.canPlay;
+    if (command == 'pause') return policy.canPause;
+    if (command == 'toggle') return policy.canPlayPause;
+    if (command == 'stop') return policy.canStop;
+    if (command == 'seek_forward' || command == 'seek_back') {
+      return policy.canSeekRelative;
+    }
+    if (command.startsWith('seek_to:')) return policy.canSeekAbsolute;
+    if (command == 'loop_on' || command == 'loop_off') return policy.canLoop;
+    if (command.startsWith('switch_player:')) {
+      final eng = command.substring('switch_player:'.length);
+      return policy.canSwitchEngine &&
+          policy.availablePlayerEngines.contains(eng);
+    }
+    return false;
+  }
 
   Future<bool> sendControl(String command) {
+    if (!canSendControl(command)) return Future.value(false);
     if (command == 'stop') _releaseProxyLeases();
     return _transport.sendControl(command);
+  }
+
+  Future<bool> sendRemoteKey(String key) {
+    if (policy.isLegacy) {
+      if (key == 'volume_up' || key == 'volume_down') {
+        return _transport.sendRemoteKey(key);
+      }
+      return Future.value(false);
+    }
+    if (policy.isMalformedV1) return Future.value(false);
+    if (!policy.canSendKey(key)) return Future.value(false);
+    return _transport.sendRemoteKey(key);
+  }
+
+  Future<bool> adjustVolume(int steps) async {
+    if (policy.isLegacy) {
+      final key = steps > 0 ? 'volume_up' : 'volume_down';
+      return _transport.sendRemoteKey(key);
+    }
+    if (!policy.canAdjustVolume) return false;
+    final key = steps > 0 ? 'volume_up' : 'volume_down';
+    var ok = true;
+    for (var i = 0; i < steps.abs(); i++) {
+      final res = await _transport.sendRemoteKey(key);
+      if (!res) ok = false;
+    }
+    return ok;
+  }
+
+  Future<bool> setVolume(double level) async {
+    if (!policy.canSetVolume) return false;
+    final scope = policy.volumeScope;
+    if (scope == null) return false;
+    return _transport.sendVolume(scope, level.clamp(0.0, 1.0));
+  }
+
+  Future<bool> toggleMute() async {
+    if (!policy.canToggleMute) return false;
+    return _transport.sendRemoteKey('mute');
+  }
+
+  Future<bool> setLoop(bool enable) async {
+    if (!policy.canLoop) return false;
+    final ok = await sendControl(enable ? 'loop_on' : 'loop_off');
+    if (ok) {
+      _loopEnabled = enable;
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Future<bool> switchPlayer(String engine) async {
+    if (!policy.canSwitchEngine ||
+        !policy.availablePlayerEngines.contains(engine)) {
+      return false;
+    }
+    return sendControl('switch_player:$engine');
+  }
+
+  Future<bool> launchBrowser({String? engine}) async {
+    if (!policy.canLaunchBrowser) return false;
+    if (engine != null && !policy.launchBrowserEngines.contains(engine)) {
+      return false;
+    }
+    return _transport.sendBrowserLaunch(engine: engine);
+  }
+
+  Future<bool> sendBrowserControl(String action) async {
+    if (policy.isLegacy) return _transport.sendBrowserControl(action);
+    if (policy.isMalformedV1) return false;
+    switch (action) {
+      case 'forward':
+        if (!policy.canBrowserForward) return false;
+      case 'refresh':
+      case 'reload':
+        if (!policy.canBrowserReload) return false;
+      case 'video_target_cycle':
+      case 'cycle_source':
+        if (!policy.canBrowserCycleSource) return false;
+      case 'video_unmute':
+      case 'unmute':
+        if (!policy.canBrowserUnmute) return false;
+      case 'maximize_video':
+      case 'restore_video':
+      case 'fullscreen':
+        if (!policy.canBrowserFullscreen) return false;
+      default:
+        return false;
+    }
+    return _transport.sendBrowserControl(action);
   }
 
   Future<bool> sendContextQuery() => _transport.sendContextQuery();
@@ -1117,6 +1296,8 @@ class TvSenderController extends ChangeNotifier {
     _remoteDurationMs = 0;
     _castPlaylist = const [];
     _castIndex = -1;
+    _mediaKind = null;
+    _isLive = false;
     notifyListeners();
   }
 
@@ -1345,6 +1526,14 @@ class TvSenderController extends ChangeNotifier {
     _remoteState = '';
     _remotePositionMs = 0;
     _remoteDurationMs = 0;
+    _remoteContext = null;
+    _contextEngine = null;
+    _settingsEngine = null;
+    _settingsAvailability = const ReceiverSettingsAvailability();
+    _volumeState = null;
+    _loopEnabled = null;
+    _mediaKind = null;
+    _isLive = false;
   }
 
   bool _isCurrentSession(int generation) =>
@@ -1550,6 +1739,7 @@ class TvSenderController extends ChangeNotifier {
       location: p.location,
       token: creds.token,
       certFingerprint: creds.certFingerprint,
+      capabilities: creds.capabilities ?? _transport.capabilities,
       lastConnected: DateTime.now(),
     ));
     _activeTv = _store.byIdentity(p.protocol, p.uuid);
@@ -1602,6 +1792,48 @@ class TvSenderController extends ChangeNotifier {
             (obj['duration'] as num?)?.toInt() ?? _remoteDurationMs;
         final t = obj['title'] as String?;
         if (t != null && t.isNotEmpty) _castingTitle = t;
+        final mk = obj['mediaKind'] as String?;
+        if (mk != null && mk.isNotEmpty) _mediaKind = mk;
+        if (obj.containsKey('isLive') && obj['isLive'] is bool) {
+          _isLive = obj['isLive'] as bool;
+        } else if (obj.containsKey('live') && obj['live'] is bool) {
+          _isLive = obj['live'] as bool;
+        }
+        notifyListeners();
+      } else if (type == 'volume_state') {
+        final scope = obj['scope'] as String?;
+        if (scope != null) {
+          final level = (obj['level'] as num?)?.toDouble();
+          final muted = obj['muted'] as bool?;
+          _volumeState = ReceiverVolumeState(
+            scope: scope,
+            level: level ?? _volumeState?.level,
+            muted: muted ?? _volumeState?.muted,
+          );
+          notifyListeners();
+        }
+      } else if (type == 'player_settings') {
+        final eng = obj['engine'] as String?;
+        if (eng != null && eng.isNotEmpty) _settingsEngine = eng;
+        if (obj.containsKey('loop') && obj['loop'] is bool) {
+          _loopEnabled = obj['loop'] as bool;
+        }
+        _settingsAvailability = ReceiverSettingsAvailability(
+          subtitleOffsetAvailable: (obj['subtitleOffsetAvailable'] ??
+              obj['subtitle_offset_available']) as bool?,
+          engineAvailable:
+              (obj['engineAvailable'] ?? obj['engine_available']) as bool?,
+          loopAvailable:
+              (obj['loopAvailable'] ?? obj['loop_available']) as bool?,
+          speedAvailable:
+              (obj['speedAvailable'] ?? obj['speed_available']) as bool?,
+          scalingAvailable:
+              (obj['scalingAvailable'] ?? obj['scaling_available']) as bool?,
+          audioBoostAvailable: (obj['audioBoostAvailable'] ??
+              obj['audio_boost_available']) as bool?,
+          qualityAvailable:
+              (obj['qualityAvailable'] ?? obj['quality_available']) as bool?,
+        );
         notifyListeners();
       } else if (type == 'error') {
         final message = obj['message']?.toString();
@@ -1613,18 +1845,23 @@ class TvSenderController extends ChangeNotifier {
         _clearNowCasting();
         notifyListeners();
       } else if (type == 'context') {
+        final active = (obj['active'] ?? obj['surface']) as String?;
+        if (active != null && active.isNotEmpty) _remoteContext = active;
+        final eng = obj['engine'] as String?;
+        if (eng != null && eng.isNotEmpty) _contextEngine = eng;
         // The TV broadcasts context 'idle' when its player activity goes away
         // (playback ended or stopped on the TV) — mirror that here.
-        if ((obj['active'] as String?) == 'idle') {
+        if (active == 'idle') {
           _startProxyIdleGrace();
           _suppressStoppedPlayback();
           _clearNowCasting();
-        } else if ((obj['active'] as String?) == 'player') {
+        } else if (active == 'player') {
           _cancelProxyIdleGrace();
           // A context event has no session ID and may have been queued before
           // Stop. For receivers with IDs, wait for a different ID instead.
           if (_stoppedPlaybackId == null) _awaitingFreshPlayback = false;
         }
+        notifyListeners();
       } else if (type == 'playlist_status') {
         final playbackId = obj['playbackId'] as String?;
         if (playbackId != null && playbackId == _stoppedPlaybackId) return;

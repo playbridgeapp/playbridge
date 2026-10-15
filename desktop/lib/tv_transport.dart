@@ -98,6 +98,18 @@ abstract class TvTransport {
   /// Queue an item.
   Future<bool> queueAdd(PlayPayload item);
 
+  /// Send a remote key press string (e.g. 'volume_up', 'dpad_center', 'mute').
+  Future<bool> sendRemoteKey(String key) async => false;
+
+  /// Send an absolute volume command with normalized level in [0.0, 1.0].
+  Future<bool> sendVolume(String scope, double level) async => false;
+
+  /// Send browser launch command.
+  Future<bool> sendBrowserLaunch({String? engine}) async => false;
+
+  /// Send browser control command.
+  Future<bool> sendBrowserControl(String action) async => false;
+
   /// Dispose transport resources and subscriptions.
   Future<void> dispose();
 }
@@ -185,6 +197,25 @@ class PlayBridgeTransport extends TvTransport {
   @override
   Future<bool> queueAdd(PlayPayload item) async =>
       _client.send(senderQueueAddJson(item));
+
+  @override
+  Map<String, dynamic> get capabilities => _client.capabilities ?? const {};
+
+  @override
+  Future<bool> sendRemoteKey(String key) async =>
+      _client.send(senderRemoteKeyJson(key));
+
+  @override
+  Future<bool> sendVolume(String scope, double level) async =>
+      _client.send(senderVolumeCommandJson(scope, level));
+
+  @override
+  Future<bool> sendBrowserLaunch({String? engine}) async =>
+      _client.send(senderBrowserLaunchJson(engine: engine));
+
+  @override
+  Future<bool> sendBrowserControl(String action) async =>
+      _client.send(senderBrowserControlJson(action));
 
   @override
   Future<void> dispose() => _client.dispose();

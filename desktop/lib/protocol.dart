@@ -625,3 +625,17 @@ String senderControlCommandJson(String command) =>
 
 String senderContextQueryJson() =>
     jsonEncode({'type': 'command', 'action': 'context_query'});
+
+String senderRemoteKeyJson(String key) =>
+    _commandEnvelope('remote', {'key': key});
+
+String senderVolumeCommandJson(String scope, double level) =>
+    _commandEnvelope('volume', {'scope': scope, 'level': level});
+
+String senderBrowserLaunchJson({String? engine}) => jsonEncode({
+      'type': 'browser',
+      if (engine != null) 'engine': engine,
+    });
+
+String senderBrowserControlJson(String action) =>
+    _commandEnvelope('browser_control', {'action': action});
