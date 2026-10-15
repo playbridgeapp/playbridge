@@ -1,6 +1,9 @@
 package com.playbridge.sender.connection
 
 import java.math.BigDecimal
+import com.playbridge.shared.protocol.MAX_RECEIVER_CAPABILITIES_REVISION
+import com.playbridge.shared.protocol.RECEIVER_CAPABILITIES_V1_FEATURE
+import com.playbridge.shared.protocol.createReceiverCapabilitiesSubscribeJson
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonArray
@@ -145,12 +148,18 @@ internal object ReceiverDescriptorParser {
 internal class ReceiverProtocolSession {
     private var generation = 0L
     private var authenticated = false
+    private var supportsUpdates = false
+    private var subscribed = false
+    private var revision = 0L
     private val mutableState = MutableStateFlow(ReceiverProtocolState())
     val state = mutableState.asStateFlow()
 
     @Synchronized fun begin(): Long {
         generation++
         authenticated = false
+        supportsUpdates = false
+        subscribed = false
+        revision = 0L
         mutableState.value = ReceiverProtocolState()
         return generation
     }
@@ -161,6 +170,12 @@ internal class ReceiverProtocolSession {
     @Synchronized fun acceptCredentials(session: Long, envelope: JsonObject): Boolean {
         if (session != generation) return false
         authenticated = true
+        supportsUpdates = (envelope["features"] as? JsonArray)?.any {
+            (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull == RECEIVER_CAPABILITIES_V1_FEATURE
+        } == true
+        // Repeated credentials on the same socket must not rewind a live revision
+        // or opt in a second time. Only begin()/clear() establish a new baseline.
+        if (!supportsUpdates) subscribed = false
         val raw = envelope["capabilities"]
         val descriptor = ReceiverDescriptorParser.parse(raw)
         mutableState.value = ReceiverProtocolState(
@@ -170,10 +185,31 @@ internal class ReceiverProtocolSession {
         return true
     }
 
+    /** Called after authenticated metadata is accepted, including protected first pairing. */
+    @Synchronized fun subscription(session: Long): String? {
+        if (session != generation || !authenticated || !supportsUpdates || subscribed) return null
+        subscribed = true
+        return createReceiverCapabilitiesSubscribeJson()
+    }
+
     @Synchronized fun observe(session: Long, frame: JsonObject) {
         if (session != generation || !authenticated) return
         val old = mutableState.value
         when ((frame["type"] as? JsonPrimitive)?.contentOrNull) {
+            "receiver_capabilities" -> {
+                if (!subscribed || frame.keys != setOf("type", "revision", "capabilities")) return
+                val next = (frame["revision"] as? JsonPrimitive)?.takeUnless { it.isString }?.content
+                    ?.toBigDecimalOrNull()?.let { runCatching { it.longValueExact() }.getOrNull() } ?: return
+                if (next !in 1..MAX_RECEIVER_CAPABILITIES_REVISION || next <= revision) return
+                val raw = frame["capabilities"] as? JsonObject ?: return
+                if (raw["version"] !is JsonPrimitive) return
+                // Even an opaque future version advances ordering, so a delayed older v1
+                // cannot replace the current snapshot after a newer revision was observed.
+                revision = next
+                if (!ReceiverDescriptorParser.recognizedV1(raw)) return
+                val descriptor = ReceiverDescriptorParser.parse(raw)
+                mutableState.value = old.copy(descriptor = descriptor, malformedV1 = descriptor == null)
+            }
             "volume_state" -> parseVolume(frame)?.let { incoming ->
                 val previous = old.volume?.takeIf { it.scope == incoming.scope }
                 mutableState.value = old.copy(volume = incoming.copy(

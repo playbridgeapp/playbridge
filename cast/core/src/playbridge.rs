@@ -532,6 +532,20 @@ mod tests {
     }
 
     #[test]
+    fn receiver_parser_ignores_live_capabilities_until_sender_opt_in_support() {
+        for text in [
+            r#"{"type":"receiver_capabilities","revision":1,"capabilities":{"version":1,"surfaces":{}}}"#,
+            r#"{"type":"receiver_capabilities","revision":2,"capabilities":{"version":99,"surfaces":[]}}"#,
+        ] {
+            assert_eq!(decode_receiver_text(text).unwrap(), ReceiverFrame::Unknown);
+        }
+        assert_eq!(
+            decode_receiver_text(r#"{"type":"pong"}"#).unwrap(),
+            ReceiverFrame::Pong
+        );
+    }
+
+    #[test]
     fn receiver_parser_tolerates_unknown_fields_and_types() {
         let response = decode_receiver_text(
             r#"{"type":"auth_response","success":true,"players":["mpv"],"mediaKinds":["video","audio","image"],"screenMirrorWebRtc":true,"future":1}"#,

@@ -41,7 +41,9 @@ def check_invariants(document, old):
     for name in ('BrowserCapabilitiesFrame', 'BrowserCapabilities'):
         assert schemas[name] == retained[name], f'{name} changed'
     assert schemas['PlayerSettings']['required'] == retained['PlayerSettings']['required']
-    assert 'ReceiverCapabilitiesFrame' not in schemas, 'Reserved native push shipped prematurely'
+    assert {'$ref': '#/components/schemas/ReceiverCapabilitiesFrame'} in schemas['ReceiverFrame']['oneOf']
+    assert schemas['ReceiverCapabilitiesFrame']['required'] == ['type', 'revision', 'capabilities']
+    assert schemas['ReceiverCapabilitiesFrame']['properties']['revision'] == {'type': 'integer', 'minimum': 1, 'maximum': 9007199254740991}
     assert schemas['CapabilityIdentifier']['type'] == 'string'
     assert 'enum' not in schemas['CapabilityIdentifier']
     assert schemas['ReceiverFeatures']['items'] == {'type': 'string'}

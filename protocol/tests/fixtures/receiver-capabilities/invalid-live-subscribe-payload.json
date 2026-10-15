@@ -1,0 +1,7 @@
+{
+  "type": "command",
+  "action": "receiver_capabilities_subscribe",
+  "payload": {
+    "enabled": true
+  }
+}

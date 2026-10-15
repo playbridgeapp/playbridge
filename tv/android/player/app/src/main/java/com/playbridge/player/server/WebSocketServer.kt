@@ -66,8 +66,8 @@ class WebSocketServer(
     // Invoked from Java-WebSocket's onStart path with the actual bound port. It is
     // never invoked for a failed bind, so callers cannot advertise a dead endpoint.
     private val onWssReady: ((wssPort: Int) -> Unit)? = null,
-    // Players/browsers this receiver supports, re-evaluated per auth so a plugin installed
-    // after start-up is picked up on the next (re)connect. Reported to the phone at auth.
+    // Resolve availability through the shared publication owner on auth, pairing,
+    // subscription and package changes, so every advertisement uses one snapshot.
     private val capabilities: () -> TvCapabilities = {
         TvCapabilities(emptyList(), emptyList(), screenMirrorWebRtc = false)
     },
@@ -101,6 +101,14 @@ class WebSocketServer(
     private val inProgressHandshakes = ConcurrentHashMap<org.java_websocket.WebSocket, ConnectionHandshake>()
     private val failedAttemptsMap = ConcurrentHashMap<String, Int>()
     private val lockoutMap = ConcurrentHashMap<String, Long>()
+
+    private val capabilityPublisher = ReceiverCapabilityPublisher<org.java_websocket.WebSocket>(
+        resolve = capabilities,
+        send = { connection, frame -> connection.send(frame) },
+        close = { connection -> connection.close() },
+    )
+
+    fun refreshCapabilities() = capabilityPublisher.refresh()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startJob: Job? = null
@@ -212,6 +220,7 @@ class WebSocketServer(
         startJob = null
         wssServer = null
         wssClients.clear()
+        capabilityPublisher.clear()
         trackedConnections.clear()
         tokenNameLookups.clear()
         boundWssPort = null
@@ -348,6 +357,7 @@ class WebSocketServer(
         override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
             trackedConnections.close(conn)?.let { tokenNameLookups.remove(it) }
             authed.remove(conn)
+            capabilityPublisher.forget(conn)
             val handshake = inProgressHandshakes.remove(conn)
             if (handshake != null) {
                 val pending = _pendingPairingRequest.value
@@ -381,6 +391,7 @@ class WebSocketServer(
                 try {
                     when (val msg = parseIncomingMessage(message)) {
                         is IncomingMessage.Ping -> conn.send(createPongJson())
+                        is IncomingMessage.ReceiverCapabilitiesSubscribe -> capabilityPublisher.subscribe(conn)
                         else -> {
                             val requestId = runCatching {
                                 val json = org.json.JSONObject(message)
@@ -510,42 +521,45 @@ class WebSocketServer(
                     if (approved) {
                         failedAttemptsMap.remove(ip)
                         val token = onPairingApproved(handshake.deviceName, handshake.deviceUUID)
-                        val caps = capabilities()
-                        if (conn.isOpen) {
-                            val transcriptHash = SasCrypto.sha256(transcript)
-                            val prk = SasCrypto.hkdfExtract(salt = null, ikm = sharedSecret)
-                            val credentialKey = SasCrypto.hkdfExpand(
-                                prk, info = "playbridgeCredentialKey-v1".toByteArray(), length = 32
-                            )
-                            val credentialNonce = SasCrypto.generateNonce(12)
-                            val plaintext = buildJsonObject {
-                                put("token", token)
-                                certFingerprint?.let { put("certFingerprint", it) }
-                                put("players", buildJsonArray { caps.players.forEach { add(it) } })
-                                put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
-                                put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
-                                put("features", buildJsonArray { caps.features.forEach { add(it) } })
-                                if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
-                                put("capabilities", caps.capabilities)
-                            }.toString().toByteArray()
-                            val ciphertext = SasCrypto.aesGcmEncrypt(
-                                credentialKey, credentialNonce, plaintext, transcriptHash
-                            )
-                            conn.send(createProtectedPairingApprovedJson(
-                                Base64.getEncoder().encodeToString(credentialNonce),
-                                Base64.getEncoder().encodeToString(ciphertext),
-                            ))
+                        capabilityPublisher.authenticate(conn) { caps ->
+                            if (conn.isOpen) {
+                                val transcriptHash = SasCrypto.sha256(transcript)
+                                val prk = SasCrypto.hkdfExtract(salt = null, ikm = sharedSecret)
+                                val credentialKey = SasCrypto.hkdfExpand(
+                                    prk, info = "playbridgeCredentialKey-v1".toByteArray(), length = 32
+                                )
+                                val credentialNonce = SasCrypto.generateNonce(12)
+                                val plaintext = buildJsonObject {
+                                    put("token", token)
+                                    certFingerprint?.let { put("certFingerprint", it) }
+                                    put("players", buildJsonArray { caps.players.forEach { add(it) } })
+                                    put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
+                                    put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
+                                    put("features", buildJsonArray { caps.features.forEach { add(it) } })
+                                    if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
+                                    put("capabilities", caps.capabilities)
+                                }.toString().toByteArray()
+                                val ciphertext = SasCrypto.aesGcmEncrypt(
+                                    credentialKey, credentialNonce, plaintext, transcriptHash
+                                )
+                                // SAS confirmation and token persistence have completed. Accept
+                                // an immediate opt-in, but do not expose this client to ordinary
+                                // broadcasts until credentials are enqueued first.
+                                authed.add(conn)
+                                conn.send(createProtectedPairingApprovedJson(
+                                    Base64.getEncoder().encodeToString(credentialNonce),
+                                    Base64.getEncoder().encodeToString(ciphertext),
+                                ))
+                                trackedConnections.remember(
+                                    conn,
+                                    authenticatedSenderName(
+                                        handshakeDeviceName = handshake.deviceName,
+                                        tokenOwnerName = null,
+                                    ),
+                                )
+                                registerAuthed(conn)
+                            } else error("Pairing socket closed")
                         }
-                        // Authenticated on this socket. The phone does not send auth afterwards,
-                        // so the handshake name is the only sender name this connection will have.
-                        trackedConnections.remember(
-                            conn,
-                            authenticatedSenderName(
-                                handshakeDeviceName = handshake.deviceName,
-                                tokenOwnerName = null,
-                            ),
-                        )
-                        registerAuthed(conn)
                         inProgressHandshakes.remove(conn)
                         onPairingCompleted(handshake.deviceUUID, true)
                     } else {
@@ -612,19 +626,23 @@ class WebSocketServer(
                                 tokenOwnerName = deviceName,
                             ),
                         )
-                        val caps = capabilities()
-                        if (conn.isOpen) {
-                            conn.send(createAuthResponseJson(
-                                success = true, certFingerprint = certFingerprint,
-                                players = caps.players,
-                                browsers = caps.browsers,
-                                mediaKinds = caps.mediaKinds,
-                                screenMirrorWebRtc = caps.screenMirrorWebRtc,
-                                features = caps.features,
-                                capabilities = caps.capabilities,
-                            ))
+                        capabilityPublisher.authenticate(conn) { caps ->
+                            if (conn.isOpen) {
+                                // Authorization has succeeded; subscription may arrive as soon
+                                // as auth_response is read by the peer.
+                                authed.add(conn)
+                                conn.send(createAuthResponseJson(
+                                    success = true, certFingerprint = certFingerprint,
+                                    players = caps.players,
+                                    browsers = caps.browsers,
+                                    mediaKinds = caps.mediaKinds,
+                                    screenMirrorWebRtc = caps.screenMirrorWebRtc,
+                                    features = caps.features,
+                                    capabilities = caps.capabilities,
+                                ))
+                                registerAuthed(conn)
+                            } else error("Auth socket closed")
                         }
-                        registerAuthed(conn)
                     } else {
                         if (conn.isOpen) {
                             conn.send(createAuthResponseJson(success = false))

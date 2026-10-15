@@ -298,6 +298,7 @@ components:
         - $ref: '#/components/schemas/BrowserCommand'
         - $ref: '#/components/schemas/BrowserControlCommand'
         - $ref: '#/components/schemas/ContextQueryCommand'
+        - $ref: '#/components/schemas/ReceiverCapabilitiesSubscribeCommand'
         - $ref: '#/components/schemas/ScreenMirrorStartCommand'
         - $ref: '#/components/schemas/ScreenMirrorOfferCommand'
         - $ref: '#/components/schemas/ScreenMirrorCandidateCommand'
@@ -322,6 +323,7 @@ components:
         - $ref: '#/components/schemas/Tracks'
         - $ref: '#/components/schemas/PlayerSettings'
         - $ref: '#/components/schemas/VolumeState'
+        - $ref: '#/components/schemas/ReceiverCapabilitiesFrame'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
         - $ref: '#/components/schemas/Logs'
@@ -640,6 +642,25 @@ components:
               properties:
                 action: { type: string, description: "Open implemented action IDs: refresh, toggle_ublock, forward, video_target_cycle, video_unmute, maximize_video, restore_video, toggle_play, seek_to:<milliseconds>. Support requires the active engine operation set." }
               additionalProperties: false
+    ReceiverCapabilitiesSubscribeCommand:
+      description: Post-auth opt-in, only after receiver_capabilities_v1 was advertised in authenticated features. Idempotent for this socket; never persists across reconnect.
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: receiver_capabilities_subscribe }
+            payload: { type: object, maxProperties: 0, additionalProperties: false }
+      unevaluatedProperties: false
+    ReceiverCapabilitiesFrame:
+      description: Complete native descriptor replacement for an opted-in authenticated socket. Revision is a JSON integer in 1..2^53-1, strictly increasing per socket. Unknown descriptor versions are ignored; malformed recognized v1 fails closed.
+      type: object
+      required: [type, revision, capabilities]
+      properties:
+        type: { const: receiver_capabilities }
+        revision: { type: integer, minimum: 1, maximum: 9007199254740991 }
+        capabilities: { $ref: '#/components/schemas/ReceiverCapabilities' }
+      additionalProperties: false
     ContextQueryCommand:
       allOf:
         - $ref: '#/components/schemas/CommandEnvelope'

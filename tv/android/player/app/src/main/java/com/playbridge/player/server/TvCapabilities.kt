@@ -23,12 +23,13 @@ data class TvCapabilities(
     val features: List<String> = listOf(
         "queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1",
         "diagnostic_logs_v1", "player_home_v1",
+        com.playbridge.shared.protocol.RECEIVER_CAPABILITIES_V1_FEATURE,
     ),
     val capabilities: JsonObject = buildReceiverCapabilities(players, browsers),
 )
 
 object TvCapabilityProvider {
-    private const val GECKO_PACKAGE = "com.playbridge.geckoview.plugin"
+    const val GECKO_PACKAGE = "com.playbridge.geckoview.plugin"
 
     // Both engines are compiled into the player app; external players were removed.
     // Bare engine ids, shared with every receiver (Apple TV/desktop already use the same scheme).
@@ -36,7 +37,7 @@ object TvCapabilityProvider {
 
     /**
      * Resolved fresh per call so a GeckoView plugin installed after the server starts is
-     * picked up on the next (re)connect without a restart.
+     * picked up by live publication as well as (re)connect, without a restart.
      */
     fun current(context: Context): TvCapabilities {
         val browsers = buildList {
