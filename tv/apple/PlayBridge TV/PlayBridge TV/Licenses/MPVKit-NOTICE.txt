@@ -1,8 +1,20 @@
 PlayBridge TV uses the standard MPVKit 1.0.0 product.
 MPVKit bundles libmpv, FFmpeg and supporting media libraries.
-The standard MPVKit source and bundle are documented as LGPL-3.0;
-supporting libraries retain their respective copyrights and licenses.
+The standard MPVKit source and bundle are LGPL-3.0.
+The full LGPL-3.0 text is MPVKit-LICENSE.txt.
+LGPL-3.0 incorporates GPL-3.0. The full GPL-3.0 text is GPL-3.0.txt.
+Supporting libraries keep their own copyrights and licences.
+Exact upstream versions and the permissive licence texts are in
+ThirdPartyComponents.txt.
 The MPVKit-GPL product is not linked by the TV app.
+
+The standard FFmpeg build passes --enable-version3 and does not pass
+--enable-gpl. GMP and Nettle are used on the LGPL-3.0 side of their
+dual licences.
+
+Package.swift Library.version repeats build-repository tags for several
+dependencies. Those tags are not the upstream versions. Use
+ThirdPartyComponents.txt for the upstream version of each library.
 
 MPVKit source and build scripts:
 https://github.com/mpvkit/MPVKit/tree/1.0.0
@@ -12,5 +24,4 @@ Dependency source and version references:
 https://github.com/mpvkit/MPVKit/blob/1.0.0/Package.swift
 https://github.com/mpvkit/MPVKit/tree/1.0.0/Sources/BuildScripts
 
-See the bundled MPVKit-LICENSE.txt and the PlayBridge repository's
-THIRD_PARTY_LICENSES.md for notices and source availability.
+See also the PlayBridge repository file THIRD_PARTY_LICENSES.md.
