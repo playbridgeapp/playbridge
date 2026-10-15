@@ -250,11 +250,15 @@ class _NowCastingCardState extends State<NowCastingCard> {
                       min: 0,
                       max: dur,
                       value: pos,
-                      onChanged: (v) => setState(() => _dragMs = v),
-                      onChangeEnd: (v) {
-                        c.seekToMs(v.toInt());
-                        setState(() => _dragMs = null);
-                      },
+                      onChanged: c.canSeekAbsolute
+                          ? (v) => setState(() => _dragMs = v)
+                          : null,
+                      onChangeEnd: c.canSeekAbsolute
+                          ? (v) {
+                              c.seekToMs(v.toInt());
+                              setState(() => _dragMs = null);
+                            }
+                          : null,
                     ),
                   ),
                 ),
@@ -271,28 +275,115 @@ class _NowCastingCardState extends State<NowCastingCard> {
               IconButton(
                 tooltip: 'Back 10s',
                 icon: const Icon(Icons.replay_10),
-                onPressed: c.seekBack,
+                onPressed: c.canSeekRelative ? c.seekBack : null,
               ),
               IconButton(
                 tooltip: playing ? 'Pause' : 'Play',
                 iconSize: 30,
                 icon: Icon(playing ? Icons.pause_circle : Icons.play_circle),
-                onPressed: c.playPause,
+                onPressed: c.canPlayPause ? c.playPause : null,
               ),
               IconButton(
                 tooltip: 'Forward 10s',
                 icon: const Icon(Icons.forward_10),
-                onPressed: c.seekForward,
+                onPressed: c.canSeekRelative ? c.seekForward : null,
               ),
               const SizedBox(width: 8),
               IconButton(
                 tooltip: 'Stop',
                 color: Colors.redAccent,
                 icon: const Icon(Icons.stop_circle),
-                onPressed: c.stopCast,
+                onPressed: c.canStop ? c.stopCast : null,
               ),
+              if (c.canLoop) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: c.isLoopEnabled == true ? 'Loop on' : 'Loop off',
+                  color: c.isLoopEnabled == true
+                      ? Colors.tealAccent
+                      : Colors.white60,
+                  icon: const Icon(Icons.repeat),
+                  onPressed: () => c.setLoop(c.isLoopEnabled != true),
+                ),
+              ],
+              if (c.canSwitchEngine && c.availablePlayerEngines.length > 1) ...[
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: 'Switch player engine',
+                  icon: const Icon(Icons.tune, size: 20),
+                  onSelected: c.switchPlayer,
+                  itemBuilder: (context) => [
+                    for (final eng in c.availablePlayerEngines)
+                      PopupMenuItem(
+                        value: eng,
+                        child: Text(eng),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
+          if (c.hasVolume) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (c.canToggleMute)
+                  IconButton(
+                    tooltip: c.isMuted == true ? 'Unmute' : 'Mute',
+                    icon: Icon(
+                      c.isMuted == true ? Icons.volume_off : Icons.volume_up,
+                      size: 20,
+                      color: c.isMuted == true
+                          ? Colors.redAccent
+                          : Colors.white70,
+                    ),
+                    onPressed: c.toggleMute,
+                  ),
+                Text(
+                  c.volumeLabel ?? 'Volume',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (c.canSetVolume)
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2,
+                        activeTrackColor: Colors.tealAccent,
+                        inactiveTrackColor: Colors.white24,
+                        thumbColor: Colors.tealAccent,
+                        thumbShape:
+                            const RoundSliderThumbShape(enabledThumbRadius: 5),
+                        overlayShape:
+                            const RoundSliderOverlayShape(overlayRadius: 10),
+                      ),
+                      child: Slider(
+                        min: 0.0,
+                        max: 1.0,
+                        value: (c.volumeLevel ?? 1.0).clamp(0.0, 1.0),
+                        onChanged: c.setVolume,
+                      ),
+                    ),
+                  )
+                else if (c.canAdjustVolume) ...[
+                  IconButton(
+                    tooltip: '${c.volumeLabel ?? "Volume"} down',
+                    icon: const Icon(Icons.volume_down, size: 18),
+                    onPressed: () => c.adjustVolume(-1),
+                  ),
+                  IconButton(
+                    tooltip: '${c.volumeLabel ?? "Volume"} up',
+                    icon: const Icon(Icons.volume_up, size: 18),
+                    onPressed: () => c.adjustVolume(1),
+                  ),
+                ],
+              ],
+            ),
+          ],
         ],
       ),
     );

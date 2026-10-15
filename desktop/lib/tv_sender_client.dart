@@ -68,7 +68,8 @@ enum SenderConnectionState {
 class TvCredentials {
   final String token;
   final String? certFingerprint;
-  const TvCredentials(this.token, this.certFingerprint);
+  final Map<String, dynamic>? capabilities;
+  const TvCredentials(this.token, this.certFingerprint, {this.capabilities});
 }
 
 /// Sender-side WebSocket client: connects the desktop to a TV receiver over
@@ -141,6 +142,11 @@ class TvSenderClient {
   /// Emitted whenever the TV issues a token (first pairing or token refresh) so
   /// the caller can persist it via [TvConnectionStore].
   Stream<TvCredentials> get credentials => _credentials.stream;
+
+  Map<String, dynamic>? _capabilities;
+
+  /// Last capabilities descriptor advertised by the receiver at auth/pairing.
+  Map<String, dynamic>? get capabilities => _capabilities;
 
   bool get isConnected => _current == SenderConnectionState.connected;
 
@@ -407,7 +413,11 @@ class TvSenderClient {
       if (token == null || token.isEmpty) {
         throw const FormatException('missing pairing token');
       }
-      _acceptPairingCredentials(token, certFp);
+      final rawCaps = credentials['capabilities'];
+      _capabilities = rawCaps is Map
+          ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
+          : null;
+      _acceptPairingCredentials(token, certFp, capabilities: _capabilities);
     } catch (_) {
       debugPrint('[tv-sender] pairing credential verification failed');
       _clearPairingSecrets();
@@ -432,7 +442,8 @@ class TvSenderClient {
         _nonceS!);
   }
 
-  void _acceptPairingCredentials(String token, String? certFp) {
+  void _acceptPairingCredentials(String token, String? certFp,
+      {Map<String, dynamic>? capabilities}) {
     // Bind the delivered fingerprint to the cert actually served this handshake.
     if (certFp != null &&
         certFp.isNotEmpty &&
@@ -446,7 +457,7 @@ class TvSenderClient {
     }
     final pin = (certFp != null && certFp.isNotEmpty) ? certFp : _capturedPin;
     if (!_credentials.isClosed) {
-      _credentials.add(TvCredentials(token, pin));
+      _credentials.add(TvCredentials(token, pin, capabilities: capabilities));
     }
     _clearPairingSecrets();
     _setState(SenderConnectionState.connected);
@@ -469,6 +480,10 @@ class TvSenderClient {
       _close();
       return;
     }
+    final rawCaps = obj['capabilities'];
+    _capabilities = rawCaps is Map
+        ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
+        : null;
     // SEC-005: legacy echoed tokens in auth_response are ignored.
     _setState(SenderConnectionState.connected);
   }
@@ -522,6 +537,7 @@ class TvSenderClient {
     _httpClient = null;
     client?.close(force: true);
     _clearPairingSecrets();
+    _capabilities = null;
     await sub?.cancel();
     if (c != null) {
       try {

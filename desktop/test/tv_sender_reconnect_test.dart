@@ -615,6 +615,9 @@ class _FakeTransport implements TvTransport {
   Future<bool> queueAdd(PlayPayload item) async => false;
 
   @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
+  @override
   Future<void> dispose() async {
     await _state.close();
     await _messages.close();
