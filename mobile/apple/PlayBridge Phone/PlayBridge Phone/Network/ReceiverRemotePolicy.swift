@@ -106,6 +106,20 @@ struct ReceiverRemotePolicy {
     var toggleCommand: String { transport.contains("toggle") ? "toggle" : state.playing ? "pause" : "play" }
     var hasPointer: Bool { !pointer.isEmpty }
     var hasDpad: Bool { !keys.isDisjoint(with: ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center"]) }
+    /// Open surfaces follow the same live permissions as their entry buttons.
+    var allowedPresentations: Set<String> {
+        let all: Set<String> = ["settings", "subtitles", "addSubtitle", "more", "scripts", "agents", "airPlayQueue"]
+        if isLegacy { return all }
+        guard state.connected else { return [] }
+        var result: Set<String> = []
+        if !settings.isEmpty { result.insert("settings") }
+        if !tracks.isDisjoint(with: ["subtitle_select", "subtitle_url_add", "subtitle_resource_add"]) { result.insert("subtitles") }
+        if !tracks.isDisjoint(with: ["subtitle_url_add", "subtitle_resource_add"]) { result.insert("addSubtitle") }
+        if !browser.isDisjoint(with: ["cycle_source", "unmute", "manage_user_scripts", "manage_user_agent"]) { result.insert("more") }
+        if allowsManager("manage_user_scripts") { result.insert("scripts") }
+        if allowsManager("manage_user_agent") { result.insert("agents") }
+        return result
+    }
     func hasVolume(_ operation: String) -> Bool { volume?.operations.contains(operation) == true }
     func allowsKey(_ key: String) -> Bool {
         if isLegacy { return true }

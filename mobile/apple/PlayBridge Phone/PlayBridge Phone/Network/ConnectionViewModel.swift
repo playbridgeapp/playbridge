@@ -46,7 +46,8 @@ final class ConnectionViewModel: ObservableObject {
         input.availability = coordinator.receiverSettingsAvailability
         input.audioIDs = Set(coordinator.audioTracks.map(\.id))
         input.subtitleIDs = Set(coordinator.subtitleTracks.map(\.id))
-        return .resolve(isExternalReceiver || isAirPlay ? .legacy : receiverCapabilities, state: input)
+        let metadata = ws.receiverCapabilitySession.snapshot
+        return .resolve(isExternalReceiver || isAirPlay ? .legacy : metadata.authenticated ? metadata.capabilities : .malformedV1, state: input)
     }
     func supportsNativeMediaKind(_ kind: String) -> Bool {
         if isAirPlay { return kind == "video" || kind == "audio" }
@@ -133,6 +134,12 @@ final class ConnectionViewModel: ObservableObject {
         }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
         ws.onCapabilities = { [weak self] caps in self?.persistCapabilities(caps) }
+        ws.onReceiverCapabilities = { [weak self] id, capabilities in
+            // Called on main after authenticated socket/session and revision checks.
+            guard let self, self.ws.capabilitySessionID == id, !self.isExternalReceiver, !self.isAirPlay else { return }
+            if self.pointerAnchorHeld || self.pointerButtonHeld { self.endPointerGesture() }
+            self.receiverCapabilities = capabilities
+        }
         ws.onCapabilitySessionStarted = { [weak self] id in
             DispatchQueue.main.async {
                 guard let self, self.ws.capabilitySessionID == id else { return }
@@ -952,11 +959,11 @@ final class ConnectionViewModel: ObservableObject {
         if event == "transform_anchor" { pointerAnchorHeld = true }
         if event == "down" { pointerButtonHeld = true }
         if event == "up" { pointerButtonHeld = false }
-        ws.sendMouse(event: event, dx: dx, dy: dy)
+        ws.sendMouse(event: event, dx: dx, dy: dy, state: nativeRemotePolicy.state)
     }
     func endPointerGesture() {
         if nativeRemotePolicy.isLegacy { ws.endPointerGesture(); return }
-        if pointerButtonHeld { ws.sendMouse(event: "up"); pointerButtonHeld = false }
+        if pointerButtonHeld { ws.sendMouse(event: "up", state: nativeRemotePolicy.state); pointerButtonHeld = false }
         if pointerAnchorHeld { ws.endPointerGesture(); pointerAnchorHeld = false }
     }
     func setReceiverVolume(_ level: Double) {

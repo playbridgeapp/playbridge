@@ -16,7 +16,10 @@ final class WebSocketClient: NSObject, ObservableObject {
     /// player_mode / browser_mode ids the receiver reported at auth.
     var onCapabilities: ((TvCapabilities) -> Void)?
     var onCapabilitySessionStarted: ((UUID) -> Void)?
-    private(set) var capabilitySessionID = UUID()
+    let receiverCapabilitySession = ReceiverCapabilitySession()
+    var capabilitySessionID: UUID { receiverCapabilitySession.snapshot.id }
+    /// Live metadata has no credential-persistence callback.
+    var onReceiverCapabilities: ((UUID, ReceiverCapabilities) -> Void)?
 
     struct IssuedCredentials { let token: String; let certFingerprint: String?; let sessionID: UUID }
     struct TvCapabilities {
@@ -82,10 +85,13 @@ final class WebSocketClient: NSObject, ObservableObject {
     private var pendingAnchorX: Float?
     private var pendingAnchorY: Float?
     private var mouseFlush: DispatchWorkItem?
+    private var pendingMouseState = ReceiverRemoteState()
 
     override init() {
         super.init()
         delegateQueue.maxConcurrentOperationCount = 1
+        // Lifecycle, handshake and frame acceptance share the UI lifecycle queue.
+        delegateQueue.underlyingQueue = .main
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
         // Generous inter-data timeout: during pairing the receiver shows a ~60s code prompt
@@ -145,11 +151,12 @@ final class WebSocketClient: NSObject, ObservableObject {
     func sendPing() { _ = send(WireProtocol.ping()) }
 
     /// Continuous gesture updates coalesce to ~60 Hz. Discrete commands flush first.
-    func sendMouse(event: String, dx: Float = 0, dy: Float = 0) {
+    func sendMouse(event: String, dx: Float = 0, dy: Float = 0, state: ReceiverRemoteState) {
         let sessionID = capabilitySessionID
         mouseQueue.async {
             guard self.capabilitySessionID == sessionID else { return }
             guard dx.isFinite, dy.isFinite else { return }
+            self.pendingMouseState = state
             switch event {
             case "move":
                 self.pendingMoveDx += dx
@@ -166,8 +173,8 @@ final class WebSocketClient: NSObject, ObservableObject {
                 self.pendingAnchorX = min(1, max(0, dx))
                 self.pendingAnchorY = min(1, max(0, dy))
             default:
-                self.flushPendingMouseLocked()
-                _ = self.send(MousePacket.pack(event: event, dx: dx, dy: dy))
+                self.flushPendingMouseLocked(sessionID: sessionID)
+                self.sendMousePacket(event: event, dx: dx, dy: dy, state: state, sessionID: sessionID)
                 return
             }
             self.scheduleMouseFlushLocked()
@@ -178,8 +185,8 @@ final class WebSocketClient: NSObject, ObservableObject {
         let sessionID = capabilitySessionID
         mouseQueue.async {
             guard self.capabilitySessionID == sessionID else { return }
-            self.flushPendingMouseLocked()
-            _ = self.send(MousePacket.pack(event: "transform_anchor", dx: -1, dy: -1))
+            self.flushPendingMouseLocked(sessionID: sessionID)
+            self.sendMousePacket(event: "transform_anchor", dx: -1, dy: -1, state: .init(), sessionID: sessionID)
         }
     }
 
@@ -189,13 +196,13 @@ final class WebSocketClient: NSObject, ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.capabilitySessionID == sessionID else { return }
             self.mouseFlush = nil
-            self.flushPendingMouseLocked()
+            self.flushPendingMouseLocked(sessionID: sessionID)
         }
         mouseFlush = work
         mouseQueue.asyncAfter(deadline: .now() + 0.016, execute: work)
     }
 
-    private func flushPendingMouseLocked() {
+    private func flushPendingMouseLocked(sessionID: UUID) {
         mouseFlush?.cancel()
         mouseFlush = nil
         let moveDx = pendingMoveDx, moveDy = pendingMoveDy
@@ -211,11 +218,24 @@ final class WebSocketClient: NSObject, ObservableObject {
         pendingRotationDegrees = 0
         pendingAnchorX = nil
         pendingAnchorY = nil
-        if let anchorX, let anchorY { _ = send(MousePacket.pack(event: "transform_anchor", dx: anchorX, dy: anchorY)) }
-        if moveDx != 0 || moveDy != 0 { _ = send(MousePacket.pack(event: "move", dx: moveDx, dy: moveDy)) }
-        if scrollDx != 0 || scrollDy != 0 { _ = send(MousePacket.pack(event: "scroll", dx: scrollDx, dy: scrollDy)) }
-        if zoomFactor != 1 { _ = send(MousePacket.pack(event: "zoom", dx: zoomFactor, dy: 0)) }
-        if rotationDegrees != 0 { _ = send(MousePacket.pack(event: "rotate", dx: rotationDegrees, dy: 0)) }
+        let state = pendingMouseState
+        if let anchorX, let anchorY { sendMousePacket(event: "transform_anchor", dx: anchorX, dy: anchorY, state: state, sessionID: sessionID) }
+        if moveDx != 0 || moveDy != 0 { sendMousePacket(event: "move", dx: moveDx, dy: moveDy, state: state, sessionID: sessionID) }
+        if scrollDx != 0 || scrollDy != 0 { sendMousePacket(event: "scroll", dx: scrollDx, dy: scrollDy, state: state, sessionID: sessionID) }
+        if zoomFactor != 1 { sendMousePacket(event: "zoom", dx: zoomFactor, dy: 0, state: state, sessionID: sessionID) }
+        if rotationDegrees != 0 { sendMousePacket(event: "rotate", dx: rotationDegrees, dy: 0, state: state, sessionID: sessionID) }
+    }
+
+    private func sendMousePacket(event: String, dx: Float, dy: Float, state: ReceiverRemoteState, sessionID: UUID) {
+        DispatchQueue.main.async {
+            let snapshot = self.receiverCapabilitySession.snapshot
+            guard snapshot.id == sessionID, snapshot.authenticated else { return }
+            // Delayed/coalesced gestures must recheck the latest descriptor too.
+            // Release packets only finish a gesture authorized before withdrawal.
+            let cleanup = event == "up" || event == "transform_anchor" && dx == -1 && dy == -1
+            guard cleanup || ReceiverRemotePolicy.resolve(snapshot.capabilities, state: state).allowsMouse(event) else { return }
+            _ = self.send(MousePacket.pack(event: event, dx: dx, dy: dy))
+        }
     }
 
     private func clearPendingMouseLocked() {
@@ -252,21 +272,23 @@ final class WebSocketClient: NSObject, ObservableObject {
         let newTask = session.webSocketTask(with: url)
         task = newTask
         newTask.resume()
-        receiveLoop(on: newTask)
+        receiveLoop(on: newTask, sessionID: capabilitySessionID)
     }
 
-    private func receiveLoop(on wsTask: URLSessionWebSocketTask) {
+    private func receiveLoop(on wsTask: URLSessionWebSocketTask, sessionID: UUID) {
         wsTask.receive { [weak self] result in
-            guard let self, wsTask === self.task else { return }
-            switch result {
-            case .success(let message):
-                if case .string(let text) = message {
-                    self.handleIncoming(text)
+            DispatchQueue.main.async {
+                guard let self, wsTask === self.task, sessionID == self.capabilitySessionID else { return }
+                switch result {
+                case .success(let message):
+                    if case .string(let text) = message {
+                        self.handleIncoming(text, sessionID: sessionID)
+                    }
+                    self.receiveLoop(on: wsTask, sessionID: sessionID)
+                case .failure:
+                    // The matching didCompleteWithError will drive retry/teardown.
+                    break
                 }
-                self.receiveLoop(on: wsTask)
-            case .failure:
-                // The matching didCompleteWithError will drive retry/teardown.
-                break
             }
         }
     }
@@ -303,7 +325,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         }
     }
 
-    private func handleIncoming(_ text: String) {
+    private func handleIncoming(_ text: String, sessionID: UUID) {
         guard let data = text.data(using: .utf8),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let type = json["type"] as? String else {
@@ -311,7 +333,12 @@ final class WebSocketClient: NSObject, ObservableObject {
             return
         }
 
+        guard sessionID == capabilitySessionID else { return }
         switch type {
+        case "receiver_capabilities":
+            if let capabilities = receiverCapabilitySession.observe(text, sessionID: sessionID) {
+                onReceiverCapabilities?(sessionID, capabilities)
+            }
         case "pairing_challenge":
             handlePairingChallenge(json)
         case "pairing_approved":
@@ -464,6 +491,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         target?.pin = pin
         onCredentials?(IssuedCredentials(token: token, certFingerprint: pin, sessionID: capabilitySessionID))
         emitCapabilities(credentials)
+        subscribeToReceiverCapabilities()
         clearPairingSecrets()
         setState(.connected(serverName: serverName, secure: isSecure))
         startPing()
@@ -492,6 +520,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         if success {
             authenticated = true
             emitCapabilities(json)
+            subscribeToReceiverCapabilities()
             setState(.connected(serverName: serverName, secure: isSecure))
             // SEC-005: legacy echoed tokens in auth_response are ignored.
             startPing()
@@ -504,19 +533,25 @@ final class WebSocketClient: NSObject, ObservableObject {
     }
 
     private func emitCapabilities(_ json: [String: Any]) {
+        guard receiverCapabilitySession.acceptAuthenticated(json, sessionID: capabilitySessionID) else { return }
         let players = (json["players"] as? [String]) ?? []
         let browsers = (json["browsers"] as? [String]) ?? []
         let mediaKinds = (json["mediaKinds"] as? [String]) ?? []
         let features = (json["features"] as? [String]) ?? []
         onCapabilities?(TvCapabilities(players: players, browsers: browsers,
             mediaKinds: mediaKinds, features: features,
-            receiverCapabilities: ReceiverCapabilities.parse(json["capabilities"]), sessionID: capabilitySessionID))
+            receiverCapabilities: receiverCapabilitySession.snapshot.capabilities, sessionID: capabilitySessionID))
+    }
+
+    private func subscribeToReceiverCapabilities() {
+        if let command = receiverCapabilitySession.subscription(sessionID: capabilitySessionID) {
+            _ = send(command)
+        }
     }
 
     private func beginCapabilitySession() {
         authenticated = false
-        capabilitySessionID = UUID()
-        let sessionID = capabilitySessionID
+        let sessionID = receiverCapabilitySession.begin()
         mouseQueue.async {
             guard self.capabilitySessionID == sessionID else { return }
             self.clearPendingMouseLocked()
@@ -525,6 +560,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     }
 
     private func handleDisconnect() {
+        beginCapabilitySession()
         stopPing()
         task = nil
 
@@ -544,8 +580,9 @@ final class WebSocketClient: NSObject, ObservableObject {
             retryCount += 1
             setState(.retrying(attempt: retryCount, maxAttempts: ProtocolConstants.maxRetries,
                                nextRetrySeconds: Int(ProtocolConstants.retryDelay)))
-            mouseQueue.asyncAfter(deadline: .now() + ProtocolConstants.retryDelay) { [weak self] in
-                guard let self, !self.isUserDisconnect else { return }
+            let sessionID = capabilitySessionID
+            DispatchQueue.main.asyncAfter(deadline: .now() + ProtocolConstants.retryDelay) { [weak self] in
+                guard let self, !self.isUserDisconnect, self.capabilitySessionID == sessionID else { return }
                 self.attemptConnection()
             }
         } else if isUserDisconnect {
