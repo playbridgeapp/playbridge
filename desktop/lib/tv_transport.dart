@@ -5,10 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
 
 import 'protocol.dart';
+import 'receiver_capability_policy.dart';
 import 'stream_proxy_server.dart';
 import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
 
+export 'receiver_capability_policy.dart'
+    show ReceiverProtocolSession, ReceiverProtocolState;
 export 'tv_sender_client.dart' show SenderConnectionState, TvCredentials;
 
 const _googleCastApplicationId = String.fromEnvironment(
@@ -63,6 +66,13 @@ abstract class TvTransport {
 
   /// Last capabilities reported by the receiver probe.
   Map<String, dynamic> get capabilities => const {};
+
+  /// Session owner for authenticated capabilities and live updates.
+  ReceiverProtocolSession? get protocolSession => null;
+
+  /// Current session capabilities and protocol state.
+  ReceiverProtocolState get protocolState =>
+      protocolSession?.state ?? const ReceiverProtocolState();
 
   /// Whether this protocol uses SAS pairing (6-digit PIN handshake).
   bool get supportsPairing => false;
@@ -203,6 +213,12 @@ class PlayBridgeTransport extends TvTransport {
 
   @override
   Map<String, dynamic> get capabilities => _client.capabilities ?? const {};
+
+  @override
+  ReceiverProtocolSession get protocolSession => _client.protocolSession;
+
+  @override
+  ReceiverProtocolState get protocolState => _client.protocolState;
 
   @override
   Future<bool> sendRemoteKey(String key) async =>

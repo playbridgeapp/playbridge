@@ -387,19 +387,38 @@ class TvSenderController extends ChangeNotifier {
 
   /// Pure resolved capability policy for the active TV receiver.
   ResolvedReceiverPolicy get policy {
-    Map<String, dynamic>? transportCaps;
+    ReceiverProtocolState? sessionState;
     try {
-      if (_transport.capabilities.isNotEmpty) {
-        transportCaps = _transport.capabilities;
-      }
+      sessionState = _transport.protocolState;
     } catch (_) {
-      transportCaps = null;
+      sessionState = null;
     }
-    final rawCaps = _activeTv?.capabilities.isNotEmpty == true
-        ? _activeTv!.capabilities
-        : transportCaps;
+
+    dynamic rawCaps;
+    bool explicitMalformed = false;
+
+    if (sessionState != null && sessionState.descriptor != null) {
+      rawCaps = sessionState.descriptor;
+    } else if (sessionState != null && sessionState.malformedV1) {
+      explicitMalformed = true;
+      rawCaps = null;
+    } else {
+      Map<String, dynamic>? transportCaps;
+      try {
+        if (_transport.capabilities.isNotEmpty) {
+          transportCaps = _transport.capabilities;
+        }
+      } catch (_) {
+        transportCaps = null;
+      }
+      rawCaps = _activeTv?.capabilities.isNotEmpty == true
+          ? _activeTv!.capabilities
+          : transportCaps;
+    }
+
     return resolveReceiverCapabilityPolicy(
       rawDescriptor: rawCaps,
+      malformedV1: explicitMalformed,
       activeSurface: _remoteContext ??
           (_remoteState.isNotEmpty && !_terminalStates.contains(_remoteState)
               ? 'player'
@@ -1871,6 +1890,12 @@ class TvSenderController extends ChangeNotifier {
         _startProxyIdleGrace();
         _suppressStoppedPlayback();
         _clearNowCasting();
+        notifyListeners();
+      } else if (type == 'receiver_capabilities') {
+        final sess = _transport.protocolSession;
+        if (sess != null) {
+          sess.observe(sess.generation, obj);
+        }
         notifyListeners();
       } else if (type == 'context') {
         final active = (obj['active'] ?? obj['surface']) as String?;
