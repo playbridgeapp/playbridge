@@ -16,6 +16,9 @@ const _googleCastApplicationId = String.fromEnvironment(
   defaultValue: '30FDC6BC',
 );
 
+const browserSingleItemMessage =
+    'Web browser receivers play one file at a time';
+
 @visibleForTesting
 bool isGoogleCastRestartableSessionError(Object error) =>
     error is rust.CastSessionError &&
@@ -799,9 +802,11 @@ class GoogleCastTransport extends RustCastTransport {
 /// Transport for a browser page connected to Desktop's on-demand Rust host.
 class BrowserTransport extends TvTransport {
   BrowserTransport({rust.SenderServices? services})
-      : _services = services ?? StreamProxyServer.instance.services;
+      : _providedServices = services;
 
-  final rust.SenderServices _services;
+  final rust.SenderServices? _providedServices;
+  late final rust.SenderServices _services =
+      _providedServices ?? StreamProxyServer.instance.services;
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
   final _credentials = StreamController<TvCredentials>.broadcast();
@@ -810,6 +815,10 @@ class BrowserTransport extends TvTransport {
   String? _sessionId;
   int _positionMs = 0;
   String _playbackState = 'idle';
+  String? _lastError;
+
+  @override
+  String? get lastError => _lastError;
 
   @override
   TvProtocol get protocol => TvProtocol.webBrowser;
@@ -908,6 +917,7 @@ class BrowserTransport extends TvTransport {
     String? subtitleUrl,
     Duration? startPosition,
   }) async {
+    _lastError = null;
     final sessionId = _sessionId;
     if (sessionId == null || url.isEmpty) return false;
     try {
@@ -930,9 +940,14 @@ class BrowserTransport extends TvTransport {
   }
 
   @override
-  Future<bool> castPlaylist(PlaylistPayload playlist) => playlist.items.isEmpty
-      ? Future.value(false)
-      : castVideo(playlist.items.first);
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
+    _lastError = null;
+    if (playlist.items.length != 1 || playlist.startIndex != 0) {
+      _lastError = browserSingleItemMessage;
+      return false;
+    }
+    return castVideo(playlist.items.single);
+  }
 
   @override
   Future<bool> sendControl(String command) async {

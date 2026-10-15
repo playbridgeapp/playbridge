@@ -418,6 +418,11 @@ class TvSenderController extends ChangeNotifier {
   bool get canPlay => policy.canPlay;
   bool get canPause => policy.canPause;
   bool get canStop => policy.canStop;
+  // Only the native transport implements playlist jumps. Keep its existing
+  // descriptor/legacy policy, independently of external media controls.
+  bool get canPlaylistJump =>
+      _transport.protocol == TvProtocol.playBridge &&
+      (policy.isLegacy || policy.canPlaylistJumpIndex);
   bool get canSeekAbsolute => policy.canSeekAbsolute;
   bool get canSeekRelative => policy.canSeekRelative;
   bool get hasVolume => policy.hasVolume;
@@ -485,6 +490,15 @@ class TvSenderController extends ChangeNotifier {
   /// Failure detail from the last local file cast attempt.
   String? _lastCastError;
   String? get lastCastError => _lastCastError;
+
+  bool _acceptsPlaylist(int itemCount, int startIndex) {
+    if (_transport.protocol == TvProtocol.webBrowser &&
+        (itemCount != 1 || startIndex != 0)) {
+      _lastCastError = browserSingleItemMessage;
+      return false;
+    }
+    return true;
+  }
 
   bool get castRouteThroughProxy => _identity.castRouteThroughProxy;
 
@@ -816,6 +830,9 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> castPlaylist(PlaylistPayload playlist,
       {bool Function()? canCommit}) async {
     _lastCastError = null;
+    if (!_acceptsPlaylist(playlist.items.length, playlist.startIndex)) {
+      return false;
+    }
     final outgoing = PlaylistPayload()..mergeFromMessage(playlist);
     final items = playlist.items.map(_withHistoryPreference).toList();
     outgoing.items
@@ -848,6 +865,13 @@ class TvSenderController extends ChangeNotifier {
       _awaitingFreshPlayback = false;
       _stoppedPlaybackId = null;
     }
+    if (_transport.protocol == TvProtocol.webBrowser) {
+      final title = items.single.title;
+      _castingTitle = title.isNotEmpty ? title : 'Media';
+      _castPlaylist = [(index: 0, title: _castingTitle!)];
+      _castIndex = 0;
+      notifyListeners();
+    }
     return ok;
   }
 
@@ -856,6 +880,10 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> castLinkedPlaylist(PlaylistPayload playlist,
       {required bool Function() canCommit}) async {
     if (!canCommit() || playlist.items.isEmpty) return false;
+    _lastCastError = null;
+    if (!_acceptsPlaylist(playlist.items.length, playlist.startIndex)) {
+      return false;
+    }
     if (_transport.protocol == TvProtocol.playBridge) {
       return castPlaylist(playlist, canCommit: canCommit);
     }
@@ -1013,6 +1041,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   Future<bool> queueAdd(PlayPayload item, {bool Function()? canCommit}) async {
+    if (_transport.protocol == TvProtocol.webBrowser) return false;
     final generation = _proxyLeaseGeneration;
     final lease = await _acquireProxyLease([item.url]);
     if (lease == null) return false;
@@ -1037,9 +1066,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   Future<bool> playlistJump(int index) {
-    if (!policy.isLegacy && !policy.canPlaylistJumpIndex) {
-      return Future.value(false);
-    }
+    if (!canPlaylistJump) return Future.value(false);
     return _transport.playlistJump(index);
   }
 
@@ -1316,6 +1343,7 @@ class TvSenderController extends ChangeNotifier {
   /// connected, no file exists, or no LAN address is reachable.
   Future<bool> castLocalFiles(List<File> files, {List<String>? titles}) async {
     _lastCastError = null;
+    if (!_acceptsPlaylist(files.length, 0)) return false;
     try {
       final active = _activeTv;
       if (active == null || !isConnected) return false;
@@ -1348,7 +1376,7 @@ class TvSenderController extends ChangeNotifier {
       if (items.isEmpty) return false;
 
       final ok = await castPlaylist(PlaylistPayload(items: items));
-      if (!ok) _lastCastError = _transport.lastError;
+      if (!ok) _lastCastError ??= _transport.lastError;
       if (ok) {
         // Optimistic now-casting snapshot; refined by the TV's status /
         // playlist_status echoes.

@@ -29,7 +29,7 @@ class NowCastingScreen extends StatelessWidget {
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
         const SizedBox(height: 16),
         NowCastingCard(controller: controller),
-        if (playlist.length > 1) ...[
+        if (controller.canPlaylistJump && playlist.length > 1) ...[
           const SizedBox(height: 24),
           Row(
             children: [
