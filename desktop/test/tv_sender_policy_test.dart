@@ -137,12 +137,24 @@ void main() {
       'player': {
         'engines': {
           'mpv': {
-            'transport': ['play', 'pause', 'stop', 'seek_absolute', 'seek_relative'],
+            'transport': [
+              'play',
+              'pause',
+              'stop',
+              'seek_absolute',
+              'seek_relative'
+            ],
             'settings': ['loop', 'engine'],
             'queue': ['jump_index'],
           },
           'exo': {
-            'transport': ['play', 'pause', 'stop', 'seek_absolute', 'seek_relative'],
+            'transport': [
+              'play',
+              'pause',
+              'stop',
+              'seek_absolute',
+              'seek_relative'
+            ],
             'settings': ['loop', 'engine'],
             'queue': ['jump_index'],
           },
@@ -194,8 +206,13 @@ void main() {
     },
   };
 
-  Future<({TvSenderController sender, _PolicyTestTransport transport, TvRecord record, TvConnectionStore store})>
-      createFixture({Map<String, dynamic>? descriptor}) async {
+  Future<
+      ({
+        TvSenderController sender,
+        _PolicyTestTransport transport,
+        TvRecord record,
+        TvConnectionStore store
+      })> createFixture({Map<String, dynamic>? descriptor}) async {
     final transport = _PolicyTestTransport();
     if (descriptor != null) {
       transport.setCapabilities(descriptor);
@@ -225,7 +242,8 @@ void main() {
   }
 
   group('TvSenderController Policy Gating', () {
-    testWidgets('unspecified descriptor falls back to legacy policy', (tester) async {
+    testWidgets('unspecified descriptor falls back to legacy policy',
+        (tester) async {
       final f = await createFixture(descriptor: null);
       await f.sender.reconnect(f.record);
       await tester.pump();
@@ -236,7 +254,9 @@ void main() {
       expect(f.sender.canSwitchEngine, isFalse);
     });
 
-    testWidgets('Android TV descriptor: player operations permitted, volume rejected', (tester) async {
+    testWidgets(
+        'Android TV descriptor: player operations permitted, volume rejected',
+        (tester) async {
       final f = await createFixture(descriptor: androidTvDescriptor);
       await f.sender.reconnect(f.record);
       await tester.pump();
@@ -266,7 +286,9 @@ void main() {
       expect(await f.sender.switchPlayer('vlc'), isFalse);
     });
 
-    testWidgets('Apple TV with App volume descriptor: volume enabled and marked App volume', (tester) async {
+    testWidgets(
+        'Apple TV with App volume descriptor: volume enabled and marked App volume',
+        (tester) async {
       final f = await createFixture(descriptor: appleTvWithAppVolumeDescriptor);
       await f.sender.reconnect(f.record);
       await tester.pump();
@@ -285,7 +307,8 @@ void main() {
       expect(await f.sender.switchPlayer('exo'), isFalse);
     });
 
-    testWidgets('Apple TV with no volume block: volume completely disabled', (tester) async {
+    testWidgets('Apple TV with no volume block: volume completely disabled',
+        (tester) async {
       final f = await createFixture(descriptor: appleTvNoVolumeDescriptor);
       await f.sender.reconnect(f.record);
       await tester.pump();
@@ -302,7 +325,8 @@ void main() {
       expect(f.transport.sentRemoteKeys, isEmpty);
     });
 
-    testWidgets('Dynamic context update modifies active policy and gating', (tester) async {
+    testWidgets('Dynamic context update modifies active policy and gating',
+        (tester) async {
       final f = await createFixture(descriptor: {
         'version': 1,
         'surfaces': {
@@ -358,7 +382,9 @@ void main() {
       expect(await f.sender.sendBrowserControl('forward'), isFalse);
     });
 
-    testWidgets('Dynamic player_settings update gates settings-backed operations', (tester) async {
+    testWidgets(
+        'Dynamic player_settings update gates settings-backed operations',
+        (tester) async {
       final f = await createFixture(descriptor: androidTvDescriptor);
       await f.sender.reconnect(f.record);
       await tester.pump();
@@ -376,7 +402,8 @@ void main() {
       expect(await f.sender.setLoop(true), isFalse);
     });
 
-    testWidgets('Credentials, tokens, pins, and descriptors are never logged', (tester) async {
+    testWidgets('Credentials, tokens, pins, and descriptors are never logged',
+        (tester) async {
       final logs = <String>[];
       final originalDebugPrint = debugPrint;
       debugPrint = (String? message, {int? wrapWidth}) {

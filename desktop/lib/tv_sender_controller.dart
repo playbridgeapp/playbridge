@@ -1821,8 +1821,8 @@ class TvSenderController extends ChangeNotifier {
         _settingsAvailability = ReceiverSettingsAvailability(
           subtitleOffsetAvailable: (obj['subtitleOffsetAvailable'] ??
               obj['subtitle_offset_available']) as bool?,
-          engineAvailable: (obj['engineAvailable'] ??
-              obj['engine_available']) as bool?,
+          engineAvailable:
+              (obj['engineAvailable'] ?? obj['engine_available']) as bool?,
           loopAvailable:
               (obj['loopAvailable'] ?? obj['loop_available']) as bool?,
           speedAvailable:

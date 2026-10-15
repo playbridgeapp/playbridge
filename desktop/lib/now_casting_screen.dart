@@ -333,9 +333,8 @@ class _NowCastingCardState extends State<NowCastingCard> {
                     icon: Icon(
                       c.isMuted == true ? Icons.volume_off : Icons.volume_up,
                       size: 20,
-                      color: c.isMuted == true
-                          ? Colors.redAccent
-                          : Colors.white70,
+                      color:
+                          c.isMuted == true ? Colors.redAccent : Colors.white70,
                     ),
                     onPressed: c.toggleMute,
                   ),

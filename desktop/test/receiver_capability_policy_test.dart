@@ -574,7 +574,18 @@ void main() {
       expect(p.canSeekRelative, isTrue);
 
       // Keys (7 nav keys + mute)
-      expect(p.supportedKeys, containsAll(['dpad_up', 'dpad_down', 'dpad_left', 'dpad_right', 'dpad_center', 'back', 'home', 'mute']));
+      expect(
+          p.supportedKeys,
+          containsAll([
+            'dpad_up',
+            'dpad_down',
+            'dpad_left',
+            'dpad_right',
+            'dpad_center',
+            'back',
+            'home',
+            'mute'
+          ]));
 
       // Settings
       expect(p.canLoop, isTrue);
@@ -619,7 +630,18 @@ void main() {
       expect(p.canSeekRelative, isTrue);
 
       // Keys (7 nav keys + mute)
-      expect(p.supportedKeys, containsAll(['dpad_up', 'dpad_down', 'dpad_left', 'dpad_right', 'dpad_center', 'back', 'home', 'mute']));
+      expect(
+          p.supportedKeys,
+          containsAll([
+            'dpad_up',
+            'dpad_down',
+            'dpad_left',
+            'dpad_right',
+            'dpad_center',
+            'back',
+            'home',
+            'mute'
+          ]));
 
       // Settings: ONLY loop and engine; unsupported settings are false
       expect(p.canLoop, isTrue);
@@ -873,9 +895,11 @@ void main() {
       );
       expect(pIntersection.canPointerMove, isTrue);
       expect(pIntersection.canPointerClick, isTrue);
-      expect(pIntersection.canPointerZoom, isFalse); // Restricted by intersection!
+      expect(
+          pIntersection.canPointerZoom, isFalse); // Restricted by intersection!
       expect(pIntersection.canBrowserReload, isTrue);
-      expect(pIntersection.canBrowserFullscreen, isFalse); // Restricted by intersection!
+      expect(pIntersection.canBrowserFullscreen,
+          isFalse); // Restricted by intersection!
 
       // When active engine state arrives as webview:
       final pWebView = resolveReceiverCapabilityPolicy(
@@ -913,7 +937,14 @@ void main() {
         'player': {
           'engines': {
             'mpv': {
-              'transport': ['play', 'pause', 'toggle', 'stop', 'seek_absolute', 'seek_relative'],
+              'transport': [
+                'play',
+                'pause',
+                'toggle',
+                'stop',
+                'seek_absolute',
+                'seek_relative'
+              ],
               'settings': ['loop', 'engine', 'speed', 'scaling'],
               'imageTransforms': ['pan', 'zoom'],
             },
@@ -937,7 +968,8 @@ void main() {
       expect(pWithFlags.canScaling, isTrue);
     });
 
-    test('image media kind restricts seek and loop, enables image transforms', () {
+    test('image media kind restricts seek and loop, enables image transforms',
+        () {
       final pImage = resolveReceiverCapabilityPolicy(
         rawDescriptor: tvDescriptor,
         activeSurface: 'player',

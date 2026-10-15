@@ -184,7 +184,9 @@ class ReceiverDescriptorParser {
             browser: _identifiers(engObj['browser']) ?? const {},
             reporting: _identifiers(engObj['reporting']) ?? const {},
           );
-          if (engObj['transport'] != null && engines[engineId]!.transport.isEmpty && (engObj['transport'] as List).isNotEmpty) return null;
+          if (engObj['transport'] != null &&
+              engines[engineId]!.transport.isEmpty &&
+              (engObj['transport'] as List).isNotEmpty) return null;
         }
         surfaces[surfaceId] = ReceiverSurface(engines: engines);
       }
@@ -510,9 +512,7 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   // 3. Valid v1 descriptor => declared operations only.
   final isPlayer = activeSurface == null || activeSurface == 'player';
   final isBrowser = activeSurface == 'browser';
-  final surfaceKey = isPlayer
-      ? 'player'
-      : (isBrowser ? 'browser' : null);
+  final surfaceKey = isPlayer ? 'player' : (isBrowser ? 'browser' : null);
 
   final engines = surfaceKey != null
       ? (descriptor.surfaces[surfaceKey]?.engines ?? const {})
@@ -549,8 +549,10 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
               ? ops.transport.contains('pause')
               : ops.transport.contains('play')))
       : (isBrowser && ops.transport.contains('toggle'));
-  final canPlay = ops.transport.contains('play') || ops.transport.contains('toggle');
-  final canPause = ops.transport.contains('pause') || ops.transport.contains('toggle');
+  final canPlay =
+      ops.transport.contains('play') || ops.transport.contains('toggle');
+  final canPause =
+      ops.transport.contains('pause') || ops.transport.contains('toggle');
   final canStop = isPlayer && ops.transport.contains('stop');
   final canSeekAbsolute = seekable && ops.transport.contains('seek_absolute');
   final canSeekRelative = seekable && ops.transport.contains('seek_relative');
@@ -630,7 +632,8 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
       ops.settings.contains('loop') &&
       settingsAvailability.loopAvailable != false;
 
-  final playerEngines = descriptor.surfaces['player']?.engines.keys.toSet() ?? const {};
+  final playerEngines =
+      descriptor.surfaces['player']?.engines.keys.toSet() ?? const {};
   final canSwitchEngine = isPlayer &&
       !isImage &&
       ops.settings.contains('engine') &&
@@ -671,9 +674,12 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   final canQueueClear = isPlayer && ops.queue.contains('clear');
 
   // Tracks
-  final canSelectAudio = isPlayer && !isImage && ops.tracks.contains('audio_select');
-  final canSelectSubtitle = isPlayer && isVideo && ops.tracks.contains('subtitle_select');
-  final canAddSubtitleUrl = isPlayer && isVideo && ops.tracks.contains('subtitle_url_add');
+  final canSelectAudio =
+      isPlayer && !isImage && ops.tracks.contains('audio_select');
+  final canSelectSubtitle =
+      isPlayer && isVideo && ops.tracks.contains('subtitle_select');
+  final canAddSubtitleUrl =
+      isPlayer && isVideo && ops.tracks.contains('subtitle_url_add');
   final canAddSubtitleResource = isPlayer &&
       isVideo &&
       ops.tracks.contains('subtitle_resource_add') &&
@@ -689,11 +695,14 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
 
   final canBrowserForward = isBrowser && ops.browser.contains('forward');
   final canBrowserReload = isBrowser && ops.browser.contains('reload');
-  final canBrowserCycleSource = isBrowser && ops.browser.contains('cycle_source');
+  final canBrowserCycleSource =
+      isBrowser && ops.browser.contains('cycle_source');
   final canBrowserUnmute = isBrowser && ops.browser.contains('unmute');
   final canBrowserFullscreen = isBrowser && ops.browser.contains('fullscreen');
-  final canManageUserScripts = isBrowser && ops.browser.contains('manage_user_scripts');
-  final canManageUserAgent = isBrowser && ops.browser.contains('manage_user_agent');
+  final canManageUserScripts =
+      isBrowser && ops.browser.contains('manage_user_scripts');
+  final canManageUserAgent =
+      isBrowser && ops.browser.contains('manage_user_agent');
 
   // Pointer & Image transforms
   final canPointerMove = isBrowser && ops.pointer.contains('move');
@@ -705,11 +714,16 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   final canPointerScroll = isBrowser && ops.pointer.contains('scroll');
   final canPointerZoom = isBrowser && ops.pointer.contains('zoom');
 
-  final canImagePan = isPlayer && isImage && ops.imageTransforms.contains('pan');
-  final canImageZoom = isPlayer && isImage && ops.imageTransforms.contains('zoom');
-  final canImageRotate = isPlayer && isImage && ops.imageTransforms.contains('rotate');
-  final canImageAnchor = isPlayer && isImage && ops.imageTransforms.contains('anchor');
-  final canImageReset = isPlayer && isImage && ops.imageTransforms.contains('reset');
+  final canImagePan =
+      isPlayer && isImage && ops.imageTransforms.contains('pan');
+  final canImageZoom =
+      isPlayer && isImage && ops.imageTransforms.contains('zoom');
+  final canImageRotate =
+      isPlayer && isImage && ops.imageTransforms.contains('rotate');
+  final canImageAnchor =
+      isPlayer && isImage && ops.imageTransforms.contains('anchor');
+  final canImageReset =
+      isPlayer && isImage && ops.imageTransforms.contains('reset');
 
   return ResolvedReceiverPolicy(
     isLegacy: false,
