@@ -26,6 +26,10 @@ legal entity the owner forms to hold the project.
    material and its licence; you do not grant rights you do not hold.
 5. **No warranty.** Your contributions are provided as is, without warranties or
    a promise to provide support.
+6. **Open source promise.** The Maintainer will keep your contributions available
+   under an open source licence approved by the Open Source Initiative, such as
+   MPL-2.0. The Maintainer may also offer them under other terms, but will not
+   distribute them only under terms that are not open source.
 
 This agreement follows the general scope of the [Apache individual CLA](https://www.apache.org/licenses/icla.pdf),
 but is a separate agreement for PlayBridge. It is not legal advice; seek
@@ -33,5 +37,6 @@ independent advice before adapting it for another project.
 
 Only PR authors sign. AI-tool co-author attribution does not create a separate
 signing requirement. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and
-public signature-record details. The MPL code licence and the
+public signature-record details, and [docs/licensing.md](docs/licensing.md)
+for why PlayBridge uses MPL-2.0 and a CLA. The MPL code licence and the
 [trademark policy](TRADEMARKS.md) are separate from this agreement.

@@ -329,6 +329,7 @@ Other native media builds also require release-specific licence verification.
 The PlayBridge name and logos identify the official apps; see
 [TRADEMARKS.md](TRADEMARKS.md) for the fork and redistribution policy.
 Contributors must read and sign [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
+[docs/licensing.md](docs/licensing.md) explains why PlayBridge uses MPL-2.0 and a CLA.
 
 ## Contact
 
