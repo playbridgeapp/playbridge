@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'protocol.dart';
 
 /// Typed representation of a Stage 5 v1 ReceiverCapabilities descriptor.
 class ReceiverDescriptor {
@@ -100,6 +101,219 @@ class ReceiverSettingsAvailability {
     this.audioBoostAvailable,
     this.qualityAvailable,
   });
+}
+
+/// Session-scoped metadata for an authenticated receiver connection.
+class ReceiverProtocolState {
+  final ReceiverDescriptor? descriptor;
+  final bool malformedV1;
+  final ReceiverVolumeState? volume;
+  final ReceiverSettingsAvailability settingsAvailability;
+  final String? contextEngine;
+
+  const ReceiverProtocolState({
+    this.descriptor,
+    this.malformedV1 = false,
+    this.volume,
+    this.settingsAvailability = const ReceiverSettingsAvailability(),
+    this.contextEngine,
+  });
+
+  ReceiverProtocolState copyWith({
+    ReceiverDescriptor? descriptor,
+    bool clearDescriptor = false,
+    bool? malformedV1,
+    ReceiverVolumeState? volume,
+    ReceiverSettingsAvailability? settingsAvailability,
+    String? contextEngine,
+  }) {
+    return ReceiverProtocolState(
+      descriptor: clearDescriptor ? null : (descriptor ?? this.descriptor),
+      malformedV1: malformedV1 ?? this.malformedV1,
+      volume: volume ?? this.volume,
+      settingsAvailability: settingsAvailability ?? this.settingsAvailability,
+      contextEngine: contextEngine ?? this.contextEngine,
+    );
+  }
+}
+
+/// One owner for authenticated metadata and live capability updates.
+/// Session generation guards asynchronous retired-socket callbacks.
+class ReceiverProtocolSession {
+  int _generation = 0;
+  bool _authenticated = false;
+  bool _supportsUpdates = false;
+  bool _subscribed = false;
+  int _revision = 0;
+  ReceiverProtocolState _state = const ReceiverProtocolState();
+
+  int get generation => _generation;
+  bool get isAuthenticated => _authenticated;
+  bool get supportsUpdates => _supportsUpdates;
+  bool get isSubscribed => _subscribed;
+  int get revision => _revision;
+  ReceiverProtocolState get state => _state;
+
+  /// Begin a new session; invalidates any previous session callbacks and resets revision watermark.
+  int begin([int? session]) {
+    if (session != null) {
+      _generation = session;
+    } else {
+      _generation++;
+    }
+    _authenticated = false;
+    _supportsUpdates = false;
+    _subscribed = false;
+    _revision = 0;
+    _state = const ReceiverProtocolState();
+    return _generation;
+  }
+
+  /// Clears session metadata on disconnect or receiver switch.
+  void clear([int? session]) {
+    begin(session);
+  }
+
+  /// Called only after successful auth or verified decryption/pin checks of first-pairing credentials.
+  bool acceptCredentials(int session, Map<dynamic, dynamic> envelope) {
+    if (session != _generation) return false;
+    _authenticated = true;
+    final features = envelope['features'];
+    _supportsUpdates = features is List &&
+        features.any((f) => f.toString() == receiverCapabilitiesV1Feature);
+
+    // Repeated credentials on the same socket must not rewind a live revision
+    // or opt in a second time. Only begin()/clear() establish a new baseline.
+    if (!_supportsUpdates) _subscribed = false;
+
+    final raw = envelope['capabilities'];
+    final recognized = ReceiverDescriptorParser.recognizedV1(raw);
+    final descriptor = recognized ? ReceiverDescriptorParser.parse(raw) : null;
+    final malformedV1 = recognized && descriptor == null;
+
+    _state = ReceiverProtocolState(
+      descriptor: descriptor,
+      malformedV1: malformedV1,
+    );
+    return true;
+  }
+
+  /// Called after authenticated metadata is accepted, including protected first pairing.
+  String? subscription(int session) {
+    if (session != _generation ||
+        !_authenticated ||
+        !_supportsUpdates ||
+        _subscribed) {
+      return null;
+    }
+    _subscribed = true;
+    return senderReceiverCapabilitiesSubscribeJson();
+  }
+
+  /// Observes an incoming protocol envelope on the authenticated socket.
+  bool observe(int session, Map<dynamic, dynamic> frame) {
+    if (session != _generation || !_authenticated) return false;
+    final type = frame['type'];
+    if (type == 'receiver_capabilities') {
+      if (!_subscribed) return false;
+      final keys = frame.keys.map((k) => k.toString()).toSet();
+      if (keys.length != 3 ||
+          !keys.containsAll(['type', 'revision', 'capabilities'])) {
+        return false;
+      }
+      final rev = frame['revision'];
+      if (rev is! num || rev is bool) return false;
+      final intVal = rev.toInt();
+      if (intVal != rev) return false;
+      if (intVal < 1 ||
+          intVal > maxReceiverCapabilitiesRevision ||
+          intVal <= _revision) {
+        return false;
+      }
+      final raw = frame['capabilities'];
+      if (raw is! Map) return false;
+      final version = raw['version'];
+      if (version is! num && version is! String) return false;
+
+      // Even an opaque future version advances ordering, so a delayed older v1
+      // cannot replace the current snapshot after a newer revision was observed.
+      _revision = intVal;
+      if (!ReceiverDescriptorParser.recognizedV1(raw)) {
+        // Keep current descriptor
+        return true;
+      }
+      final descriptor = ReceiverDescriptorParser.parse(raw);
+      _state = _state.copyWith(
+        descriptor: descriptor,
+        malformedV1: descriptor == null,
+        clearDescriptor: descriptor == null,
+      );
+      return true;
+    } else if (type == 'volume_state') {
+      final parsed = _parseVolume(frame);
+      if (parsed != null) {
+        final prev =
+            _state.volume?.scope == parsed.scope ? _state.volume : null;
+        _state = _state.copyWith(
+          volume: ReceiverVolumeState(
+            scope: parsed.scope,
+            level: parsed.level ?? prev?.level,
+            muted: parsed.muted ?? prev?.muted,
+          ),
+        );
+        return true;
+      }
+    } else if (type == 'player_settings') {
+      final eng = frame['engine']?.toString();
+      _state = _state.copyWith(
+        contextEngine:
+            (eng != null && eng.isNotEmpty) ? eng : _state.contextEngine,
+        settingsAvailability: ReceiverSettingsAvailability(
+          subtitleOffsetAvailable: (frame['subtitleOffsetAvailable'] ??
+              frame['subtitle_offset_available']) as bool?,
+          engineAvailable:
+              (frame['engineAvailable'] ?? frame['engine_available']) as bool?,
+          loopAvailable:
+              (frame['loopAvailable'] ?? frame['loop_available']) as bool?,
+          speedAvailable:
+              (frame['speedAvailable'] ?? frame['speed_available']) as bool?,
+          scalingAvailable: (frame['scalingAvailable'] ??
+              frame['scaling_available']) as bool?,
+          audioBoostAvailable: (frame['audioBoostAvailable'] ??
+              frame['audio_boost_available']) as bool?,
+          qualityAvailable: (frame['qualityAvailable'] ??
+              frame['quality_available']) as bool?,
+        ),
+      );
+      return true;
+    } else if (type == 'context') {
+      final eng = frame['engine']?.toString();
+      if (eng != null && eng.isNotEmpty) {
+        _state = _state.copyWith(contextEngine: eng);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  ReceiverVolumeState? _parseVolume(Map<dynamic, dynamic> frame) {
+    try {
+      final scope = frame['scope']?.toString();
+      if (scope == null || scope.isEmpty) return null;
+      if (!frame.containsKey('level') && !frame.containsKey('muted')) {
+        return null;
+      }
+      final level = (frame['level'] as num?)?.toDouble();
+      final muted = frame['muted'] as bool?;
+      return ReceiverVolumeState(
+        scope: scope,
+        level: level,
+        muted: muted,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Pure parser and validator for Stage 5 ReceiverCapabilities v1.
@@ -456,6 +670,7 @@ ReceiverEngine intersectEngines(Iterable<ReceiverEngine> engines) {
 /// Pure resolver: maps raw descriptor + runtime state to authorized operations.
 ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   required dynamic rawDescriptor,
+  bool malformedV1 = false,
   String? activeSurface,
   String? activeEngine,
   List<String> legacyPlayers = const [],
@@ -468,13 +683,23 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   bool hasDuration = true,
   bool isPlaying = false,
 }) {
-  final recognized = ReceiverDescriptorParser.recognizedV1(rawDescriptor);
-  final descriptor =
-      recognized ? ReceiverDescriptorParser.parse(rawDescriptor) : null;
-  final malformedV1 = recognized && descriptor == null;
+  final bool recognized;
+  final ReceiverDescriptor? descriptor;
+  final bool isMalformed;
+
+  if (rawDescriptor is ReceiverDescriptor) {
+    recognized = true;
+    descriptor = rawDescriptor;
+    isMalformed = malformedV1;
+  } else {
+    recognized = ReceiverDescriptorParser.recognizedV1(rawDescriptor);
+    descriptor =
+        recognized ? ReceiverDescriptorParser.parse(rawDescriptor) : null;
+    isMalformed = malformedV1 || (recognized && descriptor == null);
+  }
 
   // 1. Absent or unknown version => frozen legacy Desktop sender behavior.
-  if (!recognized && descriptor == null) {
+  if (!recognized && descriptor == null && !isMalformed) {
     final isImage = mediaKind == 'image';
     final seekable = !isImage && !isLive && hasDuration;
     return ResolvedReceiverPolicy(
@@ -503,7 +728,7 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
   }
 
   // 2. Recognized v1 but malformed => fail closed.
-  if (malformedV1 || descriptor == null) {
+  if (isMalformed || descriptor == null) {
     return const ResolvedReceiverPolicy(
       isLegacy: false,
       isMalformedV1: true,

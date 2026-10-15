@@ -639,3 +639,16 @@ String senderBrowserLaunchJson({String? engine}) => jsonEncode({
 
 String senderBrowserControlJson(String action) =>
     _commandEnvelope('browser_control', {'action': action});
+
+/// Feature name offering live receiver capabilities updates
+const receiverCapabilitiesV1Feature = 'receiver_capabilities_v1';
+
+/// Maximum allowable numeric revision (2^53 - 1)
+const maxReceiverCapabilitiesRevision = 9007199254740991;
+
+/// Wire message to subscribe to live receiver capabilities updates
+String senderReceiverCapabilitiesSubscribeJson() => jsonEncode({
+      'type': 'command',
+      'action': 'receiver_capabilities_subscribe',
+      'payload': {},
+    });

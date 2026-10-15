@@ -8,6 +8,7 @@ import 'package:pointycastle/asn1.dart';
 import 'package:web_socket_channel/io.dart';
 
 import 'protocol.dart';
+import 'receiver_capability_policy.dart';
 import 'sas_crypto.dart';
 
 /// Computes the OkHttp-style SPKI pin `sha256/<base64(SHA-256(SubjectPublicKeyInfo
@@ -143,6 +144,11 @@ class TvSenderClient {
   /// the caller can persist it via [TvConnectionStore].
   Stream<TvCredentials> get credentials => _credentials.stream;
 
+  final ReceiverProtocolSession protocolSession = ReceiverProtocolSession();
+
+  /// Current session capabilities and protocol state.
+  ReceiverProtocolState get protocolState => protocolSession.state;
+
   Map<String, dynamic>? _capabilities;
 
   /// Last capabilities descriptor advertised by the receiver at auth/pairing.
@@ -178,6 +184,7 @@ class TvSenderClient {
     _userClosed = false;
     await _close();
     if (!_isCurrent(generation)) return;
+    protocolSession.begin(generation);
     _clearPairingSecrets();
     _capturedPin = null;
     _pinMismatch = false;
@@ -288,6 +295,9 @@ class TvSenderClient {
           case 'auth_response':
             _handleAuthResponse(obj);
             return;
+          case 'receiver_capabilities':
+            protocolSession.observe(_generation, obj);
+            break;
         }
       }
     } catch (_) {
@@ -417,6 +427,11 @@ class TvSenderClient {
       _capabilities = rawCaps is Map
           ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
           : null;
+      protocolSession.acceptCredentials(_generation, credentials);
+      final sub = protocolSession.subscription(_generation);
+      if (sub != null) {
+        _channel?.sink.add(sub);
+      }
       _acceptPairingCredentials(token, certFp, capabilities: _capabilities);
     } catch (_) {
       debugPrint('[tv-sender] pairing credential verification failed');
@@ -484,6 +499,11 @@ class TvSenderClient {
     _capabilities = rawCaps is Map
         ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
         : null;
+    protocolSession.acceptCredentials(_generation, obj);
+    final sub = protocolSession.subscription(_generation);
+    if (sub != null) {
+      _channel?.sink.add(sub);
+    }
     // SEC-005: legacy echoed tokens in auth_response are ignored.
     _setState(SenderConnectionState.connected);
   }
@@ -538,6 +558,7 @@ class TvSenderClient {
     client?.close(force: true);
     _clearPairingSecrets();
     _capabilities = null;
+    protocolSession.clear();
     await sub?.cancel();
     if (c != null) {
       try {
