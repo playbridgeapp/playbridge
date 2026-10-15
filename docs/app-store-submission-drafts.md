@@ -4,8 +4,8 @@ Paste-ready text for the steps that need the paid Apple Developer account. Repla
 
 | App | Bundle ID | Version (build) |
 |---|---|---|
-| PlayBridge Phone (iOS) | `app.playbridge.phone` | 0.15.0 (7) |
-| PlayBridge TV (tvOS) | `app.playbridge.tv` | 0.15.0 (6) |
+| PlayBridge Phone (iOS) | `app.playbridge.phone` | 0.15.0 (8) |
+| PlayBridge TV (tvOS) | `app.playbridge.tv` | 0.15.0 (8) |
 
 Version numbers come from the Xcode projects at the time of writing; use the values of the build you upload.
 
@@ -41,7 +41,7 @@ App Review can't pair a receiver it doesn't have. Before submitting:
 >
 > **How to test**
 > 1. Open the app and allow Local Network access when asked.
-> 2. Open this sample page in the browser tab: [sample page URL]. Play the video, then tap the cast button.
+> 2. Open this sample page in the browser tab: https://playbridge.app/cast-demo/. Play the video, then tap the cast button.
 > 3. Pick a receiver: an Apple TV running PlayBridge TV, a Google Cast device, AirPlay, or a DLNA/Roku device. To play on the iPhone itself instead, choose **Play on Phone** in the cast sheet.
 > 4. A screen recording of pairing with the Apple TV app and casting is here: [recording link].
 >
@@ -60,7 +60,7 @@ App Review can't pair a receiver it doesn't have. Before submitting:
 > **How to test**
 > 1. Open PlayBridge TV on the Apple TV and allow Local Network access. It shows a pairing screen.
 > 2. On an iPhone on the same Wi-Fi network, open PlayBridge, tap the device picker and choose the Apple TV. Confirm that the code on both screens matches.
-> 3. On the iPhone, open [sample page URL] and cast the video. It plays on the Apple TV; use the Siri Remote or the iPhone to control it.
+> 3. On the iPhone, open https://playbridge.app/cast-demo/ and cast the video. It plays on the Apple TV; use the Siri Remote or the iPhone to control it.
 > 4. A screen recording of this flow is here: [recording link].
 >
 > Settings lets the user choose the player engine (AVPlayer or MPV), turn off cast history and read the privacy policy address. The app plays only media the user sends from their own iPhone; it has no built-in content catalog or web browser.
@@ -90,12 +90,130 @@ Both apps use encryption only through standard, published algorithms and protoco
 | iOS | CryptoKit for pairing and TLS certificate pinning; statically linked Rust TLS in Cast Core |
 | Both | GnuTLS inside MPVKit for HTTPS media streams |
 
-Suggested App Store Connect answers:
+Because MPVKit ships GnuTLS, the apps use standard encryption that Apple's operating system doesn't provide. That rules out declaring them exempt. Apple's [documentation table](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/) maps this case to one document: a French encryption declaration, needed only for distribution in France. A CCATS is needed only for proprietary algorithms.
+
+App Store Connect answers:
 
 1. **Does your app use encryption?** Yes.
-2. **Does it qualify for any of the exemptions in Category 5, Part 2?** It uses only standard encryption (no proprietary algorithms), for securing communications and protecting user data on the device. Choose the option for **standard encryption algorithms instead of, or in addition to, Apple's operating system**.
-3. **Distribution in France:** check whether App Store Connect asks for a French encryption declaration for this choice, and file it if so.
+2. **Algorithm type:** **Standard encryption algorithms instead of, or in addition to, using or accessing the encryption within Apple's operating system.**
+3. **Available in France?** No, until the declaration to ANSSI (France's cybersecurity agency) is filed. Leave France and the French overseas territories out of Pricing and Availability until then. Also leave out **China mainland**: distribution there needs an ICP filing number, which requires a Chinese business entity. To add France, file the declaration ([ANSSI](https://cyber.gouv.fr/controle-relatif-un-moyen-de-cryptologie); Debian's is a [public example](https://www.debian.org/legal/anssi.fr.html)) and upload ANSSI's receipt under App Information → App Encryption Documentation.
 
-After answering once, add `ITSAppUsesNonExemptEncryption` to each Info.plist with the value that matches the answer, so later uploads skip the question.
+**United States:** a free consumer app using only standard cryptography is "mass market". Since the [March 2021 EAR rule](https://www.federalregister.gov/documents/2021/03/29/2021-05481/export-administration-regulations-implementation-of-wassenaar-arrangement-2019-plenary-decisions), it needs no annual self-classification report, and open source code using standard cryptography needs no email notification to BIS.
 
-This is a reasoned draft, not legal advice. The rules are in [Apple's export compliance overview](https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance) and the U.S. EAR (Category 5, Part 2, including §740.17). Confirm them before answering.
+**Info.plist:** the apps deliberately do **not** declare `ITSAppUsesNonExemptEncryption`. With the key set to `YES`, App Store Connect rejects the upload (ITMS-90592, "Invalid Export Compliance Code") unless an `ITSEncryptionExportComplianceCode` from approved documentation accompanies it, and this case has no documentation and therefore no code. `NO` would skip the question but would be inaccurate. So each uploaded build shows **Missing Compliance** once in App Store Connect (TestFlight → the build → Manage); answer it as above. A future CI upload can set the answer through the App Store Connect API.
+
+This is a reasoned draft, not legal advice. Check Annex 1 of French decree 2007-663 or ask ANSSI (`controle@ssi.gouv.fr`) before distributing in France.
+
+## 5. Store listing text
+
+Limits: subtitle 30 characters, promotional text 170, keywords 100 (comma-separated, no spaces after commas), description 4,000. Words in the app name don't need repeating in keywords. Keywords avoid other companies' trademarks, which App Review rejects there; the description may name compatible devices.
+
+### iPhone: PlayBridge: Cast to TV
+
+**Subtitle:** Cast web video to any TV
+
+**Promotional text:**
+
+> Find a video in the built-in browser, tap cast, and watch it on Apple TV, Google Cast, AirPlay or DLNA TVs. No account and no cloud: it all stays on your Wi-Fi.
+
+**Keywords:**
+
+```
+stream,video,player,dlna,upnp,browser,remote,iptv,m3u,receiver,smart,hls,mpv,subtitles,media
+```
+
+**Description:**
+
+```
+PlayBridge sends the video you find on your iPhone to the big screen. Browse to a video, tap the cast button and pick your TV. Everything happens on your own Wi-Fi network: no account, no sign-up and no cloud servers.
+
+CAST TO THE TV YOU HAVE
+• Apple TV with the free PlayBridge TV app, paired once with a 6-digit code
+• Google Cast devices and AirPlay
+• DLNA and UPnP smart TVs, with nothing to install on the TV
+• Or play on the iPhone itself with the built-in player
+
+A BROWSER BUILT FOR CASTING
+• Finds the videos on a web page, including HLS and DASH streams
+• Built-in blocker for ads and trackers
+• Tabs, bookmarks, history and collections
+
+YOUR OWN MEDIA
+• Cast videos from your photo library and the Files app
+• Load your own M3U playlists
+
+A REMOTE IN YOUR POCKET
+• Play, pause, seek and change the volume from the app, the lock screen or Control Center
+• A D-pad and touchpad for PlayBridge receivers
+
+PRIVATE BY DESIGN
+• No account, no ads, no analytics and no tracking
+• Your history and settings stay on your devices
+• Open source
+
+PlayBridge doesn't provide any content. Use it only with media you have the right to watch.
+```
+
+### Apple TV: PlayBridge TV
+
+**Subtitle:** Play videos from your iPhone
+
+**Promotional text:**
+
+> Send videos from your iPhone to your Apple TV. Pair once with a 6-digit code, then cast with a tap. Plays with AVPlayer or MPV. No account and no cloud.
+
+**Keywords:**
+
+```
+receiver,video,player,stream,phone,mpv,subtitles,hls,remote,playback,cast,mkv,local,wifi
+```
+
+**Description:**
+
+```
+PlayBridge TV turns your Apple TV into a receiver for the free PlayBridge iPhone app. Find a video on your iPhone, tap cast and it plays here, over your own Wi-Fi network, with no account.
+
+• Secure pairing: confirm a 6-digit code once, and your iPhone reconnects by itself
+• Two player engines: Apple's AVPlayer, or MPV for formats and codecs AVPlayer can't play
+• Subtitles, including subtitle files sent from your iPhone
+• Control playback with the Siri Remote or from your iPhone
+• An "Are you still watching?" prompt so playback doesn't run all night
+• Cast history you can turn off, stored encrypted on the Apple TV
+• No account, no ads, no analytics and no tracking
+• Open source
+
+Needs the PlayBridge iPhone app on the same Wi-Fi network. PlayBridge TV doesn't provide any content; it plays only what you send it.
+```
+
+### Both apps
+
+- **Support URL:** `https://github.com/playbridgeapp/playbridge/issues` (or a support page on `https://playbridge.app`)
+- **Marketing URL:** `https://playbridge.app`
+- **Copyright:** `2026 [your name]`
+- **Privacy Policy URL:** `https://playbridge.app/privacy`
+
+## 6. Screenshots
+
+| Device | Size (portrait unless noted) | Count |
+|---|---|---|
+| iPhone 6.9" | 1320 × 2868 | 3 to 6 |
+| iPad 13" (the iPhone app also runs on iPad) | 2064 × 2752 | 3 to 6 |
+| Apple TV | 1920 × 1080 landscape | 3 to 5 |
+
+Rules: show the real app; use only rights-cleared video (Blender Foundation open movies such as Big Buck Bunny, Sintel or Tears of Steel); no third-party websites, logos or personal device names; status bar at 9:41 with full battery (`xcrun simctl status_bar … override`). Captions above the screenshot are allowed.
+
+**iPhone and iPad shot list**
+
+1. Browser on a neutral page with a detected video and the cast sheet open. *Find a video. Tap cast.*
+2. Device picker listing an Apple TV, a Google Cast device, AirPlay and a DLNA TV. *Cast to the TV you already have.*
+3. Remote during playback: title, seek bar, volume line. *A remote in your pocket.*
+4. Built-in phone player playing an open movie. *Or watch right on your iPhone.*
+5. Phone Files with a few local videos. *Your own videos, too.*
+6. Content blocker settings. *No account. No tracking.*
+
+**Apple TV shot list**
+
+1. Pairing screen with its 6-digit code. *Pair once with your iPhone.*
+2. Player with the controls overlay over an open movie. *Plays what you cast.*
+3. Settings showing the AVPlayer and MPV engines. *Two player engines.*
+4. Ready / waiting screen. *Always ready to receive.*

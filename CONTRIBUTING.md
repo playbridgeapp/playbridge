@@ -70,7 +70,9 @@ and icon and do not imply endorsement.
 Before a contribution is merged, its pull request author must sign the individual
 [CLA](CLA.md). You keep your copyright and grant the maintainer rights to use,
 modify, sublicense and distribute your contribution under MPL-2.0 or another
-licence, including future dual or commercial licensing.
+licence, including future dual or commercial licensing. In return, the CLA promises that your contribution
+stays available under an OSI-approved open source licence. See
+[docs/licensing.md](docs/licensing.md) for the reasons behind the licence and the CLA.
 
 Sign by posting this exact comment on your pull request:
 
