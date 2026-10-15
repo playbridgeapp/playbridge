@@ -8,7 +8,7 @@ use playbridge_cast_core::{
     discovery::{
         DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver, ReceiverId, ReceiverProtocol,
     },
-    playbridge::{PairingSession, ReceiverFrame, SenderFrame},
+    playbridge::{PairingSession, ReceiverCapabilities, ReceiverFrame, SenderFrame},
     secure_ws::SecureWebSocket,
     session::{MediaRequest, ReceiverSession},
     upnp::Renderer,
@@ -33,6 +33,7 @@ use crate::{
     json_session::{self, ControlRequest, JsonCastSession, SessionInfo},
     preferred::PreferredDevice,
     receive::DEFAULT_PORT,
+    receiver_policy::{Control, ReceiverPolicy},
 };
 
 type CommandConfirmation = (
@@ -43,7 +44,10 @@ type CommandConfirmation = (
     Option<u64>,
 );
 
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+/// Authenticated PlayBridge session facts: the features and the optional receiver descriptor.
+type PlaybridgeAuth = (SecureWebSocket, Vec<String>, Option<ReceiverCapabilities>);
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub(crate) struct CastCapabilities {
     pub play_pause: bool,
     pub seek: bool,
@@ -52,6 +56,16 @@ pub(crate) struct CastCapabilities {
     pub looping: bool,
     pub speed: bool,
     pub audio_boost: bool,
+    /// Scope of the relative volume route, named in the UI as App volume when it is "app".
+    /// Absent without a receiver descriptor, so legacy JSON output does not change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_scope: Option<String>,
+    /// Compact diagnostic summary of the receiver's declared surfaces and engines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<Value>,
+    /// Text form of the same summary for the dashboard. Not part of the JSON output.
+    #[serde(skip)]
+    pub receiver_text: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -656,7 +670,7 @@ pub(crate) async fn run_json_pair(
     let was_paired = PlaybridgeCredentials::load(&uuid).is_some();
     let empty_payload = json!({ "items": [] });
     let pair_path = pair_code_file.as_deref().map(PathBuf::from);
-    let (socket, _) = cast_to_playbridge_maybe_pair(
+    let (socket, _, _) = cast_to_playbridge_maybe_pair(
         &address,
         receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT),
         PlaybridgeLoad {
@@ -1118,7 +1132,12 @@ async fn apply_json_control(
     media_items: &mut Vec<String>,
 ) -> Result<JsonControlResult, String> {
     match request.command.as_str() {
-        "stop" => Ok(JsonControlResult::Stop),
+        "stop" => {
+            if let TargetControl::Playbridge { policy, .. } = &*control {
+                policy.require(&Control::Transport("stop".into()), "Stop")?;
+            }
+            Ok(JsonControlResult::Stop)
+        }
         "detach" => Ok(JsonControlResult::Detach),
         "receiver_command" => {
             let action = request
@@ -1126,6 +1145,9 @@ async fn apply_json_control(
                 .as_deref()
                 .ok_or("receiver command requires action")?;
             let mut payload = request.payload.clone();
+            if let TargetControl::Playbridge { policy, .. } = &*control {
+                policy.require_receiver_action(action, payload.as_ref())?;
+            }
             let queued_media = if action == "queue_add" {
                 payload
                     .as_ref()
@@ -1139,7 +1161,10 @@ async fn apply_json_control(
             {
                 prepare_queue_item(payload, proxy_server).await?;
             }
-            let TargetControl::Playbridge { socket, features } = control else {
+            let TargetControl::Playbridge {
+                socket, features, ..
+            } = control
+            else {
                 return Err("receiver commands require a PlayBridge session".into());
             };
             if managed_command_requires_confirmation(action) {
@@ -1247,7 +1272,9 @@ async fn json_seek(
         position_ms = position_ms.min(snapshot.duration_ms);
     }
     match control {
-        TargetControl::Playbridge { socket, .. } => {
+        TargetControl::Playbridge { socket, policy, .. }
+            if policy.allows(&Control::Transport("seek_absolute".into())) =>
+        {
             socket
                 .send(&SenderFrame::Command {
                     action: "control".into(),
@@ -1258,6 +1285,8 @@ async fn json_seek(
             snapshot.position_ms = position_ms;
             Ok(())
         }
+        // A receiver that declares only relative seeking gets the relative command, which
+        // the dashboard path checks. Its step is the receiver's own.
         _ => dashboard_control(control, CastCommand::SeekRelative(seconds), snapshot).await,
     }
 }
@@ -1573,7 +1602,7 @@ pub(crate) async fn run_device_receiver_command(
         ));
     }
     let empty_payload = json!({ "items": [] });
-    let (mut socket, features) = cast_to_playbridge_with_features(
+    let (mut socket, features, capabilities) = cast_to_playbridge_with_features(
         &address,
         receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT),
         PlaybridgeLoad {
@@ -1590,6 +1619,11 @@ pub(crate) async fn run_device_receiver_command(
     if requires_v1 && !supports_confirmed_queue_crud(&features) {
         let _ = socket.close().await;
         return Err("receiver does not support confirmed queue CRUD v1".into());
+    }
+    let policy = ReceiverPolicy::from_descriptor(capabilities.as_ref());
+    if let Err(error) = policy.require_receiver_action(action, Some(&payload)) {
+        let _ = socket.close().await;
+        return Err(error);
     }
     let request_id = crate::json_session::new_request_id();
     socket
@@ -1906,7 +1940,7 @@ async fn connect_and_load(
         ReceiverProtocol::PlayBridge => {
             let port = receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT);
             let uuid = receiver_uuid(&receiver);
-            let (socket, features) = cast_to_playbridge_maybe_pair(
+            let (socket, features, capabilities) = cast_to_playbridge_maybe_pair(
                 &address,
                 port,
                 PlaybridgeLoad {
@@ -1924,6 +1958,7 @@ async fn connect_and_load(
             TargetControl::Playbridge {
                 socket: Box::new(socket),
                 features,
+                policy: ReceiverPolicy::from_descriptor(capabilities.as_ref()),
             }
         }
         _ => cast_to_target(
@@ -2009,7 +2044,7 @@ async fn cast_to_playbridge_maybe_pair(
     wss_port: u16,
     load: PlaybridgeLoad<'_>,
     machine_pairing: MachinePairing<'_>,
-) -> Result<(SecureWebSocket, Vec<String>), String> {
+) -> Result<PlaybridgeAuth, String> {
     if PlaybridgeCredentials::load(load.device_uuid).is_some() {
         return cast_to_playbridge_with_features(address, wss_port, load).await;
     }
@@ -2060,6 +2095,7 @@ async fn cast_to_playbridge_maybe_pair(
                     .decrypt_credentials(&nonce, &ciphertext, Some(&served_pin))
                     .map_err(|error| error.to_string())?;
                 let features = bundle.features.clone();
+                let capabilities = bundle.capabilities.clone();
                 let credentials = PlaybridgeCredentials {
                     token: bundle.token,
                     cert_fingerprint: bundle
@@ -2074,7 +2110,7 @@ async fn cast_to_playbridge_maybe_pair(
                 if !load.pair_only {
                     send_load(&mut socket, load).await?;
                 }
-                return Ok((socket, features));
+                return Ok((socket, features, capabilities));
             }
             ReceiverFrame::PairingDenied => {
                 return Err("Pairing was denied or timed out on the receiver".into());
@@ -2125,7 +2161,7 @@ pub(crate) async fn run_dashboard_cast(
         "playbridge" | "native" => {
             let port = target.wss_port.or(target.port).unwrap_or(DEFAULT_PORT);
             let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
-            let (socket, features) = cast_to_playbridge_dashboard(
+            let (socket, features, capabilities) = cast_to_playbridge_dashboard(
                 &address,
                 port,
                 PlaybridgeLoad {
@@ -2147,6 +2183,7 @@ pub(crate) async fn run_dashboard_cast(
             TargetControl::Playbridge {
                 socket: Box::new(socket),
                 features,
+                policy: ReceiverPolicy::from_descriptor(capabilities.as_ref()),
             }
         }
         _ => cast_to_target(
@@ -2507,6 +2544,8 @@ enum TargetControl {
     Playbridge {
         socket: Box<SecureWebSocket>,
         features: Vec<String>,
+        /// Resolved from the receiver descriptor received with this session's auth.
+        policy: ReceiverPolicy,
     },
     Roku(ReceiverSession),
     Browser {
@@ -2517,17 +2556,29 @@ enum TargetControl {
     },
 }
 
+/// Dashboard and status capabilities for a PlayBridge receiver, from its resolved policy.
+/// Legacy keeps the existing all-controls assumption, so its output is unchanged.
+fn playbridge_capabilities(policy: &ReceiverPolicy) -> CastCapabilities {
+    CastCapabilities {
+        // The dashboard's play/pause sends pause or play, so both must be declared.
+        play_pause: policy.allows(&Control::Transport("pause".into()))
+            && policy.allows(&Control::Transport("play".into())),
+        seek: policy.allows(&Control::Transport("seek_absolute".into()))
+            || policy.allows(&Control::Transport("seek_relative".into())),
+        volume: policy.allows(&Control::Volume("relative_step".into())),
+        mute: policy.allows(&Control::Volume("mute_toggle".into())),
+        looping: policy.allows(&Control::Setting("loop".into())),
+        speed: policy.allows(&Control::Setting("speed".into())),
+        audio_boost: policy.allows(&Control::Setting("audio_boost".into())),
+        volume_scope: policy.volume_scope(),
+        receiver: policy.summary(),
+        receiver_text: Some(policy.describe()),
+    }
+}
+
 fn dashboard_capabilities(control: &TargetControl) -> CastCapabilities {
     match control {
-        TargetControl::Playbridge { .. } => CastCapabilities {
-            play_pause: true,
-            seek: true,
-            volume: true,
-            mute: true,
-            looping: true,
-            speed: true,
-            audio_boost: true,
-        },
+        TargetControl::Playbridge { policy, .. } => playbridge_capabilities(policy),
         TargetControl::Cast { .. } | TargetControl::Browser { .. } => CastCapabilities {
             play_pause: true,
             seek: true,
@@ -2674,12 +2725,45 @@ async fn dashboard_poll(
     Ok(())
 }
 
+/// The declared operation a dashboard control needs from a PlayBridge receiver.
+fn native_requirement(
+    policy: &ReceiverPolicy,
+    command: &CastCommand,
+    snapshot: &CastSnapshot,
+) -> Option<(Control, String)> {
+    Some(match command {
+        CastCommand::PlayPause => {
+            // The wire command is pause while playing and play while paused.
+            let pause = snapshot.state != "paused";
+            let operation = if pause { "pause" } else { "play" };
+            (Control::Transport(operation.into()), "Play/pause".into())
+        }
+        CastCommand::SeekRelative(_) => (Control::Transport("seek_relative".into()), "Seek".into()),
+        CastCommand::VolumeDelta(_) => (
+            Control::Volume("relative_step".into()),
+            policy.volume_label().into(),
+        ),
+        CastCommand::ToggleMute => (Control::Volume("mute_toggle".into()), "Mute".into()),
+        CastCommand::ToggleLoop => (Control::Setting("loop".into()), "Loop".into()),
+        CastCommand::SetSpeed(_) => (Control::Setting("speed".into()), "Speed".into()),
+        CastCommand::ToggleAudioBoost => {
+            (Control::Setting("audio_boost".into()), "Audio boost".into())
+        }
+        _ => return None,
+    })
+}
+
 async fn dashboard_control(
     control: &mut TargetControl,
     command: CastCommand,
     snapshot: &mut CastSnapshot,
 ) -> Result<(), String> {
     let unsupported = || Err("This receiver does not support that control".into());
+    if let TargetControl::Playbridge { policy, .. } = &*control
+        && let Some((required, what)) = native_requirement(policy, &command, snapshot)
+    {
+        policy.require(&required, &what)?;
+    }
     match command {
         CastCommand::Stop
         | CastCommand::SubmitPairingCode(_)
@@ -2914,12 +2998,17 @@ async fn stop_target(target_control: TargetControl) {
         TargetControl::Dlna(renderer) => {
             let _ = renderer.stop().await;
         }
-        TargetControl::Playbridge { mut socket, .. } => {
-            let cmd = SenderFrame::Command {
-                action: "control".into(),
-                payload: Some(serde_json::json!({ "command": "stop" })),
-            };
-            let _ = socket.send(&cmd).await;
+        TargetControl::Playbridge {
+            mut socket, policy, ..
+        } => {
+            // Ending the session only sends a stop the receiver declares it can execute.
+            if policy.allows(&Control::Transport("stop".into())) {
+                let cmd = SenderFrame::Command {
+                    action: "control".into(),
+                    payload: Some(serde_json::json!({ "command": "stop" })),
+                };
+                let _ = socket.send(&cmd).await;
+            }
             let _ = (*socket).close().await;
         }
         TargetControl::Roku(mut session) => {
@@ -3039,7 +3128,7 @@ async fn cast_to_playbridge_with_features(
     address: &str,
     wss_port: u16,
     load: PlaybridgeLoad<'_>,
-) -> Result<(SecureWebSocket, Vec<String>), String> {
+) -> Result<PlaybridgeAuth, String> {
     let mut credentials = PlaybridgeCredentials::load(load.device_uuid)
         .ok_or_else(|| format!("{} has no stored pairing credentials", load.device_name))?;
     let endpoint = playbridge_cast_core::net::wss_endpoint(address, wss_port);
@@ -3053,13 +3142,14 @@ async fn cast_to_playbridge_with_features(
         .await
         .map_err(|error| error.to_string())?;
 
-    let features = loop {
+    let (features, capabilities) = loop {
         match socket.receive().await.map_err(|error| error.to_string())? {
             Some(ReceiverFrame::AuthResponse {
                 success: true,
                 features,
+                capabilities,
                 ..
-            }) => break features,
+            }) => break (features, capabilities),
             Some(ReceiverFrame::AuthResponse { success: false, .. }) => {
                 return Err("credentials_rejected".into());
             }
@@ -3075,7 +3165,7 @@ async fn cast_to_playbridge_with_features(
     if !load.pair_only {
         send_load(&mut socket, load).await?;
     }
-    Ok((socket, features))
+    Ok((socket, features, capabilities))
 }
 
 struct DashboardPairing<'a> {
@@ -3089,7 +3179,7 @@ async fn cast_to_playbridge_dashboard(
     wss_port: u16,
     load: PlaybridgeLoad<'_>,
     pairing_ui: DashboardPairing<'_>,
-) -> Result<(SecureWebSocket, Vec<String>), String> {
+) -> Result<PlaybridgeAuth, String> {
     let DashboardPairing {
         generation,
         commands,
@@ -3174,6 +3264,7 @@ async fn cast_to_playbridge_dashboard(
                     .decrypt_credentials(&nonce, &ciphertext, Some(&served_pin))
                     .map_err(|error| error.to_string())?;
                 let features = bundle.features.clone();
+                let capabilities = bundle.capabilities.clone();
                 let credentials = PlaybridgeCredentials {
                     token: bundle.token,
                     cert_fingerprint: bundle
@@ -3195,7 +3286,7 @@ async fn cast_to_playbridge_dashboard(
                 if !load.pair_only {
                     send_load(&mut socket, load).await?;
                 }
-                return Ok((socket, features));
+                return Ok((socket, features, capabilities));
             }
             ReceiverFrame::PairingDenied => {
                 return Err("Pairing was denied by the receiver".into());
@@ -3906,5 +3997,135 @@ mod tests {
 
         assert!(status["media"].is_null());
         assert_eq!(status["current_index"], 2);
+    }
+
+    fn snapshot_in_state(state: &str) -> CastSnapshot {
+        CastSnapshot {
+            state: state.into(),
+            title: "Receiver".into(),
+            position_ms: 0,
+            duration_ms: 60_000,
+            current_index: None,
+            total_count: None,
+            volume: None,
+            muted: None,
+            looping: None,
+            speed: None,
+        }
+    }
+
+    #[test]
+    fn no_descriptor_keeps_the_existing_native_capabilities() {
+        let legacy = playbridge_capabilities(&ReceiverPolicy::Legacy);
+        assert!(legacy.play_pause && legacy.seek && legacy.volume && legacy.mute);
+        assert!(legacy.looping && legacy.speed && legacy.audio_boost);
+        let json = serde_json::to_value(&legacy).unwrap();
+        // Legacy JSON carries no new keys, so existing consumers see the same output.
+        assert!(json.get("volume_scope").is_none());
+        assert!(json.get("receiver").is_none());
+    }
+
+    #[test]
+    fn real_descriptors_map_to_their_declared_dashboard_controls() {
+        use crate::receiver_policy::tests as fixtures;
+
+        let tv = playbridge_capabilities(&fixtures::android_tv());
+        assert!(tv.play_pause && tv.seek && tv.volume && tv.mute);
+        assert!(tv.looping && tv.speed && tv.audio_boost);
+        assert_eq!(tv.volume_scope.as_deref(), Some("system"));
+
+        let apple = playbridge_capabilities(&fixtures::apple_tv());
+        assert!(apple.play_pause && apple.seek && apple.volume && apple.mute);
+        assert!(apple.looping);
+        assert!(!apple.speed && !apple.audio_boost);
+        assert_eq!(apple.volume_scope.as_deref(), Some("app"));
+
+        let desktop = playbridge_capabilities(&fixtures::desktop());
+        assert!(desktop.play_pause && desktop.seek && desktop.volume);
+        assert!(!desktop.mute && !desktop.looping && !desktop.speed && !desktop.audio_boost);
+        assert_eq!(desktop.volume_scope.as_deref(), Some("system"));
+
+        let cli = playbridge_capabilities(&fixtures::cli_receiver());
+        assert!(cli.play_pause && cli.seek);
+        assert!(!cli.volume && !cli.mute && !cli.looping && !cli.speed && !cli.audio_boost);
+        assert_eq!(cli.volume_scope, None);
+    }
+
+    #[test]
+    fn malformed_and_empty_descriptors_offer_no_native_dashboard_controls() {
+        for policy in [
+            ReceiverPolicy::Malformed,
+            crate::receiver_policy::tests::policy(json!({"version": 1, "surfaces": {}})),
+        ] {
+            let caps = playbridge_capabilities(&policy);
+            assert!(!caps.play_pause && !caps.seek && !caps.volume && !caps.mute);
+            assert!(!caps.looping && !caps.speed && !caps.audio_boost);
+            assert_eq!(caps.volume_scope, None);
+        }
+    }
+
+    #[test]
+    fn dashboard_requirements_name_the_operation_each_control_sends() {
+        let tv = crate::receiver_policy::tests::android_tv();
+        // Playing sends pause; paused sends play. Both are declared on Android TV.
+        let playing = snapshot_in_state("playing");
+        let paused = snapshot_in_state("paused");
+        assert_eq!(
+            native_requirement(&tv, &CastCommand::PlayPause, &playing)
+                .unwrap()
+                .0,
+            Control::Transport("pause".into())
+        );
+        assert_eq!(
+            native_requirement(&tv, &CastCommand::PlayPause, &paused)
+                .unwrap()
+                .0,
+            Control::Transport("play".into())
+        );
+        assert_eq!(
+            native_requirement(&tv, &CastCommand::SeekRelative(10), &playing)
+                .unwrap()
+                .0,
+            Control::Transport("seek_relative".into())
+        );
+        assert!(native_requirement(&tv, &CastCommand::Stop, &playing).is_none());
+
+        // App volume is named as app volume in the rejection message.
+        let apple = crate::receiver_policy::tests::apple_tv();
+        let (control, what) =
+            native_requirement(&apple, &CastCommand::VolumeDelta(0.05), &playing).unwrap();
+        assert_eq!(control, Control::Volume("relative_step".into()));
+        assert_eq!(what, "App volume");
+
+        // Desktop declares no loop, so the dashboard's loop control is rejected by name.
+        let desktop = crate::receiver_policy::tests::desktop();
+        let (control, what) =
+            native_requirement(&desktop, &CastCommand::ToggleLoop, &playing).unwrap();
+        assert!(
+            desktop
+                .require(&control, &what)
+                .unwrap_err()
+                .contains("Loop is not supported")
+        );
+    }
+
+    #[test]
+    fn relative_seek_is_refused_when_only_absolute_seek_is_declared() {
+        let absolute_only = crate::receiver_policy::tests::policy(json!({
+            "version": 1,
+            "surfaces": {"player": {"engines": {"exo": {"transport": ["seek_absolute"]}}}}
+        }));
+        let (control, what) = native_requirement(
+            &absolute_only,
+            &CastCommand::SeekRelative(-10),
+            &snapshot_in_state("playing"),
+        )
+        .unwrap();
+        assert!(
+            absolute_only
+                .require(&control, &what)
+                .unwrap_err()
+                .contains("Seek is not supported")
+        );
     }
 }
