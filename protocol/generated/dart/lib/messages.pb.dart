@@ -3910,6 +3910,83 @@ class VolumeStateMessage extends $pb.GeneratedMessage {
   void clearMuted() => $_clearField(4);
 }
 
+/// Native opt-in push, independent of hosted-browser capabilities. JSON adapters
+/// MUST emit revision as a number (1..2^53-1), not protobuf JSON's uint64 string.
+/// Select capabilities.version from raw JSON before decoding a future shape.
+/// Opt in with command/receiver_capabilities_subscribe, payload {}, only after
+/// receiver_capabilities_v1 appears in authenticated receiver features.
+class ReceiverCapabilitiesFrame extends $pb.GeneratedMessage {
+  factory ReceiverCapabilitiesFrame({
+    $core.String? type,
+    $fixnum.Int64? revision,
+    ReceiverCapabilities? capabilities,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (revision != null) result.revision = revision;
+    if (capabilities != null) result.capabilities = capabilities;
+    return result;
+  }
+
+  ReceiverCapabilitiesFrame._();
+
+  factory ReceiverCapabilitiesFrame.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ReceiverCapabilitiesFrame.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ReceiverCapabilitiesFrame', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'type')
+    ..a<$fixnum.Int64>(2, _omitFieldNames ? '' : 'revision', $pb.PbFieldType.OU6, defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aOM<ReceiverCapabilities>(3, _omitFieldNames ? '' : 'capabilities', subBuilder: ReceiverCapabilities.create)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverCapabilitiesFrame clone() => ReceiverCapabilitiesFrame()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ReceiverCapabilitiesFrame copyWith(void Function(ReceiverCapabilitiesFrame) updates) => super.copyWith((message) => updates(message as ReceiverCapabilitiesFrame)) as ReceiverCapabilitiesFrame;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ReceiverCapabilitiesFrame create() => ReceiverCapabilitiesFrame._();
+  @$core.override
+  ReceiverCapabilitiesFrame createEmptyInstance() => create();
+  static $pb.PbList<ReceiverCapabilitiesFrame> createRepeated() => $pb.PbList<ReceiverCapabilitiesFrame>();
+  @$core.pragma('dart2js:noInline')
+  static ReceiverCapabilitiesFrame getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ReceiverCapabilitiesFrame>(create);
+  static ReceiverCapabilitiesFrame? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get type => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set type($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get revision => $_getI64(1);
+  @$pb.TagNumber(2)
+  set revision($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRevision() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRevision() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  ReceiverCapabilities get capabilities => $_getN(2);
+  @$pb.TagNumber(3)
+  set capabilities(ReceiverCapabilities value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasCapabilities() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearCapabilities() => $_clearField(3);
+  @$pb.TagNumber(3)
+  ReceiverCapabilities ensureCapabilities() => $_ensure(2);
+}
+
 
 const $core.bool _omitFieldNames = $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames = $core.bool.fromEnvironment('protobuf.omit_message_names');

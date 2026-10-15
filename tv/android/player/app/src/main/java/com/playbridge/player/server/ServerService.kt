@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
@@ -55,6 +57,15 @@ private const val MAX_LOGS_REPLY_CHARS = 1_000_000
 private const val KEY_SAVED_UAS = "saved_user_agents"
 
 class ServerService : Service() {
+
+    private val capabilityPackageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.data?.schemeSpecificPart != TvCapabilityProvider.GECKO_PACKAGE) return
+            // PACKAGE_REMOVED with replacing=true is only half of an upgrade.
+            if (intent.action == Intent.ACTION_PACKAGE_REMOVED && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
+            webSocketServer?.refreshCapabilities()
+        }
+    }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val webhookTransport = PlaybackWebhookTransport()
@@ -235,6 +246,17 @@ class ServerService : Service() {
         super.onCreate()
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, capabilityPackageReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         userScripts = UserScriptRuntime.attach(
             applicationContext,
             publishPrompt = { review, decision -> showScriptPrompt(review, decision) },
@@ -452,8 +474,7 @@ class ServerService : Service() {
                         registerNsdService(actualPort, actualPort)
                     }
                 },
-                // Resolved per auth so a GeckoView plugin installed later is picked up
-                // on the next (re)connect without restarting the server.
+                // One publication owner refreshes this builder on package changes and auth.
                 capabilities = { TvCapabilityProvider.current(this@ServerService) },
             ).also { server ->
                 server.start()
@@ -815,6 +836,7 @@ class ServerService : Service() {
             is IncomingMessage.ScreenMirrorEvent -> {
                 // These are receiver-to-sender frames and must never arrive as commands.
             }
+            is IncomingMessage.ReceiverCapabilitiesSubscribe -> Unit // Handled only by the authenticated socket owner.
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
@@ -1345,6 +1367,7 @@ class ServerService : Service() {
         // stops receiving routed calls and doesn't leak as a retained Context. Identity
         // check: a replacement instance may already have registered itself in onCreate.
         if (_staticInstance === this) _staticInstance = null
+        try { unregisterReceiver(capabilityPackageReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(externalBrowserContextReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(browserVideoStatusReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}

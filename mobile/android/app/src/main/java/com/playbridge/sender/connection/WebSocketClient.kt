@@ -331,6 +331,8 @@ class WebSocketClient(
                     // Route on the exact envelope `type` rather than substring matching, so a
                     // value that merely contains "pairing_approved" etc. can't be misrouted.
                     val type = (rawFrame?.get("type") as? JsonPrimitive)?.contentOrNull
+                    // This is session metadata only, never a generic command/log payload.
+                    if (type == "receiver_capabilities") return
 
                     // Handle pairing_challenge message from TV
                     if (type == "pairing_challenge") {
@@ -427,6 +429,7 @@ class WebSocketClient(
                                 if (!emitCapabilities(credentialsJson, receiverSession)) return
                                 clearPairingSecrets() // handshake done — drop key material
                                 updateConnectionState(ConnectionState.Connected(serverName, isSecure))
+                                receiverProtocolSession.subscription(receiverSession)?.let { webSocket.send(it) }
                                 // Resync: the TV only broadcasts context on its own activity
                                 // transitions, so a client (re)connecting mid-playback would
                                 // otherwise show "idle" until the next transition.
@@ -468,6 +471,7 @@ class WebSocketClient(
                                         Log.i(TAG, "Authentication successful")
                                         if (!emitCapabilities(json, receiverSession)) return
                                         updateConnectionState(ConnectionState.Connected(serverName, isSecure))
+                                        receiverProtocolSession.subscription(receiverSession)?.let { webSocket.send(it) }
                                         // Resync context after every (re)connect — see the
                                         // pairing_approved path for rationale.
                                         webSocket.send(createContextQueryJson())

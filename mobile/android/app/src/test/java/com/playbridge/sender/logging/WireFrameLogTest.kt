@@ -6,6 +6,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WireFrameLogTest {
+    @Test fun liveDescriptorNeverAppearsInDebugOrReleaseLogs() {
+        val frame = """{"type":"receiver_capabilities","revision":1,"capabilities":{"version":1,"surfaces":{"PRIVATE_DESCRIPTOR":{"engines":{}}}}}"""
+        assertEquals(WireFrameLog.summary(frame), WireFrameLog.redact(frame))
+        assertFalse(WireFrameLog.redact(frame).contains("PRIVATE_DESCRIPTOR"))
+        assertFalse(WireFrameLog.summary(frame).contains("PRIVATE_DESCRIPTOR"))
+    }
     @Test fun debugFramesNeverRetainTypedTextOrPinsOrProtectedCredentials() {
         val frames = listOf(
             """{"type":"command","action":"remote","payload":{"key":"text:U1lOVEhFVElDX1RFWFQ="}}""",

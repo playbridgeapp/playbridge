@@ -160,6 +160,23 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         if (previous.sheet == RemoteSheet.Keyboard && previous.keyboardRoute() != state.keyboardRoute() && !advertisementOnly) {
             state = state.copy(sheet = null)
         }
+        if (advertisementOnly && state.nativePolicy != null) {
+            val layout = resolveRemoteLayout(state, RemoteViewport())
+            val supported = when (state.sheet) {
+                RemoteSheet.More -> layout.tracks.more
+                RemoteSheet.Subtitles -> layout.tracks.subtitles
+                RemoteSheet.AddSubtitle -> state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported
+                RemoteSheet.Queue -> layout.showQueue
+                RemoteSheet.BrowserMore -> listOf(
+                    RemoteAction.Browser(BrowserAction.CycleSource), RemoteAction.Browser(BrowserAction.Unmute),
+                    RemoteAction.ManageUserScripts, RemoteAction.ManageUserAgent,
+                ).any(state::receiverActionSupported)
+                // The keyboard retains its draft and captured route; its existing
+                // canReplace/canEnter gates disable removed receiver operations.
+                else -> true
+            }
+            if (!supported) state = state.copy(sheet = null)
+        }
         return state
     }
 

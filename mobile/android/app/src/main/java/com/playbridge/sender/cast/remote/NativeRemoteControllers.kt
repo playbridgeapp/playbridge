@@ -65,7 +65,10 @@ open class NativeProfileRemoteController(
 
     override suspend fun execute(action: RemoteAction): RemoteCommandResult {
         if (!current()) return RemoteCommandResult.Failed("Remote session changed")
-        val state = snapshot.value.state
+        // Resolve the current metadata synchronously too: a push may remove an
+        // operation before the combined UI StateFlow has had a chance to emit.
+        val state = decorate(transport.snapshot.value,
+            configuration.receiverProtocol?.value ?: transport.snapshot.value.state.receiverProtocol).state
         if (!state.connection.ready) return RemoteCommandResult.Failed("Receiver is not connected")
         val caps = state.capabilities
         fun unsupported() = RemoteCommandResult.Unsupported("${action::class.simpleName} is unavailable on this receiver in ${state.context}")

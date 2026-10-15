@@ -448,10 +448,20 @@ uses payload `{scope, level}` only after `absolute` is advertised. New `volume_s
 scope with level and/or muted, only as reporting is implemented. No current values belong in auth.
 App controls must be labelled App volume; they do not control tvOS system/HDMI-CEC volume.
 
-Reserve `receiver_capabilities` / `ReceiverCapabilitiesFrame` for a later native push; no frame is
-shipped or registered in this step. `BrowserCapabilitiesFrame` is unchanged. Static descriptors
-refresh at each authenticated connection/pairing; later pushes need coherent replacement/revision/
-session semantics before implementation.
+Live native updates use `receiver_capabilities` / `ReceiverCapabilitiesFrame`, separate from the
+unchanged hosted-browser `BrowserCapabilitiesFrame`. A receiver advertises `receiver_capabilities_v1`
+in successful auth / protected credentials. A supporting authenticated sender then opts in with
+`command/receiver_capabilities_subscribe`, payload `{}`. Without that explicit socket opt-in the
+receiver never sends the new frame; pre-auth requests are ignored. Subscription is idempotent and
+immediately sends the current complete descriptor at revision 1, closing the auth/subscription race.
+
+Each changed snapshot replaces the descriptor with a strictly increasing session-local numeric
+revision (1..2^53-1). Senders drop invalid/nonincreasing/stale-session updates. Unknown descriptor
+versions retain the current descriptor while advancing ordering; malformed recognized v1 fails
+closed. New connections clear descriptor and revision state. Auth, protected pairing and pushes
+share one current receiver advertisement. Android TV rechecks Gecko package changes while running;
+Apple TV/Desktop/CLI receivers do not push. Sender support outside Android is deferred to step 9b.
+See the linked capability contract for bounds, numeric JSON encoding and UI/execution fencing.
 
 See [Receiver capabilities v1](RECEIVER_CAPABILITIES.md) for the complete shape, known identifiers,
 wire mappings, settings/volume decisions, and rollout/strict-parser qualification, and

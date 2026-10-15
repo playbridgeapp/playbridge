@@ -20,7 +20,7 @@ required_schemas = %w[
   BrowserHostFrame BrowserClientFrame BrowserMedia BrowserCapabilities
   ReceiverCapabilities ReceiverCapabilitiesV1 ReceiverCapabilitiesFuture
   ReceiverSurfaceCapabilities ReceiverEngineCapabilities ReceiverVolumeCapabilities
-  VolumeCommand VolumePayload VolumeState
+  VolumeCommand VolumePayload VolumeState ReceiverCapabilitiesFrame ReceiverCapabilitiesSubscribeCommand
 ]
 missing_schemas = required_schemas.reject { |name| schemas.key?(name) }
 abort "missing required schemas: #{missing_schemas.join(', ')}" unless missing_schemas.empty?

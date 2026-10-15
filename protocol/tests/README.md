@@ -18,8 +18,8 @@ python scripts/check-retained-parsers.py
 The Ruby checker validates structure/references only. The Python validator checks all component
 schemas against the JSON Schema metaschema and validates actual payloads through local `$ref`,
 `oneOf`/`allOf`/`anyOf`, required/type/const/uniqueness/additional-property/range constraints.
-Its errors report fixture/schema paths without echoing payloads. The manifest includes 37 valid
-and 25 invalid cases; every JSON fixture must be listed. Fixtures cover auth and decrypted bundles,
+Its errors report fixture/schema paths without echoing payloads. The manifest includes 40 valid
+and 31 invalid cases; every JSON fixture must be listed. Fixtures cover auth and decrypted bundles,
 with/without descriptors for Android-TV-like, Apple player-only, Desktop and CLI hosts, unknown
 identifiers and opaque future versions, empty complete sets, app/system volume and full settings.
 
@@ -28,7 +28,7 @@ claims of deployed Apple support. Android-TV-like fixtures illustrate engine dif
 receiver builders must derive their advertisements from implemented dispatch/availability.
 
 Negative fixtures reject wrong/missing version, contradictory surface arrays, duplicate/nonstring
-operations, transient state, plaintext outer-pairing descriptors, premature reserved pushes,
+operations, transient state, plaintext outer-pairing descriptors, invalid live-update envelopes/revisions,
 percent-as-normalized-volume, missing volume/state fields, loop-only settings and `status.loop`.
 Unknown versions deliberately change the type of `surfaces`, proving why raw version selection
 must precede typed descriptor decoding. Unknown identifiers are accepted, including engines,
@@ -113,4 +113,6 @@ raw version gates, exact legacy policy goldens, recognized-empty/partial operati
 engine/context/media readiness, state availability, volume units/mute/scope, queue acknowledgements,
 keyboard/gesture/channel fences, and independent paired/discovered companion overlays. Runtime
 publication must be consistent across auth and protected credentials and preserve existing pin,
-token replacement/revocation and SAS security smoke tests. No dynamic native push is shipped here.
+token replacement/revocation and SAS security smoke tests. Live native updates are opt-in; fixtures cover replacement envelopes and subscription payloads.
+Android tests additionally cover ordering/session fences, unknown versions, fail-closed malformed
+v1, and Gecko availability flowing through the existing remote policy.

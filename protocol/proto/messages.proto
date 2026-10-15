@@ -430,5 +430,13 @@ message VolumeStateMessage {
   optional double level = 3;
   optional bool muted = 4;
 }
-// Reserved only: receiver_capabilities / ReceiverCapabilitiesFrame.
-// No native push frame is defined or registered in this version.
+// Native opt-in push, independent of hosted-browser capabilities. JSON adapters
+// MUST emit revision as a number (1..2^53-1), not protobuf JSON's uint64 string.
+// Select capabilities.version from raw JSON before decoding a future shape.
+// Opt in with command/receiver_capabilities_subscribe, payload {}, only after
+// receiver_capabilities_v1 appears in authenticated receiver features.
+message ReceiverCapabilitiesFrame {
+  string type = 1;
+  uint64 revision = 2;
+  ReceiverCapabilities capabilities = 3;
+}

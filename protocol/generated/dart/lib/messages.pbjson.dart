@@ -1094,3 +1094,19 @@ final $typed_data.Uint8List volumeStateMessageDescriptor = $convert.base64Decode
     'IFc2NvcGUSGQoFbGV2ZWwYAyABKAFIAFIFbGV2ZWyIAQESGQoFbXV0ZWQYBCABKAhIAVIFbXV0'
     'ZWSIAQFCCAoGX2xldmVsQggKBl9tdXRlZA==');
 
+@$core.Deprecated('Use receiverCapabilitiesFrameDescriptor instead')
+const ReceiverCapabilitiesFrame$json = {
+  '1': 'ReceiverCapabilitiesFrame',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
+    {'1': 'revision', '3': 2, '4': 1, '5': 4, '10': 'revision'},
+    {'1': 'capabilities', '3': 3, '4': 1, '5': 11, '6': '.playbridge.ReceiverCapabilities', '10': 'capabilities'},
+  ],
+};
+
+/// Descriptor for `ReceiverCapabilitiesFrame`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List receiverCapabilitiesFrameDescriptor = $convert.base64Decode(
+    'ChlSZWNlaXZlckNhcGFiaWxpdGllc0ZyYW1lEhIKBHR5cGUYASABKAlSBHR5cGUSGgoIcmV2aX'
+    'Npb24YAiABKARSCHJldmlzaW9uEkQKDGNhcGFiaWxpdGllcxgDIAEoCzIgLnBsYXlicmlkZ2Uu'
+    'UmVjZWl2ZXJDYXBhYmlsaXRpZXNSDGNhcGFiaWxpdGllcw==');
+

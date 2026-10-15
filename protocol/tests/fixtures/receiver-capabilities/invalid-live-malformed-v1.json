@@ -1,0 +1,8 @@
+{
+  "type": "receiver_capabilities",
+  "revision": 1,
+  "capabilities": {
+    "version": 1,
+    "surfaces": []
+  }
+}

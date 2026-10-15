@@ -308,5 +308,50 @@
     "file": "invalid-status-loop.json",
     "schema": "Status",
     "valid": false
+  },
+  {
+    "file": "live-update-v1.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "live-update-future.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
+    "file": "live-subscribe.json",
+    "schema": "SenderFrame",
+    "valid": true
+  },
+  {
+    "file": "invalid-live-zero-revision.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-live-string-revision.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-live-large-revision.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-live-fractional-revision.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-live-malformed-v1.json",
+    "schema": "ReceiverFrame",
+    "valid": false
+  },
+  {
+    "file": "invalid-live-subscribe-payload.json",
+    "schema": "SenderFrame",
+    "valid": false
   }
 ]

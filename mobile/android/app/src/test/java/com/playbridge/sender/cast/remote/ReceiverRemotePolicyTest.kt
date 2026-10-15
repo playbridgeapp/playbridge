@@ -27,6 +27,44 @@ import playbridge.SubtitleResource
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReceiverRemotePolicyTest {
+    @Test fun liveGeckoUpdatesKeepControllerAndMediaAndFenceExecutionBeforeUiRefresh() = runTest {
+        fun frame(value: String) = Json.parseToJsonElement(value) as JsonObject
+        val owner = ReceiverProtocolSession()
+        val session = owner.begin()
+        val withoutGecko = javaClass.getResourceAsStream("/receiver-policy/android-tv.json")!!.bufferedReader().use { it.readText() }
+        val withGecko = javaClass.getResourceAsStream("/receiver-policy/android-tv-gecko.json")!!.bufferedReader().use { it.readText() }
+        owner.acceptCredentials(session, frame("""{"features":["receiver_capabilities_v1"],"capabilities":$withoutGecko}"""))
+        owner.subscription(session)
+        val config = testConfiguration(RemoteProfile.Unknown).copy(receiverProtocol = owner.state)
+        val raw = testSnapshot(RemoteContext.Browser)
+        val transport = FakeNativeRemoteTransport(raw.copy(state = raw.state.copy(browser = RemoteBrowserState(RemoteBrowserEngine.Unknown))))
+        val registry = RemoteControllerRegistry(MutableStateFlow<RemoteTarget?>(RemoteNativeTarget(config)), transport, backgroundScope)
+        val controller = registry.controller.value!!
+        runCurrent()
+        val media = controller.snapshot.value.state.playback?.mediaId
+        assertEquals(Support.Supported, controller.snapshot.value.state.capabilities.pointer.zoom)
+        owner.observe(session, frame("""{"type":"receiver_capabilities","revision":1,"capabilities":$withGecko}"""))
+        // Unknown active browser engine must intersect WebView/Gecko operations.
+        // Do not run the combined StateFlow first: dispatch must already deny zoom.
+        assertTrue(controller.execute(RemoteAction.ImageZoom(1.1f)) is RemoteCommandResult.Unsupported)
+        runCurrent()
+        assertEquals(Support.Unsupported, controller.snapshot.value.state.capabilities.pointer.zoom)
+        assertTrue(controller === registry.controller.value)
+        assertEquals(media, controller.snapshot.value.state.playback?.mediaId)
+        owner.observe(session, frame("""{"type":"receiver_capabilities","revision":2,"capabilities":$withoutGecko}"""))
+        runCurrent()
+        assertEquals(Support.Supported, controller.snapshot.value.state.capabilities.pointer.zoom)
+        val reducer = RemoteStateReducer { 0L }
+        reducer.observe(controller.snapshot.value)
+        reducer.local(RemoteAction.OpenSheet(RemoteSheet.BrowserMore))
+        owner.observe(session, frame("""{"type":"receiver_capabilities","revision":3,"capabilities":{"version":1,"surfaces":{}}}"""))
+        assertTrue(controller.execute(RemoteAction.ReplaceText("synthetic")) is RemoteCommandResult.Unsupported)
+        runCurrent()
+        assertNull(reducer.observe(controller.snapshot.value).sheet)
+        assertTrue(controller === registry.controller.value)
+        assertTrue(transport.commands.isEmpty())
+    }
+
     private val guarded = setOf("queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1")
     private fun fixture(name: String): ReceiverDescriptor = javaClass.getResourceAsStream("/receiver-policy/$name.json")!!.use {
         ReceiverDescriptorParser.parse(Json.parseToJsonElement(it.bufferedReader().readText()))!!

@@ -74,6 +74,7 @@ sealed class IncomingMessage {
     data class ScreenMirrorReady(val sessionId: String) : IncomingMessage()
     data class ScreenMirrorEvent(val sessionId: String, val state: String, val reason: String?) : IncomingMessage()
     data object ContextQuery : IncomingMessage()
+    data object ReceiverCapabilitiesSubscribe : IncomingMessage()
     /**
      * User-supplied browser script the phone installs onto the TV (e.g. an ad-skipper we
      * deliberately don't ship). [content] blank means uninstall. Plain JSON, no proto.
@@ -578,6 +579,11 @@ fun parseIncomingMessage(text: String): IncomingMessage {
 
 private fun parseCommandAction(action: String, payloadJson: String?, raw: String): IncomingMessage {
     if (action == "context_query") return IncomingMessage.ContextQuery
+    if (action == "receiver_capabilities_subscribe") {
+        return if (payloadJson != null && envelopeJson.parseToJsonElement(payloadJson) == buildJsonObject {}) {
+            IncomingMessage.ReceiverCapabilitiesSubscribe
+        } else IncomingMessage.Unknown("invalid_capabilities_subscription", raw)
+    }
     if (action == "queue_query") return IncomingMessage.QueueQuery
     if (action == "queue_clear" && payloadJson == null) {
         return IncomingMessage.QueueClear(QueueClearPayload())

@@ -1,7 +1,7 @@
 # Native receiver capabilities v1
 
-This is the Stage 5 contract, not an implementation/advertisement rollout. Receivers must
-implement and verify an operation before advertising it. The illustrative fixtures are not
+This is the Stage 5 native capabilities contract. Receivers must implement and verify an
+operation before advertising it. The illustrative fixtures are not
 permission to add controls to current senders. Hosted-browser `BrowserCapabilitiesFrame` and
 native-host bridge capabilities remain separate contracts.
 
@@ -170,14 +170,64 @@ App attenuation is not tvOS system volume or HDMI-CEC. Until handlers and real a
 verified, current Apple TV descriptors omit volume. Current Desktop declares relative system
 steps with app fallback, and does not claim mute, absolute or reporting; CLI claims none.
 
-## Reserved later update
+## Live native replacement (step 9)
 
-`receiver_capabilities` / `ReceiverCapabilitiesFrame` are reserved for a later native push.
-No such frame is defined in protobuf/AsyncAPI or registered in ReceiverFrame. Static auth/bundle
-snapshots refresh on reconnect; Gecko install/uninstall can use reconnect initially. A future
-push needs complete replacement semantics, revision/session fencing, removed-operation handling,
-and coherent runtime state that also drives subsequent auth and pairing. Never repurpose the
-hosted-browser `BrowserCapabilitiesFrame` or generic browser `capabilities` name.
+The independent native `ReceiverCapabilitiesFrame` is now defined:
+
+```json
+{"type":"receiver_capabilities","revision":1,"capabilities":{"version":1,"surfaces":{}}}
+```
+
+It replaces the entire descriptor, including removed surfaces/engines/operations/volume/hints.
+Never merge or fill removed fields from a previous descriptor or legacy metadata. It does not
+replace context, settings availability, volume values, media identity or canonical legacy arrays.
+Engine switching alone is state and does not require a descriptor update.
+
+**Opt-in:** supporting receivers advertise `receiver_capabilities_v1` in authenticated
+`auth_response.features` and protected `CredentialBundle.features`. That feature is an offer,
+not consent to receive pushes. After verifying successful auth or protected pairing, a supporting
+sender sends exactly:
+
+```json
+{"type":"command","action":"receiver_capabilities_subscribe","payload":{}}
+```
+
+Only that authenticated socket is subscribed. Pre-auth subscriptions are ignored; senders without
+this explicit opt-in never receive the new frame. Do not add an auth or pairing-commit field or
+alter their cryptographic transcript. New senders do not subscribe when the receiver lacks the
+feature. The command is idempotent and does not reset revisions; it immediately replies with the
+current descriptor as revision 1, closing the race between initial auth and subscription. It
+remains valid after first pairing without an extra auth exchange.
+
+`revision` is a JSON **number**, an integer from 1 through 9007199254740991 (2^53-1), strictly
+increasing for each subscribed authenticated socket. It is not a global receiver revision, a
+persisted credential field, a string, or an auth/bundle field. The auth baseline has implicit
+revision 0. Receivers increment only for changed advertisements, reset on a new socket, discard
+subscriptions on close, and close a session rather than wrap an exhausted counter. Manual JSON
+adapters must preserve numeric encoding: default protobuf JSON encodes uint64 as a string and
+must not be sent verbatim. Current Android uses a bounded manual JSON writer.
+
+Senders fence updates with the local authenticated socket/session generation and check revision
+before applying. Drop pre-auth, unsolicited, stale-session, duplicate, nonincreasing and invalid
+revision/envelope frames. A structurally valid newer frame with an unknown descriptor version
+advances the session's ordering watermark but **keeps the current descriptor**; do not decode a
+future shape as v1 or revert to legacy. Malformed recognized v1 advances ordering and **fails
+closed**, replacing native operations with an unsupported snapshot until a newer valid update or
+fresh auth. A valid empty v1 removes every native surface control. Continue enforcing context,
+media, readiness and independently verified companion routes. Close or disable open removed
+controls, and recheck current metadata at execution; unrelated updates preserve controller,
+media and keyboard draft identity.
+
+Android TV rebuilds availability for Gecko plugin package add/remove/change/replacement while
+running. One serialized publication owner supplies auth, protected pairing and opted-in pushes;
+a later auth/pairing sees the same current descriptor. During package replacement, ignore the
+intermediate removal and recheck on add/replaced. Apple TV, Desktop and CLI receivers do not have
+runtime capability changes and do **not** send this frame. iPhone/Desktop/CLI sender subscription
+and consumption are step 9b; until implemented they must not opt in. Rust's existing unknown-frame
+decoder safely ignores this frame, independently of subscription policy.
+
+Never repurpose the hosted-browser `BrowserCapabilitiesFrame`, `/v1/browser/ws` protocol or generic
+browser `capabilities` type. Never log the descriptor, credentials, pins or typed text.
 
 ## Compatibility boundary
 
@@ -190,7 +240,8 @@ had an even shorter feature enum. Those pre-existing feature mismatches are reco
 extensible string vocabulary, not hidden by skipping schema validation.
 
 If strict legacy readers must be supported universally, delivery needs opt-in negotiation before
-receivers begin sending descriptors. This step adds no receiver emission. Protobuf binary unknown-
+receivers begin sending descriptors. Live pushes use the explicit socket opt-in above; the existing static auth delivery boundary
+is unchanged. Protobuf binary unknown-
 field tolerance is not proof of protobuf JSON tolerance. Version selection must precede typed
 JSON decoding; generated model defaults/omission, 64-bit JSON encodings and unknown-field flags
 need wire adapters/consumer tests wherever generated serialization is used directly.
