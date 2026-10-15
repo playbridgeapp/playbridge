@@ -62,12 +62,15 @@ struct DeviceConnectionSheet: View {
                     }
                     .padding(.top, 4)
 
-                    if playBridgeDevices.isEmpty {
+                    if PlayBridgeListEmptyState.showsEmptyCopy(
+                        savedCount: vm.savedDevices.count,
+                        activeKey: activePairedDeviceKey
+                    ) {
                         Text("No PlayBridge TVs yet. Tap Find more devices to scan and pair.")
                             .font(Theme.font(.subheadline))
                             .foregroundColor(Theme.onSurfaceVariant)
                             .padding(.vertical, 4)
-                    } else {
+                    } else if !playBridgeDevices.isEmpty {
                         ForEach(Array(playBridgeDevices.enumerated()), id: \.offset) { _, device in
                             ConnectionPairedDeviceRow(
                                 device: device,

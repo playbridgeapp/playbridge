@@ -104,13 +104,17 @@ struct ConnectionScreen: View {
                 .accessibilityLabel("Refresh PlayBridge TVs")
             }
 
-            if sortedSavedPlayBridgeDevices.isEmpty && unpairedPlayBridgeDevices.isEmpty {
+            if PlayBridgeListEmptyState.showsEmptyCopy(
+                savedCount: vm.savedDevices.count,
+                activeKey: activePlayBridgeKey,
+                unpairedCount: unpairedPlayBridgeDevices.count
+            ) {
                 emptyHint(
                     discoveryIsScanning
                         ? "Looking for PlayBridge TVs on your network…"
                         : "No PlayBridge TVs yet. Open PlayBridge on your TV, then refresh."
                 )
-            } else {
+            } else if !sortedSavedPlayBridgeDevices.isEmpty || !unpairedPlayBridgeDevices.isEmpty {
                 ForEach(Array(sortedSavedPlayBridgeDevices.enumerated()), id: \.offset) { _, device in
                     ConnectionPairedDeviceRow(
                         device: device,
