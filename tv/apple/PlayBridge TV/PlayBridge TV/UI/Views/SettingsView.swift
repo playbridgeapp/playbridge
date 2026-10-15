@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("still_watching_threshold_min") var stillWatchingThreshold: Int = StillWatchingController.defaultThreshold
     @AppStorage("still_watching_response_sec") var stillWatchingResponseSeconds: Int = StillWatchingController.defaultResponseSeconds
     @FocusState private var focusedSetting: FocusedSetting?
+    @State private var showLicences = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 40) {
@@ -101,9 +102,13 @@ struct SettingsView: View {
                         Text(appVersionLabel).foregroundColor(.gray)
                     }
                     .focusable()
+                    Button("Open source licences") { showLicences = true }
                 }
             }
             .listStyle(.grouped)
+        }
+        .fullScreenCover(isPresented: $showLicences) {
+            OpenSourceLicencesScreen()
         }
         .onAppear {
             if !StillWatchingController.allowedThresholds.contains(stillWatchingThreshold) {

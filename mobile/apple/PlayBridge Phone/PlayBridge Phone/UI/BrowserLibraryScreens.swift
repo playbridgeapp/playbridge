@@ -118,6 +118,7 @@ struct BrowserSettingsScreen: View {
     @State private var showNetworkLogs = false
     @State private var engine = SearchEngine.current
     @State private var showCastPermissions = false
+    @State private var showLicences = false
 
     var body: some View {
         ZStack {
@@ -145,6 +146,7 @@ struct BrowserSettingsScreen: View {
                     Section("Privacy") {
                         Button("Website casting permissions") { showCastPermissions = true }
                         Link("Privacy policy", destination: URL(string: "https://playbridge.app/privacy")!)
+                        Button("Open source licences") { showLicences = true }
                         Button("Media detect") { showMediaDetection = true }
                         Button("Clear Browsing Data") { showClearData = true }
                             .foregroundColor(Theme.danger)
@@ -169,6 +171,7 @@ struct BrowserSettingsScreen: View {
             }
         }
         .sheet(isPresented: $showCastPermissions) { PageCastPermissionsView() }
+        .sheet(isPresented: $showLicences) { OpenSourceLicencesScreen() }
         .sheet(isPresented: $showClearData) { BrowserClearDataSheet(store: store) }
         .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
         .sheet(isPresented: $showUserAgent) {
