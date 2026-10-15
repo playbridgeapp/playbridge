@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreFoundation
 
 /// Parses TV→phone status messages into observable now-playing state.
 /// Direct port of `connection/ConnectionCoordinator.kt`. Handles the proto-defined messages
@@ -16,6 +17,12 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var audioBoost = false
     @Published var subtitleOffsetMs: Int64 = 0
     @Published var playerEngine = ""
+    @Published var contextEngine: String?
+    @Published var receiverSettingsAvailability: [String: Bool] = [:]
+    @Published var receiverLoop: Bool?
+    @Published var receiverVolumeScope: String?
+    @Published var receiverVolumeLevel: Double?
+    @Published var receiverVolumeMuted: Bool?
     @Published var qualityMaxHeight = 0
     @Published var currentVideoHeight = 0
     @Published var playerIsLive = false
@@ -31,12 +38,15 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var savedUserAgents: [(name: String, value: String)] = []
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
-    func handle(_ text: String) {
+    func handle(_ text: String, isCurrentSession: @escaping () -> Bool = { true }) {
         guard let data = text.data(using: .utf8),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let type = json["type"] as? String else { return }
 
-        DispatchQueue.main.async { self.dispatch(type: type, json: json) }
+        DispatchQueue.main.async {
+            guard isCurrentSession() else { return }
+            self.dispatch(type: type, json: json)
+        }
     }
 
     private func dispatch(type: String, json: [String: Any]) {
@@ -44,7 +54,9 @@ final class ConnectionCoordinator: ObservableObject {
         case "context":
             let active = json["active"] as? String ?? "idle"
             activeContext = active
-            if active == "idle" { clear() }
+            if active == "idle" { clear(keepingReceiverVolume: true) }
+            contextEngine = (json["engine"] as? String).flatMap { (1...64).contains($0.unicodeScalars.count) ? $0 : nil }
+            if active == "browser_external", contextEngine == nil { contextEngine = "gecko" }
 
         case "status":
             mediaKind = json["mediaKind"] as? String ?? "video"
@@ -102,6 +114,13 @@ final class ConnectionCoordinator: ObservableObject {
             subtitleTracks = parseTracks(json["subtitle"])
 
         case "player_settings":
+            receiverSettingsAvailability = [:]
+            for (operation, field) in ["speed": "speedAvailable", "scaling": "scalingAvailable", "audio_boost": "audioBoostAvailable", "quality": "qualityAvailable", "subtitle_offset": "subtitleOffsetAvailable", "engine": "engineAvailable", "loop": "loopAvailable"] {
+                if let number = json[field] as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+                    receiverSettingsAvailability[operation] = number.boolValue
+                }
+            }
+            receiverLoop = json["loop"] as? Bool
             if let speed = json["speed"] as? Double { playerSpeed = Float(speed) }
             else if let speed = json["speed"] as? NSNumber { playerSpeed = speed.floatValue }
             playerScaling = json["scaling"] as? String ?? "Fit"
@@ -116,6 +135,26 @@ final class ConnectionCoordinator: ObservableObject {
             scalingAvailable = json["scalingAvailable"] as? Bool ?? true
             audioBoostAvailable = json["audioBoostAvailable"] as? Bool ?? true
             qualityAvailable = json["qualityAvailable"] as? Bool ?? false
+
+        case "volume_state":
+            guard Set(json.keys).isSubset(of: ["type", "scope", "level", "muted"]),
+                  let scope = json["scope"] as? String, (1...64).contains(scope.unicodeScalars.count),
+                  json["level"] != nil || json["muted"] != nil else { return }
+            var level: Double?
+            var muted: Bool?
+            if let raw = json["level"] {
+                guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      number.doubleValue.isFinite, number.decimalValue >= 0, number.decimalValue <= 1 else { return }
+                level = number.doubleValue
+            }
+            if let raw = json["muted"] {
+                guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return }
+                muted = number.boolValue
+            }
+            if receiverVolumeScope != scope { receiverVolumeLevel = nil; receiverVolumeMuted = nil }
+            receiverVolumeScope = scope
+            if let level { receiverVolumeLevel = level }
+            if let muted { receiverVolumeMuted = muted }
 
         case "user_scripts":
             installedUserScripts = (json["names"] as? [String]) ?? []
@@ -169,7 +208,8 @@ final class ConnectionCoordinator: ObservableObject {
         (value as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    func clear() {
+    func clear(keepingReceiverVolume: Bool = false) {
+        clearReceiverMetadata(keepingVolume: keepingReceiverVolume)
         playback = nil
         playlist = nil
         videoTracks = []
@@ -193,5 +233,16 @@ final class ConnectionCoordinator: ObservableObject {
         installedUserScripts = []
         userAgentActive = ""
         savedUserAgents = []
+    }
+
+    func clearReceiverMetadata(keepingVolume: Bool = false) {
+        contextEngine = nil
+        receiverSettingsAvailability = [:]
+        receiverLoop = nil
+        if !keepingVolume {
+            receiverVolumeScope = nil
+            receiverVolumeLevel = nil
+            receiverVolumeMuted = nil
+        }
     }
 }

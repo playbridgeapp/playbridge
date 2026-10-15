@@ -15,13 +15,18 @@ final class WebSocketClient: NSObject, ObservableObject {
     var onCredentials: ((IssuedCredentials) -> Void)?
     /// player_mode / browser_mode ids the receiver reported at auth.
     var onCapabilities: ((TvCapabilities) -> Void)?
+    var onCapabilitySessionStarted: ((UUID) -> Void)?
+    private(set) var capabilitySessionID = UUID()
 
-    struct IssuedCredentials { let token: String; let certFingerprint: String? }
+    struct IssuedCredentials { let token: String; let certFingerprint: String?; let sessionID: UUID }
     struct TvCapabilities {
         let players: [String]
         let browsers: [String]
         let mediaKinds: [String]
         let features: [String]
+        let receiverCapabilities: ReceiverCapabilities
+        let sessionID: UUID
+        var hasLegacyAdvertisement: Bool { !players.isEmpty || !browsers.isEmpty || !mediaKinds.isEmpty || !features.isEmpty }
     }
 
     // MARK: - Internals
@@ -46,6 +51,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     private var retryCount = 0
     private var isUserDisconnect = false
     private var isSecure = false
+    private var authenticated = false
 
     // TLS pin captured during the current handshake, and whether it failed to match.
     private var capturedServerPin: String?
@@ -111,6 +117,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        beginCapabilitySession()
         isUserDisconnect = true
         stopPing()
         task?.cancel(with: .goingAway, reason: nil)
@@ -139,7 +146,9 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     /// Continuous gesture updates coalesce to ~60 Hz. Discrete commands flush first.
     func sendMouse(event: String, dx: Float = 0, dy: Float = 0) {
+        let sessionID = capabilitySessionID
         mouseQueue.async {
+            guard self.capabilitySessionID == sessionID else { return }
             guard dx.isFinite, dy.isFinite else { return }
             switch event {
             case "move":
@@ -166,7 +175,9 @@ final class WebSocketClient: NSObject, ObservableObject {
     }
 
     func endPointerGesture() {
+        let sessionID = capabilitySessionID
         mouseQueue.async {
+            guard self.capabilitySessionID == sessionID else { return }
             self.flushPendingMouseLocked()
             _ = self.send(MousePacket.pack(event: "transform_anchor", dx: -1, dy: -1))
         }
@@ -174,8 +185,9 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     private func scheduleMouseFlushLocked() {
         guard mouseFlush == nil else { return }
+        let sessionID = capabilitySessionID
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+            guard let self, self.capabilitySessionID == sessionID else { return }
             self.mouseFlush = nil
             self.flushPendingMouseLocked()
         }
@@ -223,6 +235,7 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     private func attemptConnection() {
         guard let conn = target else { return }
+        beginCapabilitySession()
         setState(.connecting)
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -310,7 +323,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         case "auth_response":
             handleAuthResponse(json)
         default:
-            onMessage?(text)
+            if authenticated { onMessage?(text) }
         }
     }
 
@@ -446,9 +459,10 @@ final class WebSocketClient: NSObject, ObservableObject {
             return
         }
         let pin = certFp ?? capturedServerPin
+        authenticated = true
         target?.token = token
         target?.pin = pin
-        onCredentials?(IssuedCredentials(token: token, certFingerprint: pin))
+        onCredentials?(IssuedCredentials(token: token, certFingerprint: pin, sessionID: capabilitySessionID))
         emitCapabilities(credentials)
         clearPairingSecrets()
         setState(.connected(serverName: serverName, secure: isSecure))
@@ -476,6 +490,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         let serverName = target?.serverName ?? ""
         let success = (json["success"] as? Bool) ?? false
         if success {
+            authenticated = true
             emitCapabilities(json)
             setState(.connected(serverName: serverName, secure: isSecure))
             // SEC-005: legacy echoed tokens in auth_response are ignored.
@@ -493,10 +508,20 @@ final class WebSocketClient: NSObject, ObservableObject {
         let browsers = (json["browsers"] as? [String]) ?? []
         let mediaKinds = (json["mediaKinds"] as? [String]) ?? []
         let features = (json["features"] as? [String]) ?? []
-        if !players.isEmpty || !browsers.isEmpty || !mediaKinds.isEmpty || !features.isEmpty {
-            onCapabilities?(TvCapabilities(players: players, browsers: browsers,
-                                           mediaKinds: mediaKinds, features: features))
+        onCapabilities?(TvCapabilities(players: players, browsers: browsers,
+            mediaKinds: mediaKinds, features: features,
+            receiverCapabilities: ReceiverCapabilities.parse(json["capabilities"]), sessionID: capabilitySessionID))
+    }
+
+    private func beginCapabilitySession() {
+        authenticated = false
+        capabilitySessionID = UUID()
+        let sessionID = capabilitySessionID
+        mouseQueue.async {
+            guard self.capabilitySessionID == sessionID else { return }
+            self.clearPendingMouseLocked()
         }
+        onCapabilitySessionStarted?(capabilitySessionID)
     }
 
     private func handleDisconnect() {

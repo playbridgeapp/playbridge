@@ -149,6 +149,10 @@ enum WireProtocol {
         envelope(action: "control", payload: ["command": command])
     }
 
+    static func volumeCommand(scope: String, level: Double) -> String {
+        envelope(action: "volume", payload: ["scope": scope, "level": level])
+    }
+
     static func addSubtitleCommand(url: String, headers: [String: String] = [:], label: String? = nil,
                                    requestID: String? = nil) -> String {
         var resource: [String: Any] = ["url": url]

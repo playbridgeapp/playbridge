@@ -365,3 +365,19 @@ bash mobile/apple/tests/run-browser-startup-checks.sh --playback-state
 Uses real WebKit audio elements with a local silent WAV to verify tab-specific
 play/pause indicators, stopping a previous tab without clearing the current one,
 cross-origin iframe playback/removal, stale report expiry, and dormant-tab safety.
+
+Native receiver capability policy (host checks, no device contact):
+
+```sh
+bash mobile/apple/tests/run-receiver-policy-checks.sh
+```
+
+Exercises bounded v1 parsing, exact legacy delegation, empty/malformed/future
+metadata, engine intersections, surface/media/settings restrictions, command
+permissions, app/system/fallback volume and session-fenced state. The runner
+executes the current Apple TV descriptor builder with host-only engine/step
+stubs; it projects the current declarative Android/Desktop/CLI builders into
+scratch fixtures without installing their toolchains or starting receivers.
+It also reads the protocol auth/bundle fixtures and checks old saved-device
+records still decode. Pairing, physical gestures and receiver execution need the
+manual checklist in the task report.

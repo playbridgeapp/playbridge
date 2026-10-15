@@ -8,6 +8,8 @@ struct RemoteSeekBar: View {
     var isSeekable: Bool
     var isPlaying: Bool
     var enableVolume: Bool
+    var enablePlayPause = true
+    var volumeLabel = "Volume"
     var onSeekTo: (Int64) -> Void
     var onVolumeUp: () -> Void
     var onVolumeDown: () -> Void
@@ -22,6 +24,7 @@ struct RemoteSeekBar: View {
         let positionMs: Double
         let durationMs: Double
         let volumeDirection: String?
+        var volumeLabel = "Volume"
     }
 
     @State private var dragging = false
@@ -42,11 +45,11 @@ struct RemoteSeekBar: View {
         ZStack {
             VStack(spacing: 8) {
                 HStack(spacing: 6) {
-                    Text(axis == .horizontal ? (scrubMode == .absolute ? "SCRUB ◄►" : "SEEK ◄►") : (isPlaying ? "SEEK · TAP PAUSE" : "SEEK · TAP PLAY"))
+                    Text(axis == .horizontal ? (scrubMode == .absolute ? "SCRUB ◄►" : "SEEK ◄►") : (!enablePlayPause ? "SEEK" : isPlaying ? "SEEK · TAP PAUSE" : "SEEK · TAP PLAY"))
                         .lineLimit(1).minimumScaleFactor(0.75)
                     if enableVolume {
                         Text("·").foregroundStyle(Theme.onSurfaceVariant.opacity(0.4))
-                        Text(axis == .vertical && scrubMode == .absolute ? "FAST VOL ▲▼" : "VOL ▲▼")
+                        Text(volumeLabel == "Volume" ? (axis == .vertical && scrubMode == .absolute ? "FAST VOL ▲▼" : "VOL ▲▼") : volumeLabel + " ▲▼")
                             .lineLimit(1).minimumScaleFactor(0.75)
                     }
                 }
@@ -78,7 +81,7 @@ struct RemoteSeekBar: View {
             }
             SeekGesture(hasDuration: hasDuration, durationMs: durationMs, positionMs: positionMs, enableVolume: enableVolume) { event in
                 switch event {
-                case .playPause: onPlayPause()
+                case .playPause: if enablePlayPause { onPlayPause() }
                 case .volumeUp:
                     volumeDirection = "up"
                     onVolumeUp()
@@ -96,7 +99,8 @@ struct RemoteSeekBar: View {
                         targetMs: ms,
                         positionMs: positionMs,
                         durationMs: durationMs,
-                        volumeDirection: volumeDirection
+                        volumeDirection: volumeDirection,
+                        volumeLabel: volumeLabel
                     )
                 case .end(let ms):
                     if let ms, hasDuration { onSeekTo(ms) }
@@ -112,7 +116,7 @@ struct RemoteSeekBar: View {
         .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 28))
         .onDisappear { feedback = nil }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(isPlaying ? "Pause" : "Play")
+        .accessibilityLabel((enablePlayPause ? (isPlaying ? "Pause" : "Play") : "Playback timeline") + (enableVolume && volumeLabel != "Volume" ? ", " + volumeLabel : ""))
         .accessibilityValue(isLive ? "Live" : "\(RemoteMode.time(Int64(displayMs))) of \(durationMs > 0 ? RemoteMode.time(Int64(durationMs)) : "unknown")")
         .accessibilityAdjustableAction { direction in
             guard hasDuration else { return }
@@ -149,8 +153,8 @@ struct RemoteSeekBar: View {
                     VStack(spacing: 12) {
                         Image(systemName: feedback.volumeDirection == "down" ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
                             .font(Theme.font(size: 30)).foregroundStyle(activeColor)
-                        Text(feedback.volumeDirection == nil ? (feedback.mode == .absolute ? "Volume (Fast)" : "Volume") :
-                                "Volume \(feedback.volumeDirection == "up" ? "Up" : "Down")\(feedback.mode == .absolute ? " (Fast)" : "")")
+                        Text(feedback.volumeDirection == nil ? (feedback.mode == .absolute ? feedback.volumeLabel + " (Fast)" : feedback.volumeLabel) :
+                                "\(feedback.volumeLabel) \(feedback.volumeDirection == "up" ? "Up" : "Down")\(feedback.mode == .absolute ? " (Fast)" : "")")
                             .font(Theme.font(size: 13, weight: .bold)).tracking(1)
                     }
                     .foregroundStyle(.white)

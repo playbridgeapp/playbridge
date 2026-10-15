@@ -31,6 +31,8 @@ struct PairedDevice: Codable, Equatable {
     var browsers: [String] = []
     var mediaKinds: [String]? = nil
     var features: [String]? = nil
+    /// Bounded authenticated v1 metadata; refreshed on every session, never used as live authority before auth.
+    var receiverCapabilitiesData: Data? = nil
     var lastConnected: Date = Date()
 }
 
