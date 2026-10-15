@@ -85,15 +85,19 @@ struct RemoteControlView: View {
             }
         }
         .sheet(item: $presented) { sheet in
-            switch sheet {
-            case .settings: settings
-            case .subtitles: subtitles
-            case .addSubtitle: addSubtitle
-            case .more: browserMore
-            case .scripts: scripts
-            case .agents: agents
-            case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
+            Group {
+                switch sheet {
+                case .settings: settings
+                case .subtitles: subtitles
+                case .addSubtitle: addSubtitle
+                case .more: browserMore
+                case .scripts: scripts
+                case .agents: agents
+                case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
+                }
             }
+            // Editors stay mounted with their drafts when authority disappears.
+            .disabled(!policy.allowedPresentations.contains(sheet.rawValue))
         }
         .fileImporter(isPresented: $importingScript, allowedContentTypes: [.javaScript, .plainText]) { result in
             guard case .success(let url) = result, scriptImportDestinationID == vm.destinationID else { return }
@@ -102,6 +106,13 @@ struct RemoteControlView: View {
             guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return }
             vm.installUserScript(name: url.deletingPathExtension().lastPathComponent, content: text)
             vm.queryUserScripts()
+        }
+        .onChange(of: policy.allowedPresentations) { allowed in
+            if let presented, !allowed.contains(presented.rawValue), !presented.preservesDraft {
+                self.presented = nil
+            }
+            if !allowed.contains("scripts") { importingScript = false }
+            if !allowed.contains("agents") { addingAgent = false }
         }
         .onChange(of: playback?.title) { _ in looping = false }
         .onChange(of: vm.destinationID) { _ in modes = [:]; keyboardText = ""; looping = false; maximized = false; presented = nil; addingAgent = false; importingScript = false }
@@ -459,6 +470,7 @@ struct RemoteControlView: View {
                 .font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
             TextField("Type to send to TV…", text: $keyboardText)
                 .focused($keyboardFocused)
+                .disabled(!policy.isLegacy && !policy.text.contains("replace"))
                 .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.go)
                 .padding(16).background(Theme.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 12))
                 .onChange(of: keyboardText) { text in
@@ -653,6 +665,7 @@ struct RemoteControlView: View {
                 TextField("Name", text: $agentName)
                 TextField("User agent string", text: $agentValue)
                 Button("Save") {
+                    guard policy.allowedPresentations.contains("agents") else { return }
                     let name = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
                     let value = agentValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !name.isEmpty, !value.isEmpty else { return }
@@ -736,6 +749,7 @@ struct RemoteControlView: View {
     private enum Presented: String, Identifiable {
         case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue
         var id: String { rawValue }
+        var preservesDraft: Bool { self == .addSubtitle || self == .agents }
     }
 }
 

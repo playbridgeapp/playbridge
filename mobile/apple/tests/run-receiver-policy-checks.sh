@@ -27,5 +27,6 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$app/Models/Models.swift" "$app/Network/ConnectionCoordinator.swift" \
   "$app/Network/WireProtocol.swift" "$app/UI/RemoteMode.swift" \
   "$app/Network/ReceiverCapabilities.swift" "$app/Network/ReceiverRemotePolicy.swift" \
+  "$repo_root/mobile/apple/tests/ReceiverCapabilitySessionTests.swift" \
   "$repo_root/mobile/apple/tests/ReceiverRemotePolicyTests.swift" -o "$test_dir/check"
 "$test_dir/check" "$test_dir" "$repo_root/protocol/tests/fixtures/receiver-capabilities"

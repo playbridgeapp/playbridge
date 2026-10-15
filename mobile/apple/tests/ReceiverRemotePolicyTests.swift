@@ -179,6 +179,7 @@ struct ReceiverRemotePolicyTests {
                 guard case .descriptor = ReceiverCapabilities.restore(parsed.storage) else { preconditionFailure("cache lost descriptor") }
             }
         }
+        try await ReceiverCapabilitySessionTests.run(contractRoot: contractRoot)
         let coordinator = ConnectionCoordinator()
         coordinator.handle(#"{"type":"context","active":"player","engine":"mpv"}"#)
         coordinator.handle(#"{"type":"player_settings","engine":"mpv","loop":true,"speedAvailable":false,"loopAvailable":false,"engineAvailable":true}"#)

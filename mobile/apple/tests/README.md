@@ -379,5 +379,11 @@ executes the current Apple TV descriptor builder with host-only engine/step
 stubs; it projects the current declarative Android/Desktop/CLI builders into
 scratch fixtures without installing their toolchains or starting receivers.
 It also reads the protocol auth/bundle fixtures and checks old saved-device
-records still decode. Pairing, physical gestures and receiver execution need the
+records still decode. Live checks consume the subscription/update fixtures and
+exercise authenticated opt-in, exact numeric revisions (including rounding traps),
+complete replacement, opaque future versions, malformed-v1 fail-closed recovery,
+reconnect/stale-session fencing and immediate Gecko permission withdrawal without
+resetting coordinator media/context/volume/settings. Presentation permissions
+cover closing unsupported controls and disabling editors while retaining drafts.
+Pairing, physical gestures and receiver execution need the
 manual checklist in the task report.
