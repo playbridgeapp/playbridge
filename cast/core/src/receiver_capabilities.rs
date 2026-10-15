@@ -40,6 +40,17 @@ impl ReceiverCapabilities {
     pub fn as_json(&self) -> &Value {
         &self.0
     }
+
+    /// True for the sender-side marker of a recognized v1 descriptor that failed validation.
+    /// Senders must fail closed for native controls rather than treating it as absent.
+    pub fn is_malformed(&self) -> bool {
+        // from_json never produces Null: every accepted value is an object with version 1.
+        self.0.is_null()
+    }
+
+    fn malformed_v1() -> Self {
+        Self(Value::Null)
+    }
 }
 
 impl fmt::Debug for ReceiverCapabilities {
@@ -59,13 +70,16 @@ impl<'de> Deserialize<'de> for ReceiverCapabilities {
 }
 
 /// Sender-only adapter: future layouts are opaque; optional metadata never breaks legacy auth.
+/// Absent and unknown versions stay `None` (legacy). A recognized v1 that fails validation
+/// becomes the malformed marker, so senders can fail closed instead of falling back.
 pub(crate) fn deserialize_optional<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<ReceiverCapabilities>, D::Error> {
     let raw = Option::<Value>::deserialize(deserializer)?;
-    Ok(raw
-        .filter(is_v1)
-        .and_then(|value| ReceiverCapabilities::from_json(value).ok()))
+    Ok(raw.filter(is_v1).map(|value| {
+        ReceiverCapabilities::from_json(value)
+            .unwrap_or_else(|_| ReceiverCapabilities::malformed_v1())
+    }))
 }
 
 fn is_v1(value: &Value) -> bool {
@@ -347,8 +361,22 @@ mod tests {
                 "{name}"
             );
             let auth: ReceiverFrame = serde_json::from_value(json!({"type":"auth_response","success":true,"players":["legacy"],"capabilities":raw})).unwrap();
+            // Unrecognized versions are legacy (None). Recognized v1 failures are the malformed marker.
+            let unrecognized = matches!(
+                name,
+                "missing-version" | "string-version" | "zero-version" | "oversized-version"
+            );
             assert!(
-                matches!(auth, ReceiverFrame::AuthResponse { success:true, capabilities:None, players, .. } if players == ["legacy"])
+                matches!(
+                    &auth,
+                    ReceiverFrame::AuthResponse { success: true, capabilities: None, players, .. }
+                        if unrecognized && players == &["legacy"]
+                ) || matches!(
+                    &auth,
+                    ReceiverFrame::AuthResponse { success: true, capabilities: Some(descriptor), players, .. }
+                        if !unrecognized && descriptor.is_malformed() && players == &["legacy"]
+                ),
+                "{name}"
             );
         }
     }
@@ -398,11 +426,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            auth,
+            &auth,
             ReceiverFrame::AuthResponse {
-                capabilities: None,
+                capabilities: Some(descriptor),
                 ..
-            }
+            } if descriptor.is_malformed()
         ));
     }
 

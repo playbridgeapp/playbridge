@@ -1894,6 +1894,14 @@ fn render_remote(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
             app.cast_target.as_deref().unwrap_or("—")
         )),
         Line::raw(format!(
+            "Controls  {}",
+            app.remote
+                .capabilities
+                .receiver_text
+                .as_deref()
+                .unwrap_or("—")
+        )),
+        Line::raw(format!(
             "State     {}",
             snapshot.map_or("disconnected", |value| value.state.as_str())
         )),
@@ -1908,17 +1916,32 @@ fn render_remote(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
         rows[0],
     );
 
+    // A declared app route is named as app volume, never as TV volume.
+    let volume_name = if app.remote.capabilities.volume_scope.as_deref() == Some("app") {
+        "App volume"
+    } else {
+        "Volume"
+    };
     let controls = [
-        ("Play / pause", app.remote.capabilities.play_pause),
-        ("Seek -10 seconds", app.remote.capabilities.seek),
-        ("Seek +10 seconds", app.remote.capabilities.seek),
-        ("Volume down", app.remote.capabilities.volume),
-        ("Volume up", app.remote.capabilities.volume),
-        ("Mute", app.remote.capabilities.mute),
-        ("Loop", app.remote.capabilities.looping),
-        ("Speed 1.25×", app.remote.capabilities.speed),
-        ("Audio boost", app.remote.capabilities.audio_boost),
-        ("Stop playback", app.cast_active),
+        (
+            "Play / pause".to_owned(),
+            app.remote.capabilities.play_pause,
+        ),
+        ("Seek -10 seconds".to_owned(), app.remote.capabilities.seek),
+        ("Seek +10 seconds".to_owned(), app.remote.capabilities.seek),
+        (
+            format!("{volume_name} down"),
+            app.remote.capabilities.volume,
+        ),
+        (format!("{volume_name} up"), app.remote.capabilities.volume),
+        ("Mute".to_owned(), app.remote.capabilities.mute),
+        ("Loop".to_owned(), app.remote.capabilities.looping),
+        ("Speed 1.25×".to_owned(), app.remote.capabilities.speed),
+        (
+            "Audio boost".to_owned(),
+            app.remote.capabilities.audio_boost,
+        ),
+        ("Stop playback".to_owned(), app.cast_active),
     ];
     app.content_selection = app.content_selection.min(controls.len() - 1);
     let items = controls

@@ -78,6 +78,7 @@ mod json_session;
 mod mcp;
 mod preferred;
 mod receive;
+mod receiver_policy;
 mod send;
 mod ui;
 mod update;
