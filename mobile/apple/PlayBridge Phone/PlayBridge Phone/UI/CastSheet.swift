@@ -17,6 +17,13 @@ struct TvCapabilityOptions {
     static func playerOptions(for device: PairedDevice?) -> [(id: String, label: String)] {
         var options = [("tv", "TV Default")]
         guard let device = device else { return options }
+        let descriptor = ReceiverCapabilities.restore(device.receiverCapabilitiesData)
+        if descriptor != .legacy {
+            guard case .descriptor(let value) = descriptor else { return options }
+            return options + (value.surfaces["player"] ?? [:]).keys.sorted().compactMap { id in
+                ReceiverRemotePolicy.playerLabels[id].map { (id, $0) }
+            }
+        }
         var seen = Set<String>()
         for id in device.players {
             if let label = playerLabels[id], seen.insert(label).inserted {
@@ -29,6 +36,14 @@ struct TvCapabilityOptions {
     static func browserOptions(for device: PairedDevice?) -> [(id: String, label: String)] {
         var options = [("tv", "TV Default")]
         guard let device = device else { return options }
+        let descriptor = ReceiverCapabilities.restore(device.receiverCapabilitiesData)
+        if descriptor != .legacy {
+            guard case .descriptor(let value) = descriptor else { return options }
+            return options + (value.surfaces["browser"] ?? [:]).keys.sorted().compactMap { id in
+                guard value.surfaces["browser"]?[id]?["browser"]?.contains("launch") == true else { return nil }
+                return browserLabels[id].map { (id, $0) }
+            }
+        }
         var seen = Set<String>()
         for id in device.browsers {
             if let label = browserLabels[id], seen.insert(label).inserted {

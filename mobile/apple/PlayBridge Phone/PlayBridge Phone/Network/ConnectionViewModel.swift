@@ -20,8 +20,34 @@ final class ConnectionViewModel: ObservableObject {
     @Published private(set) var savedExternalReceiverDevices: [ExternalReceiverDevice] = []
     @Published var operationError: String?
     var isExternalReceiver: Bool { externalReceiver != nil }
-    var supportsQueue: Bool { !isExternalReceiver }
-    var supportsBrowser: Bool { !isAirPlay && !isExternalReceiver && pairedDevice?.browsers.isEmpty == false }
+    var supportsQueue: Bool { !isExternalReceiver && (nativeRemotePolicy.isLegacy || nativeRemotePolicy.allowsQueue("append")) }
+    var supportsBrowser: Bool {
+        !isAirPlay && !isExternalReceiver && (nativeRemotePolicy.isLegacy
+            ? pairedDevice?.browsers.isEmpty == false : !nativeRemotePolicy.launchEngines.isEmpty)
+    }
+    @Published private(set) var receiverCapabilities: ReceiverCapabilities = .legacy
+    private var pointerAnchorHeld = false
+    private var pointerButtonHeld = false
+    var nativeRemotePolicy: ReceiverRemotePolicy {
+        var input = ReceiverRemoteState()
+        input.connected = isConnected
+        input.context = coordinator.activeContext == "browser_external" ? "browser" : coordinator.activeContext
+        input.contextEngine = coordinator.contextEngine
+        input.settingsEngine = coordinator.playerEngine
+        input.players = pairedDevice?.players ?? []
+        input.features = Set(pairedDevice?.features ?? [])
+        input.mediaKind = coordinator.mediaKind
+        input.durationMs = coordinator.playback?.durationMs ?? 0
+        input.positionMs = coordinator.playback?.positionMs ?? 0
+        input.active = ["playing", "paused", "buffering"].contains(coordinator.playback?.state ?? "")
+        input.playing = coordinator.playback?.state == "playing"
+        input.live = input.context == "player" && coordinator.playerIsLive
+        input.seekable = input.context == "browser" ? input.durationMs > 0 : coordinator.playerIsSeekable
+        input.availability = coordinator.receiverSettingsAvailability
+        input.audioIDs = Set(coordinator.audioTracks.map(\.id))
+        input.subtitleIDs = Set(coordinator.subtitleTracks.map(\.id))
+        return .resolve(isExternalReceiver || isAirPlay ? .legacy : receiverCapabilities, state: input)
+    }
     func supportsNativeMediaKind(_ kind: String) -> Bool {
         if isAirPlay { return kind == "video" || kind == "audio" }
         return isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
@@ -72,6 +98,7 @@ final class ConnectionViewModel: ObservableObject {
         airPlay.$error.compactMap { $0 }.receive(on: RunLoop.main).sink { [weak self] in self?.operationError = $0 }.store(in: &cancellables)
         castPlaybackSession.onCommand = { [weak self] command in
             guard let self, self.isConnected else { return false }
+            guard self.isAirPlay || self.isExternalReceiver || self.nativeRemotePolicy.allowsControl(command) else { return false }
             self.control(command)
             return true
         }
@@ -97,9 +124,24 @@ final class ConnectionViewModel: ObservableObject {
             store.saveSavedDevices(savedDevices)
         }
 
-        ws.onMessage = { [weak self] text in guard let self, !isExternalReceiver, !isAirPlay else { return }; coordinator.handle(text) }
+        ws.onMessage = { [weak self] text in
+            guard let self, !isExternalReceiver, !isAirPlay else { return }
+            let sessionID = ws.capabilitySessionID
+            coordinator.handle(text, isCurrentSession: { [weak self] in
+                self?.ws.capabilitySessionID == sessionID && self?.isExternalReceiver == false && self?.isAirPlay == false
+            })
+        }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
         ws.onCapabilities = { [weak self] caps in self?.persistCapabilities(caps) }
+        ws.onCapabilitySessionStarted = { [weak self] id in
+            DispatchQueue.main.async {
+                guard let self, self.ws.capabilitySessionID == id else { return }
+                self.receiverCapabilities = .legacy
+                self.pointerAnchorHeld = false
+                self.pointerButtonHeld = false
+                self.coordinator.clearReceiverMetadata()
+            }
+        }
 
         // Re-publish nested object changes so views observing the VM refresh.
         ws.$state
@@ -189,6 +231,8 @@ final class ConnectionViewModel: ObservableObject {
         endSavedReconnectDiscovery()
         connectingDevice = device
         let saved = matchingSaved(for: device)
+        pairedDevice = saved
+        state = .connecting
         ws.connect(
             ip: device.ip,
             port: device.port,
@@ -280,6 +324,7 @@ final class ConnectionViewModel: ObservableObject {
         let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
         guard route != "google_cast", route != "this_phone" else { return }
         guard let saved = pairedDevice else { return }
+        state = .connecting
         endSavedReconnectDiscovery()
         connectingDevice = DiscoveredDevice(ip: saved.ip, port: saved.port, name: saved.name,
                                             uuid: saved.uuid, wssPort: saved.wssPort)
@@ -304,6 +349,7 @@ final class ConnectionViewModel: ObservableObject {
         usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         pairedDevice = device
+        state = .connecting
         connectingDevice = DiscoveredDevice(ip: device.ip, port: device.port, name: device.name,
                                             uuid: device.uuid, wssPort: device.wssPort)
         ws.connect(
@@ -653,6 +699,7 @@ final class ConnectionViewModel: ObservableObject {
             noteNewCast(mediaKind: kind, title: video.displayTitle)
             routedStreamRegistrations.removeAll()
         }
+        guard !queue || nativeRemotePolicy.allowsQueue("append") else { throw StreamRoutingError.message("Queueing is unavailable on this receiver.") }
         routedStreamRegistrations.append(contentsOf: ([media] + subtitles).compactMap(\.registration))
         let urls = subtitles.map { $0.url.absoluteString }
         let resources: [[String: Any]] = subtitles.map { subtitle in
@@ -680,6 +727,7 @@ final class ConnectionViewModel: ObservableObject {
             return
         }
         guard !isExternalReceiver else { operationError = "Queueing is not supported by this receiver adapter yet."; return }
+        guard nativeRemotePolicy.allowsQueue("append") else { return }
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
         let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
@@ -701,18 +749,22 @@ final class ConnectionViewModel: ObservableObject {
     /// Open a URL on the TV browser.
     func browseTo(url: String, browserMode: String? = nil, desktopMode: Bool = false) {
         guard !isExternalReceiver else { operationError = "This receiver cannot open a browser page."; return }
+        guard nativeRemotePolicy.allowsLaunch(browserMode) else { return }
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onUserMediaAction?()
         SenderDebugNetwork.request("Browser command output", url: trimmed)
+        let mode = !nativeRemotePolicy.isLegacy && (browserMode == nil || browserMode == "tv")
+            ? nativeRemotePolicy.launchEngines.first : browserMode
         ws.send(WireProtocol.browserCommand(
             url: trimmed,
-            browserMode: browserMode,
+            browserMode: mode,
             desktopMode: desktopMode
         ))
     }
 
     func control(_ command: String) {
+        guard isAirPlay || isExternalReceiver || nativeRemotePolicy.allowsControl(command) else { return }
         if command == "stop" || command == "end_receiver" { onUserMediaAction?() }
         if isAirPlay {
             switch command {
@@ -763,7 +815,13 @@ final class ConnectionViewModel: ObservableObject {
             airPlay.addSubtitle(.init(url: source, headers: headers, title: label ?? "Added subtitle"))
             return true
         }
-        guard pairedDevice?.features?.contains("subtitle_resource_add_v1") == true else {
+        let policy = nativeRemotePolicy
+        let structured = pairedDevice?.features?.contains("subtitle_resource_add_v1") == true &&
+            (policy.isLegacy || policy.tracks.contains("subtitle_resource_add"))
+        if !policy.isLegacy && !structured {
+            return headers.isEmpty && policy.tracks.contains("subtitle_url_add") && ws.send(WireProtocol.controlCommand("add_subtitle:\(url)"))
+        }
+        guard structured else {
             return headers.isEmpty && ws.send(WireProtocol.controlCommand("add_subtitle:\(url)"))
         }
         let requestID = UUID().uuidString
@@ -824,13 +882,18 @@ final class ConnectionViewModel: ObservableObject {
         }
     }
     func browserControl(_ action: String) {
-        guard isConnected, supportsBrowser else { return }
-        ws.send(WireProtocol.browserControlCommand(action))
+        guard isConnected, nativeRemotePolicy.isLegacy ? supportsBrowser : nativeRemotePolicy.allowsBrowser(action) else { return }
+        let relative = !nativeRemotePolicy.isLegacy && ["seek_back", "seek_forward"].contains(action)
+        let wireAction = relative ? nativeRemotePolicy.browserRelativeSeek(forward: action == "seek_forward") : action
+        if let wireAction { ws.send(WireProtocol.browserControlCommand(wireAction)) }
     }
 
     func remote(_ key: String) {
         guard isConnected else { return }
-        guard isExternalReceiver else { ws.send(WireProtocol.remoteCommand(key: key)); return }
+        guard isExternalReceiver else {
+            guard nativeRemotePolicy.allowsKey(key) else { return }
+            ws.send(WireProtocol.remoteCommand(key: key)); return
+        }
         switch key {
         case "volume_up": adjustExternalVolume(up: true)
         case "volume_down": adjustExternalVolume(up: false)
@@ -844,19 +907,23 @@ final class ConnectionViewModel: ObservableObject {
             if let itemId = item.itemId, let id = UUID(uuidString: itemId) { airPlay.jump(to: id) }
             return
         }
+        let itemJump = supportsQueueV1 && (nativeRemotePolicy.isLegacy || item.itemId != nil && nativeRemotePolicy.allowsQueue("jump_item"))
+        guard itemJump || nativeRemotePolicy.allowsQueue("jump_index") else { return }
         ws.send(WireProtocol.playlistJumpCommand(
             index: item.index,
-            itemId: supportsQueueV1 ? item.itemId : nil,
-            playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
-            useQueueV1: supportsQueueV1
+            itemId: itemJump ? item.itemId : nil,
+            playbackId: itemJump ? coordinator.playlist?.playbackId : nil,
+            useQueueV1: itemJump
         ))
     }
     func queryQueue() {
+        guard nativeRemotePolicy.isLegacy || isConnected && nativeRemotePolicy.reporting.contains("playlist_status") else { return }
         guard supportsQueueV1 else { queryContext(); return }
         ws.send(WireProtocol.queueQuery())
     }
     func removeFromQueue(itemIds: [String]) {
         guard supportsQueueV1, !itemIds.isEmpty else { return }
+        guard nativeRemotePolicy.allowsQueue("remove") else { return }
         onUserMediaAction?()
         ws.send(WireProtocol.queueRemove(
             itemIds: itemIds,
@@ -865,6 +932,7 @@ final class ConnectionViewModel: ObservableObject {
     }
     func moveInQueue(itemId: String, beforeItemId: String?) {
         guard supportsQueueV1 else { return }
+        guard nativeRemotePolicy.allowsQueue("move") else { return }
         onUserMediaAction?()
         ws.send(WireProtocol.queueMove(
             itemId: itemId,
@@ -874,21 +942,41 @@ final class ConnectionViewModel: ObservableObject {
     }
     func clearQueue() {
         guard supportsQueueV1 else { return }
+        guard nativeRemotePolicy.allowsQueue("clear") else { return }
         onUserMediaAction?()
         ws.send(WireProtocol.queueClear(playbackId: coordinator.playlist?.playbackId))
     }
-    func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
-    func endPointerGesture() { ws.endPointerGesture() }
+    func mouse(event: String, dx: Float = 0, dy: Float = 0) {
+        let finishing = event == "up" && pointerButtonHeld
+        guard finishing || nativeRemotePolicy.allowsMouse(event) else { return }
+        if event == "transform_anchor" { pointerAnchorHeld = true }
+        if event == "down" { pointerButtonHeld = true }
+        if event == "up" { pointerButtonHeld = false }
+        ws.sendMouse(event: event, dx: dx, dy: dy)
+    }
+    func endPointerGesture() {
+        if nativeRemotePolicy.isLegacy { ws.endPointerGesture(); return }
+        if pointerButtonHeld { ws.sendMouse(event: "up"); pointerButtonHeld = false }
+        if pointerAnchorHeld { ws.endPointerGesture(); pointerAnchorHeld = false }
+    }
+    func setReceiverVolume(_ level: Double) {
+        let policy = nativeRemotePolicy
+        guard let scope = policy.volume?.scope, policy.allowsAbsoluteVolume(scope: scope, level: level) else { return }
+        ws.send(WireProtocol.volumeCommand(scope: scope, level: level))
+    }
     func queryContext() {
         if isAirPlay { airPlay.refreshRoute() }
         else if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) }
     }
-    func queryUserScripts() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScriptQuery()) }
-    func installUserScript(name: String, content: String) { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScript(name: name, content: content)) }
-    func queryUserAgents() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userAgentQuery()) }
+    func queryUserScripts() { guard canManageBrowser("manage_user_scripts") else { return }; ws.send(WireProtocol.userScriptQuery()) }
+    func installUserScript(name: String, content: String) { guard canManageBrowser("manage_user_scripts") else { return }; ws.send(WireProtocol.userScript(name: name, content: content)) }
+    func queryUserAgents() { guard canManageBrowser("manage_user_agent") else { return }; ws.send(WireProtocol.userAgentQuery()) }
     func setUserAgent(name: String, value: String, save: Bool) {
-        guard isConnected, supportsBrowser else { return }
+        guard canManageBrowser("manage_user_agent") else { return }
         ws.send(WireProtocol.userAgent(name: name, value: value, save: save))
+    }
+    private func canManageBrowser(_ operation: String) -> Bool {
+        isConnected && (nativeRemotePolicy.isLegacy ? supportsBrowser : nativeRemotePolicy.allowsManager(operation))
     }
 
     private func adjustExternalVolume(up: Bool) {
@@ -1170,32 +1258,40 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func persistCredentials(_ creds: WebSocketClient.IssuedCredentials) {
-        guard !isExternalReceiver else { return }
-        guard let d = connectingDevice else { return }
-        var device = PairedDevice(
-            ip: d.ip, port: d.port, name: d.name, uuid: d.uuid,
-            wssPort: d.wssPort, certFingerprint: creds.certFingerprint
-        )
-        device.players = pairedDevice?.players ?? []
-        device.browsers = pairedDevice?.browsers ?? []
-        device.mediaKinds = pairedDevice?.mediaKinds ?? []
-        device.features = pairedDevice?.features
-        // Store token alongside the rest of the record (the whole struct lives in the Keychain).
-        var stored = device
-        stored.setToken(creds.token)
-        store.savePairedDevice(stored)
-        upsertSaved(stored)
-        DispatchQueue.main.async { self.pairedDevice = stored }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.ws.capabilitySessionID == creds.sessionID else { return }
+            guard !isExternalReceiver else { return }
+            guard let d = connectingDevice else { return }
+            var device = PairedDevice(
+                ip: d.ip, port: d.port, name: d.name, uuid: d.uuid,
+                wssPort: d.wssPort, certFingerprint: creds.certFingerprint
+            )
+            device.players = pairedDevice?.players ?? []
+            device.browsers = pairedDevice?.browsers ?? []
+            device.mediaKinds = pairedDevice?.mediaKinds ?? []
+            device.features = pairedDevice?.features
+            // Store token alongside the rest of the record (the whole struct lives in the Keychain).
+            var stored = device
+            stored.setToken(creds.token)
+            store.savePairedDevice(stored)
+            upsertSaved(stored)
+            self.pairedDevice = stored
+        }
     }
 
     private func persistCapabilities(_ caps: WebSocketClient.TvCapabilities) {
         DispatchQueue.main.async {
-            guard !self.isExternalReceiver else { return }
+            guard !self.isExternalReceiver, !self.isAirPlay, self.ws.capabilitySessionID == caps.sessionID else { return }
+            if self.pointerAnchorHeld || self.pointerButtonHeld { self.endPointerGesture() }
+            self.receiverCapabilities = caps.receiverCapabilities
             guard var device = self.pairedDevice ?? self.store.loadPairedDevice() else { return }
-            device.players = caps.players
-            device.browsers = caps.browsers
-            device.mediaKinds = caps.mediaKinds
-            device.features = caps.features
+            if caps.hasLegacyAdvertisement {
+                device.players = caps.players
+                device.browsers = caps.browsers
+                device.mediaKinds = caps.mediaKinds
+                device.features = caps.features
+            }
+            device.receiverCapabilitiesData = caps.receiverCapabilities.storage
             self.store.savePairedDevice(device)
             self.upsertSaved(device)
             self.pairedDevice = device
@@ -1292,7 +1388,7 @@ extension ConnectionViewModel: PageCastTransport {
         queryContext()
         // Apple TV's context reply doesn't include its playlist. Recover a lost
         // queue broadcast explicitly so linked prefetch can resume after reconnect.
-        if supportsQueueV1 { ws.send(WireProtocol.queueQuery()) }
+        if supportsQueueV1 && (nativeRemotePolicy.isLegacy || nativeRemotePolicy.reporting.contains("playlist_status")) { ws.send(WireProtocol.queueQuery()) }
     }
     func websiteMatchesReceiver(_ id: String) -> Bool {
         guard !isAirPlay, !isExternalReceiver, let pairedDevice else { return false }
@@ -1300,6 +1396,10 @@ extension ConnectionViewModel: PageCastTransport {
     }
 
     func sendWebsiteCommand(action: String, payload: [String: Any]) -> Bool {
+        if !nativeRemotePolicy.isLegacy {
+            let operation = action == "queue_add" ? "append" : action == "playlist_jump" ? "jump_index" : ""
+            guard nativeRemotePolicy.allowsQueue(operation) else { return false }
+        }
         guard isConnected, !isAirPlay, !isExternalReceiver,
               let data = try? JSONSerialization.data(withJSONObject: ["type": "command", "action": action, "payload": payload]) else { return false }
         return ws.send(String(decoding: data, as: UTF8.self))
