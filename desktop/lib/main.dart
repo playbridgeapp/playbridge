@@ -1005,7 +1005,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (tvLinked) {
       if (files.isNotEmpty) {
         unawaited(_sender.castLocalFiles(files).then((ok) {
-          if (!ok) _showOsd('Cast failed');
+          if (!ok) _showOsd(_sender.lastCastError ?? 'Cast failed');
         }));
       }
       for (final u in urls) {
