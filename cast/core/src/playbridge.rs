@@ -97,6 +97,15 @@ pub enum ReceiverFrame {
     /// Opt-in live descriptor updates. Decoding never fails: invalid envelopes are `Invalid`.
     #[serde(rename = "receiver_capabilities")]
     LiveCapabilities(CapabilitiesFrame),
+    /// The receiver's active surface. `idle`, `browser`, and `screen_mirror` mean the player is
+    /// no longer playing, so a sender must not keep reporting the last player state.
+    #[serde(rename = "context")]
+    Context {
+        #[serde(default)]
+        active: String,
+        #[serde(default)]
+        engine: Option<String>,
+    },
     #[serde(rename = "status")]
     Status {
         #[serde(default)]
@@ -573,6 +582,24 @@ mod tests {
         assert_eq!(
             decode_receiver_text(r#"{"type":"pong"}"#).unwrap(),
             ReceiverFrame::Pong
+        );
+    }
+
+    #[test]
+    fn receiver_parser_decodes_the_active_surface_context() {
+        assert_eq!(
+            decode_receiver_text(r#"{"type":"context","active":"idle"}"#).unwrap(),
+            ReceiverFrame::Context {
+                active: "idle".into(),
+                engine: None,
+            }
+        );
+        assert_eq!(
+            decode_receiver_text(r#"{"type":"context","active":"player","engine":"exo"}"#).unwrap(),
+            ReceiverFrame::Context {
+                active: "player".into(),
+                engine: Some("exo".into()),
+            }
         );
     }
 

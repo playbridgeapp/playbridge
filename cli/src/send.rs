@@ -1043,8 +1043,20 @@ fn managed_command_result(frame: &ReceiverFrame, request_id: &str) -> ManagedCom
     }
 }
 
+/// Applies the receiver's active surface to the session state. Leaving the player (idle, browser,
+/// or screen mirror) ends playback, so the state stops reporting buffering or playing. A player
+/// context means playback may resume, and the next status frame sets the real state.
+fn apply_receiver_context(snapshot: &mut CastSnapshot, active: &str) {
+    match active {
+        "player" if snapshot.state == "stopped" => snapshot.state = "buffering".into(),
+        "idle" | "browser" | "screen_mirror" => snapshot.state = "stopped".into(),
+        _ => {}
+    }
+}
+
 fn update_snapshot_from_receiver_frame(snapshot: &mut CastSnapshot, frame: &ReceiverFrame) {
     match frame {
+        ReceiverFrame::Context { active, .. } => apply_receiver_context(snapshot, active),
         ReceiverFrame::Status {
             state,
             position,
@@ -2724,6 +2736,9 @@ async fn dashboard_poll(
                     ReceiverFrame::LiveCapabilities(update) => {
                         live.accept(policy, &update);
                     }
+                    ReceiverFrame::Context { active, .. } => {
+                        apply_receiver_context(snapshot, &active);
+                    }
                     ReceiverFrame::Status {
                         state,
                         position,
@@ -4239,5 +4254,79 @@ mod tests {
         assert_eq!(after.receiver, policy.summary());
         // Equal capabilities publish nothing, so an unchanged descriptor is not a dashboard event.
         assert_eq!(after, playbridge_capabilities(&policy));
+    }
+
+    fn playing_snapshot(state: &str) -> CastSnapshot {
+        CastSnapshot {
+            state: state.into(),
+            title: "Movie".into(),
+            position_ms: 0,
+            duration_ms: 0,
+            current_index: Some(0),
+            total_count: Some(1),
+            volume: None,
+            muted: None,
+            looping: None,
+            speed: None,
+        }
+    }
+
+    #[test]
+    fn a_terminal_player_failure_is_reported_as_stopped_not_buffering() {
+        // The TV's exit frame after a terminal player failure: context idle, no status update.
+        let frame: ReceiverFrame =
+            serde_json::from_str(r#"{"type":"context","active":"idle"}"#).unwrap();
+        let mut snapshot = playing_snapshot("buffering");
+        update_snapshot_from_receiver_frame(&mut snapshot, &frame);
+        assert_eq!(snapshot.state, "stopped");
+        assert_eq!(snapshot.position_ms, 0);
+        assert_eq!(snapshot.duration_ms, 0);
+        let receiver = Receiver {
+            id: ReceiverId("test-tv".into()),
+            name: "Test TV".into(),
+            protocol: ReceiverProtocol::PlayBridge,
+            addresses: vec!["192.0.2.10".into()],
+            port: None,
+            wss_port: Some(8765),
+            location: None,
+            uuid: None,
+        };
+        let status = status_json(
+            JsonStatusContext {
+                session_id: "s",
+                receiver: &receiver,
+                media_items: &["https://example.test/a.mp4".to_owned()],
+                capabilities: &CastCapabilities::default(),
+            },
+            &snapshot,
+        );
+        assert_eq!(status["state"], "stopped");
+    }
+
+    #[test]
+    fn leaving_the_player_for_the_browser_or_mirror_also_stops_the_session() {
+        for active in ["browser", "screen_mirror"] {
+            let mut snapshot = playing_snapshot("playing");
+            apply_receiver_context(&mut snapshot, active);
+            assert_eq!(snapshot.state, "stopped", "{active}");
+        }
+    }
+
+    #[test]
+    fn returning_to_the_player_resumes_from_stopped_until_status_arrives() {
+        let mut snapshot = playing_snapshot("stopped");
+        apply_receiver_context(&mut snapshot, "player");
+        assert_eq!(snapshot.state, "buffering");
+        // A playing state is not overwritten by a player context.
+        let mut playing = playing_snapshot("playing");
+        apply_receiver_context(&mut playing, "player");
+        assert_eq!(playing.state, "playing");
+    }
+
+    #[test]
+    fn a_context_frame_with_an_unknown_surface_changes_nothing() {
+        let mut snapshot = playing_snapshot("playing");
+        apply_receiver_context(&mut snapshot, "something_new");
+        assert_eq!(snapshot.state, "playing");
     }
 }
