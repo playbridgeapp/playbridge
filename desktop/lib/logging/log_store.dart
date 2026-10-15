@@ -30,7 +30,21 @@ String redactSensitiveLogData(String input) {
   );
   value = value.replaceAllMapped(
     RegExp(
-      r'([?&](?:token|api_key|apikey|auth|signature|sig)=)[^&#\s]+',
+      r'([?&](?:token|api_key|apikey|auth|signature|sig|cap)=)[^&#\s]+',
+      caseSensitive: false,
+    ),
+    (m) => '${m.group(1)}<redacted>',
+  );
+  value = value.replaceAllMapped(
+    RegExp(
+      r'''((?:https?://[^/\s"'>]+|(?<=^|[\s"'\([{<>=]))/s/)[^/?#\s"'\\]+''',
+      caseSensitive: false,
+    ),
+    (m) => '${m.group(1)}<redacted>',
+  );
+  value = value.replaceAllMapped(
+    RegExp(
+      r'''((?:https?://[^/\s"'>]+|(?<=^|[\s"'\([{<>=]))/media/)[^/?#\s"'\\]+(?=/)''',
       caseSensitive: false,
     ),
     (m) => '${m.group(1)}<redacted>',
