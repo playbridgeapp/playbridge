@@ -33,7 +33,7 @@ use crate::{
     json_session::{self, ControlRequest, JsonCastSession, SessionInfo},
     preferred::PreferredDevice,
     receive::DEFAULT_PORT,
-    receiver_policy::{Control, ReceiverPolicy},
+    receiver_policy::{Control, LiveUpdates, ReceiverPolicy},
 };
 
 type CommandConfirmation = (
@@ -47,7 +47,7 @@ type CommandConfirmation = (
 /// Authenticated PlayBridge session facts: the features and the optional receiver descriptor.
 type PlaybridgeAuth = (SecureWebSocket, Vec<String>, Option<ReceiverCapabilities>);
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub(crate) struct CastCapabilities {
     pub play_pause: bool,
     pub seek: bool,
@@ -84,6 +84,11 @@ pub(crate) struct CastSnapshot {
 
 #[derive(Debug, Clone)]
 pub(crate) enum CastEvent {
+    /// The receiver's capabilities changed through a live update. Sent only on change.
+    Capabilities {
+        generation: u64,
+        capabilities: CastCapabilities,
+    },
     BrowserHosting {
         generation: u64,
         urls: Vec<String>,
@@ -772,6 +777,7 @@ async fn json_session_loop(
                 match request {
                     Some(request) => {
                         let request = request?;
+                        let current = dashboard_capabilities(&control);
                         match process_json_request(
                             &mut control,
                             &mut snapshot,
@@ -780,7 +786,7 @@ async fn json_session_loop(
                             &mut media_items,
                             session,
                             &receiver,
-                            &capabilities,
+                            &current,
                             true,
                         ).await {
                             JsonRequestOutcome::Continue => {}
@@ -812,6 +818,7 @@ async fn json_session_loop(
                 }
                 if let Some(request) = session.take_request(&last_control_id) {
                     last_control_id = request.id.clone();
+                    let current = dashboard_capabilities(&control);
                     match process_json_request(
                         &mut control,
                         &mut snapshot,
@@ -820,7 +827,7 @@ async fn json_session_loop(
                         &mut media_items,
                         session,
                         &receiver,
-                        &capabilities,
+                        &current,
                         false,
                     ).await {
                         JsonRequestOutcome::Continue => {}
@@ -834,8 +841,9 @@ async fn json_session_loop(
                         }
                     }
                 }
+                let current = dashboard_capabilities(&control);
                 let _ = session.write_status(&status_json(
-                    json_status_context(session, &receiver, &media_items, &capabilities),
+                    json_status_context(session, &receiver, &media_items, &current),
                     &snapshot,
                 ));
             }
@@ -1067,9 +1075,44 @@ fn update_snapshot_from_receiver_frame(snapshot: &mut CastSnapshot, frame: &Rece
     }
 }
 
+/// Publishes a capability change made by a live update, so the dashboard gates refresh without
+/// rebuilding the session. Unchanged capabilities send nothing.
+fn publish_capability_change(
+    events: &tokio::sync::mpsc::Sender<CastEvent>,
+    generation: u64,
+    control: &TargetControl,
+    last: &mut CastCapabilities,
+) {
+    let current = dashboard_capabilities(control);
+    if current != *last {
+        *last = current.clone();
+        let _ = events.try_send(CastEvent::Capabilities {
+            generation,
+            capabilities: current,
+        });
+    }
+}
+
+/// Opts an authenticated socket into live descriptor updates when its metadata offers them.
+async fn subscribe_live_updates(
+    socket: &mut SecureWebSocket,
+    features: &[String],
+) -> Result<LiveUpdates, String> {
+    let mut live = LiveUpdates::default();
+    if let Some(frame) = live.subscribe_frame(features) {
+        socket
+            .send(&frame)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(live)
+}
+
 async fn send_confirmed_managed_command(
     socket: &mut SecureWebSocket,
     snapshot: &mut CastSnapshot,
+    live: &mut LiveUpdates,
+    policy: &mut ReceiverPolicy,
     request_id: &str,
     action: &str,
     payload: Option<Value>,
@@ -1101,6 +1144,9 @@ async fn send_confirmed_managed_command(
             playlist_snapshot = Some((playback_id.clone(), *queue_revision));
         }
         update_snapshot_from_receiver_frame(snapshot, &frame);
+        if let ReceiverFrame::LiveCapabilities(update) = &frame {
+            live.accept(policy, update);
+        }
         match managed_command_result(&frame, request_id) {
             ManagedCommandResult::Pending => {}
             ManagedCommandResult::Accepted {
@@ -1162,7 +1208,10 @@ async fn apply_json_control(
                 prepare_queue_item(payload, proxy_server).await?;
             }
             let TargetControl::Playbridge {
-                socket, features, ..
+                socket,
+                features,
+                policy,
+                live,
             } = control
             else {
                 return Err("receiver commands require a PlayBridge session".into());
@@ -1171,8 +1220,16 @@ async fn apply_json_control(
                 if !supports_confirmed_queue_crud(features) {
                     return Err("receiver does not support confirmed queue CRUD v1".into());
                 }
-                send_confirmed_managed_command(socket, snapshot, &request.id, action, payload)
-                    .await?;
+                send_confirmed_managed_command(
+                    socket,
+                    snapshot,
+                    live,
+                    policy,
+                    &request.id,
+                    action,
+                    payload,
+                )
+                .await?;
             } else {
                 socket
                     .send(&SenderFrame::Command {
@@ -1955,10 +2012,13 @@ async fn connect_and_load(
                 pairing,
             )
             .await?;
+            let mut socket = socket;
+            let live = subscribe_live_updates(&mut socket, &features).await?;
             TargetControl::Playbridge {
                 socket: Box::new(socket),
                 features,
                 policy: ReceiverPolicy::from_descriptor(capabilities.as_ref()),
+                live,
             }
         }
         _ => cast_to_target(
@@ -2180,10 +2240,13 @@ pub(crate) async fn run_dashboard_cast(
                 },
             )
             .await?;
+            let mut socket = socket;
+            let live = subscribe_live_updates(&mut socket, &features).await?;
             TargetControl::Playbridge {
                 socket: Box::new(socket),
                 features,
                 policy: ReceiverPolicy::from_descriptor(capabilities.as_ref()),
+                live,
             }
         }
         _ => cast_to_target(
@@ -2225,6 +2288,7 @@ pub(crate) async fn run_dashboard_cast(
     let mut poll_count = 0_u64;
     let mut consecutive_poll_failures = 0_u8;
     let mut session_error = None;
+    let mut last_capabilities = dashboard_capabilities(&control);
     loop {
         tokio::select! {
             command = commands.recv() => {
@@ -2256,6 +2320,7 @@ pub(crate) async fn run_dashboard_cast(
                 } else {
                     consecutive_poll_failures = 0;
                 }
+                publish_capability_change(&events, generation, &control, &mut last_capabilities);
                 let _ = events.try_send(CastEvent::Snapshot { generation, snapshot: snapshot.clone() });
             }
         }
@@ -2403,6 +2468,7 @@ pub(crate) async fn run_dashboard_browser_cast(
 
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_capabilities = dashboard_capabilities(&control);
     let mut session_error = None;
     loop {
         tokio::select! {
@@ -2420,6 +2486,7 @@ pub(crate) async fn run_dashboard_browser_cast(
             _ = tick.tick() => {
                 match dashboard_poll(&mut control, &mut snapshot, false).await {
                     Ok(()) => {
+                        publish_capability_change(&events, generation, &control, &mut last_capabilities);
                         let _ = events.try_send(CastEvent::Snapshot { generation, snapshot: snapshot.clone() });
                     }
                     Err(message) => {
@@ -2544,8 +2611,11 @@ enum TargetControl {
     Playbridge {
         socket: Box<SecureWebSocket>,
         features: Vec<String>,
-        /// Resolved from the receiver descriptor received with this session's auth.
+        /// Resolved from the receiver descriptor received with this session's auth, then
+        /// replaced by accepted live updates.
         policy: ReceiverPolicy,
+        /// Subscription and revision watermark for this authenticated socket.
+        live: LiveUpdates,
     },
     Roku(ReceiverSession),
     Browser {
@@ -2635,7 +2705,12 @@ async fn dashboard_poll(
                 }
             }
         }
-        TargetControl::Playbridge { socket, .. } => {
+        TargetControl::Playbridge {
+            socket,
+            policy,
+            live,
+            ..
+        } => {
             if heartbeat {
                 socket
                     .send(&SenderFrame::Ping)
@@ -2646,6 +2721,9 @@ async fn dashboard_poll(
                 tokio::time::timeout(Duration::from_millis(10), socket.receive()).await
             {
                 match frame {
+                    ReceiverFrame::LiveCapabilities(update) => {
+                        live.accept(policy, &update);
+                    }
                     ReceiverFrame::Status {
                         state,
                         position,
@@ -4127,5 +4205,39 @@ mod tests {
                 .unwrap_err()
                 .contains("Seek is not supported")
         );
+    }
+
+    #[test]
+    fn a_live_update_changes_the_dashboard_and_status_capabilities_without_a_reconnect() {
+        use crate::receiver_policy::tests as fixtures;
+        use playbridge_cast_core::playbridge::CapabilitiesFrame;
+
+        let mut policy = fixtures::android_tv();
+        let before = playbridge_capabilities(&policy);
+        assert!(before.looping);
+
+        let mut live = LiveUpdates::default();
+        assert!(
+            live.subscribe_frame(&[
+                playbridge_cast_core::playbridge::RECEIVER_CAPABILITIES_FEATURE.into()
+            ])
+            .is_some()
+        );
+        // A receiver drops its loop control and key input. Only the transport remains.
+        let narrowed = CapabilitiesFrame::from_value(json!({
+            "revision": 1,
+            "capabilities": {
+                "version": 1,
+                "surfaces": {"player": {"engines": {"exo": {"transport": ["pause", "play"]}}}}
+            }
+        }));
+        live.accept(&mut policy, &narrowed);
+
+        let after = playbridge_capabilities(&policy);
+        assert_ne!(before, after, "the dashboard refresh sees the change");
+        assert!(!after.looping && !after.volume && after.play_pause);
+        assert_eq!(after.receiver, policy.summary());
+        // Equal capabilities publish nothing, so an unchanged descriptor is not a dashboard event.
+        assert_eq!(after, playbridge_capabilities(&policy));
     }
 }
