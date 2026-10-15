@@ -134,7 +134,7 @@ void main() {
         if (!await frames!.moveNext().timeout(const Duration(seconds: 5))) {
           throw StateError('Loopback receiver closed before response');
         }
-        return jsonDecode(frames.current as String) as Map<String, dynamic>;
+        return jsonDecode(frames!.current as String) as Map<String, dynamic>;
       }
 
       final sender = SasCrypto.generateX25519KeyPair();

@@ -186,7 +186,9 @@ class ReceiverDescriptorParser {
           );
           if (engObj['transport'] != null &&
               engines[engineId]!.transport.isEmpty &&
-              (engObj['transport'] as List).isNotEmpty) return null;
+              (engObj['transport'] as List).isNotEmpty) {
+            return null;
+          }
         }
         surfaces[surfaceId] = ReceiverSurface(engines: engines);
       }
