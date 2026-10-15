@@ -12,7 +12,10 @@ use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub use crate::receiver_capabilities::ReceiverCapabilities;
+pub use crate::receiver_capabilities::{
+    CapabilitiesFrame, CapabilitiesUpdate, LiveDescriptor, MAX_LIVE_REVISION,
+    RECEIVER_CAPABILITIES_FEATURE, ReceiverCapabilities,
+};
 use crate::{CastError, Result};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -49,6 +52,15 @@ pub enum SenderFrame {
     Unknown,
 }
 
+/// The explicit opt-in a sender sends after authenticated metadata offers
+/// `receiver_capabilities_v1`. Send it once per authenticated socket.
+pub fn receiver_capabilities_subscribe() -> SenderFrame {
+    SenderFrame::Command {
+        action: "receiver_capabilities_subscribe".into(),
+        payload: Some(serde_json::json!({})),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ReceiverFrame {
@@ -82,6 +94,9 @@ pub enum ReceiverFrame {
         )]
         capabilities: Option<ReceiverCapabilities>,
     },
+    /// Opt-in live descriptor updates. Decoding never fails: invalid envelopes are `Invalid`.
+    #[serde(rename = "receiver_capabilities")]
+    LiveCapabilities(CapabilitiesFrame),
     #[serde(rename = "status")]
     Status {
         #[serde(default)]
@@ -532,13 +547,29 @@ mod tests {
     }
 
     #[test]
-    fn receiver_parser_ignores_live_capabilities_until_sender_opt_in_support() {
-        for text in [
+    fn receiver_parser_decodes_live_capabilities_into_a_version_gated_frame() {
+        let valid = decode_receiver_text(
             r#"{"type":"receiver_capabilities","revision":1,"capabilities":{"version":1,"surfaces":{}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            valid,
+            ReceiverFrame::LiveCapabilities(CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 1,
+                descriptor: LiveDescriptor::Valid(_),
+            }))
+        ));
+        let future = decode_receiver_text(
             r#"{"type":"receiver_capabilities","revision":2,"capabilities":{"version":99,"surfaces":[]}}"#,
-        ] {
-            assert_eq!(decode_receiver_text(text).unwrap(), ReceiverFrame::Unknown);
-        }
+        )
+        .unwrap();
+        assert!(matches!(
+            future,
+            ReceiverFrame::LiveCapabilities(CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 2,
+                descriptor: LiveDescriptor::UnknownVersion,
+            }))
+        ));
         assert_eq!(
             decode_receiver_text(r#"{"type":"pong"}"#).unwrap(),
             ReceiverFrame::Pong

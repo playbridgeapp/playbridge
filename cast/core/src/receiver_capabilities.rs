@@ -206,6 +206,97 @@ fn validate_v1(value: &Value) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Authenticated metadata advertises this feature when a receiver can push live descriptor
+/// updates. The offer alone does not enable pushes; senders subscribe explicitly.
+pub const RECEIVER_CAPABILITIES_FEATURE: &str = "receiver_capabilities_v1";
+
+/// Largest revision a live update may carry (2^53 - 1), the largest integer JSON numbers
+/// represent exactly.
+pub const MAX_LIVE_REVISION: u64 = (1 << 53) - 1;
+
+/// What a live `receiver_capabilities` update says about the descriptor. It replaces the whole
+/// descriptor, so only the three outcomes below exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveDescriptor {
+    /// A valid v1 descriptor that replaces the current one.
+    Valid(ReceiverCapabilities),
+    /// A recognized v1 descriptor that failed validation. It advances ordering and fails closed.
+    Malformed,
+    /// A newer or unrecognized version. Its shape is opaque, so the current descriptor is kept.
+    UnknownVersion,
+}
+
+/// A structurally valid live update with a valid revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilitiesUpdate {
+    pub revision: u64,
+    pub descriptor: LiveDescriptor,
+}
+
+/// A decoded `receiver_capabilities` frame. Invalid envelopes and revisions are `Invalid`. They
+/// never move ordering, so a sender drops them without changing its state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilitiesFrame {
+    Update(CapabilitiesUpdate),
+    Invalid,
+}
+
+impl CapabilitiesFrame {
+    /// Decodes a live frame without failing: every outcome is representable. The revision must be
+    /// a JSON integer from 1 through 2^53 - 1. Fractions, strings, zero and larger values are
+    /// invalid.
+    pub fn from_value(value: Value) -> Self {
+        let Some(object) = value.as_object() else {
+            return Self::Invalid;
+        };
+        let Some(revision) = object.get("revision").and_then(revision_number) else {
+            return Self::Invalid;
+        };
+        let Some(capabilities) = object.get("capabilities").filter(|value| value.is_object())
+        else {
+            return Self::Invalid;
+        };
+        let descriptor = if is_v1(capabilities) {
+            match ReceiverCapabilities::from_json(capabilities.clone()) {
+                Ok(descriptor) => LiveDescriptor::Valid(descriptor),
+                Err(_) => LiveDescriptor::Malformed,
+            }
+        } else {
+            // Opaque shapes are bounded before anything reads them. An oversized unknown version
+            // is an invalid envelope, not a version to advance ordering for.
+            if serde_json::to_writer(&mut SizeBound(0), capabilities).is_err() {
+                return Self::Invalid;
+            }
+            LiveDescriptor::UnknownVersion
+        };
+        Self::Update(CapabilitiesUpdate {
+            revision,
+            descriptor,
+        })
+    }
+}
+
+fn revision_number(value: &Value) -> Option<u64> {
+    // as_u64 rejects negatives, fractions and float spellings such as 1.0, and strings.
+    let number = value.as_u64()?;
+    (1..=MAX_LIVE_REVISION).contains(&number).then_some(number)
+}
+
+impl<'de> Deserialize<'de> for CapabilitiesFrame {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_value(Value::deserialize(deserializer)?))
+    }
+}
+
+impl Serialize for CapabilitiesFrame {
+    fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+        // Live updates are receive-only. Their opaque shapes are not retained for re-encoding.
+        Err(serde::ser::Error::custom(
+            "receiver capability updates are receive-only",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +537,140 @@ mod tests {
         )
         .unwrap_err();
         assert!(!error.contains("PRIVATE"));
+    }
+
+    fn decode_live(name: &str) -> CapabilitiesFrame {
+        CapabilitiesFrame::from_value(fixture(name))
+    }
+
+    #[test]
+    fn live_fixtures_decode_to_the_documented_outcomes() {
+        assert_eq!(
+            decode_live("live-update-v1.json"),
+            CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 1,
+                descriptor: LiveDescriptor::Valid(
+                    ReceiverCapabilities::from_json(json!({"version":1,"surfaces":{}})).unwrap()
+                ),
+            })
+        );
+        assert_eq!(
+            decode_live("live-update-future.json"),
+            CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 2,
+                descriptor: LiveDescriptor::UnknownVersion,
+            })
+        );
+        // A recognized v1 that fails validation still advances ordering, and fails closed.
+        assert_eq!(
+            decode_live("invalid-live-malformed-v1.json"),
+            CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 1,
+                descriptor: LiveDescriptor::Malformed,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_live_envelopes_and_revisions_are_dropped_not_advanced() {
+        for name in [
+            "invalid-live-fractional-revision.json",
+            "invalid-live-large-revision.json",
+            "invalid-live-string-revision.json",
+            "invalid-live-zero-revision.json",
+        ] {
+            assert_eq!(decode_live(name), CapabilitiesFrame::Invalid, "{name}");
+        }
+    }
+
+    #[test]
+    fn revision_bounds_are_exactly_one_through_two_to_the_fifty_three_minus_one() {
+        let at = |revision: Value| {
+            CapabilitiesFrame::from_value(json!({
+                "type": "receiver_capabilities",
+                "revision": revision,
+                "capabilities": {"version": 1, "surfaces": {}}
+            }))
+        };
+        assert!(matches!(at(json!(1)), CapabilitiesFrame::Update(_)));
+        assert!(matches!(
+            at(json!(MAX_LIVE_REVISION)),
+            CapabilitiesFrame::Update(_)
+        ));
+        assert_eq!(at(json!(MAX_LIVE_REVISION + 1)), CapabilitiesFrame::Invalid);
+        assert_eq!(at(json!(0)), CapabilitiesFrame::Invalid);
+        assert_eq!(at(json!(-1)), CapabilitiesFrame::Invalid);
+        assert_eq!(at(json!(1.0)), CapabilitiesFrame::Invalid, "float spelling");
+        assert_eq!(at(json!("1")), CapabilitiesFrame::Invalid);
+        assert_eq!(at(Value::Null), CapabilitiesFrame::Invalid);
+    }
+
+    #[test]
+    fn missing_or_non_object_capabilities_are_invalid_envelopes() {
+        assert_eq!(
+            CapabilitiesFrame::from_value(json!({"revision": 1})),
+            CapabilitiesFrame::Invalid
+        );
+        assert_eq!(
+            CapabilitiesFrame::from_value(json!({"revision": 1, "capabilities": []})),
+            CapabilitiesFrame::Invalid
+        );
+    }
+
+    #[test]
+    fn oversized_descriptors_are_bounded_by_their_version() {
+        let padding = "x".repeat(MAX_DESCRIPTOR_BYTES);
+        // A recognized v1 that is too large is malformed: it advances and fails closed.
+        assert!(matches!(
+            CapabilitiesFrame::from_value(json!({
+                "revision": 3,
+                "capabilities": {"version": 1, "surfaces": {}, "padding": padding}
+            })),
+            CapabilitiesFrame::Update(CapabilitiesUpdate {
+                revision: 3,
+                descriptor: LiveDescriptor::Malformed,
+            })
+        ));
+        // An oversized opaque future shape is dropped without advancing ordering.
+        assert_eq!(
+            CapabilitiesFrame::from_value(json!({
+                "revision": 4,
+                "capabilities": {"version": 2, "padding": padding}
+            })),
+            CapabilitiesFrame::Invalid
+        );
+    }
+
+    #[test]
+    fn subscribe_builder_matches_the_live_subscribe_fixture() {
+        let sent =
+            serde_json::to_value(crate::playbridge::receiver_capabilities_subscribe()).unwrap();
+        assert_eq!(sent, fixture("live-subscribe.json"));
+        // The builder sends an empty payload only, so the fixture with extra fields is not what
+        // a sender produces.
+        assert_ne!(sent, fixture("invalid-live-subscribe-payload.json"));
+    }
+
+    #[test]
+    fn receiver_frame_decodes_live_fixtures_through_the_frame_type() {
+        let frame: crate::playbridge::ReceiverFrame =
+            serde_json::from_value(fixture("live-update-v1.json")).unwrap();
+        assert!(matches!(
+            frame,
+            crate::playbridge::ReceiverFrame::LiveCapabilities(CapabilitiesFrame::Update(_))
+        ));
+        let invalid: crate::playbridge::ReceiverFrame =
+            serde_json::from_value(fixture("invalid-live-string-revision.json")).unwrap();
+        assert!(matches!(
+            invalid,
+            crate::playbridge::ReceiverFrame::LiveCapabilities(CapabilitiesFrame::Invalid)
+        ));
+    }
+
+    #[test]
+    fn live_frames_never_render_their_descriptor_in_debug_output() {
+        let frame = decode_live("live-update-v1.json");
+        assert!(!format!("{frame:?}").contains("surfaces"));
+        assert!(serde_json::to_value(&frame).is_err(), "receive-only");
     }
 }

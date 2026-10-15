@@ -12,7 +12,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use playbridge_cast_core::playbridge::ReceiverCapabilities;
+use playbridge_cast_core::playbridge::{
+    CapabilitiesFrame, LiveDescriptor, RECEIVER_CAPABILITIES_FEATURE, ReceiverCapabilities,
+    SenderFrame, receiver_capabilities_subscribe,
+};
 use serde_json::{Map, Value, json};
 
 type Operations = BTreeSet<String>;
@@ -225,6 +228,71 @@ impl ReceiverPolicy {
                     parts.join(" · ")
                 }
             }
+        }
+    }
+}
+
+/// Live descriptor updates for one authenticated socket (step 9b).
+///
+/// The subscription is sent once, only when the authenticated metadata offers the feature. A
+/// fresh value is created for each authenticated socket, so the watermark starts at the auth
+/// baseline (0) and no update from an earlier session can apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LiveUpdates {
+    subscribed: bool,
+    watermark: u64,
+}
+
+/// What an incoming live frame did to the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveOutcome {
+    /// A valid or malformed update replaced the policy.
+    Replaced,
+    /// An unknown-version update kept the policy and advanced the ordering watermark.
+    Advanced,
+    /// Pre-subscription, invalid, duplicate, or out-of-order frames change nothing.
+    Dropped,
+}
+
+impl LiveUpdates {
+    /// The explicit opt-in for this socket, or `None` when it was already sent or the
+    /// authenticated metadata does not offer the feature.
+    pub(crate) fn subscribe_frame(&mut self, features: &[String]) -> Option<SenderFrame> {
+        if self.subscribed
+            || !features
+                .iter()
+                .any(|feature| feature == RECEIVER_CAPABILITIES_FEATURE)
+        {
+            return None;
+        }
+        self.subscribed = true;
+        Some(receiver_capabilities_subscribe())
+    }
+
+    /// Applies one decoded frame. A replacement is complete: the new descriptor replaces the old
+    /// one, and nothing from the previous descriptor survives.
+    pub(crate) fn accept(
+        &mut self,
+        policy: &mut ReceiverPolicy,
+        frame: &CapabilitiesFrame,
+    ) -> LiveOutcome {
+        let CapabilitiesFrame::Update(update) = frame else {
+            return LiveOutcome::Dropped;
+        };
+        if !self.subscribed || update.revision <= self.watermark {
+            return LiveOutcome::Dropped;
+        }
+        self.watermark = update.revision;
+        match &update.descriptor {
+            LiveDescriptor::Valid(descriptor) => {
+                *policy = ReceiverPolicy::from_descriptor(Some(descriptor));
+                LiveOutcome::Replaced
+            }
+            LiveDescriptor::Malformed => {
+                *policy = ReceiverPolicy::Malformed;
+                LiveOutcome::Replaced
+            }
+            LiveDescriptor::UnknownVersion => LiveOutcome::Advanced,
         }
     }
 }
@@ -769,5 +837,325 @@ pub(crate) mod tests {
             }))
         );
         assert_eq!(desktop().describe(), "player internal_mpv · volume system");
+    }
+
+    /// A live frame exactly as it arrives on the wire, decoded through the frame type.
+    fn live_frame(text: &str) -> CapabilitiesFrame {
+        let frame: playbridge_cast_core::playbridge::ReceiverFrame =
+            serde_json::from_str(text).expect("live frames decode through the frame type");
+        match frame {
+            playbridge_cast_core::playbridge::ReceiverFrame::LiveCapabilities(frame) => frame,
+            other => panic!("expected a live capabilities frame, got {other:?}"),
+        }
+    }
+
+    fn fixture_text(name: &str) -> &'static str {
+        match name {
+            "live-subscribe.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/live-subscribe.json"
+            ),
+            "live-update-v1.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/live-update-v1.json"
+            ),
+            "live-update-future.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/live-update-future.json"
+            ),
+            "invalid-live-malformed-v1.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/invalid-live-malformed-v1.json"
+            ),
+            "invalid-live-fractional-revision.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/invalid-live-fractional-revision.json"
+            ),
+            "invalid-live-large-revision.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/invalid-live-large-revision.json"
+            ),
+            "invalid-live-string-revision.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/invalid-live-string-revision.json"
+            ),
+            "invalid-live-zero-revision.json" => include_str!(
+                "../../protocol/tests/fixtures/receiver-capabilities/invalid-live-zero-revision.json"
+            ),
+            other => panic!("unregistered live fixture {other}"),
+        }
+    }
+
+    fn offered() -> Vec<String> {
+        vec![RECEIVER_CAPABILITIES_FEATURE.to_owned()]
+    }
+
+    /// A live frame with an inline descriptor, for cases the fixtures do not spell out.
+    fn update(revision: u64, descriptor: Value) -> CapabilitiesFrame {
+        live_frame(
+            &json!({
+                "type": "receiver_capabilities",
+                "revision": revision,
+                "capabilities": descriptor,
+            })
+            .to_string(),
+        )
+    }
+
+    fn subscribed_live(features: &[String]) -> LiveUpdates {
+        let mut live = LiveUpdates::default();
+        assert!(live.subscribe_frame(features).is_some());
+        live
+    }
+
+    fn player_with(operations: Value) -> Value {
+        json!({
+            "version": 1,
+            "surfaces": {"player": {"engines": {"exo": operations}}},
+            "volume": {"scope": "system", "operations": ["relative_step"]}
+        })
+    }
+
+    #[test]
+    fn subscription_is_sent_once_and_only_when_the_metadata_offers_it() {
+        let mut without = LiveUpdates::default();
+        assert!(without.subscribe_frame(&["queue_crud_v1".into()]).is_none());
+        // Without the offer, the socket never subscribes, so no live frame applies.
+        let mut policy = tests::android_tv();
+        assert_eq!(
+            without.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-v1.json"))
+            ),
+            LiveOutcome::Dropped
+        );
+
+        let mut live = LiveUpdates::default();
+        let frame = live.subscribe_frame(&offered()).expect("offered");
+        assert_eq!(
+            serde_json::to_value(frame).unwrap(),
+            serde_json::from_str::<Value>(fixture_text("live-subscribe.json")).unwrap()
+        );
+        // A second call on the same socket sends nothing.
+        assert!(live.subscribe_frame(&offered()).is_none());
+    }
+
+    #[test]
+    fn frames_before_subscription_are_dropped_and_change_nothing() {
+        let mut live = LiveUpdates::default();
+        let mut policy = tests::android_tv();
+        let before = policy.clone();
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-v1.json"))
+            ),
+            LiveOutcome::Dropped
+        );
+        assert_eq!(policy, before);
+    }
+
+    #[test]
+    fn a_valid_empty_replacement_removes_every_native_control() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-v1.json"))
+            ),
+            LiveOutcome::Replaced
+        );
+        assert!(!policy.allows(&Control::Transport("pause".into())));
+        assert!(!policy.allows(&Control::Volume("relative_step".into())));
+        assert!(!policy.allows(&Control::Key("dpad_up".into())));
+        assert_eq!(policy.volume_scope(), None);
+        assert_eq!(
+            policy.summary(),
+            Some(json!({"policy": "declared", "surfaces": {}, "volumeScope": null}))
+        );
+    }
+
+    #[test]
+    fn each_replacement_is_complete_and_restores_nothing_removed() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        assert!(policy.allows(&Control::Setting("loop".into())));
+
+        // Desktop-like replacement: the loop control and the dpad keys are gone.
+        let narrow = player_with(json!({"transport": ["pause", "play"]}));
+        assert_eq!(
+            live.accept(&mut policy, &update(1, narrow)),
+            LiveOutcome::Replaced
+        );
+        assert!(!policy.allows(&Control::Setting("loop".into())));
+        assert!(!policy.allows(&Control::Key("dpad_up".into())));
+        assert!(policy.allows(&Control::Transport("pause".into())));
+
+        // Removing everything, then adding back only queue operations: nothing from before returns.
+        let empty = json!({"version": 1, "surfaces": {}});
+        assert_eq!(
+            live.accept(&mut policy, &update(2, empty)),
+            LiveOutcome::Replaced
+        );
+        assert!(!policy.allows(&Control::Transport("pause".into())));
+        let queue_only = player_with(json!({"queue": ["append"]}));
+        assert_eq!(
+            live.accept(&mut policy, &update(3, queue_only)),
+            LiveOutcome::Replaced
+        );
+        assert!(policy.allows(&Control::Queue("append".into())));
+        assert!(!policy.allows(&Control::Transport("pause".into())));
+        assert!(!policy.allows(&Control::Setting("loop".into())));
+    }
+
+    #[test]
+    fn duplicate_and_out_of_order_revisions_are_dropped() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(2, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+        let after_two = policy.clone();
+        // An exact repeat and a lower revision both change nothing.
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(2, player_with(json!({"transport": ["play"]})))
+            ),
+            LiveOutcome::Dropped
+        );
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-v1.json"))
+            ),
+            LiveOutcome::Dropped
+        );
+        assert_eq!(policy, after_two);
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(3, player_with(json!({"transport": ["play"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+    }
+
+    #[test]
+    fn a_newer_unknown_version_keeps_the_descriptor_and_blocks_a_later_rollback() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        let before = policy.clone();
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-future.json"))
+            ),
+            LiveOutcome::Advanced
+        );
+        assert_eq!(policy, before, "the current descriptor is kept");
+        // A delayed older v1 at revision 1 cannot roll back past the revision 2 watermark.
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("live-update-v1.json"))
+            ),
+            LiveOutcome::Dropped
+        );
+        assert_eq!(policy, before);
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(3, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+    }
+
+    #[test]
+    fn a_malformed_v1_fails_closed_and_a_later_valid_update_recovers() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &live_frame(fixture_text("invalid-live-malformed-v1.json"))
+            ),
+            LiveOutcome::Replaced
+        );
+        assert_eq!(policy, ReceiverPolicy::Malformed);
+        assert!(!policy.allows(&Control::Transport("pause".into())));
+        assert!(!policy.allows(&Control::Volume("relative_step".into())));
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(2, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+        assert!(policy.allows(&Control::Transport("pause".into())));
+    }
+
+    #[test]
+    fn invalid_envelopes_and_revisions_never_advance_ordering() {
+        let mut live = subscribed_live(&offered());
+        let mut policy = tests::android_tv();
+        let before = policy.clone();
+        for name in [
+            "invalid-live-fractional-revision.json",
+            "invalid-live-large-revision.json",
+            "invalid-live-string-revision.json",
+            "invalid-live-zero-revision.json",
+        ] {
+            assert_eq!(
+                live.accept(&mut policy, &live_frame(fixture_text(name))),
+                LiveOutcome::Dropped,
+                "{name}"
+            );
+        }
+        assert_eq!(policy, before);
+        // Because nothing advanced, revision 1 is still the next valid update.
+        assert_eq!(
+            live.accept(
+                &mut policy,
+                &update(1, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+    }
+
+    #[test]
+    fn a_new_authenticated_socket_starts_at_the_auth_baseline() {
+        let mut first = subscribed_live(&offered());
+        let mut first_policy = tests::android_tv();
+        assert_eq!(
+            first.accept(
+                &mut first_policy,
+                &update(5, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Replaced
+        );
+
+        // Reconnect or switch receivers: the new socket has its own state, starting from the
+        // policy its auth gave. Nothing from the old socket can restore its operations.
+        let mut second = LiveUpdates::default();
+        let mut second_policy = ReceiverPolicy::from_descriptor(None);
+        assert_eq!(
+            second.accept(
+                &mut second_policy,
+                &update(6, player_with(json!({"transport": ["pause"]})))
+            ),
+            LiveOutcome::Dropped,
+            "no subscription on the new socket yet"
+        );
+        assert_eq!(second_policy, ReceiverPolicy::Legacy);
+        let mut second = subscribed_live(&offered());
+        // Revision 1 is the new socket's baseline, so a low revision from the old session is
+        // only accepted here because it is the first frame on this socket.
+        assert_eq!(
+            second.accept(
+                &mut second_policy,
+                &update(1, player_with(json!({"transport": ["play"]})))
+            ),
+            LiveOutcome::Replaced
+        );
     }
 }

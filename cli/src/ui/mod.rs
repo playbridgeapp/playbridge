@@ -962,6 +962,12 @@ fn receiver_dashboard_task(
 
 fn apply_cast_event(app: &mut App, event: crate::send::CastEvent) {
     match event {
+        crate::send::CastEvent::Capabilities {
+            generation,
+            capabilities,
+        } if generation == app.cast_generation => {
+            app.remote.capabilities = capabilities;
+        }
         crate::send::CastEvent::BrowserHosting { generation, urls }
             if generation == app.cast_generation =>
         {
