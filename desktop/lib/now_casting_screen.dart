@@ -19,7 +19,7 @@ class NowCastingScreen extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     if (!controller.isCasting) {
-      return const _EmptyNowPlaying();
+      return _EmptyNowPlaying(errorMessage: controller.lastPlaybackError);
     }
     final playlist = controller.castItems;
     return ListView(
@@ -132,10 +132,44 @@ class _PlaylistRow extends StatelessWidget {
 }
 
 class _EmptyNowPlaying extends StatelessWidget {
-  const _EmptyNowPlaying();
+  const _EmptyNowPlaying({this.errorMessage});
+
+  final String? errorMessage;
 
   @override
   Widget build(BuildContext context) {
+    if (errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline,
+                  size: 44, color: Colors.redAccent),
+              const SizedBox(height: 14),
+              Text(
+                errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Playback failed on the TV.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white.withValues(alpha: 0.5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,

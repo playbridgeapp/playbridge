@@ -15,6 +15,22 @@ import 'tv_discovery.dart';
 import 'tv_transport.dart';
 import 'extension_request_debug_log.dart';
 
+/// Normalizes a receiver-supplied playback failure reason according to the spec:
+/// Non-empty string: trim, collapse whitespace/control chars to one line, cap at 512 chars.
+/// Otherwise (missing, null, empty/blank, non-string): generic "Playback failed on the TV".
+@visibleForTesting
+String normalizePlaybackError(Object? raw) {
+  if (raw is! String) {
+    return 'Playback failed on the TV';
+  }
+  final singleLine =
+      raw.replaceAll(RegExp(r'[\x00-\x1F\x7F-\x9F\s]+'), ' ').trim();
+  if (singleLine.isEmpty) {
+    return 'Playback failed on the TV';
+  }
+  return singleLine.length > 512 ? singleLine.substring(0, 512) : singleLine;
+}
+
 typedef TvCastRouteDecision = ({
   bool useProxy,
   bool forwardHeadersDirectly,
@@ -510,6 +526,17 @@ class TvSenderController extends ChangeNotifier {
   String? _lastCastError;
   String? get lastCastError => _lastCastError;
 
+  /// Failure reason reported by the receiver for the current playback session.
+  String? _lastPlaybackError;
+  String? get lastPlaybackError => _lastPlaybackError;
+
+  void clearPlaybackError() {
+    if (_lastPlaybackError != null) {
+      _lastPlaybackError = null;
+      notifyListeners();
+    }
+  }
+
   bool _acceptsPlaylist(int itemCount, int startIndex) {
     if (_transport.protocol == TvProtocol.webBrowser &&
         (itemCount != 1 || startIndex != 0)) {
@@ -803,6 +830,7 @@ class TvSenderController extends ChangeNotifier {
 
   Future<bool> castVideo(PlayPayload video,
       {bool Function()? canCommit}) async {
+    _lastPlaybackError = null;
     final generation = ++_proxyLeaseGeneration;
     final lease = await _acquireProxyLease([video.url]);
     if (lease == null) return false;
@@ -849,6 +877,7 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> castPlaylist(PlaylistPayload playlist,
       {bool Function()? canCommit}) async {
     _lastCastError = null;
+    _lastPlaybackError = null;
     if (!_acceptsPlaylist(playlist.items.length, playlist.startIndex)) {
       return false;
     }
@@ -900,6 +929,7 @@ class TvSenderController extends ChangeNotifier {
       {required bool Function() canCommit}) async {
     if (!canCommit() || playlist.items.isEmpty) return false;
     _lastCastError = null;
+    _lastPlaybackError = null;
     if (!_acceptsPlaylist(playlist.items.length, playlist.startIndex)) {
       return false;
     }
@@ -940,6 +970,7 @@ class TvSenderController extends ChangeNotifier {
   }) async {
     debugLogNetworkRequest(
         source: 'tv-sender input', url: url, headers: headers);
+    _lastPlaybackError = null;
     var targetUrl = url;
     var targetHeaders = headers;
     var targetContentType = contentType;
@@ -1362,6 +1393,7 @@ class TvSenderController extends ChangeNotifier {
   /// connected, no file exists, or no LAN address is reachable.
   Future<bool> castLocalFiles(List<File> files, {List<String>? titles}) async {
     _lastCastError = null;
+    _lastPlaybackError = null;
     if (!_acceptsPlaylist(files.length, 0)) return false;
     try {
       final active = _activeTv;
@@ -1581,6 +1613,7 @@ class TvSenderController extends ChangeNotifier {
     _loopEnabled = null;
     _mediaKind = null;
     _isLive = false;
+    _lastPlaybackError = null;
   }
 
   bool _isCurrentSession(int generation) =>
@@ -1620,6 +1653,7 @@ class TvSenderController extends ChangeNotifier {
     _userClosed = false;
     _cancelReconnect(clearEstablished: !preserve);
     if (!preserve) {
+      _lastPlaybackError = null;
       _releaseProxyLeases();
       return;
     }
@@ -1634,6 +1668,7 @@ class TvSenderController extends ChangeNotifier {
     _retryInFlight = false;
     _suppressReconnect = false;
     _cancelReconnect(clearEstablished: true);
+    _lastPlaybackError = null;
   }
 
   void _noteAuthTerminal() => _beginUserClose();
@@ -1814,6 +1849,13 @@ class TvSenderController extends ChangeNotifier {
       if (type == 'status') {
         final playbackId = obj['playbackId'] as String?;
         final state = (obj['state'] as String?)?.toLowerCase();
+        if (state == 'error') {
+          if (playbackId != null &&
+              _activePlaybackId != null &&
+              playbackId != _activePlaybackId) {
+            return;
+          }
+        }
         // UI suppresses ended IDs, but that same owner may resume after a blip.
         if (playbackId == null || playbackId == _proxyPlaybackId) {
           _observeProxyState(state);
@@ -1823,14 +1865,18 @@ class TvSenderController extends ChangeNotifier {
         _observeProxyState(state);
         if (state != null && _terminalStates.contains(state)) {
           if (state == 'error') {
-            _lastBrowserError ??= 'Browser playback failed';
+            final failure = normalizePlaybackError(obj['error']);
+            _lastPlaybackError = failure;
+            _lastBrowserError ??= failure;
           }
           _suppressStoppedPlayback();
           _clearNowCasting();
+          notifyListeners();
           return;
         }
         if (state == 'playing' || state == 'buffering' || state == 'paused') {
           _lastBrowserError = null;
+          _lastPlaybackError = null;
         }
         _remoteState = state ?? _remoteState;
         _remotePositionMs =
