@@ -523,6 +523,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   bool _senderWasCasting = false;
+  String? _lastReportedPlaybackError;
   bool _wasStillWatchingPrompting = false;
 
   void _handleStillWatchingChange() {
@@ -543,6 +544,30 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   void _handleSenderChange() {
+    final playbackError = _sender.lastPlaybackError;
+    if (playbackError != _lastReportedPlaybackError) {
+      _lastReportedPlaybackError = playbackError;
+      if (mounted) {
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        if (playbackError != null) {
+          messenger?.hideCurrentSnackBar();
+          messenger?.showSnackBar(
+            SnackBar(
+              content: Text(playbackError),
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'Dismiss',
+                onPressed: () {
+                  _sender.clearPlaybackError();
+                },
+              ),
+            ),
+          );
+        } else {
+          messenger?.hideCurrentSnackBar();
+        }
+      }
+    }
     final casting = _sender.isCasting;
     if (casting == _senderWasCasting) return; // only react to edges
     _senderWasCasting = casting;

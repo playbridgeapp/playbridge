@@ -192,6 +192,13 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           reconnectStatus: controller.reconnectStatus,
           onDisconnect: controller.disconnect,
         ),
+        if (controller.lastPlaybackError != null) ...[
+          const SizedBox(height: 12),
+          _PlaybackErrorBanner(
+            message: controller.lastPlaybackError!,
+            onDismiss: controller.clearPlaybackError,
+          ),
+        ],
         if (controller.isConnected) ...[
           const SizedBox(height: 12),
           Row(
@@ -882,6 +889,46 @@ class _StatusBanner extends StatelessWidget {
           'Connection error. Check the TV is reachable and try again.',
         ),
     };
+  }
+}
+
+class _PlaybackErrorBanner extends StatelessWidget {
+  const _PlaybackErrorBanner({
+    required this.message,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Colors.redAccent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 18, color: color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(fontSize: 14, color: Colors.white),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Dismiss',
+            icon: const Icon(Icons.close, size: 18, color: Colors.white70),
+            onPressed: onDismiss,
+          ),
+        ],
+      ),
+    );
   }
 }
 
