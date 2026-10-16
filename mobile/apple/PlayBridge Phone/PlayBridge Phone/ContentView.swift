@@ -34,6 +34,7 @@ struct ContentView: View {
                     }
                 }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { playbackFailureBanner }
         .environmentObject(pageCasting)
         .tint(Theme.primary)
         .fullScreenCover(item: $vm.websitePlayerItem) { item in
@@ -80,6 +81,24 @@ struct ContentView: View {
             } else if phase == .active {
                 reconnectOnActivation()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var playbackFailureBanner: some View {
+        if !vm.isExternalReceiver, !vm.isAirPlay, let failure = vm.coordinator.playbackFailure {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
+                    .accessibilityHidden(true)
+                Text(verbatim: failure.message)
+                    .font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurface)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { vm.coordinator.dismissPlaybackFailure() } label: {
+                    Image(systemName: "xmark")
+                }.accessibilityLabel("Dismiss playback error")
+            }
+            .padding(14).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 12).padding(.vertical, 8)
         }
     }
 

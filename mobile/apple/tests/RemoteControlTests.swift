@@ -3,6 +3,7 @@ import Foundation
 @main
 struct RemoteControlTests {
     @MainActor static func main() async throws {
+        try await ReceiverPlaybackFailureTests.run(root: URL(fileURLWithPath: CommandLine.arguments[1]))
         precondition(RemoteMode.available(context: "browser", external: false, supportsRemote: true) == [.context, .dpad, .touchpad, .keyboard])
         precondition(RemoteMode.available(context: "player", external: false, supportsRemote: true) == [.context, .dpad, .touchpad])
         precondition(RemoteMode.available(context: "browser", external: true, supportsRemote: true) == [.context, .dpad])

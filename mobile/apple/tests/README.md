@@ -387,3 +387,16 @@ resetting coordinator media/context/volume/settings. Presentation permissions
 cover closing unsupported controls and disabling editors while retaining drafts.
 Pairing, physical gestures and receiver execution need the
 manual checklist in the task report.
+
+## Native receiver playback failure notices
+
+```sh
+bash mobile/apple/tests/run-remote-control-checks.sh
+```
+
+The host runner also checks the terminal-status protocol fixture, text/generic
+fallbacks, single-line 512-code-point bounds, playback identity rejection, notice
+retention through idle, new cast/success/session clearing and queued stale callback
+fences. Checks use the real phone coordinator without opening sockets or receivers.
+The app displays the reason as literal text in a dismissible inline banner;
+rendering and iPhone/Hisense behavior require the task report's manual checklist.
