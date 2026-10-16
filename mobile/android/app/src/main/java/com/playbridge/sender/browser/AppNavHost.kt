@@ -78,6 +78,7 @@ import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -202,6 +203,18 @@ fun AppNavHost(
     val onAddToCollection: (com.playbridge.sender.data.collection.CollectionItemDraft) -> Unit =
         { addToCollectionDraft = it }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
+    val playbackFailure by connectionCoordinator.playbackFailure.collectAsStateWithLifecycle()
+    LaunchedEffect(playbackFailure) {
+        val failure = playbackFailure ?: return@LaunchedEffect
+        val toast = Toast.makeText(appContext, failure.message, Toast.LENGTH_LONG)
+        toast.show()
+        try {
+            awaitCancellation()
+        } finally {
+            // A new cast/session clears any still-visible notice immediately.
+            toast.cancel()
+        }
+    }
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
     val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()

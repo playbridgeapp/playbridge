@@ -231,4 +231,11 @@ class WireFrameLogTest {
         assertTrue(result.contains("\"state\":\"paused\""))
         assertFalse(result.contains("PRIVATE_SECRET"))
     }
+    @Test fun receiverPlaybackFailureTextIsNeverCopiedToWireLogs() {
+        val frame = """{"type":"status","state":"error","position":0,"duration":0,"error":"PRIVATE_REASON https://example.test?token=PRIVATE_TOKEN"}"""
+        assertEquals(WireFrameLog.summary(frame), WireFrameLog.redact(frame))
+        assertFalse(WireFrameLog.redact(frame).contains("PRIVATE_"))
+        assertFalse(WireFrameLog.redact(frame).contains("https://"))
+    }
+
 }
