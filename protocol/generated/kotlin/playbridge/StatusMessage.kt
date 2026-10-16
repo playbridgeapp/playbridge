@@ -97,6 +97,15 @@ public class StatusMessage(
     schemaIndex = 8,
   )
   public val fullscreen: Boolean? = null,
+  /**
+   * Short user-safe failure reason for state=error; never raw exception/URL text.
+   */
+  @field:WireField(
+    tag = 10,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 9,
+  )
+  public val error: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<StatusMessage, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -119,6 +128,7 @@ public class StatusMessage(
     if (playback_id != other.playback_id) return false
     if (current_item_id != other.current_item_id) return false
     if (fullscreen != other.fullscreen) return false
+    if (error != other.error) return false
     return true
   }
 
@@ -135,6 +145,7 @@ public class StatusMessage(
       result = result * 37 + (playback_id?.hashCode() ?: 0)
       result = result * 37 + (current_item_id?.hashCode() ?: 0)
       result = result * 37 + (fullscreen?.hashCode() ?: 0)
+      result = result * 37 + (error?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -151,6 +162,7 @@ public class StatusMessage(
     if (playback_id != null) result += """playback_id=${sanitize(playback_id)}"""
     if (current_item_id != null) result += """current_item_id=${sanitize(current_item_id)}"""
     if (fullscreen != null) result += """fullscreen=$fullscreen"""
+    if (error != null) result += """error=${sanitize(error)}"""
     return result.joinToString(prefix = "StatusMessage{", separator = ", ", postfix = "}")
   }
 
@@ -164,9 +176,10 @@ public class StatusMessage(
     playback_id: String? = this.playback_id,
     current_item_id: String? = this.current_item_id,
     fullscreen: Boolean? = this.fullscreen,
+    error: String? = this.error,
     unknownFields: ByteString = this.unknownFields,
   ): StatusMessage = StatusMessage(type, state, position, duration, title, media_kind, playback_id,
-      current_item_id, fullscreen, unknownFields)
+      current_item_id, fullscreen, error, unknownFields)
 
   public companion object {
     @JvmField
@@ -197,6 +210,7 @@ public class StatusMessage(
         size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.playback_id)
         size += ProtoAdapter.STRING.encodedSizeWithTag(8, value.current_item_id)
         size += ProtoAdapter.BOOL.encodedSizeWithTag(9, value.fullscreen)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(10, value.error)
         return size
       }
 
@@ -218,11 +232,13 @@ public class StatusMessage(
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.playback_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 8, value.current_item_id)
         ProtoAdapter.BOOL.encodeWithTag(writer, 9, value.fullscreen)
+        ProtoAdapter.STRING.encodeWithTag(writer, 10, value.error)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: StatusMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 10, value.error)
         ProtoAdapter.BOOL.encodeWithTag(writer, 9, value.fullscreen)
         ProtoAdapter.STRING.encodeWithTag(writer, 8, value.current_item_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.playback_id)
@@ -252,6 +268,7 @@ public class StatusMessage(
         var playback_id: String? = null
         var current_item_id: String? = null
         var fullscreen: Boolean? = null
+        var error: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -263,6 +280,7 @@ public class StatusMessage(
             7 -> playback_id = ProtoAdapter.STRING.decode(reader)
             8 -> current_item_id = ProtoAdapter.STRING.decode(reader)
             9 -> fullscreen = ProtoAdapter.BOOL.decode(reader)
+            10 -> error = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -276,6 +294,7 @@ public class StatusMessage(
           playback_id = playback_id,
           current_item_id = current_item_id,
           fullscreen = fullscreen,
+          error = error,
           unknownFields = unknownFields
         )
       }

@@ -37,7 +37,8 @@ surfaces, operation sets, host labels and companion hints.
 Retained strict schemas demonstrate that old `additionalProperties: false` rejects new auth
 properties. They also reproduce the **pre-existing** `subtitle_resource_add_v1` feature mismatch
 in both AuthResponse and CredentialBundle. The validator asserts existing auth fields/required
-lists, protected outer credentials, browser capabilities and Status remain unchanged.
+lists, protected outer credentials, browser capabilities remain unchanged; Status gains only the optional bounded `error` reason.
+Terminal-status fixtures validate that safe string reason and reject numeric or oversized values.
 
 ## Maintained old parser boundary
 

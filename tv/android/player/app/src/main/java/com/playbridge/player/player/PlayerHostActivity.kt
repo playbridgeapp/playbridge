@@ -123,6 +123,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private val sessionCoordinator = RendererSessionCoordinator()
+    private val failureReporter = RendererFailureReporter()
     private val pendingSeekTracker = PendingSeekTracker()
     private val playbackRequestGate = PlaybackRequestGate()
     private var rendererService: IRendererService? = null
@@ -881,6 +882,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // callbacks already in flight retain the old session id and are ignored by the host.
         rendererKind = targetKind
         finishingSession = false
+        failureReporter.reset()
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
@@ -1811,6 +1813,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleRendererEvent(event: Bundle) {
+        // A late renderer tick must not overwrite the terminal status during the failure transition.
+        if (finishingSession) return
         val currentSession = session ?: return
         if (event.getLong(RendererProtocol.KEY_SESSION_ID) != currentSession.sessionId ||
             sessionCoordinator.current().sessionId != currentSession.sessionId
@@ -1935,6 +1939,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun startPlaylistItem() {
         if (finishingSession) return
+        failureReporter.reset()
         restoreSavedExternalForCurrentItem = false
         stillWatchingController.onMediaChanged()
         val renderer = rendererService ?: run {
@@ -2410,16 +2415,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             hasFirstFrame = firstFrameSeen,
         )
 
+        val safeMessage = RendererFailureReporter.userMessage(message)
         FileLogger.w(
             TAG,
-            "Renderer $failedKind failed: $message " +
+            "Renderer $failedKind failed: $safeMessage " +
                 "(severity=$effectiveSeverity firstFrame=$firstFrameSeen allowFailover=$allowEngineFailover)",
         )
         val failedSession = session
         requestedStartPositionMs = lastPositionMs.takeIf { it > 0L } ?: requestedStartPositionMs
         pendingSeekTracker.clear()
         cancelPrePlayCountdown()
-        failedSession?.let { sessionCoordinator.markFailed(it.sessionId, message) }
+        failedSession?.let { sessionCoordinator.markFailed(it.sessionId, safeMessage) }
         cancelStartupWatchdog()
         runCatchingLogged(TAG, "Renderer release after failure failed", ::logPlayerFailure) {
             failedSession?.let { rendererService?.release(it.sessionId) }
@@ -2431,8 +2437,19 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val pageControlled = playbackCoordinator.playlist
             .getOrNull(playbackCoordinator.index)
             ?.isPageControlledMedia() == true
-        val fallback = fallbackRenderer(failedKind, pageControlled)
-        if (!allowEngineFailover || fallback == null || fallback in attemptedRenderers) {
+        val fallback = failureReporter.fallbackOrReport(
+            allowEngineFailover = allowEngineFailover,
+            fallback = fallbackRenderer(failedKind, pageControlled),
+            attemptedRenderers = attemptedRenderers,
+            message = message,
+            positionMs = lastPositionMs,
+            durationMs = lastDurationMs,
+            mediaKind = currentMediaKind.wireValue,
+            playbackId = playbackCoordinator.playbackId,
+            currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
+            broadcastStatus = { status -> ServerService.broadcastStatus(this, status) },
+        )
+        if (fallback == null) {
             showTransition(R.string.player_failed, force = true)
             finishingSession = true
             val finishRunnable = Runnable {

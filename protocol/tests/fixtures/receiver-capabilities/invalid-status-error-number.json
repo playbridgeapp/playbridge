@@ -1,0 +1,10 @@
+{
+  "type": "status",
+  "state": "error",
+  "position": 0,
+  "duration": 0,
+  "mediaKind": "video",
+  "playbackId": "playback-1",
+  "currentItemId": "item-1",
+  "error": 403
+}

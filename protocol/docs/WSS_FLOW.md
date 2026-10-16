@@ -238,6 +238,12 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 | `screen_mirror_candidate` | Local host UDP ICE for the answerer |
 | `screen_mirror_event` | `connected`, or `failed`/`stopped` plus a stable `reason` |
 
+A terminal native player failure sends `status` with `state: "error"` and an optional
+short, user-safe `error` reason before the player exits and sends `context: idle`.
+The reason never includes media URLs, headers, tokens or credentials. Recoverable
+engine failover does not emit an error status. Senders that display the reason must
+retain it independently of the subsequent idle-context cleanup.
+
 Receivers must tolerate unknown JSON object properties for forward compatibility. Unknown
 message types/actions should be ignored or surfaced diagnostically, not treated as authenticated
 commands. Senders should likewise ignore receiver events they do not understand.

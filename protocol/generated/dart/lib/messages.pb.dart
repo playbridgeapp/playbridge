@@ -1708,6 +1708,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     $core.String? playbackId,
     $core.String? currentItemId,
     $core.bool? fullscreen,
+    $core.String? error,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -1719,6 +1720,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     if (playbackId != null) result.playbackId = playbackId;
     if (currentItemId != null) result.currentItemId = currentItemId;
     if (fullscreen != null) result.fullscreen = fullscreen;
+    if (error != null) result.error = error;
     return result;
   }
 
@@ -1737,6 +1739,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     ..aOS(7, _omitFieldNames ? '' : 'playbackId')
     ..aOS(8, _omitFieldNames ? '' : 'currentItemId')
     ..aOB(9, _omitFieldNames ? '' : 'fullscreen')
+    ..aOS(10, _omitFieldNames ? '' : 'error')
     ..hasRequiredFields = false
   ;
 
@@ -1838,6 +1841,16 @@ class StatusMessage extends $pb.GeneratedMessage {
   $core.bool hasFullscreen() => $_has(8);
   @$pb.TagNumber(9)
   void clearFullscreen() => $_clearField(9);
+
+  /// Short user-safe failure reason for state=error; never raw exception/URL text.
+  @$pb.TagNumber(10)
+  $core.String get error => $_getSZ(9);
+  @$pb.TagNumber(10)
+  set error($core.String value) => $_setString(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasError() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearError() => $_clearField(10);
 }
 
 /// Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
