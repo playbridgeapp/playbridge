@@ -2,6 +2,8 @@ import Foundation
 
 enum RemoteControlPresentationTests {
     static func run() {
+        headerAndInputSelection()
+        queueSelection()
         let off = MediaTrack(id: "none", name: "0", selected: false)
         let numeric = MediaTrack(id: "1962663743", name: "1962663743", selected: true)
         let hex = MediaTrack(id: "2", name: "a0be3d142c", selected: false)
@@ -83,4 +85,102 @@ enum RemoteControlPresentationTests {
         precondition(gesture.end(x: 0, y: 0) == nil)
         print("PASS: remote track labels, queue text/identity/progress, honest control badges, volume reports and navigation gestures")
     }
+
+    private static func headerAndInputSelection() {
+        let name = "Living Room"
+        for (context, kind, expected) in [
+            ("player", "video", "Watching on Living Room"),
+            ("player", "audio", "Listening on Living Room"),
+            ("player", "image", "Viewing on Living Room"),
+            ("player", "future", "Watching on Living Room"),
+            ("browser", "audio", "Browsing on Living Room"),
+            ("browser_external", "image", "Browsing on Living Room"),
+            ("idle", "audio", "Connected to Living Room"),
+            ("future", "image", "Connected to Living Room"),
+        ] {
+            precondition(RemoteControlPresentation.connectionTitle(connected: true, external: false,
+                context: context, mediaKind: kind, name: name) == expected)
+            precondition(RemoteControlPresentation.connectionTitle(connected: false, external: false,
+                context: context, mediaKind: kind, name: name) == "Not connected")
+            precondition(RemoteControlPresentation.connectionTitle(connected: true, external: true,
+                context: context, mediaKind: kind, name: name) == "Casting to Living Room")
+        }
+
+        var native = ReceiverRemotePolicy(isLegacy: false, state: ReceiverRemoteState(connected: true, context: "player"))
+        func layout(_ context: String = "player", image: Bool = false) -> RemoteInputLayout {
+            RemoteInputLayout(policy: native, context: context, image: image, external: false, externalProtocol: nil)
+        }
+        var preferences = RemotePadPreferences()
+        precondition(layout().surface(in: "player", preferences: preferences) == .none)
+        native.keys = ["home"] // Navigation only appears for a D-pad key, as before.
+        precondition(!layout().hasNavigation)
+        native.keys.insert("dpad_center")
+        precondition(layout().surface(in: "player", preferences: preferences) == .swipe)
+        precondition(!layout().hasKeyboard && !layout().canSwitchPadPointer)
+        preferences.toggleButtons(in: "player")
+        precondition(layout().surface(in: "player", preferences: preferences) == .buttons)
+        precondition(layout("browser").surface(in: "browser", preferences: preferences) == .swipe)
+        native.pointer = ["move", "click"]
+        native.text = ["delete", "enter"]
+        precondition(!layout("browser").hasKeyboard, "Keyboard entry requires replace, not delete/enter alone")
+        native.text.insert("replace")
+        precondition(layout("browser").hasKeyboard && layout("browser").canSwitchPadPointer)
+        precondition(layout("browser").surface(in: "browser", preferences: preferences) == .pointer)
+        precondition(layout().surface(in: "player", preferences: preferences) == .pointer, "A native pointer capability is presented in any context")
+        preferences.setPointer(false, in: "browser")
+        preferences.toggleButtons(in: "browser")
+        precondition(layout("browser").surface(in: "browser", preferences: preferences) == .buttons)
+        preferences.setPointer(false, in: "player")
+        precondition(layout().surface(in: "player", preferences: preferences) == .buttons)
+        preferences.toggleButtons(in: "browser")
+        precondition(layout().surface(in: "player", preferences: preferences) == .buttons, "Pad choices are separate per context")
+        native.keys = [] // Saved preference must not keep a revoked control alive.
+        precondition(layout().surface(in: "player", preferences: preferences) == .pointer)
+        native.pointer = []
+        native.text = []
+        precondition(layout().surface(in: "player", preferences: preferences) == .none && !layout().hasKeyboard)
+        native.keys = ["dpad_center"]
+        precondition(layout().surface(in: "player", preferences: preferences) == .buttons, "Restoration retains the user's choice")
+        preferences = RemotePadPreferences() // Destination changes reset choices.
+        precondition(layout().surface(in: "player", preferences: preferences) == .swipe)
+
+        let legacy = ReceiverRemotePolicy(isLegacy: true, state: ReceiverRemoteState())
+        for context in ["player", "browser", "idle"] {
+            for protocolID in ["roku", "google_cast", "dlna", "airplay"] {
+                let external = RemoteInputLayout(policy: legacy, context: context, image: false, external: true, externalProtocol: protocolID)
+                precondition(!external.hasPointer && !external.hasKeyboard)
+                precondition(external.surface(in: context, preferences: preferences) == (protocolID == "roku" ? .swipe : .none))
+            }
+        }
+        let browser = RemoteInputLayout(policy: legacy, context: "browser", image: false, external: false, externalProtocol: nil)
+        precondition(browser.hasKeyboard && browser.surface(in: "browser", preferences: preferences) == .pointer)
+        let video = RemoteInputLayout(policy: legacy, context: "player", image: false, external: false, externalProtocol: nil)
+        precondition(!video.hasKeyboard && video.surface(in: "player", preferences: preferences) == .swipe)
+        let image = RemoteInputLayout(policy: legacy, context: "player", image: true, external: false, externalProtocol: nil)
+        precondition(image.surface(in: "player", preferences: preferences) == .pointer)
+        print("PASS: header context/media/external titles; policy-gated pad/keyboard selection, context preferences, revocation/restoration and external receiver eligibility")
+    }
+
+
+    private static func queueSelection() {
+        let current = PlaylistEpisode(index: 0, title: "Current", itemId: "item-a")
+        let next = PlaylistEpisode(index: 1, title: "Next", itemId: "item-b")
+        var playlist = PlaylistUiState(currentIndex: 0, totalCount: 2, items: [current, next], currentItemId: "item-a")
+        var sends: [String] = []
+        func select(_ item: PlaylistEpisode, _ queue: PlaylistUiState?) -> Bool {
+            RemoteControlPresentation.selectQueueItem(item, playlist: queue) { sends.append($0.id) }
+        }
+        // Repeated taps, from either the card or sheet, cannot restart current playback.
+        precondition(!select(current, playlist) && !select(current, playlist) && sends.isEmpty)
+        precondition(select(next, playlist) && sends == ["item-b"])
+        playlist.currentItemId = "item-b" // Latest identity wins even if the index is stale.
+        precondition(!select(next, playlist) && sends == ["item-b"])
+        precondition(select(current, playlist) && sends == ["item-b", "item-a"])
+        precondition(!select(next, nil) && sends.count == 2)
+        playlist.currentItemId = nil // Legacy queues still identify the current row by index.
+        precondition(!select(current, playlist) && sends.count == 2)
+        precondition(select(next, playlist) && sends.count == 3)
+        print("PASS: current queue item is a no-op; other selections dispatch once; live stable identity and legacy index gates")
+    }
+
 }

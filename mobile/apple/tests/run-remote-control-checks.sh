@@ -12,3 +12,8 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$repo_root/mobile/apple/tests/ReceiverPlaybackFailureTests.swift" \
   "$repo_root/mobile/apple/tests/RemoteControlTests.swift" -o "$test_dir/check"
 "$test_dir/check" "$repo_root"
+# Native macOS SwiftUI layout: no simulator, app installation or network access.
+swiftc -parse-as-library -target "$(uname -m)-apple-macosx13.0" -module-cache-path "$test_dir/layout-cache" \
+  "$app/UI/RemoteContentBounds.swift" "$repo_root/mobile/apple/tests/RemoteContentBoundsTests.swift" \
+  -o "$test_dir/layout-check"
+"$test_dir/layout-check"

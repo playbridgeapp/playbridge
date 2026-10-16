@@ -49,7 +49,8 @@ struct ReceiverRemotePolicyTests {
             let policy = resolve(value)
             precondition(policy.isLegacy && policy.allowsKey("home") && policy.allowsControl("speed:1.5"))
             precondition(RemoteMode.supportsVolume(externalProtocol: nil))
-            precondition(RemoteMode.available(context: "browser", external: false, supportsRemote: true) == [.context, .dpad, .touchpad, .keyboard])
+            let legacyInput = RemoteInputLayout(policy: policy, context: "browser", image: false, external: false, externalProtocol: nil)
+            precondition(legacyInput.hasNavigation && legacyInput.hasPointer && legacyInput.hasKeyboard)
             precondition(!RemoteMode.supportsRemote(externalProtocol: "google_cast") && !RemoteMode.supportsVolume(externalProtocol: "dlna"))
         }
         // Empty v1 is authoritative even with legacy lists, hints and observed state.

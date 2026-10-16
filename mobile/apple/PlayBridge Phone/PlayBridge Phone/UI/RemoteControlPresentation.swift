@@ -2,6 +2,21 @@ import Foundation
 
 /// Presentation only: identifiers remain unchanged when commands are dispatched.
 enum RemoteControlPresentation {
+    static func connectionTitle(connected: Bool, external: Bool, context: String, mediaKind: String, name: String) -> String {
+        guard connected else { return "Not connected" }
+        if external { return "Casting to \(name)" }
+        switch context {
+        case "player":
+            switch mediaKind {
+            case "audio": return "Listening on \(name)"
+            case "image": return "Viewing on \(name)"
+            default: return "Watching on \(name)"
+            }
+        case "browser", "browser_external": return "Browsing on \(name)"
+        default: return "Connected to \(name)"
+        }
+    }
+
     static func isOff(_ track: MediaTrack) -> Bool {
         ["none", "off", "no", "-1"].contains(track.id.lowercased())
     }
@@ -115,6 +130,14 @@ enum RemoteControlPresentation {
     static func isCurrent(_ item: PlaylistEpisode, playlist: PlaylistUiState) -> Bool {
         if let currentID = playlist.currentItemId { return item.itemId == currentID }
         return item.index == playlist.currentIndex
+    }
+
+    /// Both queue surfaces share this gate; selecting the playing item must never reload it.
+    @discardableResult
+    static func selectQueueItem(_ item: PlaylistEpisode, playlist: PlaylistUiState?, jump: (PlaylistEpisode) -> Void) -> Bool {
+        guard let playlist, !isCurrent(item, playlist: playlist) else { return false }
+        jump(item)
+        return true
     }
 
     static func progress(_ item: PlaylistEpisode, playlist: PlaylistUiState, playback: TvPlaybackStatus?, live: Bool) -> Double? {
