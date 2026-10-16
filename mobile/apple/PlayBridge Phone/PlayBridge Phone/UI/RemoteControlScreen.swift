@@ -73,18 +73,26 @@ struct RemoteControlScreen: View {
         return HStack(spacing: 8) {
             Image(systemName: vm.isExternalReceiver || vm.isAirPlay ? "airplayvideo" : "tv")
                 .font(Theme.font(size: 14, weight: .semibold))
-            Text(label).font(Theme.font(size: 14, weight: .medium)).lineLimit(1)
-            if let protocolName = vm.externalReceiver?.protocolName {
-                Text(protocolName)
-                    .font(Theme.font(size: 10, weight: .bold))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(accent.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label).font(Theme.font(size: 14, weight: .medium)).lineLimit(1)
+                if connected {
+                    HStack(spacing: 6) {
+                        Text(vm.isAirPlay ? "AirPlay" : vm.externalReceiver?.protocolName ?? "PlayBridge")
+                            .font(Theme.font(size: 10, weight: .medium))
+                        if let level = RemoteControlPresentation.controlLevel(policy: vm.nativeRemotePolicy,
+                            connected: connected, externalProtocol: vm.isAirPlay ? "airplay" : vm.externalReceiver?.protocolID) {
+                            Text(level).font(Theme.font(size: 10, weight: .bold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(accent.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
+                }
             }
         }
         .foregroundStyle(accent)
         .padding(.horizontal, 14)
-        .frame(height: 36)
-        .frame(maxWidth: 280)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 340)
         .background(accent.opacity(0.15), in: Capsule())
         .overlay(Capsule().stroke(accent.opacity(0.5), lineWidth: 1))
     }

@@ -6,6 +6,7 @@ struct RemoteControlView: View {
     @EnvironmentObject private var browserStore: BrowserStore
     @State private var modes: [String: RemoteMode] = [:]
     @State private var looping = false
+    @State private var contextDpad = false
     @State private var volumeDraft = 0.5
     @State private var maximized = false
     @State private var presented: Presented?
@@ -57,6 +58,15 @@ struct RemoteControlView: View {
     private var anyVolume: Bool { supportsVolume || !policy.isLegacy && (policy.hasVolume("absolute") || policy.hasVolume("mute_toggle")) }
     private var canAddSubtitle: Bool { policy.isLegacy || !policy.tracks.isDisjoint(with: ["subtitle_url_add", "subtitle_resource_add"]) }
 
+    private var canShowQueue: Bool { policy.isLegacy || policy.state.connected && !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) }
+    private var allowedPresentations: Set<String> {
+        policy.allowedPresentations.union(canShowQueue ? ["queue"] : [])
+    }
+    private var volumeStatus: String? {
+        RemoteControlPresentation.volumeStatus(policy: policy, scope: vm.coordinator.receiverVolumeScope,
+            level: vm.coordinator.receiverVolumeLevel, muted: vm.coordinator.receiverVolumeMuted)
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             modeSelector
@@ -94,10 +104,11 @@ struct RemoteControlView: View {
                 case .scripts: scripts
                 case .agents: agents
                 case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
+                case .queue: queueSheet
                 }
             }
             // Editors stay mounted with their drafts when authority disappears.
-            .disabled(!policy.allowedPresentations.contains(sheet.rawValue))
+            .disabled(!allowedPresentations.contains(sheet.rawValue))
         }
         .fileImporter(isPresented: $importingScript, allowedContentTypes: [.javaScript, .plainText]) { result in
             guard case .success(let url) = result, scriptImportDestinationID == vm.destinationID else { return }
@@ -107,7 +118,7 @@ struct RemoteControlView: View {
             vm.installUserScript(name: url.deletingPathExtension().lastPathComponent, content: text)
             vm.queryUserScripts()
         }
-        .onChange(of: policy.allowedPresentations) { allowed in
+        .onChange(of: allowedPresentations) { allowed in
             if let presented, !allowed.contains(presented.rawValue), !presented.preservesDraft {
                 self.presented = nil
             }
@@ -115,7 +126,7 @@ struct RemoteControlView: View {
             if !allowed.contains("agents") { addingAgent = false }
         }
         .onChange(of: playback?.title) { _ in looping = false }
-        .onChange(of: vm.destinationID) { _ in modes = [:]; keyboardText = ""; looping = false; maximized = false; presented = nil; addingAgent = false; importingScript = false }
+        .onChange(of: vm.destinationID) { _ in modes = [:]; contextDpad = false; keyboardText = ""; looping = false; maximized = false; presented = nil; addingAgent = false; importingScript = false }
         .onChange(of: videoActive) { active in
             if isBrowser && active { modes["browser"] = .context }
         }
@@ -150,12 +161,16 @@ struct RemoteControlView: View {
                 }
                 episodes
                 if vm.isAirPlay && vm.airPlay.preparing { ProgressView("Preparing subtitles…") }
-                Spacer(minLength: 0)
+                if !isImage && availableModes.contains(.dpad) {
+                    contextNavigation.frame(minHeight: 100, maxHeight: .infinity)
+                } else {
+                    Spacer(minLength: 0)
+                }
                 if (!isImage || duration > 0) && (policy.isLegacy || canToggle || canSeek || supportsVolume) {
                     seekBar(playing: playback?.state == nil || playback?.state == "playing" || playback?.state == "buffering", browser: false)
                 }
                 mediaControls
-                if !policy.isLegacy && anyVolume { volumeRow }
+                playerBottomBar
                 if vm.isAirPlay && vm.airPlay.routeAvailable { AirPlayVolumeControl().frame(height: 30).padding(.horizontal, 12) }
                 if protocolID == "google_cast" {
                     Button("End receiver session") { playerCommand("end_receiver") }
@@ -219,7 +234,7 @@ struct RemoteControlView: View {
                 Button { presented = .subtitles } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "captions.bubble")
-                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected)?.name ?? "Off")").lineLimit(1)
+                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: vm.coordinator.subtitleTracks, subtitle: true) } ?? "Off")").lineLimit(1)
                     }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
                         .background(Theme.surfaceContainerHigh, in: Capsule())
                 }.buttonStyle(.plain)
@@ -237,13 +252,13 @@ struct RemoteControlView: View {
         Menu {
             ForEach(tracks) { track in
                 Button { playerCommand(command + track.id) } label: {
-                    if track.selected { Label(track.name, systemImage: "checkmark") } else { Text(track.name) }
+                    if track.selected { Label(RemoteControlPresentation.trackLabel(track, in: tracks), systemImage: "checkmark") } else { Text(RemoteControlPresentation.trackLabel(track, in: tracks)) }
                 }
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                Text("\(label): \(tracks.first(where: \.selected)?.name ?? "Default")").lineLimit(1)
+                Text("\(label): \(tracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: tracks) } ?? "Default")").lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(Theme.font(.caption2))
             }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(height: 32)
@@ -252,29 +267,91 @@ struct RemoteControlView: View {
     }
 
     @ViewBuilder private var episodes: some View {
-        if let playlist = vm.coordinator.playlist, playlist.items.count > 1, policy.isLegacy || !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("PLAYLIST · \(playlist.currentIndex + 1)/\(playlist.totalCount)")
-                    .font(Theme.font(.caption2).bold()).foregroundStyle(Theme.onSurfaceVariant)
+        if let playlist = vm.coordinator.playlist, playlist.items.count > 1, canShowQueue {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Up Next").font(Theme.font(.subheadline).bold())
+                    Spacer()
+                    Button { presented = vm.isAirPlay ? .airPlayQueue : .queue } label: {
+                        HStack(spacing: 4) {
+                            Text("All (\(playlist.totalCount))")
+                            Image(systemName: "chevron.right")
+                        }.font(Theme.font(.caption))
+                    }.accessibilityLabel("Show all \(playlist.totalCount) playlist items")
+                }
                 ScrollViewReader { reader in
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 10) {
                             ForEach(playlist.items) { item in
                                 Button { vm.jump(to: item) } label: {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Image(systemName: item.index == playlist.currentIndex ? "play.circle.fill" : "play.rectangle")
-                                            .font(Theme.font(.title2)).foregroundStyle(Theme.primary)
-                                        Text(item.title).font(Theme.font(.caption)).lineLimit(2)
-                                    }.frame(width: 136, height: 90, alignment: .leading).padding(12)
-                                        .background(item.index == playlist.currentIndex ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                                    queueCard(item, playlist: playlist)
                                 }.buttonStyle(.plain).id(item.index)
                             }
                         }
                     }
-                    .onAppear { reader.scrollTo(playlist.currentIndex, anchor: .center) }
-                    .onChange(of: playlist.currentIndex) { index in withAnimation { reader.scrollTo(index, anchor: .center) } }
+                    .onAppear { reader.scrollTo(max(0, playlist.currentIndex - 1), anchor: .leading) }
+                    .onChange(of: playlist.currentIndex) { index in withAnimation { reader.scrollTo(max(0, index - 1), anchor: .leading) } }
                 }
             }
+        }
+    }
+
+    private func queueCard(_ item: PlaylistEpisode, playlist: PlaylistUiState) -> some View {
+        let current = RemoteControlPresentation.isCurrent(item, playlist: playlist)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(RemoteControlPresentation.episodeBadge(item)).font(Theme.font(.caption2).bold())
+                Spacer()
+                if current { Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary) }
+            }
+            Text(RemoteControlPresentation.episodeTitle(item)).font(Theme.font(.caption)).lineLimit(2)
+            Spacer(minLength: 0)
+            if let progress = RemoteControlPresentation.progress(item, playlist: playlist, playback: playback, live: isLive) {
+                ProgressView(value: progress).tint(Theme.primary)
+                    .accessibilityLabel("Playback progress").accessibilityValue("\(Int(progress * 100)) percent")
+            }
+        }.frame(width: 136, height: 70, alignment: .leading).padding(10)
+            .background(current ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var queueSheet: some View {
+        NavigationStack {
+            List {
+                if let playlist = vm.coordinator.playlist {
+                    ForEach(playlist.items) { item in
+                        Button { vm.jump(to: item); presented = nil } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(RemoteControlPresentation.episodeBadge(item)).font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                                    Text(RemoteControlPresentation.episodeTitle(item))
+                                }
+                                Spacer()
+                                if RemoteControlPresentation.isCurrent(item, playlist: playlist) { Image(systemName: "play.circle.fill") }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Playlist").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+        }
+    }
+
+    private var contextNavigation: some View {
+        ZStack(alignment: .topLeading) {
+            if contextDpad {
+                GeometryReader { geometry in
+                    dpad.frame(width: 236, height: 236)
+                        .scaleEffect(min(1, max(0.4, min(geometry.size.width, geometry.size.height) / 236)))
+                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                }
+            } else {
+                RemoteNavigationPad(allowedKeys: policy.isLegacy ? ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center"] : policy.keys) { vm.remote($0) }
+            }
+            Button { contextDpad.toggle() } label: {
+                Label(contextDpad ? "Touchpad" : "D-pad", systemImage: contextDpad ? "hand.draw" : "gamecontroller")
+                    .font(Theme.font(.caption)).padding(10)
+            }.buttonStyle(.plain).accessibilityLabel(contextDpad ? "Show navigation touchpad" : "Show D-pad")
         }
     }
 
@@ -332,14 +409,35 @@ struct RemoteControlView: View {
             }
         } else if context == "player" {
             mediaControls
-            if !policy.isLegacy {
-                HStack {
-                    if keyAllowed("back") { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
-                    if keyAllowed("home") { action("house", "Home") { vm.remote("home") } }
-                }
-                if anyVolume { volumeRow }
-            }
+            playerBottomBar
         }
+    }
+
+    private var playerBottomBar: some View {
+        let navigation = policy.isLegacy ? availableModes.contains(.dpad) : !policy.keys.isDisjoint(with: ["back", "home"])
+        let keyboard = availableModes.contains(.keyboard)
+        return VStack(spacing: 4) {
+            if let volumeStatus { Text(volumeStatus).font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant) }
+            if navigation || keyboard || anyVolume {
+                HStack(spacing: 0) {
+                    if navigation && keyAllowed("back") { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
+                    if navigation && keyAllowed("home") { action("house", "Home") { vm.remote("home") } }
+                    if keyboard { action("keyboard", "Keyboard") { modes[context] = .keyboard; keyboardFocused = true } }
+                    if supportsVolume {
+                        action("speaker.minus", "Vol −") { vm.remote("volume_down") }
+                        action("speaker.plus", "Vol +") { vm.remote("volume_up") }
+                    }
+                    if !policy.isLegacy && policy.hasVolume("mute_toggle") { action("speaker.slash", "Mute") { vm.remote("mute") } }
+                }.padding(.vertical, 4).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+            }
+            if !policy.isLegacy && policy.hasVolume("absolute") { absoluteVolume }
+        }
+    }
+
+    private var absoluteVolume: some View {
+        Slider(value: $volumeDraft, in: 0...1) { editing in
+            if !editing { vm.setReceiverVolume(volumeDraft) }
+        }.accessibilityLabel("Set " + policy.volumeLabel)
     }
 
     private var volumeRow: some View {
@@ -543,7 +641,7 @@ struct RemoteControlView: View {
                             ForEach(group.tracks) { track in
                                 Button { playerCommand("sub_track:\(track.id)"); presented = nil } label: {
                                     HStack {
-                                        Text(track.name)
+                                        Text(RemoteControlPresentation.trackLabel(track, in: vm.coordinator.subtitleTracks, subtitle: true))
                                         Spacer()
                                         if track.selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
                                     }
@@ -747,7 +845,7 @@ struct RemoteControlView: View {
     }
 
     private enum Presented: String, Identifiable {
-        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue
+        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue, queue
         var id: String { rawValue }
         var preservesDraft: Bool { self == .addSubtitle || self == .agents }
     }
