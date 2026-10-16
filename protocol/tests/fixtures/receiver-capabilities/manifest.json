@@ -320,6 +320,11 @@
     "valid": true
   },
   {
+    "file": "live-update-integral-revision.json",
+    "schema": "ReceiverFrame",
+    "valid": true
+  },
+  {
     "file": "live-subscribe.json",
     "schema": "SenderFrame",
     "valid": true
