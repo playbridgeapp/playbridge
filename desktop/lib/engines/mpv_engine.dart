@@ -70,8 +70,9 @@ class MpvEngine extends PlayerEngine {
       player.stream.tracks.listen((_) => notifyListeners()),
       player.stream.track.listen((_) => notifyListeners()),
       player.stream.error.listen((e) {
-        debugPrint(
-            _pageMedia ? '[mpv] website playback failed' : '[mpv] error: $e');
+        debugPrint(_pageMedia
+            ? '[mpv] website playback failed'
+            : '[mpv] playback error');
         onError?.call(e);
         notifyListeners();
       }),
@@ -85,8 +86,6 @@ class MpvEngine extends PlayerEngine {
   final Player player = Player();
   final List<File> _lateSubtitleFiles = [];
   final List<StreamSubscription> _subs = [];
-  VoidCallback? onCompleted;
-  void Function(String)? onError;
   bool preselectHlsQuality;
 
   /// Ignore device flaps until playback has been stable for a bit — arming on

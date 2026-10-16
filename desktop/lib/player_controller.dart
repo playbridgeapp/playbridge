@@ -21,11 +21,73 @@ class PlaybackBoundary {
   final bool sessionEnded;
 }
 
+class PlaybackFailure {
+  const PlaybackFailure({
+    required this.error,
+    required this.playbackId,
+    required this.currentItemId,
+    required this.mediaKind,
+    this.title,
+    this.positionMs = 0,
+    this.durationMs = 0,
+  });
+
+  final String error;
+  final String? playbackId;
+  final String? currentItemId;
+  final MediaKind? mediaKind;
+  final String? title;
+  final int positionMs;
+  final int durationMs;
+}
+
+/// Extracts a 3-digit HTTP status code (100..599) from a structured statusCode
+/// field or the exact ffmpeg/mpv 'HTTP error NNN' wording, or null if no
+/// reliable status code is present.
+@visibleForTesting
+int? extractHttpStatus(Object? error) {
+  if (error == null) return null;
+  if (error is int) {
+    return (error >= 100 && error <= 599) ? error : null;
+  }
+  if (error is num) {
+    final code = error.toInt();
+    return (code >= 100 && code <= 599) ? code : null;
+  }
+  try {
+    final dynamic dyn = error;
+    final dynamic code = dyn.statusCode;
+    if (code is int && code >= 100 && code <= 599) {
+      return code;
+    }
+  } catch (_) {}
+
+  final text = error.toString();
+  final httpMatch = RegExp(r'\bHTTP error ([1-5][0-9]{2})\b').firstMatch(text);
+  if (httpMatch != null) {
+    return int.tryParse(httpMatch.group(1)!);
+  }
+
+  return null;
+}
+
+/// Formats a user-safe failure reason:
+/// "The media couldn't be loaded" plus " (HTTP NNN)" only if a three-digit HTTP
+/// status can be extracted reliably from a structured source; otherwise no code.
+@visibleForTesting
+String formatPlaybackErrorMessage(Object? rawError, {int? httpStatus}) {
+  final status = httpStatus ?? extractHttpStatus(rawError);
+  if (status != null && status >= 100 && status <= 599) {
+    return "The media couldn't be loaded (HTTP $status)";
+  }
+  return "The media couldn't be loaded";
+}
+
 class PlayerController extends ChangeNotifier {
   final playbackBoundaries =
       StreamController<PlaybackBoundary>.broadcast(sync: true);
   void _playbackBoundary(String event, {bool sessionEnded = false}) {
-    if (_playbackId != null) {
+    if (_playbackId != null && !playbackBoundaries.isClosed) {
       playbackBoundaries.add(PlaybackBoundary(event, sessionEnded));
     }
   }
@@ -37,6 +99,16 @@ class PlayerController extends ChangeNotifier {
   bool Function()? onLinkedQueueEnd;
   bool _waitingForLinkedItems = false;
 
+  void Function(PlaybackFailure failure)? onTerminalError;
+  bool _hasTerminalError = false;
+  bool get hasTerminalError => _hasTerminalError;
+  String? _terminalError;
+  String? get terminalError => _terminalError;
+
+  @visibleForTesting
+  Future<void> notifyErrorForTest(String errorMsg, {int? httpStatus}) =>
+      _handleTerminalError(errorMsg, httpStatus: httpStatus);
+
   /// [engineForTest] injects a fake engine (unit tests); production leaves it null.
   PlayerController({
     EngineType initialEngine = EngineType.mpvInternal,
@@ -47,10 +119,8 @@ class PlayerController extends ChangeNotifier {
     if (engineForTest != null) {
       _currentType = initialEngine;
       _engine = engineForTest;
-      if (_engine is MpvEngine) {
-        (_engine as MpvEngine).onCompleted = _onCompleted;
-        (_engine as MpvEngine).onError = _onError;
-      }
+      _engine.onCompleted = _onCompleted;
+      _engine.onError = _onError;
       _engine.addListener(notifyListeners);
       _hasInited = true;
     } else {
@@ -74,8 +144,8 @@ class PlayerController extends ChangeNotifier {
     switch (type) {
       case EngineType.mpvInternal:
         _engine = MpvEngine(preselectHlsQuality: _preselectHlsQuality);
-        (_engine as MpvEngine).onCompleted = _onCompleted;
-        (_engine as MpvEngine).onError = _onError;
+        _engine.onCompleted = _onCompleted;
+        _engine.onError = _onError;
     }
 
     if (_engine is MpvEngine) {
@@ -201,6 +271,7 @@ class PlayerController extends ChangeNotifier {
 
   String get state {
     if (_currentIndex < 0) return 'idle';
+    if (_hasTerminalError) return 'error';
     if (_waitingForLinkedItems) return 'ended';
     if (currentMediaKind == MediaKind.image) {
       return _imagePlaying ? 'playing' : 'paused';
@@ -422,6 +493,8 @@ class PlayerController extends ChangeNotifier {
     // Mask before queue/reveal so a new open never flashes the prior video.
     _opening = true;
     _waitingForLinkedItems = false;
+    _hasTerminalError = false;
+    _terminalError = null;
     notifyListeners();
 
     _queue
@@ -614,6 +687,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> _openCurrentItem() async {
+    _hasTerminalError = false;
+    _terminalError = null;
     _imageTimer?.cancel();
     _imageTimer = null;
     final item = _queue[_currentIndex];
@@ -632,11 +707,16 @@ class PlayerController extends ChangeNotifier {
     _imagePositionMs = 0;
     _imageDurationMs = 0;
     _imagePlaying = false;
-    await _engine.open(item);
+    try {
+      await _engine.open(item);
+    } catch (e) {
+      await _handleTerminalError(e);
+      return;
+    }
     await _resetPlaybackRateForNewMedia();
     unawaited(_applyStartPosition());
     var retries = 0;
-    while (_engine.durationMs <= 0 && retries < 40) {
+    while (_engine.durationMs <= 0 && retries < 40 && !_hasTerminalError) {
       await Future.delayed(const Duration(milliseconds: 50));
       retries++;
     }
@@ -805,10 +885,11 @@ class PlayerController extends ChangeNotifier {
     item.startPositionMs = null; // consume
 
     var retries = 0;
-    while (_engine.durationMs <= 0 && retries < 20) {
+    while (_engine.durationMs <= 0 && retries < 20 && !_hasTerminalError) {
       await Future.delayed(const Duration(milliseconds: 100));
       retries++;
     }
+    if (_hasTerminalError) return;
     // Only resume if the item is still the active one and the position is sane.
     if (_currentIndex < 0 ||
         _currentIndex >= _queue.length ||
@@ -936,12 +1017,55 @@ class PlayerController extends ChangeNotifier {
     _queueRevision++;
     _setIndex(-1);
     _opening = false;
+    _hasTerminalError = false;
+    _terminalError = null;
     queueChanges.value++;
     notifyListeners();
   }
 
+  @visibleForTesting
+  Future<void>? terminalErrorFutureForTest;
+
+  @visibleForTesting
+  Future<void>? retryThroughProxyFutureForTest;
+
+  Future<void> _handleTerminalError(Object? rawError, {int? httpStatus}) async {
+    final future = _doHandleTerminalError(rawError, httpStatus: httpStatus);
+    terminalErrorFutureForTest = future;
+    await future;
+  }
+
+  Future<void> _doHandleTerminalError(Object? rawError,
+      {int? httpStatus}) async {
+    if (_hasTerminalError) return;
+    _hasTerminalError = true;
+    final safeMsg =
+        formatPlaybackErrorMessage(rawError, httpStatus: httpStatus);
+    _terminalError = safeMsg;
+    debugPrint('[player] error: $safeMsg');
+
+    final failure = PlaybackFailure(
+      error: safeMsg,
+      playbackId: _playbackId,
+      currentItemId: currentItemId,
+      mediaKind: currentMediaKind,
+      title: currentTitle,
+      positionMs: positionMs,
+      durationMs: durationMs,
+    );
+
+    try {
+      onTerminalError?.call(failure);
+    } catch (e) {
+      debugPrint('[player] onTerminalError callback threw: $e');
+    }
+
+    await stop();
+  }
+
   void _onError(String errorMsg) {
     if (_proxyToggleInProgress) return;
+    if (_currentIndex < 0 || _queue.isEmpty) return;
     if (store?.streamProxyMode == StreamProxyMode.auto) {
       final currentItem = _currentIndex >= 0 && _currentIndex < _queue.length
           ? _queue[_currentIndex]
@@ -962,10 +1086,16 @@ class PlayerController extends ChangeNotifier {
               '[player-controller] Direct HLS playback failed. Retrying via stream proxy...');
 
           // Re-prepare the item forcing proxy mode
-          unawaited(_retryThroughProxy(currentItem));
+          final future = _retryThroughProxy(currentItem);
+          retryThroughProxyFutureForTest = future;
+          unawaited(future);
+          return;
         }
       }
     }
+    final future = _handleTerminalError(errorMsg);
+    terminalErrorFutureForTest = future;
+    unawaited(future);
   }
 
   /// True when the current item's URL is being routed through the loopback
@@ -977,15 +1107,19 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> _retryThroughProxy(QueueItem item) async {
-    final preparedItem = await PlaybackRequestPreparer.prepare(
-      item,
-      StreamProxyMode.always,
-    );
-    if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
-    _queue[_currentIndex] = preparedItem;
-    await _engine.open(preparedItem);
-    await _engine.setPlaybackRate(_playbackRate);
-    await _applyPictureSettings();
+    try {
+      final preparedItem = await PlaybackRequestPreparer.prepare(
+        item,
+        StreamProxyMode.always,
+      );
+      if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
+      _queue[_currentIndex] = preparedItem;
+      await _engine.open(preparedItem);
+      await _engine.setPlaybackRate(_playbackRate);
+      await _applyPictureSettings();
+    } catch (e) {
+      await _handleTerminalError(e);
+    }
   }
 
   /// Seamlessly switches the current item between direct ↔ proxied playback.

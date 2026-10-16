@@ -70,8 +70,24 @@ class ReceiverServer extends ChangeNotifier {
     this.onNewMedia,
     this.onScreenMirrorStarted,
   }) {
+    player.onTerminalError = _handlePlaybackError;
     screenMirror = ScreenMirrorReceiver(send: _sendScreenMirrorMessage);
     screenMirror.addListener(_handleScreenMirrorChange);
+  }
+
+  @visibleForTesting
+  void Function(Map<String, Object?> message)? onBroadcastForTest;
+
+  @visibleForTesting
+  void attachPlayerListenersForTest() {
+    player.addListener(_broadcastStatus);
+    player.indexChanges.addListener(_broadcastPlaylistStatus);
+    player.queueChanges.addListener(_broadcastPlaylistStatus);
+  }
+
+  void _broadcast(Map<String, Object?> message) {
+    onBroadcastForTest?.call(message);
+    _runtime?.broadcast(message);
   }
 
   final PlayerController player;
@@ -246,6 +262,9 @@ class ReceiverServer extends ChangeNotifier {
         sessionEnded: true, snapshot: _progressSnapshot());
     await _playbackBoundaries?.cancel();
     _statusTimer?.cancel();
+    if (player.onTerminalError == _handlePlaybackError) {
+      player.onTerminalError = null;
+    }
     player.removeListener(_broadcastStatus);
     player.indexChanges.removeListener(_broadcastPlaylistStatus);
     player.queueChanges.removeListener(_broadcastPlaylistStatus);
@@ -278,7 +297,7 @@ class ReceiverServer extends ChangeNotifier {
   }
 
   void broadcastIdleContext() {
-    _runtime?.broadcast(const {'type': 'context', 'active': 'idle'});
+    _broadcast(const {'type': 'context', 'active': 'idle'});
   }
 
   Future<void> _commandSerial = Future<void>.value();
@@ -639,7 +658,7 @@ class ReceiverServer extends ChangeNotifier {
     final active = screenMirror.isActive;
     if (active != _mirrorWasActive) {
       _mirrorWasActive = active;
-      _runtime?.broadcast({
+      _broadcast({
         'type': 'context',
         'active': active
             ? 'screen_mirror'
@@ -766,9 +785,24 @@ class ReceiverServer extends ChangeNotifier {
         durationMs: player.durationMs);
   }
 
+  void _handlePlaybackError(PlaybackFailure failure) {
+    _broadcast({
+      'type': 'status',
+      'state': 'error',
+      'position': failure.positionMs,
+      'duration': failure.durationMs,
+      if (failure.title != null) 'title': failure.title,
+      if (failure.mediaKind != null) 'mediaKind': failure.mediaKind!.wireValue,
+      if (failure.playbackId != null) 'playbackId': failure.playbackId,
+      if (failure.currentItemId != null) 'currentItemId': failure.currentItemId,
+      'error': failure.error,
+    });
+  }
+
   void _broadcastStatus() {
+    if (player.hasTerminalError) return;
     if (!player.isOpening) _progressReporter.update(_progressSnapshot());
-    _runtime?.broadcast(_statusMessage());
+    _broadcast(_statusMessage());
     _broadcastTracksIfChanged();
   }
 
@@ -782,6 +816,7 @@ class ReceiverServer extends ChangeNotifier {
           'mediaKind': player.currentMediaKind!.wireValue,
         if (player.playbackId != null) 'playbackId': player.playbackId,
         if (player.currentItemId != null) 'currentItemId': player.currentItemId,
+        if (player.terminalError != null) 'error': player.terminalError,
       };
 
   void _sendStatus(int connectionId) =>
@@ -815,11 +850,11 @@ class ReceiverServer extends ChangeNotifier {
     final encoded = message.toString();
     if (!force && encoded == _lastTracksJson) return;
     _lastTracksJson = encoded;
-    _runtime?.broadcast(message);
+    _broadcast(message);
   }
 
   void _broadcastPlaylistStatus() {
-    _runtime?.broadcast(_playlistStatusMessage());
+    _broadcast(_playlistStatusMessage());
   }
 
   void _sendPlaylistStatus(int connectionId) =>
