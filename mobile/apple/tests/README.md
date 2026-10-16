@@ -400,3 +400,28 @@ retention through idle, new cast/success/session clearing and queued stale callb
 fences. Checks use the real phone coordinator without opening sockets or receivers.
 The app displays the reason as literal text in a dismissible inline banner;
 rendering and iPhone/Hisense behavior require the task report's manual checklist.
+
+
+Android TV Remote v2 client / independent ATV ABI 1 (host-only):
+
+```sh
+bash mobile/apple/tests/run-atv-client-checks.sh
+```
+
+Runs an injectable fake transport and the compiled Swift/C transport against an in-memory
+C shim. Covers typed replies, bounded payloads/queues, stale events, terminal timeouts and
+cancellation, coalesced MainActor state, unavailable/ABI-mismatched libraries, C-string
+ownership, and teardown with polling in flight. It makes no network connections and needs
+no framework, simulator, installation or TV. UI, Keychain, Bonjour and receiver coordination
+are later integration steps. Timeout/cancellation closes the client; create a new instance
+rather than retrying an uncertain write. Use one native transport per client.
+
+After rebuilding the optional Apple framework, check every slice without running it:
+
+```sh
+python3 cast/check-apple-abi.py mobile/apple/Native/PlayBridgeCastCore.xcframework
+```
+
+`cast/build-apple.sh` performs this check automatically. `PB_APPLE_NO_INSTALL=1` requires
+already-installed Rust targets; `CARGO_TARGET_DIR` can select a scratch build cache.
+`PB_APPLE_NM` selects a Rust-LLVM-compatible llvm-nm when Xcode's nm is too old.
