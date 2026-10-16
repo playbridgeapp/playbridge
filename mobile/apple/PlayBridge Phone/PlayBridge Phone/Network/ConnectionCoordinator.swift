@@ -8,6 +8,9 @@ import CoreFoundation
 final class ConnectionCoordinator: ObservableObject {
     @Published var activeContext: String = "idle"   // player | browser | idle
     @Published var playback: TvPlaybackStatus?
+    @Published private(set) var playbackFailure: ReceiverPlaybackFailure?
+    private var nativePlaybackID: String?
+    private var playbackSessionID: UUID?
     @Published var playlist: PlaylistUiState?
     @Published var videoTracks: [MediaTrack] = []
     @Published var audioTracks: [MediaTrack] = []
@@ -38,13 +41,14 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var savedUserAgents: [(name: String, value: String)] = []
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
-    func handle(_ text: String, isCurrentSession: @escaping () -> Bool = { true }) {
+    func handle(_ text: String, sessionID: UUID? = nil, isCurrentSession: @escaping () -> Bool = { true }) {
         guard let data = text.data(using: .utf8),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let type = json["type"] as? String else { return }
 
         DispatchQueue.main.async {
             guard isCurrentSession() else { return }
+            if let sessionID { self.beginReceiverSession(sessionID) }
             self.dispatch(type: type, json: json)
         }
     }
@@ -54,11 +58,21 @@ final class ConnectionCoordinator: ObservableObject {
         case "context":
             let active = json["active"] as? String ?? "idle"
             activeContext = active
-            if active == "idle" { clear(keepingReceiverVolume: true) }
+            if active == "idle" { clear(keepingReceiverVolume: true, keepingPlaybackFailure: true) }
             contextEngine = (json["engine"] as? String).flatMap { (1...64).contains($0.unicodeScalars.count) ? $0 : nil }
             if active == "browser_external", contextEngine == nil { contextEngine = "gecko" }
 
         case "status":
+            let state = json["state"] as? String ?? "paused"
+            let id = nonEmpty(json["playbackId"])
+            if state == "error" {
+                if let id, let current = nativePlaybackID, id != current { return }
+                if let id { nativePlaybackID = id }
+                playbackFailure = ReceiverPlaybackFailure(message: ReceiverPlaybackFailure.message(json["error"]))
+            } else if ["playing", "buffering", "paused"].contains(state) {
+                if state == "playing" || id != nil && id != nativePlaybackID { dismissPlaybackFailure() }
+                if let id { nativePlaybackID = id }
+            }
             mediaKind = json["mediaKind"] as? String ?? "video"
             playback = TvPlaybackStatus(
                 state: json["state"] as? String ?? "paused",
@@ -70,6 +84,10 @@ final class ConnectionCoordinator: ObservableObject {
             )
 
         case "playlist_status":
+            if let id = nonEmpty(json["playbackId"]), id != nativePlaybackID {
+                nativePlaybackID = id
+                dismissPlaybackFailure()
+            }
             let itemsJson = json["items"] as? [[String: Any]] ?? []
             var episodes: [PlaylistEpisode] = []
             for (i, o) in itemsJson.enumerated() {
@@ -208,7 +226,21 @@ final class ConnectionCoordinator: ObservableObject {
         (value as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    func clear(keepingReceiverVolume: Bool = false) {
+    func beginReceiverSession(_ id: UUID) {
+        guard playbackSessionID != id else { return }
+        playbackSessionID = id
+        beginNativePlayback()
+    }
+
+    func beginNativePlayback() {
+        nativePlaybackID = nil
+        dismissPlaybackFailure()
+    }
+
+    func dismissPlaybackFailure() { playbackFailure = nil }
+
+    func clear(keepingReceiverVolume: Bool = false, keepingPlaybackFailure: Bool = false) {
+        if !keepingPlaybackFailure { beginNativePlayback() }
         clearReceiverMetadata(keepingVolume: keepingReceiverVolume)
         playback = nil
         playlist = nil
@@ -244,5 +276,19 @@ final class ConnectionCoordinator: ObservableObject {
             receiverVolumeLevel = nil
             receiverVolumeMuted = nil
         }
+    }
+}
+
+/// In-memory UI notice only. Never include receiver-supplied text in diagnostics.
+struct ReceiverPlaybackFailure: Equatable, Identifiable {
+    let id = UUID()
+    let message: String
+
+    static func message(_ raw: Any?) -> String {
+        guard let raw = raw as? String else { return "Playback failed on the TV" }
+        let text = raw.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        guard !text.isEmpty else { return "Playback failed on the TV" }
+        return String(String.UnicodeScalarView(text.unicodeScalars.prefix(512)))
     }
 }

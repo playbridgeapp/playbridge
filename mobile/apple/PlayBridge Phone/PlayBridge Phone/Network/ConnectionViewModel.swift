@@ -128,8 +128,9 @@ final class ConnectionViewModel: ObservableObject {
         ws.onMessage = { [weak self] text in
             guard let self, !isExternalReceiver, !isAirPlay else { return }
             let sessionID = ws.capabilitySessionID
-            coordinator.handle(text, isCurrentSession: { [weak self] in
-                self?.ws.capabilitySessionID == sessionID && self?.isExternalReceiver == false && self?.isAirPlay == false
+            coordinator.handle(text, sessionID: sessionID, isCurrentSession: { [weak self] in
+                self?.ws.capabilitySessionID == sessionID && self?.ws.receiverCapabilitySession.snapshot.authenticated == true &&
+                    self?.isExternalReceiver == false && self?.isAirPlay == false
             })
         }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
@@ -143,6 +144,7 @@ final class ConnectionViewModel: ObservableObject {
         ws.onCapabilitySessionStarted = { [weak self] id in
             DispatchQueue.main.async {
                 guard let self, self.ws.capabilitySessionID == id else { return }
+                self.coordinator.beginReceiverSession(id)
                 self.receiverCapabilities = .legacy
                 self.pointerAnchorHeld = false
                 self.pointerButtonHeld = false
@@ -1202,6 +1204,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func noteNewCast(mediaKind: String, title: String? = nil) {
+        coordinator.beginNativePlayback()
         externalMediaKind = mediaKind
         castPlaybackSession.beginPlayback(title: title, receiverName: receiverName ?? "TV", mediaKind: mediaKind)
         CastSystemPlayback.shared.userRequestedPlayback()
