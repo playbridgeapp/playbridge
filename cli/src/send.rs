@@ -80,6 +80,14 @@ pub(crate) struct CastSnapshot {
     pub muted: Option<bool>,
     pub looping: Option<bool>,
     pub speed: Option<f32>,
+    /// The receiver's terminal playback failure reason, for the playback it belongs to.
+    pub error: Option<String>,
+    /// The playback the failure belongs to, used to fence and clear it.
+    #[serde(skip)]
+    pub error_playback_id: Option<String>,
+    /// The current playback's id, when known from playlist status. Used to fence error frames.
+    #[serde(skip)]
+    pub playback_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -755,6 +763,9 @@ async fn json_session_loop(
         muted: capabilities.mute.then_some(false),
         looping: capabilities.looping.then_some(false),
         speed: capabilities.speed.then_some(1.0),
+        error: None,
+        error_playback_id: None,
+        playback_id: None,
     };
     session.write_status(&status_json(
         json_status_context(session, &receiver, &media_items, &capabilities),
@@ -766,6 +777,7 @@ async fn json_session_loop(
     let mut poll_count = 0_u64;
     let mut consecutive_poll_failures = 0_u8;
     let mut stop_playback_on_exit = true;
+    let mut reported_error: Option<String> = None;
     loop {
         tokio::select! {
             _ = wait_interrupt() => break,
@@ -815,6 +827,11 @@ async fn json_session_loop(
                     } else {
                         consecutive_poll_failures = 0;
                     }
+                    report_playback_error(
+                        snapshot.error.as_deref(),
+                        &mut reported_error,
+                        &receiver.name,
+                    );
                 }
                 if let Some(request) = session.take_request(&last_control_id) {
                     last_control_id = request.id.clone();
@@ -849,10 +866,36 @@ async fn json_session_loop(
             }
         }
     }
+    // A failure still standing at exit means playback did not succeed. `control stop` clears it
+    // first, so an acknowledged stop exits cleanly.
+    let failure = snapshot.error.clone();
     if stop_playback_on_exit {
         stop_target(control).await;
     }
+    if let Some(message) = failure {
+        emit_json(&json!({
+            "ok": false,
+            "error": "playback_failed",
+            "message": message,
+        }))?;
+        return Err("playback_failed".into());
+    }
     Ok(())
+}
+
+/// Reports a newly standing playback failure once. It goes to stderr only on a terminal, in the
+/// same style as the "Playing on" line. The reason is receiver text, so it is printed alone.
+fn report_playback_error(error: Option<&str>, reported: &mut Option<String>, device: &str) {
+    match error {
+        Some(reason) if reported.as_deref() != Some(reason) => {
+            if io::stderr().is_terminal() {
+                eprintln!("Playback failed on {device}: {reason}");
+            }
+            *reported = Some(reason.to_owned());
+        }
+        Some(_) => {}
+        None => *reported = None,
+    }
 }
 
 async fn read_stdin_control_request<R: AsyncBufRead + Unpin>(
@@ -957,6 +1000,7 @@ fn status_json(context: JsonStatusContext<'_>, snapshot: &CastSnapshot) -> Value
         "muted": snapshot.muted,
         "looping": snapshot.looping,
         "speed": snapshot.speed,
+        "error": snapshot.error,
         "capabilities": context.capabilities,
     })
 }
@@ -1043,15 +1087,50 @@ fn managed_command_result(frame: &ReceiverFrame, request_id: &str) -> ManagedCom
     }
 }
 
+/// Shown when the receiver reports a failure without a usable reason.
+const GENERIC_PLAYBACK_ERROR: &str = "Playback failed on the TV";
+
+fn clear_playback_error(snapshot: &mut CastSnapshot) {
+    snapshot.error = None;
+    snapshot.error_playback_id = None;
+}
+
 /// Applies the receiver's active surface to the session state. Leaving the player (idle, browser,
 /// or screen mirror) ends playback, so the state stops reporting buffering or playing. A player
-/// context means playback may resume, and the next status frame sets the real state.
+/// context means playback may resume, and the next status frame sets the real state. A standing
+/// failure keeps its state through every context change; only a new playback clears it.
 fn apply_receiver_context(snapshot: &mut CastSnapshot, active: &str) {
+    if snapshot.error.is_some() {
+        return;
+    }
     match active {
         "player" if snapshot.state == "stopped" => snapshot.state = "buffering".into(),
         "idle" | "browser" | "screen_mirror" => snapshot.state = "stopped".into(),
         _ => {}
     }
+}
+
+/// Applies a terminal `error` status. A failure for a different playback than the one this
+/// session tracks is ignored, because it belongs to an earlier item.
+fn apply_playback_error(
+    snapshot: &mut CastSnapshot,
+    position: u64,
+    duration: u64,
+    playback_id: Option<&str>,
+    error: Option<&str>,
+) {
+    if let (Some(id), Some(known)) = (playback_id, snapshot.playback_id.as_deref())
+        && id != known
+    {
+        return;
+    }
+    snapshot.state = "error".into();
+    snapshot.position_ms = position;
+    snapshot.duration_ms = duration;
+    snapshot.error = Some(error.unwrap_or(GENERIC_PLAYBACK_ERROR).to_owned());
+    snapshot.error_playback_id = playback_id
+        .map(str::to_owned)
+        .or_else(|| snapshot.playback_id.clone());
 }
 
 fn update_snapshot_from_receiver_frame(snapshot: &mut CastSnapshot, frame: &ReceiverFrame) {
@@ -1062,8 +1141,31 @@ fn update_snapshot_from_receiver_frame(snapshot: &mut CastSnapshot, frame: &Rece
             position,
             duration,
             title,
+            playback_id,
+            error,
             ..
         } => {
+            if state == "error" {
+                apply_playback_error(
+                    snapshot,
+                    *position,
+                    *duration,
+                    playback_id.as_deref(),
+                    error.as_deref(),
+                );
+                return;
+            }
+            if snapshot.error.is_some() {
+                // A status for another playback means a new one has started, so the failure no
+                // longer applies. A status for the same playback leaves the failure in place.
+                match (
+                    playback_id.as_deref(),
+                    snapshot.error_playback_id.as_deref(),
+                ) {
+                    (Some(id), Some(errored)) if id != errored => clear_playback_error(snapshot),
+                    _ => return,
+                }
+            }
             snapshot.state = state.clone();
             snapshot.position_ms = *position;
             snapshot.duration_ms = *duration;
@@ -1075,8 +1177,15 @@ fn update_snapshot_from_receiver_frame(snapshot: &mut CastSnapshot, frame: &Rece
             items,
             current_index,
             total_count,
+            playback_id,
             ..
         } => {
+            if let Some(id) = playback_id.as_deref() {
+                snapshot.playback_id = Some(id.to_owned());
+                if snapshot.error.is_some() && snapshot.error_playback_id.as_deref() != Some(id) {
+                    clear_playback_error(snapshot);
+                }
+            }
             snapshot.current_index = Some(*current_index);
             snapshot.total_count = Some(*total_count);
             if let Some(item) = items.iter().find(|item| item.index == *current_index) {
@@ -1194,6 +1303,7 @@ async fn apply_json_control(
             if let TargetControl::Playbridge { policy, .. } = &*control {
                 policy.require(&Control::Transport("stop".into()), "Stop")?;
             }
+            clear_playback_error(snapshot);
             Ok(JsonControlResult::Stop)
         }
         "detach" => Ok(JsonControlResult::Detach),
@@ -1205,6 +1315,9 @@ async fn apply_json_control(
             let mut payload = request.payload.clone();
             if let TargetControl::Playbridge { policy, .. } = &*control {
                 policy.require_receiver_action(action, payload.as_ref())?;
+            }
+            if action == "playlist_jump" {
+                clear_playback_error(snapshot);
             }
             let queued_media = if action == "queue_add" {
                 payload
@@ -2286,6 +2399,9 @@ pub(crate) async fn run_dashboard_cast(
         muted: capabilities.mute.then_some(false),
         looping: capabilities.looping.then_some(false),
         speed: capabilities.speed.then_some(1.0),
+        error: None,
+        error_playback_id: None,
+        playback_id: None,
     };
     let _ = events
         .send(CastEvent::Connected {
@@ -2318,6 +2434,7 @@ pub(crate) async fn run_dashboard_cast(
             }
             _ = tick.tick() => {
                 poll_count = poll_count.wrapping_add(1);
+                let previous_error = snapshot.error.clone();
                 if let Err(message) = dashboard_poll(
                     &mut control,
                     &mut snapshot,
@@ -2331,6 +2448,14 @@ pub(crate) async fn run_dashboard_cast(
                     let _ = events.try_send(CastEvent::Warning { generation, message });
                 } else {
                     consecutive_poll_failures = 0;
+                }
+                if let Some(reason) = snapshot.error.as_deref()
+                    && snapshot.error != previous_error
+                {
+                    let _ = events.try_send(CastEvent::Warning {
+                        generation,
+                        message: format!("Playback failed on {}: {reason}", target.name),
+                    });
                 }
                 publish_capability_change(&events, generation, &control, &mut last_capabilities);
                 let _ = events.try_send(CastEvent::Snapshot { generation, snapshot: snapshot.clone() });
@@ -2469,6 +2594,9 @@ pub(crate) async fn run_dashboard_browser_cast(
         muted: Some(false),
         looping: None,
         speed: None,
+        error: None,
+        error_playback_id: None,
+        playback_id: None,
     };
     let _ = events
         .send(CastEvent::Connected {
@@ -2732,38 +2860,14 @@ async fn dashboard_poll(
             while let Ok(Ok(Some(frame))) =
                 tokio::time::timeout(Duration::from_millis(10), socket.receive()).await
             {
-                match frame {
+                match &frame {
                     ReceiverFrame::LiveCapabilities(update) => {
-                        live.accept(policy, &update);
+                        live.accept(policy, update);
                     }
-                    ReceiverFrame::Context { active, .. } => {
-                        apply_receiver_context(snapshot, &active);
-                    }
-                    ReceiverFrame::Status {
-                        state,
-                        position,
-                        duration,
-                        title,
-                        ..
-                    } => {
-                        snapshot.state = state;
-                        snapshot.position_ms = position;
-                        snapshot.duration_ms = duration;
-                        if let Some(title) = title {
-                            snapshot.title = title;
-                        }
-                    }
-                    ReceiverFrame::PlaylistStatus {
-                        items,
-                        current_index,
-                        total_count,
-                        ..
-                    } => {
-                        snapshot.current_index = Some(current_index);
-                        snapshot.total_count = Some(total_count);
-                        if let Some(item) = items.iter().find(|item| item.index == current_index) {
-                            snapshot.title = item.title.clone();
-                        }
+                    ReceiverFrame::Context { .. }
+                    | ReceiverFrame::Status { .. }
+                    | ReceiverFrame::PlaylistStatus { .. } => {
+                        update_snapshot_from_receiver_frame(snapshot, &frame);
                     }
                     _ => {}
                 }
@@ -3786,6 +3890,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         };
         update_snapshot_from_receiver_frame(
             &mut snapshot,
@@ -3797,6 +3904,7 @@ mod tests {
                 media_kind: Some("video".into()),
                 playback_id: Some("playback-1".into()),
                 current_item_id: Some("item-1".into()),
+                error: None,
             },
         );
         assert_eq!(snapshot.state, "playing");
@@ -4001,6 +4109,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         };
         let request = ControlRequest {
             id: "request-1".into(),
@@ -4044,6 +4155,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         };
         let media_items = vec!["one.mp4".into(), "two.mp4".into()];
         let status = status_json(
@@ -4076,6 +4190,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         };
         let media_items = vec!["one.mp4".into()];
         let status = status_json(
@@ -4104,6 +4221,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         }
     }
 
@@ -4268,6 +4388,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         }
     }
 
@@ -4328,5 +4451,188 @@ mod tests {
         let mut snapshot = playing_snapshot("playing");
         apply_receiver_context(&mut snapshot, "something_new");
         assert_eq!(snapshot.state, "playing");
+    }
+
+    fn frame(text: &str) -> ReceiverFrame {
+        serde_json::from_str(text).expect("receiver frame decodes")
+    }
+
+    fn known_playback(id: &str) -> CastSnapshot {
+        let mut snapshot = playing_snapshot("buffering");
+        snapshot.playback_id = Some(id.into());
+        snapshot
+    }
+
+    fn error_frame(playback_id: &str, error: &str) -> ReceiverFrame {
+        frame(&format!(
+            r#"{{"type":"status","state":"error","position":0,"duration":0,"mediaKind":"video","playbackId":"{playback_id}","currentItemId":"item-1","error":{error}}}"#
+        ))
+    }
+
+    fn status_json_for(snapshot: &CastSnapshot) -> Value {
+        let receiver = Receiver {
+            id: ReceiverId("test-tv".into()),
+            name: "Test TV".into(),
+            protocol: ReceiverProtocol::PlayBridge,
+            addresses: vec!["192.0.2.10".into()],
+            port: None,
+            wss_port: Some(8765),
+            location: None,
+            uuid: None,
+        };
+        status_json(
+            JsonStatusContext {
+                session_id: "s",
+                receiver: &receiver,
+                media_items: &["https://example.test/a.mp4".to_owned()],
+                capabilities: &CastCapabilities::default(),
+            },
+            snapshot,
+        )
+    }
+
+    #[test]
+    fn a_terminal_error_reports_the_reason_and_the_status_json_carries_it() {
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &error_frame("playback-1", r#""The media couldn't be loaded (HTTP 403)""#),
+        );
+        assert_eq!(snapshot.state, "error");
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("The media couldn't be loaded (HTTP 403)")
+        );
+        let status = status_json_for(&snapshot);
+        assert_eq!(status["state"], "error");
+        assert_eq!(status["error"], "The media couldn't be loaded (HTTP 403)");
+    }
+
+    #[test]
+    fn a_non_string_or_missing_error_gets_the_generic_message_without_failing_the_frame() {
+        for error in ["5", r#"{"message":"x"}"#, "null", "true"] {
+            let mut snapshot = known_playback("playback-1");
+            update_snapshot_from_receiver_frame(&mut snapshot, &error_frame("playback-1", error));
+            assert_eq!(snapshot.state, "error", "{error}");
+            assert_eq!(
+                snapshot.error.as_deref(),
+                Some(GENERIC_PLAYBACK_ERROR),
+                "{error}"
+            );
+        }
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(r#"{"type":"status","state":"error","playbackId":"playback-1"}"#),
+        );
+        assert_eq!(snapshot.error.as_deref(), Some(GENERIC_PLAYBACK_ERROR));
+    }
+
+    #[test]
+    fn context_idle_after_an_error_keeps_it_and_is_not_a_stop() {
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &error_frame("playback-1", r#""Failed (HTTP 403)""#),
+        );
+        for active in ["idle", "browser", "screen_mirror", "player"] {
+            update_snapshot_from_receiver_frame(
+                &mut snapshot,
+                &frame(&format!(r#"{{"type":"context","active":"{active}"}}"#)),
+            );
+            assert_eq!(snapshot.state, "error", "{active}");
+            assert_eq!(
+                snapshot.error.as_deref(),
+                Some("Failed (HTTP 403)"),
+                "{active}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_error_for_another_playback_is_ignored() {
+        let mut snapshot = known_playback("playback-2");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &error_frame("playback-1", r#""Old item failed""#),
+        );
+        assert_eq!(snapshot.state, "buffering");
+        assert_eq!(snapshot.error, None);
+    }
+
+    #[test]
+    fn a_later_playback_clears_the_failure_and_the_same_playback_keeps_it() {
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &error_frame("playback-1", r#""Failed (HTTP 403)""#),
+        );
+        // A normal status for the same playback does not overwrite the failure.
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(r#"{"type":"status","state":"buffering","playbackId":"playback-1"}"#),
+        );
+        assert_eq!(snapshot.state, "error");
+        assert!(snapshot.error.is_some());
+
+        // A playlist for a new playback clears it, and the next status sets the state.
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(
+                r#"{"type":"playlist_status","items":[],"currentIndex":0,"totalCount":1,"playbackId":"playback-2"}"#,
+            ),
+        );
+        assert_eq!(snapshot.error, None);
+        assert_eq!(snapshot.error_playback_id, None);
+        assert_eq!(snapshot.playback_id.as_deref(), Some("playback-2"));
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(r#"{"type":"status","state":"playing","playbackId":"playback-2"}"#),
+        );
+        assert_eq!(snapshot.state, "playing");
+    }
+
+    #[test]
+    fn a_status_for_a_new_playback_clears_a_failure_even_without_a_playlist_frame() {
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &error_frame("playback-1", r#""Failed (HTTP 403)""#),
+        );
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(r#"{"type":"status","state":"playing","playbackId":"playback-2"}"#),
+        );
+        assert_eq!(snapshot.error, None);
+        assert_eq!(snapshot.state, "playing");
+    }
+
+    #[test]
+    fn the_error_is_null_in_every_other_state() {
+        let snapshot = playing_snapshot("playing");
+        assert!(status_json_for(&snapshot)["error"].is_null());
+        // A non-error state carrying error text is not a failure.
+        let mut snapshot = known_playback("playback-1");
+        update_snapshot_from_receiver_frame(
+            &mut snapshot,
+            &frame(
+                r#"{"type":"status","state":"playing","playbackId":"playback-1","error":"noise"}"#,
+            ),
+        );
+        assert_eq!(snapshot.state, "playing");
+        assert!(status_json_for(&snapshot)["error"].is_null());
+    }
+
+    #[test]
+    fn the_failure_is_reported_once_per_reason() {
+        let mut reported = None;
+        report_playback_error(Some("Failed (HTTP 403)"), &mut reported, "Test TV");
+        assert_eq!(reported.as_deref(), Some("Failed (HTTP 403)"));
+        report_playback_error(Some("Failed (HTTP 403)"), &mut reported, "Test TV");
+        assert_eq!(reported.as_deref(), Some("Failed (HTTP 403)"));
+        report_playback_error(None, &mut reported, "Test TV");
+        assert_eq!(reported, None);
+        report_playback_error(Some("Failed (HTTP 403)"), &mut reported, "Test TV");
+        assert_eq!(reported.as_deref(), Some("Failed (HTTP 403)"));
     }
 }
