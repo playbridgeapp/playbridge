@@ -106,7 +106,9 @@ pub enum ReceiverFrame {
         #[serde(default)]
         engine: Option<String>,
     },
-    #[serde(rename = "status")]
+    /// `playbackId`, `currentItemId`, and `mediaKind` are camelCase on the wire, like the other
+    /// receiver frames, so they must map to their snake_case fields.
+    #[serde(rename = "status", rename_all = "camelCase")]
     Status {
         #[serde(default)]
         state: String,
@@ -122,6 +124,9 @@ pub enum ReceiverFrame {
         playback_id: Option<String>,
         #[serde(default)]
         current_item_id: Option<String>,
+        /// Terminal playback failure reason, normalized. Non-string values are absent.
+        #[serde(default, deserialize_with = "deserialize_playback_error")]
+        error: Option<String>,
     },
     #[serde(rename = "playlist_status", rename_all = "camelCase")]
     PlaylistStatus {
@@ -153,6 +158,44 @@ pub enum ReceiverFrame {
     },
     #[serde(other)]
     Unknown,
+}
+
+/// Largest playback failure reason a sender keeps, in characters.
+pub const MAX_PLAYBACK_ERROR_CHARS: usize = 512;
+
+/// Normalizes a receiver-supplied playback error. Non-strings and blank text are absent. Control
+/// characters and line breaks become spaces, so the reason is one line. The result is capped.
+pub fn normalize_playback_error(value: Option<Value>) -> Option<String> {
+    let Value::String(text) = value? else {
+        return None;
+    };
+    let line = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    Some(line.chars().take(MAX_PLAYBACK_ERROR_CHARS).collect())
+}
+
+/// Decodes the optional `error` without failing the surrounding frame, whatever its type.
+fn deserialize_playback_error<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(normalize_playback_error(Option::<Value>::deserialize(
+        deserializer,
+    )?))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -583,6 +626,72 @@ mod tests {
             decode_receiver_text(r#"{"type":"pong"}"#).unwrap(),
             ReceiverFrame::Pong
         );
+    }
+
+    fn status_error(text: &str) -> Option<String> {
+        match decode_receiver_text(text).unwrap() {
+            ReceiverFrame::Status { error, .. } => error,
+            other => panic!("expected status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_status_error_fixture_keeps_the_reason_and_identifiers() {
+        let text = include_str!(
+            "../../../protocol/tests/fixtures/receiver-capabilities/status-terminal-error.json"
+        );
+        let frame = decode_receiver_text(text).unwrap();
+        assert!(matches!(
+            &frame,
+            ReceiverFrame::Status {
+                state,
+                playback_id: Some(playback_id),
+                current_item_id: Some(item),
+                error: Some(reason),
+                ..
+            } if state == "error" && playback_id == "playback-1" && item == "item-1"
+                && reason == "The media couldn't be loaded (HTTP 403)"
+        ));
+    }
+
+    #[test]
+    fn non_string_and_null_errors_are_absent_without_failing_the_frame() {
+        for raw in [
+            r#"{"type":"status","state":"error","error":5}"#,
+            r#"{"type":"status","state":"error","error":{"message":"x"}}"#,
+            r#"{"type":"status","state":"error","error":["x"]}"#,
+            r#"{"type":"status","state":"error","error":true}"#,
+            r#"{"type":"status","state":"error","error":null}"#,
+            r#"{"type":"status","state":"error"}"#,
+        ] {
+            assert_eq!(status_error(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn blank_errors_are_absent_and_control_characters_become_spaces() {
+        assert_eq!(
+            status_error(r#"{"type":"status","state":"error","error":"   "}"#),
+            None
+        );
+        assert_eq!(
+            status_error(r#"{"type":"status","state":"error","error":""}"#),
+            None
+        );
+        assert_eq!(
+            status_error(
+                r#"{"type":"status","state":"error","error":"Line one\nline\ttwo\u0007!"}"#
+            ),
+            Some("Line one line two !".into())
+        );
+    }
+
+    #[test]
+    fn long_errors_are_capped_by_characters_not_bytes() {
+        let long = "é".repeat(600);
+        let reason = normalize_playback_error(Some(Value::String(long))).unwrap();
+        assert_eq!(reason.chars().count(), MAX_PLAYBACK_ERROR_CHARS);
+        assert!(reason.chars().all(|character| character == 'é'));
     }
 
     #[test]

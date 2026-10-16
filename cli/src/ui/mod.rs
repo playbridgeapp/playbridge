@@ -3213,6 +3213,9 @@ mod tests {
             muted: None,
             looping: None,
             speed: None,
+            error: None,
+            error_playback_id: None,
+            playback_id: None,
         };
         apply_cast_event(
             &mut app,
