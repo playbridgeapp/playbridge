@@ -194,6 +194,8 @@ message StatusMessage {
   optional string current_item_id = 8 [json_name = "currentItemId"];
   // Native browser fullscreen. Omitted by the player and by older receivers.
   optional bool fullscreen = 9;
+  // Short user-safe failure reason for state=error; never raw exception/URL text.
+  optional string error = 10;
 }
 
 // Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/

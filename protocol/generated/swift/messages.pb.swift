@@ -1020,6 +1020,16 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   /// Clears the value of `fullscreen`. Subsequent reads from it will return its default value.
   mutating func clearFullscreen() {self._fullscreen = nil}
 
+  /// Short user-safe failure reason for state=error; never raw exception/URL text.
+  var error: String {
+    get {_error ?? String()}
+    set {_error = newValue}
+  }
+  /// Returns true if `error` has been explicitly set.
+  var hasError: Bool {self._error != nil}
+  /// Clears the value of `error`. Subsequent reads from it will return its default value.
+  mutating func clearError() {self._error = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -1029,6 +1039,7 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   fileprivate var _playbackID: String? = nil
   fileprivate var _currentItemID: String? = nil
   fileprivate var _fullscreen: Bool? = nil
+  fileprivate var _error: String? = nil
 }
 
 /// Complete player_settings helper. On WSS, type/speed/scaling/audioBoost/
@@ -3084,7 +3095,7 @@ nonisolated extension Playbridge_BrowserControlPayload: SwiftProtobuf.Message, S
 
 nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StatusMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}playback_id\0\u{3}current_item_id\0\u{1}fullscreen\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}playback_id\0\u{3}current_item_id\0\u{1}fullscreen\0\u{1}error\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -3101,6 +3112,7 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
       case 7: try { try decoder.decodeSingularStringField(value: &self._playbackID) }()
       case 8: try { try decoder.decodeSingularStringField(value: &self._currentItemID) }()
       case 9: try { try decoder.decodeSingularBoolField(value: &self._fullscreen) }()
+      case 10: try { try decoder.decodeSingularStringField(value: &self._error) }()
       default: break
       }
     }
@@ -3138,6 +3150,9 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     try { if let v = self._fullscreen {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 9)
     } }()
+    try { if let v = self._error {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 10)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -3151,6 +3166,7 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     if lhs._playbackID != rhs._playbackID {return false}
     if lhs._currentItemID != rhs._currentItemID {return false}
     if lhs._fullscreen != rhs._fullscreen {return false}
+    if lhs._error != rhs._error {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

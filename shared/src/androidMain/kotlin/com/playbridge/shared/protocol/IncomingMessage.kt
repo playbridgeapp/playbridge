@@ -460,6 +460,7 @@ fun createStatusJson(
     mediaKind: String? = null,
     playbackId: String? = null,
     currentItemId: String? = null,
+    error: String? = null,
 ): String = buildJsonObject {
         put("type", "status")
         put("state", state)
@@ -469,6 +470,7 @@ fun createStatusJson(
     if (mediaKind != null) put("mediaKind", mediaKind)
     if (playbackId != null) put("playbackId", playbackId)
     if (currentItemId != null) put("currentItemId", currentItemId)
+    if (error != null) put("error", error)
 }.toString()
 
 /** Merges native browser fullscreen onto a status frame. Non-status JSON is unchanged. */

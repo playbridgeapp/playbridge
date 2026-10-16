@@ -524,6 +524,7 @@ const StatusMessage$json = {
     {'1': 'playback_id', '3': 7, '4': 1, '5': 9, '9': 2, '10': 'playbackId', '17': true},
     {'1': 'current_item_id', '3': 8, '4': 1, '5': 9, '9': 3, '10': 'currentItemId', '17': true},
     {'1': 'fullscreen', '3': 9, '4': 1, '5': 8, '9': 4, '10': 'fullscreen', '17': true},
+    {'1': 'error', '3': 10, '4': 1, '5': 9, '9': 5, '10': 'error', '17': true},
   ],
   '8': [
     {'1': '_title'},
@@ -531,6 +532,7 @@ const StatusMessage$json = {
     {'1': '_playback_id'},
     {'1': '_current_item_id'},
     {'1': '_fullscreen'},
+    {'1': '_error'},
   ],
 };
 
@@ -541,8 +543,9 @@ final $typed_data.Uint8List statusMessageDescriptor = $convert.base64Decode(
     'b24SGQoFdGl0bGUYBSABKAlIAFIFdGl0bGWIAQESIgoKbWVkaWFfa2luZBgGIAEoCUgBUgltZW'
     'RpYUtpbmSIAQESJAoLcGxheWJhY2tfaWQYByABKAlIAlIKcGxheWJhY2tJZIgBARIrCg9jdXJy'
     'ZW50X2l0ZW1faWQYCCABKAlIA1INY3VycmVudEl0ZW1JZIgBARIjCgpmdWxsc2NyZWVuGAkgAS'
-    'gISARSCmZ1bGxzY3JlZW6IAQFCCAoGX3RpdGxlQg0KC19tZWRpYV9raW5kQg4KDF9wbGF5YmFj'
-    'a19pZEISChBfY3VycmVudF9pdGVtX2lkQg0KC19mdWxsc2NyZWVu');
+    'gISARSCmZ1bGxzY3JlZW6IAQESGQoFZXJyb3IYCiABKAlIBVIFZXJyb3KIAQFCCAoGX3RpdGxl'
+    'Qg0KC19tZWRpYV9raW5kQg4KDF9wbGF5YmFja19pZEISChBfY3VycmVudF9pdGVtX2lkQg0KC1'
+    '9mdWxsc2NyZWVuQggKBl9lcnJvcg==');
 
 @$core.Deprecated('Use playerSettingsMessageDescriptor instead')
 const PlayerSettingsMessage$json = {

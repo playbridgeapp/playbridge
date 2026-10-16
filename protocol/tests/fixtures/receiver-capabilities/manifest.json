@@ -353,5 +353,20 @@
     "file": "invalid-live-subscribe-payload.json",
     "schema": "SenderFrame",
     "valid": false
+  },
+  {
+    "file": "status-terminal-error.json",
+    "schema": "Status",
+    "valid": true
+  },
+  {
+    "file": "invalid-status-error-number.json",
+    "schema": "Status",
+    "valid": false
+  },
+  {
+    "file": "invalid-status-error-too-long.json",
+    "schema": "Status",
+    "valid": false
   }
 ]

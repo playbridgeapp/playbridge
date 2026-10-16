@@ -37,7 +37,11 @@ def check_invariants(document, old):
                 assert current['properties'][key] == value, f'{name}.{key} changed'
         assert current['properties']['features'] == {'$ref': '#/components/schemas/ReceiverFeatures'}
     assert schemas['PairingApproved'] == retained['PairingApproved'], 'Protected outer frame changed'
-    assert schemas['Status'] == retained['Status'], 'Status changed (loop must remain in player_settings)'
+    status = dict(schemas['Status'])
+    status['properties'] = dict(status['properties'])
+    error = status['properties'].pop('error')
+    assert error['type'] == ['string', 'null'] and error['maxLength'] == 512
+    assert status == retained['Status'], 'Only optional error may extend Status (loop stays in player_settings)'
     for name in ('BrowserCapabilitiesFrame', 'BrowserCapabilities'):
         assert schemas[name] == retained[name], f'{name} changed'
     assert schemas['PlayerSettings']['required'] == retained['PlayerSettings']['required']

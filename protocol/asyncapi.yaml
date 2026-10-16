@@ -888,6 +888,10 @@ components:
       properties:
         type: { const: status }
         state: { enum: [idle, buffering, playing, paused, stopped, ended, error] }
+        error:
+          type: [string, 'null']
+          maxLength: 512
+          description: Short user-safe failure reason when state is error. Never include URLs, headers, tokens or credentials.
         position: { type: integer, minimum: 0, description: Milliseconds. }
         duration: { type: integer, minimum: 0, description: Milliseconds; 0 when unknown or live. }
         title: { type: [string, 'null'] }
