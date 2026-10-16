@@ -412,9 +412,9 @@ Runs an injectable fake transport and the compiled Swift/C transport against an 
 C shim. Covers typed replies, bounded payloads/queues, stale events, terminal timeouts and
 cancellation, coalesced MainActor state, unavailable/ABI-mismatched libraries, C-string
 ownership, and teardown with polling in flight. It makes no network connections and needs
-no framework, simulator, installation or TV. UI, Keychain, Bonjour and receiver coordination
-are later integration steps. Timeout/cancellation closes the client; create a new instance
-rather than retrying an uncertain write. Use one native transport per client.
+no framework, simulator, installation or TV. UI and receiver coordination are later
+integration steps; storage/discovery checks are below. Timeout/cancellation closes the client;
+create a new instance rather than retrying an uncertain write. Use one native transport per client.
 
 After rebuilding the optional Apple framework, check every slice without running it:
 
@@ -425,3 +425,23 @@ python3 cast/check-apple-abi.py mobile/apple/Native/PlayBridgeCastCore.xcframewo
 `cast/build-apple.sh` performs this check automatically. `PB_APPLE_NO_INSTALL=1` requires
 already-installed Rust targets; `CARGO_TARGET_DIR` can select a scratch build cache.
 `PB_APPLE_NM` selects a Rust-LLVM-compatible llvm-nm when Xcode's nm is too old.
+
+
+Android TV credentials, native Bonjour and receiver ownership (host-only):
+
+```sh
+bash mobile/apple/tests/run-atv-storage-checks.sh
+```
+
+Uses an in-memory Keychain boundary with scripted OSStatus results and a fake Bonjour
+backend. Covers device-only/non-sync write attributes, single-document atomic saves,
+locked/access errors, corruption and verified recovery, failed writes/forget, aliases,
+multiple TVs, DHCP/MAC conflicts, ambiguous ownership, IPv4/IPv6 including scope IDs,
+and late service/scan callbacks. Numeric sockaddr parsing uses synthetic data only.
+Also checks the ATV Bonjour plist declaration and existing service declarations.
+No real Keychain access, LAN browsing, sockets, app installation or TV is required.
+The store is synchronous and serialized: construct/use/reload it on the future
+coordinator's storage queue; check storageError before using cached credentials, and
+reload after foreground/unlock. Only verified pairing may recover a corrupt document;
+future-version documents are blocked rather than overwritten. Discovery is lazy and
+requires explicit start/stop from that coordinator; these files are not wired to UI yet.
