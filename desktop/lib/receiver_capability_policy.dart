@@ -210,6 +210,26 @@ class ReceiverProtocolSession {
     return senderReceiverCapabilitiesSubscribeJson();
   }
 
+  /// The revision from a parsed JSON number. An int is exact. A double is accepted when it is finite
+  /// and integral, so `1.0` is valid. Senders may decode through binary floating point, so a value
+  /// such as `9007199254740991.1` rounds to an accepted integer. Strings, zero, negatives, fractions,
+  /// and values at or above 2^53 are rejected.
+  static int? _integralRevision(Object? value) {
+    if (value is int) {
+      return value >= 1 && value <= maxReceiverCapabilitiesRevision
+          ? value
+          : null;
+    }
+    if (value is double &&
+        value.isFinite &&
+        value == value.truncateToDouble() &&
+        value >= 1 &&
+        value <= maxReceiverCapabilitiesRevision) {
+      return value.toInt();
+    }
+    return null;
+  }
+
   /// Observes an incoming protocol envelope on the authenticated socket.
   bool observe(int session, Map<dynamic, dynamic> frame) {
     if (session != _generation || !_authenticated) return false;
@@ -221,15 +241,8 @@ class ReceiverProtocolSession {
           !keys.containsAll(['type', 'revision', 'capabilities'])) {
         return false;
       }
-      final rev = frame['revision'];
-      if (rev is! num || rev is bool) return false;
-      final intVal = rev.toInt();
-      if (intVal != rev) return false;
-      if (intVal < 1 ||
-          intVal > maxReceiverCapabilitiesRevision ||
-          intVal <= _revision) {
-        return false;
-      }
+      final intVal = _integralRevision(frame['revision']);
+      if (intVal == null || intVal <= _revision) return false;
       final raw = frame['capabilities'];
       if (raw is! Map) return false;
       final version = raw['version'];

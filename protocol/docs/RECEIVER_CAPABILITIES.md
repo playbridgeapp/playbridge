@@ -199,8 +199,9 @@ feature. The command is idempotent and does not reset revisions; it immediately 
 current descriptor as revision 1, closing the race between initial auth and subscription. It
 remains valid after first pairing without an extra auth exchange.
 
-`revision` is a JSON **number**, an integer from 1 through 9007199254740991 (2^53-1), strictly
-increasing for each subscribed authenticated socket. It is not a global receiver revision, a
+`revision` is a JSON **number**, an integer from 1 through 9007199254740991 (2^53-1). An integral-valued
+number such as `1.0` is valid; senders may decode via binary floating point, so a value such as
+`9007199254740991.1` may round to an accepted integer. Strictly increasing for each subscribed authenticated socket. It is not a global receiver revision, a
 persisted credential field, a string, or an auth/bundle field. The auth baseline has implicit
 revision 0. Receivers increment only for changed advertisements, reset on a new socket, discard
 subscriptions on close, and close a session rather than wrap an exhausted counter. Manual JSON

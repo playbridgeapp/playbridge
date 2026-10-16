@@ -276,9 +276,25 @@ impl CapabilitiesFrame {
     }
 }
 
+/// Integers are exact. A float is accepted when it is finite, integral, and in range, so `1.0` and
+/// `1e0` are valid. Senders may decode through binary floating point, so a value such as
+/// `9007199254740991.1` rounds to an accepted integer. Strings, zero, negatives, fractions, and
+/// values at or above 2^53 are rejected.
 fn revision_number(value: &Value) -> Option<u64> {
-    // as_u64 rejects negatives, fractions and float spellings such as 1.0, and strings.
-    let number = value.as_u64()?;
+    let number = match value.as_u64() {
+        Some(number) => number,
+        None => {
+            let float = value.as_f64()?;
+            if !float.is_finite()
+                || float.fract() != 0.0
+                || float < 1.0
+                || float > MAX_LIVE_REVISION as f64
+            {
+                return None;
+            }
+            float as u64
+        }
+    };
     (1..=MAX_LIVE_REVISION).contains(&number).then_some(number)
 }
 
@@ -600,7 +616,15 @@ mod tests {
         assert_eq!(at(json!(MAX_LIVE_REVISION + 1)), CapabilitiesFrame::Invalid);
         assert_eq!(at(json!(0)), CapabilitiesFrame::Invalid);
         assert_eq!(at(json!(-1)), CapabilitiesFrame::Invalid);
-        assert_eq!(at(json!(1.0)), CapabilitiesFrame::Invalid, "float spelling");
+        assert!(
+            matches!(at(json!(1.0)), CapabilitiesFrame::Update(_)),
+            "integral float"
+        );
+        assert_eq!(
+            at(json!(1.5)),
+            CapabilitiesFrame::Invalid,
+            "fractional float"
+        );
         assert_eq!(at(json!("1")), CapabilitiesFrame::Invalid);
         assert_eq!(at(Value::Null), CapabilitiesFrame::Invalid);
     }
@@ -672,5 +696,31 @@ mod tests {
         let frame = decode_live("live-update-v1.json");
         assert!(!format!("{frame:?}").contains("surfaces"));
         assert!(serde_json::to_value(&frame).is_err(), "receive-only");
+    }
+
+    #[test]
+    fn revision_spellings_follow_the_parsed_number_rule() {
+        let at = |text: &str| {
+            let revision: Value = serde_json::from_str(text).unwrap();
+            CapabilitiesFrame::from_value(json!({
+                "type": "receiver_capabilities",
+                "revision": revision,
+                "capabilities": {"version": 1, "surfaces": {}}
+            }))
+        };
+        for accepted in ["1", "1.0", "1e0", "9007199254740991", "9007199254740991.0"] {
+            assert!(
+                matches!(at(accepted), CapabilitiesFrame::Update(_)),
+                "{accepted}"
+            );
+        }
+        // Binary floating point rounds this to 2^53 - 1, which is accepted by design.
+        assert!(matches!(
+            at("9007199254740991.1"),
+            CapabilitiesFrame::Update(_)
+        ));
+        for rejected in ["1.5", "9007199254740992", "\"1\"", "0", "-1", "0.0"] {
+            assert_eq!(at(rejected), CapabilitiesFrame::Invalid, "{rejected}");
+        }
     }
 }
