@@ -39,7 +39,7 @@ class NativeCastTarget(
     )
 
     override suspend fun load(media: MediaItem) {
-        webSocketClient.send(
+        val sent = webSocketClient.send(
             createSingleVideoCommandJson(
                 PlayPayload(
                     url = media.url,
@@ -54,7 +54,10 @@ class NativeCastTarget(
                 ),
             ),
         )
-        coordinator.tvActiveContext.value = "player"
+        if (sent) {
+            coordinator.clearPlaybackSnapshots()
+            coordinator.tvActiveContext.value = "player"
+        }
     }
 
     override suspend fun play() {

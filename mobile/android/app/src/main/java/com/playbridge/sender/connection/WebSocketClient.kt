@@ -97,11 +97,14 @@ class WebSocketClient(
     }
     
     private val receiverProtocolSession = ReceiverProtocolSession()
+    private val mutableMessageSession = MutableStateFlow(0L)
+    internal val messageSession = mutableMessageSession.asStateFlow()
     /** Live metadata only; never saved with receiver credentials or discovery records. */
     val receiverProtocolState = receiverProtocolSession.state
 
     private fun clearReceiverProtocol(): Long {
         val session = receiverProtocolSession.begin()
+        mutableMessageSession.value = session
         _tvCapabilitiesState.value = _tvCapabilitiesState.value.copy(receiverDescriptor = null)
         return session
     }
@@ -493,7 +496,10 @@ class WebSocketClient(
                     }
 
                     playbackLeases.observe(text)
-                    messageBus.publish(text)
+                    messageBus.publish(text) {
+                        mutableMessageSession.value == receiverSession &&
+                            _connectionState.value is ConnectionState.Connected
+                    }
                 }
             }
             

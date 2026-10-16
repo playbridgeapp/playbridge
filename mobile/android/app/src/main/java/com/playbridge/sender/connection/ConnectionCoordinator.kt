@@ -74,18 +74,13 @@ class ConnectionCoordinator internal constructor(
         }
     }
 
-    private fun loge(message: String, error: Throwable) {
-        try {
-            Log.e(TAG, message, error)
-        } catch (_: RuntimeException) {
-            // unit tests
-        }
-    }
-
     // TV Playback & Playlist States synced from WebSocket
     val tvActiveContext = MutableStateFlow("idle")
     val tvPlaylistState = MutableStateFlow<PlaylistUiState?>(null)
     val tvPlayback = MutableStateFlow<TvPlaybackStatus?>(null)
+    private val playbackFailures = ReceiverPlaybackFailures()
+    internal val playbackFailure = playbackFailures.notice
+    private var playbackMessageSession = webSocketClient?.messageSession?.value
     val tvVideoTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
@@ -119,11 +114,23 @@ class ConnectionCoordinator internal constructor(
 
     init {
         startListening()
+        webSocketClient?.let { client ->
+            scope.launch { client.messageSession.collect { syncPlaybackMessageSession() } }
+        }
+    }
+
+    private fun syncPlaybackMessageSession() {
+        val current = webSocketClient?.messageSession?.value
+        if (current != playbackMessageSession) {
+            playbackMessageSession = current
+            playbackFailures.reset()
+        }
     }
 
     private fun startListening() {
         scope.launch {
             messages.collect { message ->
+                syncPlaybackMessageSession()
                 try {
                     val json = org.json.JSONObject(message)
                     when (json.optString("type")) {
@@ -149,6 +156,7 @@ class ConnectionCoordinator internal constructor(
                             }
                         }
                         "playlist_status" -> {
+                            playbackFailures.playlist((json.opt("playbackId") as? String)?.takeIf(String::isNotEmpty))
                             val itemsJson = json.optJSONArray("items")
                             val episodes = buildList {
                                 if (itemsJson != null) {
@@ -195,6 +203,11 @@ class ConnectionCoordinator internal constructor(
                             }
                         }
                         "status" -> {
+                            if (!playbackFailures.status(
+                                    json.optString("state", "paused"),
+                                    (json.opt("playbackId") as? String)?.takeIf(String::isNotEmpty),
+                                    json.opt("error"),
+                                )) return@collect
                             // Perf: dedupe identical ticks — the TV status cadence (~1/s)
                             // otherwise emits a distinct object per tick and recomposes
                             // every collector. Raw ms precision kept so progress bars
@@ -340,8 +353,8 @@ class ConnectionCoordinator internal constructor(
                     if (!heldPlayerStatus && !heldPlayerSnapshot && type in setOf("context", "playlist_status", "status", "tracks", "player_settings")) {
                         mutableRemoteObservation.update { it.copy(sequence = it.sequence + 1L, atMs = clock()) }
                     }
-                } catch (e: Exception) {
-                    loge("Error parsing WebSocket message: ${e.message}", e)
+                } catch (_: Exception) {
+                    logd("Error parsing receiver message")
                 }
             }
         }
@@ -411,6 +424,7 @@ class ConnectionCoordinator internal constructor(
 
     /** Drop the last-known status/playlist (stale once new content is being sent). */
     fun clearPlaybackSnapshots() {
+        playbackFailures.reset()
         tvPlayback.value = null
         tvPlaylistState.value = null
         mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L) }
