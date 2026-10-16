@@ -195,6 +195,9 @@ class TrackInfo {
 }
 
 abstract class PlayerEngine extends ChangeNotifier {
+  VoidCallback? onCompleted;
+  void Function(String)? onError;
+
   String get state; // idle | buffering | playing | paused | ended
   int get positionMs;
   int get durationMs;
