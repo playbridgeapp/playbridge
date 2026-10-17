@@ -180,20 +180,101 @@ enum RemoteControlPresentation {
     }
 }
 
-/// D-pad gestures, deliberately separate from browser/image pointer events.
+/// Android PadGesturePolicy/Session, expressed in UIKit points (Android dp).
+/// Pointer samples and the sleeping hold timer share a monotonic millisecond clock.
 struct RemoteNavigationGesture {
-    private var anchorX = 0.0
-    private var anchorY = 0.0
-    private var moved = false
-    mutating func update(x: Double, y: Double) -> String? {
-        if hypot(x, y) >= 12 { moved = true }
-        let dx = x - anchorX, dy = y - anchorY
-        guard max(abs(dx), abs(dy)) >= 32 else { return nil }
-        anchorX = x; anchorY = y
-        return abs(dx) > abs(dy) ? (dx > 0 ? "dpad_right" : "dpad_left") : (dy > 0 ? "dpad_down" : "dpad_up")
+    enum Direction: CaseIterable {
+        case up, down, left, right
+        var key: String {
+            switch self {
+            case .up: return "dpad_up"
+            case .down: return "dpad_down"
+            case .left: return "dpad_left"
+            case .right: return "dpad_right"
+            }
+        }
+        static func from(dx: Double, dy: Double) -> Self {
+            if abs(dx) >= abs(dy) { return dx < 0 ? .left : .right }
+            return dy < 0 ? .up : .down
+        }
     }
-    mutating func end(x: Double, y: Double) -> String? {
-        defer { self = Self() }
-        return !moved && hypot(x, y) < 12 ? "dpad_center" : nil
+    struct Step: Equatable {
+        enum Kind { case tap, swipe, drag, hold }
+        let key: String
+        let kind: Kind
+        let direction: Direction?
+    }
+    static let touchSlop = 20.0, dragStep = 56.0, holdSlop = 12.0
+    static let tapTimeout: Int64 = 300, holdDelay: Int64 = 500, holdCadence: Int64 = 150
+    static let maxHoldSteps = 100, maxStepsPerMove = 3
+    private struct Stepping {
+        var anchorX: Double, anchorY: Double, holdX: Double, holdY: Double
+        var direction: Direction
+        var nextHoldAt: Int64?
+        var steps = 1
+    }
+    private enum Phase {
+        case idle, tracking(Double, Double, Int64), stepping(Stepping)
+    }
+    private var phase: Phase = .idle
+    private var now: Int64 = 0
+    var holdDeadline: Int64? {
+        guard case .stepping(let current) = phase, current.steps < Self.maxHoldSteps else { return nil }
+        return current.nextHoldAt
+    }
+    mutating func down(x: Double, y: Double, at time: Int64) {
+        observe(time)
+        phase = .tracking(x, y, now)
+    }
+    mutating func move(x: Double, y: Double, at time: Int64) -> [Step] {
+        observe(time)
+        switch phase {
+        case .idle: return []
+        case .tracking(let x0, let y0, _):
+            let dx = x - x0, dy = y - y0
+            guard hypot(dx, dy) >= Self.touchSlop else { return [] }
+            let direction = Direction.from(dx: dx, dy: dy)
+            phase = .stepping(stepping(anchorX: x, anchorY: y, holdX: x, holdY: y, direction: direction))
+            return [Step(key: direction.key, kind: .swipe, direction: direction)]
+        case .stepping(var next):
+            if hypot(x - next.holdX, y - next.holdY) > Self.holdSlop { next.nextHoldAt = nil }
+            var steps: [Step] = []
+            while steps.count < Self.maxStepsPerMove {
+                let dx = x - next.anchorX, dy = y - next.anchorY
+                let distance = max(abs(dx), abs(dy))
+                if distance < Self.dragStep { break }
+                let direction = Direction.from(dx: dx, dy: dy), fraction = Self.dragStep / distance
+                next = stepping(anchorX: next.anchorX + dx * fraction, anchorY: next.anchorY + dy * fraction,
+                                holdX: x, holdY: y, direction: direction)
+                steps.append(Step(key: direction.key, kind: .drag, direction: direction))
+            }
+            if steps.count == Self.maxStepsPerMove { next.anchorX = x; next.anchorY = y }
+            phase = .stepping(next)
+            return steps
+        }
+    }
+    mutating func up(x: Double, y: Double, at time: Int64) -> [Step] {
+        observe(time)
+        defer { cancel() }
+        if case .tracking(let x0, let y0, let t0) = phase,
+           hypot(x - x0, y - y0) < Self.touchSlop, now - t0 <= Self.tapTimeout {
+            return [Step(key: "dpad_center", kind: .tap, direction: nil)]
+        }
+        return [] // Release travel never adds arrows.
+    }
+    mutating func tick(at time: Int64) -> [Step] {
+        observe(time)
+        guard case .stepping(var current) = phase, let deadline = current.nextHoldAt,
+              now >= deadline, current.steps < Self.maxHoldSteps else { return [] }
+        current.steps += 1
+        current.nextHoldAt = now + Self.holdCadence // Never catch up after suspension.
+        phase = .stepping(current)
+        return [Step(key: current.direction.key, kind: .hold, direction: current.direction)]
+    }
+    mutating func cancel() { phase = .idle }
+    private mutating func observe(_ time: Int64) { now = max(now, time) }
+    private func stepping(anchorX: Double, anchorY: Double, holdX: Double, holdY: Double, direction: Direction) -> Stepping {
+        Stepping(anchorX: anchorX, anchorY: anchorY, holdX: holdX, holdY: holdY,
+                 direction: direction, nextHoldAt: now + Self.holdDelay)
     }
 }

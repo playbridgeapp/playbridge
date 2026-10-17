@@ -60,16 +60,16 @@ struct RemoteInputLayout {
     let hasKeyboard: Bool
     private let defaultPointer: Bool
 
-    init(policy: ReceiverRemotePolicy, context: String, image: Bool, external: Bool, externalProtocol: String?) {
+    init(policy: ReceiverRemotePolicy, context: String, image: Bool, external: Bool, externalProtocol: String?, fullControl: Bool = false) {
         if policy.isLegacy {
-            hasNavigation = RemoteMode.supportsRemote(externalProtocol: externalProtocol)
-            hasPointer = !external
-            hasKeyboard = !external && context == "browser"
+            hasNavigation = fullControl || RemoteMode.supportsRemote(externalProtocol: externalProtocol)
+            hasPointer = !external && (!fullControl || policy.state.connected)
+            hasKeyboard = fullControl || !external && context == "browser"
             defaultPointer = context == "browser" || image
         } else {
-            hasNavigation = policy.hasDpad
-            hasPointer = policy.hasPointer
-            hasKeyboard = policy.text.contains("replace")
+            hasNavigation = fullControl || policy.hasDpad
+            hasPointer = (!fullControl || policy.state.connected) && policy.hasPointer
+            hasKeyboard = fullControl || policy.text.contains("replace")
             defaultPointer = hasPointer
         }
     }

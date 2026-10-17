@@ -96,8 +96,6 @@ struct ConnectionScreen: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 ConnectionSectionLabel("PlayBridge")
-                Button("Paired TVs") { showPairedTVs = true }
-                    .accessibilityLabel("Manage paired TVs")
                 Spacer()
                 Button {
                     refreshDiscovery()
@@ -108,6 +106,15 @@ struct ConnectionScreen: View {
                 }
                 .accessibilityLabel("Refresh PlayBridge TVs")
             }
+
+            Button { showPairedTVs = true } label: {
+                HStack {
+                    Label("Paired TVs · Full control", systemImage: "tv")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                }.padding(12).frame(minHeight: 48)
+                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+            }.buttonStyle(.plain).accessibilityLabel("Manage paired TVs for Full control")
 
             if PlayBridgeListEmptyState.showsEmptyCopy(
                 savedCount: vm.savedDevices.count,

@@ -114,6 +114,7 @@ final class ReceiverCapabilitySession {
         let id: UUID
         let authenticated: Bool
         let capabilities: ReceiverCapabilities
+        let revision: UInt64
     }
 
     private let lock = NSLock()
@@ -125,7 +126,7 @@ final class ReceiverCapabilitySession {
     private var capabilities: ReceiverCapabilities = .legacy
 
     var snapshot: Snapshot {
-        locked { Snapshot(id: id, authenticated: authenticated, capabilities: capabilities) }
+        locked { Snapshot(id: id, authenticated: authenticated, capabilities: capabilities, revision: revision) }
     }
 
     @discardableResult func begin() -> UUID {

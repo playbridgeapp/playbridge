@@ -148,6 +148,16 @@ final class WebSocketClient: NSObject, ObservableObject {
         return true
     }
 
+    /// Await the socket write for navigation so the caller can keep one in flight,
+    /// rather than accumulating URLSession sends after the finger has lifted.
+    @MainActor func sendNavigation(_ text: String, authority: () -> Bool) async throws {
+        guard authority(), isConnected, let task else { throw AtvClientError.superseded }
+        let session = capabilitySessionID
+        try await task.send(.string(WireProtocol.applyingHistoryPreference(text,
+            prevent: UserDefaults.standard.bool(forKey: "cast_prevent_receiver_history"))))
+        guard capabilitySessionID == session else { throw AtvClientError.superseded }
+    }
+
     func sendPing() { _ = send(WireProtocol.ping()) }
 
     /// Continuous gesture updates coalesce to ~60 Hz. Discrete commands flush first.

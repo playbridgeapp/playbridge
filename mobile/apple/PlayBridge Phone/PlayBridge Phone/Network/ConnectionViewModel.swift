@@ -5,6 +5,8 @@ import Network
 /// Top-level glue the UI observes: owns discovery, the socket, the inbound coordinator, and
 /// credential persistence. Mirrors the role of `ConnectionViewModel` on Android.
 final class ConnectionViewModel: ObservableObject {
+    @MainActor weak var atvRemote: AtvRemoteCoordinator?
+    @MainActor let navigationDispatcher = RemoteNavigationDispatcher()
     @Published var websitePlayerItem: PlayerItem?
     @MainActor private var preparedWebsitePlayback: WebsitePhonePlayback?
     @MainActor private var websitePhonePlayback: WebsitePhonePlayback?
@@ -777,7 +779,7 @@ final class ConnectionViewModel: ObservableObject {
         ))
     }
 
-    func control(_ command: String) {
+    func control(_ command: String, onSent: (() -> Void)? = nil) {
         guard isAirPlay || isExternalReceiver || nativeRemotePolicy.allowsControl(command) else { return }
         if command == "stop" || command == "end_receiver" { onUserMediaAction?() }
         if isAirPlay {
@@ -794,6 +796,7 @@ final class ConnectionViewModel: ObservableObject {
                 if command.hasPrefix("sub_track:") { airPlay.selectSubtitle(Int(command.dropFirst(10))) }
                 if command.hasPrefix("audio_track:"), let id = Int(command.dropFirst(12)) { airPlay.selectAudio(id) }
             }
+            onSent?()
             return
         }
         guard isConnected else { operationError = "Reconnect to the receiver to control playback."; return }
@@ -802,9 +805,12 @@ final class ConnectionViewModel: ObservableObject {
             CastSystemPlayback.shared.userRequestedPlayback()
         }
         guard isExternalReceiver else {
-            if ws.send(WireProtocol.controlCommand(command)), command == "stop" {
-                castPlaybackSession.stopLocally()
-                releaseCastResources()
+            if ws.send(WireProtocol.controlCommand(command)) {
+                onSent?()
+                if command == "stop" {
+                    castPlaybackSession.stopLocally()
+                    releaseCastResources()
+                }
             }
             return
         }
@@ -812,6 +818,7 @@ final class ConnectionViewModel: ObservableObject {
         Task { @MainActor in
             do {
                 try await googleCast.control(command)
+                if destinationID == target { onSent?() }
                 if destinationID == target, command == "stop" || command == "end_receiver" {
                     castPlaybackSession.stopLocally()
                     releaseCastResources()
@@ -895,24 +902,27 @@ final class ConnectionViewModel: ObservableObject {
             } catch { if destinationID == target { operationError = error.localizedDescription } }
         }
     }
-    func browserControl(_ action: String) {
+    func browserControl(_ action: String, onSent: (() -> Void)? = nil) {
         guard isConnected, nativeRemotePolicy.isLegacy ? supportsBrowser : nativeRemotePolicy.allowsBrowser(action) else { return }
         let relative = !nativeRemotePolicy.isLegacy && ["seek_back", "seek_forward"].contains(action)
         let wireAction = relative ? nativeRemotePolicy.browserRelativeSeek(forward: action == "seek_forward") : action
-        if let wireAction { ws.send(WireProtocol.browserControlCommand(wireAction)) }
+        if let wireAction, ws.send(WireProtocol.browserControlCommand(wireAction)) { onSent?() }
     }
 
-    func remote(_ key: String) {
+    @MainActor func remote(_ key: String) { routeRemoteKey(key) }
+
+    func receiverRemoteKey(_ key: String, onSent: (() -> Void)? = nil) {
         guard isConnected else { return }
         guard isExternalReceiver else {
             guard nativeRemotePolicy.allowsKey(key) else { return }
-            ws.send(WireProtocol.remoteCommand(key: key)); return
+            if ws.send(WireProtocol.remoteCommand(key: key)) { onSent?() }
+            return
         }
         switch key {
-        case "volume_up": adjustExternalVolume(up: true)
-        case "volume_down": adjustExternalVolume(up: false)
+        case "volume_up": adjustExternalVolume(up: true, onSent: onSent)
+        case "volume_down": adjustExternalVolume(up: false, onSent: onSent)
         default:
-            if externalReceiver?.protocolID == "roku" { sendRokuKeypress(key) }
+            if externalReceiver?.protocolID == "roku" { sendRokuKeypress(key, onSent: onSent) }
         }
     }
 
@@ -973,7 +983,8 @@ final class ConnectionViewModel: ObservableObject {
         if pointerButtonHeld { ws.sendMouse(event: "up", state: nativeRemotePolicy.state); pointerButtonHeld = false }
         if pointerAnchorHeld { ws.endPointerGesture(); pointerAnchorHeld = false }
     }
-    func setReceiverVolume(_ level: Double) {
+    @MainActor func setReceiverVolume(_ level: Double) {
+        guard !combinedRemote.fullControlReady else { return }
         let policy = nativeRemotePolicy
         guard let scope = policy.volume?.scope, policy.allowsAbsoluteVolume(scope: scope, level: level) else { return }
         ws.send(WireProtocol.volumeCommand(scope: scope, level: level))
@@ -993,19 +1004,23 @@ final class ConnectionViewModel: ObservableObject {
         isConnected && (nativeRemotePolicy.isLegacy ? supportsBrowser : nativeRemotePolicy.allowsManager(operation))
     }
 
-    private func adjustExternalVolume(up: Bool) {
+    private func adjustExternalVolume(up: Bool, onSent: (() -> Void)? = nil) {
         if externalReceiver?.protocolID == "roku" {
-            sendRokuKeypress(up ? "volume_up" : "volume_down")
+            sendRokuKeypress(up ? "volume_up" : "volume_down", onSent: onSent)
             return
         }
         guard externalReceiver?.protocolID == "google_cast" else { return }
+        let target = destinationID
         Task { @MainActor in
-            do { try await googleCast.adjustVolume(up: up) }
+            do {
+                try await googleCast.adjustVolume(up: up)
+                if destinationID == target { onSent?() }
+            }
             catch { operationError = error.localizedDescription }
         }
     }
 
-    private func sendRokuKeypress(_ key: String) {
+    private func rokuKeypressRequest(_ key: String) -> URLRequest? {
         let rokuKey: String
         switch key {
         case "dpad_up": rokuKey = "Up"
@@ -1017,15 +1032,34 @@ final class ConnectionViewModel: ObservableObject {
         case "home": rokuKey = "Home"
         case "volume_up": rokuKey = "VolumeUp"
         case "volume_down": rokuKey = "VolumeDown"
-        default: return
+        default: return nil
         }
         guard rokuKey.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
-              let host = externalReceiver?.addresses.first, !host.isEmpty else { return }
+              let host = externalReceiver?.addresses.first, !host.isEmpty else { return nil }
         let literal = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
-        guard let url = URL(string: "http://\(literal):\(externalReceiver?.port ?? 8060)/keypress/\(rokuKey)") else { return }
+        guard let url = URL(string: "http://\(literal):\(externalReceiver?.port ?? 8060)/keypress/\(rokuKey)") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        URLSession.shared.dataTask(with: request).resume()
+        return request
+    }
+    private func sendRokuKeypress(_ key: String, onSent: (() -> Void)? = nil) {
+        guard let request = rokuKeypressRequest(key) else { return }
+        let target = destinationID
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            guard error == nil, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
+            Task { @MainActor in
+                if self?.destinationID == target { onSent?() }
+            }
+        }.resume()
+    }
+
+    @MainActor func sendExternalNavigation(_ key: String, authority: () -> Bool) async throws {
+        guard authority(), isConnected, externalReceiver?.protocolID == "roku",
+              let request = rokuKeypressRequest(key) else { throw AtvClientError.superseded }
+        let target = destinationID
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard destinationID == target else { throw AtvClientError.superseded }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw AtvClientError.rejected }
     }
 
     private func sendMediaCommand(_ command: String) {

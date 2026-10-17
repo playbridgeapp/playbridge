@@ -4,6 +4,7 @@ import Combine
 struct AtvChannelState: Equatable {
     enum Phase { case idle, discovering, available, connecting, connected, retrying, repairRequired, storageUnavailable, unavailable }
     var phase: Phase = .idle
+    var connectionID: UUID?
     var endpoint: String?
     var paired = false
     var retrySeconds: Int?
@@ -18,8 +19,8 @@ struct AtvPairingState: Equatable {
     var storageFailure = false
 }
 
-/// One foreground owner, separate from PlayBridge playback authority. No remote commands are
-/// routed here yet. Every async publication checks the owner and attempt generation.
+/// One foreground owner, separate from PlayBridge playback authority. Command tickets are
+/// bound to the selected endpoint and native connection. Every async publication checks the owner and attempt generation.
 @MainActor final class AtvRemoteCoordinator: ObservableObject {
     @Published private(set) var channel = AtvChannelState()
     @Published private(set) var pairing = AtvPairingState()
@@ -42,6 +43,9 @@ struct AtvPairingState: Equatable {
     private var pairWork: Task<Void, Never>?
     private var shutdown: Task<Void, Never>?
     private var client: AtvCoordinatorClient?
+    private var commands: [UUID: Task<Void, Error>] = [:]
+    private var commandTail: Task<Void, Never>?
+    private var navigationCommand: UUID?
     private var host: String?
     private var retryAttempt = 1
     private struct TrustFailure { var count = 0; var stopped = false }
@@ -74,6 +78,8 @@ struct AtvPairingState: Equatable {
     func refresh() { restart() }
 
     private func retireClient() {
+        channel.connectionID = nil
+        commands.values.forEach { $0.cancel() }; commandTail = nil; navigationCommand = nil
         attempt = UUID(); pendingFailure = nil; pendingTelevision = nil
         guard let old = client else { return }
         client = nil; old.onState = nil
@@ -149,6 +155,7 @@ struct AtvPairingState: Equatable {
             guard current(ticket), attempt == connection else { return }
             if let pendingFailure { throw pendingFailure }
             trustFailures[record.fingerprint] = nil; retryAttempt = 1
+            channel.connectionID = connection
             channel.phase = .connected; channel.failure = nil; channel.television = pendingTelevision
         } catch {
             guard current(ticket), attempt == connection else { return }
@@ -243,6 +250,57 @@ struct AtvPairingState: Equatable {
         retireClient(); pairingIdentity = nil
     }
     func cancelPairing() { restart() }
+
+    var fullControl: AtvFullControlSnapshot {
+        let associated = records.filter { $0.receiverIds.contains(receiver?.endpoint ?? "") }
+        let ready = eligible && channel.phase == .connected && channel.paired && associated.count == 1 && client != nil
+        let ticket = ready ? receiver.map { AtvControlTicket(owner: generation, connection: attempt, endpoint: $0.endpoint) } : nil
+        return .init(endpoint: channel.endpoint, ticket: ticket, paired: channel.paired,
+            available: channel.paired || [.available, .repairRequired, .storageUnavailable].contains(channel.phase),
+            needsRepair: channel.phase == .repairRequired || channel.failure == .native(.notTrusted) || channel.failure == .native(.pinMismatch),
+            storageFailure: storageError != nil, television: ready ? channel.television : nil)
+    }
+    func execute(_ action: AtvControlAction, ticket: AtvControlTicket, authority: @escaping @MainActor () -> Bool = { true }) async throws {
+        guard fullControl.ticket == ticket, authority(), let session = client else { throw AtvClientError.superseded }
+        // Navigation never waits behind acknowledged keyboard edits or other keys.
+        // The UI dispatcher owns one replaceable pending step; this boundary admits
+        // only one navigation write on this connection, even for other callers.
+        if action.isNavigation {
+            guard navigationCommand == nil else { throw AtvClientError.overflow }
+            let id = UUID()
+            navigationCommand = id
+            defer { if navigationCommand == id { navigationCommand = nil } }
+            try Task.checkCancellation()
+            guard authority() else { throw AtvClientError.superseded }
+            try await session.command(action)
+            guard fullControl.ticket == ticket, client === session else { throw AtvClientError.superseded }
+            return
+        }
+        guard commands.count < 64 else { throw AtvClientError.overflow }
+        let previous = commandTail, id = UUID()
+        let operation = Task { [weak self] in
+            await previous?.value
+            guard let self else { throw AtvClientError.closed }
+            @MainActor func check() throws {
+                try Task.checkCancellation()
+                guard self.fullControl.ticket == ticket, authority(), self.client === session else { throw AtvClientError.superseded }
+            }
+            try check()
+            switch action {
+            case .edit(let deletes, let suffix, let enter):
+                guard (0...64).contains(deletes), suffix.unicodeScalars.count <= 64 else { throw AtvClientError.invalidInput }
+                for _ in 0..<deletes { try check(); try await session.command(.key("key_delete")) }
+                if !suffix.isEmpty { try check(); try await session.insertText(suffix) }
+                if enter { try check(); try await session.command(.key("key_enter")) }
+            default: try await session.command(action)
+            }
+            try check()
+        }
+        commands[id] = operation
+        commandTail = Task { _ = await operation.result }
+        defer { commands[id] = nil }
+        try await withTaskCancellationHandler(operation: { try await operation.value }, onCancel: { operation.cancel() })
+    }
 
     func reloadManagement() {
         let ticket = UUID(); managementGeneration = ticket

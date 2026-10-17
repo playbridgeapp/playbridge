@@ -6,7 +6,10 @@ import CoreFoundation
 /// Direct port of `connection/ConnectionCoordinator.kt`. Handles the proto-defined messages
 /// (context/status/playlist_status) plus the non-proto `tracks` and `player_settings`.
 final class ConnectionCoordinator: ObservableObject {
-    @Published var activeContext: String = "idle"   // player | browser | idle
+    @Published var activeContext: String = "idle" { // player | browser | idle
+        didSet { if activeContext != oldValue { remoteContextGeneration = UUID() } }
+    }
+    private(set) var remoteContextGeneration = UUID()
     @Published var playback: TvPlaybackStatus?
     @Published private(set) var playbackFailure: ReceiverPlaybackFailure?
     private var nativePlaybackID: String?

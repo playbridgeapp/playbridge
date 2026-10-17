@@ -58,6 +58,7 @@ struct ContentView: View {
             Button("OK", role: .cancel) { vm.operationError = nil }
         } message: { Text(vm.operationError ?? "") }
         .onAppear {
+            vm.atvRemote = atv
             nav.browserStore = store
             store.onBridgedAppExternalNavigation = { [weak nav] in nav?.navigate(to: .browser) }
             pageCasting.attach(vm)
