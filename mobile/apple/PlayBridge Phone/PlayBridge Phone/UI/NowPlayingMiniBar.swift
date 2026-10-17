@@ -21,6 +21,7 @@ struct NowPlayingMiniBar: View {
     private var deviceName: String { vm.receiverName ?? "TV" }
     private var primaryText: String {
         if playing { return playback?.title ?? "Now playing" }
+        if let selected = vm.selectedRemoteTV { return selected.device.name }
         return vm.isConnected ? deviceName : "This Device"
     }
     private var secondaryText: String {
@@ -29,6 +30,7 @@ struct NowPlayingMiniBar: View {
         if vm.isConnected {
             return vm.externalReceiver.map { "\($0.protocolName) · Ready to cast" } ?? "Ready to cast"
         }
+        if let selected = vm.selectedRemoteTV { return selected.status }
         return "Tap to cast to a device"
     }
 
@@ -36,7 +38,7 @@ struct NowPlayingMiniBar: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 Button {
-                    if playing {
+                    if playing || vm.selectedRemoteTV?.paired == true {
                         vm.queryContext()
                         nav.navigate(to: .remote)
                     } else {

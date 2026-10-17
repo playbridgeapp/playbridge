@@ -118,6 +118,11 @@ fun CastSheet(
         mutableStateOf(CastPreparation.defaultRoute(castProtocol))
     }
     var packaging by remember { mutableStateOf(false) }
+    val connections: com.playbridge.sender.connection.ConnectionViewModel = org.koin.androidx.compose.koinViewModel()
+    val remoteTVRows by connections.remoteTVDirectory.rows.collectAsState()
+    val remoteSelection by connections.selectedRemoteDevice.collectAsState()
+    val selectedRemoteTV = remoteTVRows.firstOrNull { it.device.endpointKey == remoteSelection?.endpointKey }
+    val receiverState by connections.connectionState.collectAsState()
     val castSessionManager: CastSessionManager = org.koin.compose.koinInject()
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
     val hideEmptyAudioAndImages by settingsRepository.hideEmptyCastSheetTabs.collectAsState(initial = true)
@@ -452,6 +457,15 @@ fun CastSheet(
                     .fillMaxHeight()
                     .padding(bottom = 80.dp) // Provide padding so FAB doesn't cover content
             ) {
+                if (receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected && selectedRemoteTV?.paired == true) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(com.playbridge.sender.cast.remote.RemoteAvailability.RECEIVER_MISSING)
+                        TextButton(onClick = { connections.openPlayBridge(); onDismiss() }) {
+                            Text("Open PlayBridge on ${selectedRemoteTV.device.name}")
+                        }
+                        Text("Once PlayBridge connects, send again.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 // Header
             Row(
                 modifier = Modifier
@@ -671,7 +685,7 @@ fun CastSheet(
                     }
                 }
 
-                val sendEnabled = !packaging && when (castAction) {
+                val sendEnabled = !packaging && !(selectedRemoteTV?.paired == true && receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) && when (castAction) {
                     "browse" -> canBrowse && browseUrl.isNotBlank()
                     "queue"  -> playEnabled && canQueue
                     else     -> playEnabled

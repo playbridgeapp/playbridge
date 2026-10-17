@@ -3,6 +3,7 @@ import Foundation
 @main
 struct RemoteControlTests {
     @MainActor static func main() async throws {
+        RemoteAvailabilityTests.run()
         RemoteControlPresentationTests.run()
         RemoteNavigationGestureTests.run()
         try await RemoteHapticsTests.run()

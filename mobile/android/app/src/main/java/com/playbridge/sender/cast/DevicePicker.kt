@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast
 
+import androidx.compose.material3.TextButton
+
 import android.os.Build
 import android.view.WindowManager
 import androidx.compose.foundation.BorderStroke
@@ -346,6 +348,8 @@ fun DeviceConnectionDialog(
 ) {
     val viewModel: ConnectionViewModel = koinViewModel()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val remoteTVRows by viewModel.remoteTVDirectory.rows.collectAsState()
+    val selectedRemoteDevice by viewModel.selectedRemoteDevice.collectAsState()
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
@@ -391,22 +395,13 @@ fun DeviceConnectionDialog(
         return false
     }
 
-    val playBridgeList = ConnectionMerge.playBridgeHistory(history).map { saved ->
-        // Prefer the live discovered endpoint (DHCP/control URL can change) while
-        // keeping the history entry for credentials and last-connected metadata.
-        val live = ConnectionMerge.withDiscoveredEndpoint(saved, discoveredDevices)
-        UnifiedDevice(
-            connectDevice = live,
-            historyEntry = saved,
-            isOnline = pings[saved.endpointKey.toString()] == true ||
-                discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
-            lastConnected = saved.lastConnected,
-        )
+    val playBridgeList = remoteTVRows.map { row ->
+        UnifiedDevice(connectDevice = row.device,
+            historyEntry = history.firstOrNull { ConnectionMerge.isSameDevice(it, row.device) },
+            isOnline = row.receiverReachable || row.tvReachable, lastConnected = row.device.lastConnected,
+            remoteStatus = row.status)
     }.filterNot { isActive(it.connectDevice) }
-        .sortedWith(
-            compareByDescending<UnifiedDevice> { it.isOnline }
-                .thenByDescending { it.lastConnected ?: 0L },
-        )
+        .sortedWith(compareByDescending<UnifiedDevice> { it.isOnline }.thenByDescending { it.lastConnected ?: 0L })
 
     val recentExternal = ConnectionMerge.recentExternalHistory(history).map { saved ->
         val live = ConnectionMerge.withDiscoveredEndpoint(saved, discoveredDevices)
@@ -465,14 +460,7 @@ fun DeviceConnectionDialog(
                     ConnectionMerge.isSameDevice(it, target)
                 } == true
                 if (!alreadyLinked) {
-                    connectKnownOrPair(
-                        viewModel,
-                        history,
-                        target.ip,
-                        target.port,
-                        target.name,
-                        target.uuid,
-                    )
+                    viewModel.connect(target)
                 }
                 true
             }
@@ -495,7 +483,8 @@ fun DeviceConnectionDialog(
         ) {
             LocalNetworkBanners(status = networkStatus)
 
-            NowDestinationCard(
+            if (!(nativeSelected && !isConnected && remoteTVRows.any { it.device.endpointKey == selectedRemoteDevice?.endpointKey && (it.paired || it.ambiguous) })) NowDestinationCard(
+                nativeStatus = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey }?.status,
                 connectionState = connectionState,
                 route = route,
                 tvDevice = tvDevice,
@@ -601,6 +590,13 @@ fun DeviceConnectionDialog(
                             { viewModel.removeDeviceFromHistory(entry) }
                         },
                     )
+                    if (device.remoteStatus == "TV remote only") {
+                        TextButton(onClick = {
+                            viewModel.connect(device.connectDevice)
+                            viewModel.openPlayBridge()
+                            onDismiss()
+                        }) { Text("Open PlayBridge on ${device.connectDevice.name}") }
+                    }
                 }
             }
 

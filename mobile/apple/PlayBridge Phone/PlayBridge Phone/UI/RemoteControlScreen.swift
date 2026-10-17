@@ -9,6 +9,8 @@ struct RemoteControlScreen: View {
     @State private var showCastLink = false
     @State private var showDevices = false
     @State private var showTVApps = false
+    @State private var checkedSelection = false
+    @State private var selectionRevision: UInt64 = 0
     @State private var appTicket: AtvControlTicket?
     private var combined: CombinedRemotePolicy { vm.combinedRemote }
     @State private var castURL = ""
@@ -65,12 +67,34 @@ struct RemoteControlScreen: View {
             if vm.isAirPlay && !vm.airPlay.routeAvailable {
                 AirPlayDestinationRow()
             }
-            RemoteControlView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            if vm.remoteAvailability == .tvRemoteOnly {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(RemoteAvailability.receiverMissing)
+                    Button("Open PlayBridge") { vm.requestOpenPlayBridge() }
+                }.font(Theme.font(.subheadline)).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+            }
+            if vm.remoteAvailability == .offline {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Text(RemoteAvailability.offlineTitle).font(Theme.font(.headline))
+                    Text(RemoteAvailability.offlineMessage).multilineTextAlignment(.center)
+                    HStack {
+                        Button("Retry") { vm.retryIndependentRemote() }
+                        Button("Switch TV") { showDevices = true }
+                    }
+                    if selectedAmbiguous { Text("Pair again").foregroundStyle(Theme.danger) }
+                    Spacer()
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else { RemoteControlView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .padding(.horizontal, 16).padding(.bottom, 12)
         .foregroundStyle(Theme.onSurface)
         .background(Theme.surface.ignoresSafeArea())
-        .onAppear { vm.queryContext() }
+        .onAppear { selectionRevision = vm.destinationSelectionRevision; vm.queryContext(); checkSelection() }
+        .onDisappear { vm.pendingPlayBridgeLaunch = nil }
+        .onChange(of: vm.remoteTVScanComplete) { _ in checkSelection() }
+        .onChange(of: vm.remoteTVRecordsLoaded) { _ in checkSelection() }
         .sheet(isPresented: $showDevices) { DeviceConnectionSheet() }
         .sheet(isPresented: $showTVApps) {
             AtvAppLaunchSheet { value in vm.sendTVControl(.launch(value), ticket: appTicket) }
@@ -93,15 +117,26 @@ struct RemoteControlScreen: View {
         }
     }
 
+    private var selectedAmbiguous: Bool { vm.selectedRemoteTV?.ambiguous == true }
+    private func checkSelection() {
+        guard !checkedSelection else { return }
+        guard selectionRevision == vm.destinationSelectionRevision else { checkedSelection = true; return }
+        guard !AtvConnectionLifetime.waitForDiscovery(
+            hasSelection: vm.remoteEndpoint != nil || vm.isExternalReceiver || vm.isAirPlay,
+            settled: vm.remoteTVRecordsLoaded && (vm.remoteTVScanComplete || vm.remoteTVRecords.isEmpty)) else { return }
+        checkedSelection = true
+        if !vm.prepareIndependentRemote() { showDevices = true }
+    }
+
     private var statusChip: some View {
         let connected = vm.isConnected || combined.fullControlReady
         let accent = connected ? Color.green : Theme.onSurfaceVariant
-        let name = vm.receiverName ?? (vm.isExternalReceiver ? "receiver" : "TV")
-        let label = combined.fullControlReady && !vm.isConnected ? "TV control on \(name)" : RemoteControlPresentation.connectionTitle(connected: vm.isConnected,
+        let name = vm.selectedRemoteTV?.device.name ?? vm.receiverName ?? (vm.isExternalReceiver ? "receiver" : "TV")
+        let label = !vm.isConnected && (vm.selectedRemoteTV?.paired == true || selectedAmbiguous) ? "Remote · \(name)" : RemoteControlPresentation.connectionTitle(connected: vm.isConnected,
             external: vm.isExternalReceiver || vm.isAirPlay, context: vm.coordinator.activeContext,
             mediaKind: vm.coordinator.mediaKind, name: name)
-        let protocolName = vm.isAirPlay ? "AirPlay" : vm.externalReceiver?.protocolName ?? "PlayBridge"
-        let level = combined.badge ?? RemoteControlPresentation.controlLevel(policy: vm.nativeRemotePolicy,
+        let protocolName = vm.remoteAvailability == .tvRemoteOnly ? "TV remote" : vm.isAirPlay ? "AirPlay" : vm.externalReceiver?.protocolName ?? "PlayBridge"
+        let level = (selectedAmbiguous ? "Pair again" : combined.badge) ?? RemoteControlPresentation.controlLevel(policy: vm.nativeRemotePolicy,
             connected: connected, externalProtocol: vm.isAirPlay ? "airplay" : vm.externalReceiver?.protocolID)
         let accessibilityTitle = ([label] + (connected || combined.badge != nil ? [protocolName, level].compactMap { $0 } : [])).joined(separator: ", ") + (combined.televisionOff ? ", TV is off" : "")
         return Button { showDevices = true } label: {
@@ -114,6 +149,7 @@ struct RemoteControlScreen: View {
                         HStack(spacing: 6) {
                             Text(protocolName)
                                 .font(Theme.font(size: 10, weight: .medium))
+                            if vm.remoteAvailability == .tvRemoteOnly { Text("·").font(Theme.font(.caption)) }
                             if combined.televisionOff { Text("Off").font(Theme.font(size: 10, weight: .bold)).accessibilityLabel("TV is off") }
                             if let level {
                                 Text(level).font(Theme.font(size: 10, weight: .bold))

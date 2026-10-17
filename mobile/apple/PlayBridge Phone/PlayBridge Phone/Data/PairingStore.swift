@@ -10,19 +10,13 @@ final class PairingStore {
     private let keychainService = "com.playbridge.phone"
     private let keychainAccount = "paired_device"
     private let savedDevicesAccount = "saved_devices"
-    private let deviceUUIDKey = "pb_device_uuid"
 
     private let defaults = UserDefaults.standard
 
     // MARK: - This phone's identity (sent in pairing_request)
 
     /// Stable per-install UUID. Generated once and persisted.
-    var localDeviceUUID: String {
-        if let existing = defaults.string(forKey: deviceUUIDKey) { return existing }
-        let fresh = UUID().uuidString
-        defaults.set(fresh, forKey: deviceUUIDKey)
-        return fresh
-    }
+    var localDeviceUUID: String { PlayBridgePhoneIdentity.localDeviceUUID(defaults: defaults) }
 
     /// Human-readable name shown on the TV's Allow/Deny prompt.
     var localDeviceName: String {

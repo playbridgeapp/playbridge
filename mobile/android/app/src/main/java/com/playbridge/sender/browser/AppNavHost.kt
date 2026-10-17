@@ -72,6 +72,7 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
+import com.playbridge.sender.ui.dashboardPageCount
 import com.playbridge.sender.cast.mirror.ScreenMirrorScreen
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
@@ -236,6 +237,12 @@ fun AppNavHost(
     val tvDevice by connectionViewModel.tvDevice.collectAsStateWithLifecycle(initialValue = null)
     val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsStateWithLifecycle()
     val castRoute by connectionViewModel.route.collectAsStateWithLifecycle()
+    LaunchedEffect(connectionViewModel) {
+        connectionViewModel.independentRemoteRequests.collect { onScreenChange(Screen.Remote) }
+    }
+    val selectedRemoteDevice by connectionViewModel.selectedRemoteDevice.collectAsStateWithLifecycle()
+    val remoteTVRows by connectionViewModel.remoteTVDirectory.rows.collectAsStateWithLifecycle()
+    val remoteTV = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey && castRoute is CastSessionManager.Route.NativeTv }
     // Authoritative routing intent — reactive so screens follow device-picker changes live.
     val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsStateWithLifecycle()
     val allHistory by historyDao.getAll().collectAsStateWithLifecycle(initialValue = emptyList())
@@ -348,9 +355,9 @@ fun AppNavHost(
     val librarySearchResultsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val libraryCatalogRowScrollStates = remember { mutableStateMapOf<String, LazyListState>() }
     // AnimatedContent recreates DashboardScreen after navigating away; keep its tile page here.
+    val dashboardPages = remember(bridgedApps) { dashboardPageCount(bridgedApps) }
     val dashboardPagerState = rememberPagerState(pageCount = {
-        val builtInCount = if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) 8 else 7
-        com.playbridge.sender.ui.DashboardTileOrder.pageCount(builtInCount + 1 + bridgedApps.size.coerceAtLeast(1))
+        dashboardPages
     })
 
     // State to determine if search focus should be requested
@@ -1008,7 +1015,7 @@ fun AppNavHost(
                         viewModel = connectionViewModel,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (
-                            activeExternalDevice != null ||
+                            activeExternalDevice != null || remoteTV?.paired == true ||
                             (castRoute is CastSessionManager.Route.NativeTv &&
                                 connectionState is WebSocketClient.ConnectionState.Connected)
                         ) {
@@ -1073,9 +1080,9 @@ fun AppNavHost(
                                 }
                                 com.playbridge.sender.cast.remote.RemoteEffect.UnlinkWebsite -> linkedPageCastCoordinator.unlink("unlinked")
                                 com.playbridge.sender.cast.remote.RemoteEffect.RetryConnection -> {
-                                    if (castRoute is CastSessionManager.Route.External || tvDevice == null) {
+                                    if (castRoute is CastSessionManager.Route.External || selectedRemoteDevice == null) {
                                         showDevicePicker = true
-                                    } else tvDevice?.let { connectionViewModel.connect(it) }
+                                    } else connectionViewModel.retryIndependentRemote()
                                 }
                                 is com.playbridge.sender.cast.remote.RemoteEffect.Notice -> if (effect.subtitle) Toast.makeText(appContext, effect.message, Toast.LENGTH_LONG).show()
                             }
@@ -1125,7 +1132,7 @@ fun AppNavHost(
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (
-                            activeExternalDevice != null ||
+                            activeExternalDevice != null || remoteTV?.paired == true ||
                             (castRoute is CastSessionManager.Route.NativeTv &&
                                 connectionState is WebSocketClient.ConnectionState.Connected)
                         ) {
@@ -1165,7 +1172,7 @@ fun AppNavHost(
                         viewModel = libraryViewModel,
                         tvName = activeExternalDevice?.name
                             ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
-                        isTvConnected = activeExternalDevice != null ||
+                        isTvConnected = activeExternalDevice != null || remoteTV?.paired == true ||
                             (castRoute is CastSessionManager.Route.NativeTv &&
                                 connectionState is WebSocketClient.ConnectionState.Connected),
                         routeTargetsTv = routeTargetsTv,
@@ -1620,6 +1627,7 @@ fun AppNavHost(
                         isSecure = !externalSelected &&
                             (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
                         connectedDeviceName = if (externalSelected) activeExternalDevice?.name else tvDevice?.name,
+                        remoteSubtitle = remoteTV?.let { "${it.device.name} · ${it.status}" } ?: "Control your TV",
                         onNavigate = { screen ->
                             onScreenChange(screen)
                         },
@@ -1845,6 +1853,9 @@ private fun NowPlayingBarHost(
     onOpenRemote: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val selectedRemoteDevice by connectionViewModel.selectedRemoteDevice.collectAsStateWithLifecycle()
+    val remoteTVRows by connectionViewModel.remoteTVDirectory.rows.collectAsStateWithLifecycle()
+    val remoteTV = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey && castRoute is CastSessionManager.Route.NativeTv }
     val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
     val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
     val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
@@ -1892,6 +1903,10 @@ private fun NowPlayingBarHost(
             secondaryText = "on ${resolvedDeviceName ?: "TV"}" +
                 protocolName?.let { " · $it" }.orEmpty()
         }
+        remoteTV?.paired == true && !wsConnected -> {
+            primaryText = remoteTV.device.name
+            secondaryText = remoteTV.status
+        }
         externalActive || (nativeSelected && wsConnected) -> {
             primaryText = resolvedDeviceName ?: "TV"
             secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
@@ -1907,7 +1922,7 @@ private fun NowPlayingBarHost(
         secondaryText = secondaryText,
         leadingIcon = leadingIcon,
         onClick = {
-            if (playing) {
+            if (playing || remoteTV?.paired == true) {
                 if (!externalActive) {
                     connectionViewModel.webSocketClient.send(
                         com.playbridge.shared.protocol.createContextQueryJson()

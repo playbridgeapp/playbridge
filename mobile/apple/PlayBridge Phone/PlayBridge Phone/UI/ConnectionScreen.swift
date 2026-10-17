@@ -31,7 +31,7 @@ struct ConnectionScreen: View {
                     onDisconnect: { vm.disconnect() }
                 )
                 ConnectionThisPhoneRow(
-                    selected: !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
+                    selected: !vm.nativeReceiverSelected && !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
                     compact: false,
                     onSelect: { vm.disconnect() }
                 )
@@ -62,12 +62,13 @@ struct ConnectionScreen: View {
     }
 
     private var activePlayBridgeKey: String? {
-        guard vm.isConnected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
+        guard vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice,
+              vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV?.paired == true || vm.selectedRemoteTV?.ambiguous == true else { return nil }
         return vm.deviceKey(device)
     }
 
     private var sortedSavedPlayBridgeDevices: [PairedDevice] {
-        vm.savedDevices
+        vm.remoteTVRows.map(\.device)
             .filter { vm.deviceKey($0) != activePlayBridgeKey }
             .sorted {
                 let leftOnline = vm.onlineStatus[vm.deviceKey($0)] == true
@@ -75,15 +76,6 @@ struct ConnectionScreen: View {
                 if leftOnline != rightOnline { return leftOnline && !rightOnline }
                 return $0.lastConnected > $1.lastConnected
             }
-    }
-
-    private var unpairedPlayBridgeDevices: [DiscoveredDevice] {
-        vm.browser.devices.filter { discovered in
-            !vm.savedDevices.contains { saved in samePlayBridgeDevice(discovered, saved) } &&
-                !(vm.isConnected && !vm.isExternalReceiver && vm.pairedDevice.map {
-                    samePlayBridgeDevice(discovered, $0)
-                } == true)
-        }
     }
 
     private var recentOtherDevices: [ExternalReceiverDevice] {
@@ -117,36 +109,21 @@ struct ConnectionScreen: View {
             }.buttonStyle(.plain).accessibilityLabel("Manage paired TVs for Full control")
 
             if PlayBridgeListEmptyState.showsEmptyCopy(
-                savedCount: vm.savedDevices.count,
-                activeKey: activePlayBridgeKey,
-                unpairedCount: unpairedPlayBridgeDevices.count
+                savedCount: vm.remoteTVRows.count,
+                activeKey: activePlayBridgeKey
             ) {
                 emptyHint(
                     discoveryIsScanning
                         ? "Looking for PlayBridge TVs on your network…"
                         : "No PlayBridge TVs yet. Open PlayBridge on your TV, then refresh."
                 )
-            } else if !sortedSavedPlayBridgeDevices.isEmpty || !unpairedPlayBridgeDevices.isEmpty {
+            } else if !sortedSavedPlayBridgeDevices.isEmpty {
                 ForEach(Array(sortedSavedPlayBridgeDevices.enumerated()), id: \.offset) { _, device in
                     ConnectionPairedDeviceRow(
                         device: device,
-                        online: vm.onlineStatus[vm.deviceKey(device)] == true,
+                        online: vm.remoteTVRows.first { $0.id == AtvReceiverTarget(playBridge: device).endpoint }.map { $0.receiverReachable || $0.tvReachable } ?? false,
                         onSelect: { vm.connectSaved(device) },
-                        onRemove: { vm.forget(device) }
-                    )
-                }
-                ForEach(unpairedPlayBridgeDevices) { device in
-                    let display = PairedDevice(
-                        ip: device.ip,
-                        port: device.port,
-                        name: device.name,
-                        uuid: device.uuid,
-                        wssPort: device.wssPort
-                    )
-                    ConnectionPairedDeviceRow(
-                        device: display,
-                        online: true,
-                        onSelect: { vm.connect(to: device) }
+                        onRemove: vm.savedDevices.contains { vm.deviceKey($0) == vm.deviceKey(device) } ? { vm.forget(device) } : nil
                     )
                 }
             }

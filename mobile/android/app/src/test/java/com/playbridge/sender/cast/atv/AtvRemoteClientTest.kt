@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class AtvRemoteClientTest {
     @Test fun abiMismatchDoesNotStart() = runBlocking<Unit> {
         val native = FakeAtvNative(abi = 2)
-        val client = AtvRemoteClient(native, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(SupervisorJob() + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             val error = runCatching { client.discover(0) }.exceptionOrNull()
             assertTrue(error is AtvCommandException)
@@ -57,7 +57,7 @@ class AtvRemoteClientTest {
 
     @Test fun commandsCarryExplicitNullsAndCorrelateByRequestId() = runBlocking<Unit> {
         val native = FakeAtvNative()
-        val client = AtvRemoteClient(native, CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(SupervisorJob() + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             client.key(name = "HOME", code = null, direction = "short")
             val key = JSONObject(native.submitted.last())
@@ -80,10 +80,27 @@ class AtvRemoteClientTest {
         assertTrue(native.freed)
     }
 
+    @Test fun pairingPreparationPassesExistingCredentialsAndRetainsNativeNameWithoutLogging() = runBlocking<Unit> {
+        val native = FakeAtvNative()
+        val client = AtvRemoteClient(native, CoroutineScope(SupervisorJob() + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
+        try {
+            val prepared = client.preparePairingIdentity(AtvClientIdentity("OLD-CERT", "OLD-KEY"))
+            val request = JSONObject(native.submitted.last())
+            assertTrue(request.getString("cert_pem") == "OLD-CERT")
+            assertTrue(request.getString("key_pem") == "OLD-KEY")
+            assertTrue(request.getString("client_name") == atvClientName(android.os.Build.MODEL.orEmpty(), "fixture-phone-uuid"))
+            assertFalse(request.toString().contains("fixture-phone-uuid"))
+            assertTrue(prepared.replacesLegacy && prepared.clientName == "PlayBridge (Android) fixture")
+            assertTrue(!prepared.toString().contains("fixture"))
+            val decoded = parseIdentity(JSONObject("""{"cert_pem":"c","key_pem":"k","fingerprint":"${"ab".repeat(32)}"}"""))
+            assertFalse(decoded.replacesLegacy)
+        } finally { client.close() }
+    }
+
     @Test fun closeWaitsForBlockedNativePollAndFreesExactlyOnce() = runBlocking<Unit> {
         val native = BlockingNative(blockPoll = true)
         val owner = SupervisorJob()
-        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             client.key("HOME", null, "short")
             assertTrue(native.entered.await(2, TimeUnit.SECONDS))
@@ -108,7 +125,7 @@ class AtvRemoteClientTest {
     @Test fun submitAndConcurrentCloseAreSerialized() = runBlocking<Unit> {
         val native = BlockingNative(blockPoll = false)
         val owner = SupervisorJob()
-        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             val submit = async(Dispatchers.IO) { runCatching { client.key("HOME", null, "short") } }
             assertTrue(native.entered.await(2, TimeUnit.SECONDS))
@@ -129,7 +146,7 @@ class AtvRemoteClientTest {
     @Test fun disconnectReenterIgnoresOldClosureAndStateEvents() = runBlocking<Unit> {
         val native = FakeAtvNative()
         val owner = SupervisorJob()
-        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             client.connect("host-a", "CERT", "KEY", "ab".repeat(32))
             val oldId = native.connectedId!!
@@ -156,7 +173,7 @@ class AtvRemoteClientTest {
     @Test fun replacingConnectionRetiresOldWaiterWithoutClosingTheNewOne() = runBlocking<Unit> {
         val native = FakeAtvNative()
         val owner = SupervisorJob()
-        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO))
+        val client = AtvRemoteClient(native, CoroutineScope(owner + Dispatchers.IO), phoneUUID = { "fixture-phone-uuid" })
         try {
             client.connect("host-a", "CERT", "KEY", "ab".repeat(32))
             val oldId = native.connectedId!!
@@ -198,6 +215,9 @@ private class FakeAtvNative(private val abi: Int = ATV_REMOTE_ABI) : AtvNativeBo
             events.add("""{"event":"closed","request_id":"$connectedId","kind":"closed"}""")
         }
         val event = when (command.getString("command")) {
+            "generate_identity" -> JSONObject().put("event", "identity").put("request_id", id)
+                .put("cert_pem", "NEW-CERT").put("key_pem", "NEW-KEY").put("fingerprint", "ab".repeat(32))
+                .put("client_name", "PlayBridge (Android) fixture").put("replaces_legacy", true).toString()
             "key" -> """{"event":"operation","request_id":"$id","operation":"key","ok":true}"""
             "connect" -> """{"event":"connected","request_id":"$id"}"""
             else -> """{"event":"operation","request_id":"$id","operation":"other","ok":true}"""

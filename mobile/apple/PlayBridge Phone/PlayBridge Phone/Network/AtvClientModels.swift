@@ -47,7 +47,22 @@ struct AtvIdentity: Equatable, Decodable, CustomStringConvertible, CustomDebugSt
     let certPem: String
     let keyPem: String
     let fingerprint: String
-    enum CodingKeys: String, CodingKey { case certPem = "cert_pem", keyPem = "key_pem", fingerprint }
+    let clientName: String?
+    let replacesLegacy: Bool
+    init(certPem: String, keyPem: String, fingerprint: String, clientName: String? = nil, replacesLegacy: Bool = false) {
+        self.certPem = certPem; self.keyPem = keyPem; self.fingerprint = fingerprint
+        self.clientName = clientName; self.replacesLegacy = replacesLegacy
+    }
+    enum CodingKeys: String, CodingKey {
+        case certPem = "cert_pem", keyPem = "key_pem", fingerprint, clientName = "client_name", replacesLegacy = "replaces_legacy"
+    }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(certPem: try values.decode(String.self, forKey: .certPem), keyPem: try values.decode(String.self, forKey: .keyPem),
+                  fingerprint: try values.decode(String.self, forKey: .fingerprint),
+                  clientName: try values.decodeIfPresent(String.self, forKey: .clientName),
+                  replacesLegacy: try values.decodeIfPresent(Bool.self, forKey: .replacesLegacy) ?? false)
+    }
     var description: String { "AtvIdentity(redacted)" }
     var debugDescription: String { description }
 }

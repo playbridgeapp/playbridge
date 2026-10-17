@@ -1,5 +1,9 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.fullControlSupports
+
+import com.playbridge.sender.cast.remote.fullControlReady
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -83,9 +87,10 @@ internal fun remoteVolumeLabel(
 @Composable
 internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispatch: (RemoteAction) -> Unit) {
     val nav = RemoteNavAvailability(layout.nav.back.enabled, layout.nav.home.enabled, layout.nav.keys.enabled, layout.nav.volume.enabled)
-    val nativeVolume = state.nativePolicy != null
+    val nativeVolume = state.nativePolicy != null || state.fullControlReady
     if (!nativeVolume && !nav.back && !nav.home && !nav.keys && !nav.volume) return
-    val mute = state.nativePolicy?.volume?.operations?.contains("mute_toggle") == true && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Mute in state.capabilities.keys
+    val mute = state.fullControlSupports(RemoteAction.Key(RemoteKey.Mute)) ||
+        (state.nativePolicy?.volume?.operations?.contains("mute_toggle") == true && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Mute in state.capabilities.keys)
     val enter = nativeVolume && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Enter in state.capabilities.keys && !nav.keys
     val delete = state.nativePolicy?.operations?.text?.contains("delete") == true && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && state.capabilities.text.delete == Support.Supported && !nav.keys
     val volumeTitle = state.volumeLabel()

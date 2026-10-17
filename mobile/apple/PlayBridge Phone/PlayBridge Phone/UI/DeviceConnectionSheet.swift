@@ -10,12 +10,13 @@ struct DeviceConnectionSheet: View {
     @State private var pendingExternalID: String?
 
     private var activePairedDeviceKey: String? {
-        guard vm.isConnected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
+        guard vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice,
+              vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV?.paired == true || vm.selectedRemoteTV?.ambiguous == true else { return nil }
         return vm.deviceKey(device)
     }
 
     private var playBridgeDevices: [PairedDevice] {
-        vm.savedDevices
+        vm.remoteTVRows.map(\.device)
             .filter { vm.deviceKey($0) != activePairedDeviceKey }
             .sorted {
                 let leftOnline = vm.onlineStatus[vm.deviceKey($0)] == true
@@ -41,7 +42,7 @@ struct DeviceConnectionSheet: View {
                     }
 
                     ConnectionThisPhoneRow(
-                        selected: !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
+                        selected: !vm.nativeReceiverSelected && !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
                         compact: true
                     ) {
                         vm.disconnect()
@@ -63,7 +64,7 @@ struct DeviceConnectionSheet: View {
                     .padding(.top, 4)
 
                     if PlayBridgeListEmptyState.showsEmptyCopy(
-                        savedCount: vm.savedDevices.count,
+                        savedCount: vm.remoteTVRows.count,
                         activeKey: activePairedDeviceKey
                     ) {
                         Text("No PlayBridge TVs yet. Tap Find more devices to scan and pair.")
@@ -74,13 +75,13 @@ struct DeviceConnectionSheet: View {
                         ForEach(Array(playBridgeDevices.enumerated()), id: \.offset) { _, device in
                             ConnectionPairedDeviceRow(
                                 device: device,
-                                online: vm.onlineStatus[vm.deviceKey(device)] == true,
+                                online: vm.remoteTVRows.first { $0.id == AtvReceiverTarget(playBridge: device).endpoint }.map { $0.receiverReachable || $0.tvReachable } ?? false,
                                 compact: true,
                                 onSelect: {
                                     vm.connectSaved(device)
                                     dismiss()
                                 },
-                                onRemove: { vm.forget(device) }
+                                onRemove: vm.savedDevices.contains { vm.deviceKey($0) == vm.deviceKey(device) } ? { vm.forget(device) } : nil
                             )
                         }
                     }
@@ -180,6 +181,8 @@ struct ConnectionSectionLabel: View {
 }
 
 struct ConnectionNowDestinationCard: View {
+    @EnvironmentObject private var nav: NavigationViewModel
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var vm: ConnectionViewModel
     var compact = false
     var onRemote: (() -> Void)?
@@ -204,6 +207,10 @@ struct ConnectionNowDestinationCard: View {
                     statusFilled: vm.airPlay.routeAvailable, secure: nil)
             } else if case .connected(let name, let secure) = vm.state {
                 activeCard(name: name, secure: secure)
+            } else if vm.nativeReceiverSelected, let row = vm.selectedRemoteTV, row.paired || row.ambiguous {
+                activeShell(name: row.device.name, subtitle: row.ambiguous ? "Pair again" : nil,
+                    systemImage: "tv", badge: nil, status: row.status,
+                    statusFilled: row.tvReachable, secure: nil)
             } else if vm.connectionIsConnecting {
                 activeShell(
                     name: connectingName,
@@ -251,7 +258,7 @@ struct ConnectionNowDestinationCard: View {
             subtitle: detail,
             systemImage: receiver == nil ? "tv" : "airplayvideo",
             badge: receiver?.protocolName,
-            status: "Connected",
+            status: receiver == nil ? (vm.selectedRemoteTV?.status ?? "PlayBridge") : "Connected",
             statusFilled: true,
             secure: receiver == nil ? secure : nil
         )
@@ -300,6 +307,13 @@ struct ConnectionNowDestinationCard: View {
                 }
             }
 
+            if !vm.isConnected, let row = vm.selectedRemoteTV, row.paired, !row.ambiguous {
+                Button("Open PlayBridge on \(row.device.name)") {
+                    vm.requestOpenPlayBridge()
+                    nav.navigate(to: .remote)
+                    dismiss()
+                }.font(Theme.font(.subheadline))
+            }
             HStack(spacing: 8) {
                 Spacer()
                 if let onRemote {
@@ -349,6 +363,7 @@ struct ConnectionThisPhoneRow: View {
 }
 
 struct ConnectionPairedDeviceRow: View {
+    @EnvironmentObject private var vm: ConnectionViewModel
     let device: PairedDevice
     let online: Bool
     var compact = false
@@ -359,7 +374,7 @@ struct ConnectionPairedDeviceRow: View {
         ConnectionDeviceRowShell(
             name: device.name,
             endpoint: "\(device.ip):\(device.port)",
-            status: online ? "Online" : connectionLastSeen(device.lastConnected),
+            status: vm.remoteTVRows.first { $0.id == AtvReceiverTarget(playBridge: device).endpoint }?.status ?? "Offline",
             online: online,
             systemImage: "tv",
             badge: nil,

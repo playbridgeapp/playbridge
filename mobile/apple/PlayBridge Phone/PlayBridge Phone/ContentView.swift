@@ -7,6 +7,8 @@ struct ContentView: View {
     @EnvironmentObject private var store: BrowserStore
     @StateObject private var pageCasting = PageCastCoordinator()
     @StateObject private var atv = AtvRemoteCoordinator()
+    @StateObject private var remoteTVBrowser = AtvBonjourBrowser()
+    @State private var remoteTVScan: Task<Void, Never>?
     @State private var showDestinationPicker = false
     @State private var attemptedReconnectInForeground = false
 
@@ -59,6 +61,8 @@ struct ContentView: View {
         } message: { Text(vm.operationError ?? "") }
         .onAppear {
             vm.atvRemote = atv
+            atv.reloadManagement()
+            updateRemoteTVDiscovery()
             nav.browserStore = store
             store.onBridgedAppExternalNavigation = { [weak nav] in nav?.navigate(to: .browser) }
             pageCasting.attach(vm)
@@ -76,6 +80,18 @@ struct ContentView: View {
             reconnectOnActivation()
             updateAtv()
         }
+        .onReceive(atv.$records) { records in
+            vm.remoteTVRecords = records
+            Task { @MainActor in updateRemoteTVDiscovery() }
+        }
+        .onReceive(atv.$recordsLoaded) { vm.remoteTVRecordsLoaded = $0 }
+        .onReceive(remoteTVBrowser.$devices) { devices in
+            vm.remoteTVDiscoveries = devices
+            atv.updateDiscovery(devices)
+        }
+        .onReceive(atv.$channel) { _ in
+            Task { @MainActor in vm.objectWillChange.send(); vm.completePlayBridgeLaunchIfReady() }
+        }
         .onReceive(vm.objectWillChange) { _ in
             Task { @MainActor in pageCasting.refresh(); updateAtv() }
         }
@@ -83,7 +99,9 @@ struct ContentView: View {
         .onReceive(vm.$nativeReceiverSelected) { selected in updateAtv(selection: (selected, vm.pairedDevice)) }
         .onReceive(nav.$currentScreen) { screen in updateAtv(screen: screen) }
         .onChange(of: scenePhase) { phase in
+            if phase != .active { vm.pendingPlayBridgeLaunch = nil }
             updateAtv()
+            updateRemoteTVDiscovery()
             if phase == .background {
                 attemptedReconnectInForeground = false
             } else if phase == .active {
@@ -110,11 +128,25 @@ struct ContentView: View {
         }
     }
 
+    private func updateRemoteTVDiscovery() {
+        guard scenePhase == .active, !vm.remoteTVRecords.isEmpty else {
+            remoteTVBrowser.stop(); remoteTVScan?.cancel(); remoteTVScan = nil
+            vm.remoteTVScanComplete = false
+            return
+        }
+        guard !remoteTVBrowser.isScanning else { return }
+        remoteTVBrowser.start()
+        remoteTVScan = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 4_000_000_000) } catch { return }
+            vm.remoteTVScanComplete = true
+        }
+    }
+
     private func updateAtv(selection: (Bool, PairedDevice?)? = nil, screen: AppScreen? = nil) {
         let (selected, device) = selection ?? (vm.nativeReceiverSelected, vm.pairedDevice)
         let target = selected && !vm.isAirPlay && !vm.isExternalReceiver
             ? device.map { AtvReceiverTarget(playBridge: $0) } : nil
-        atv.update(receiver: target, remoteVisible: (screen ?? nav.currentScreen) == .remote && vm.websitePlayerItem == nil, foreground: scenePhase == .active)
+        atv.update(receiver: target, remoteVisible: (screen ?? nav.currentScreen) == .remote && vm.websitePlayerItem == nil, foreground: scenePhase != .background)
     }
 
     private func reconnectOnActivation() {

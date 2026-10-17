@@ -44,21 +44,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.LibraryBooks
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.automirrored.filled.ScreenShare
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -86,7 +76,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +98,7 @@ fun DashboardScreen(
     isConnected: Boolean,
     isSecure: Boolean,
     connectedDeviceName: String?,
+    remoteSubtitle: String = "Control your TV",
     onNavigate: (Screen) -> Unit,
     onExit: () -> Unit = {},
     // Close the Dashboard (top-left X) → return to the screen it was opened from.
@@ -156,99 +146,7 @@ fun DashboardScreen(
             (0 until array.length()).map { array.getString(it) }
         }.getOrDefault(emptyList()))
     }
-    val builtInItems = listOf(
-        DashboardItem(
-            icon = Icons.Default.Language,
-            title = "Browser",
-            subtitle = "Browse the web",
-            screen = Screen.Browser,
-            gradientColors = listOf(Color(0xFF1565C0), Color(0xFF1E88E5))
-        ),
-        DashboardItem(
-            icon = Icons.AutoMirrored.Filled.LibraryBooks,
-            title = "Library (legacy)",
-            subtitle = "Deprecated · use the new Library",
-            screen = Screen.Library,
-            gradientColors = listOf(Color(0xFF6A1B9A), Color(0xFF8E24AA))
-        ),
-        DashboardItem(
-            icon = Icons.Default.Tv,
-            title = "Connection",
-            subtitle = if (isConnected) "Connected" else "Not connected",
-            screen = Screen.Connection,
-            gradientColors = if (isConnected)
-                listOf(Color(0xFF2E7D32), Color(0xFF43A047))
-            else
-                listOf(Color(0xFF424242), Color(0xFF616161))
-        ),
-        DashboardItem(
-            icon = Icons.AutoMirrored.Filled.ScreenShare,
-            title = "Screen Mirror",
-            subtitle = "Share your screen",
-            screen = Screen.ScreenMirror,
-            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
-        ),
-        DashboardItem(
-            icon = Icons.Default.Folder,
-            title = "Phone Files",
-            subtitle = "Cast videos & audio",
-            screen = Screen.PhoneFiles,
-            gradientColors = listOf(Color(0xFF4527A0), Color(0xFF5E35B1))
-        ),
-        DashboardItem(
-            icon = Icons.Default.Cloud,
-            title = "Debrid",
-            subtitle = "Cloud torrents",
-            screen = Screen.DebridLibrary,
-            gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
-        ),
-        DashboardItem(
-            icon = Icons.Default.LiveTv,
-            title = "IPTV",
-            subtitle = "Live channels",
-            screen = Screen.Iptv,
-            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
-        ),
-        DashboardItem(
-            icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-            title = "Collections",
-            subtitle = "Your playlists",
-            screen = Screen.Collections,
-            gradientColors = listOf(Color(0xFFAD1457), Color(0xFFD81B60))
-        ),
-    ).filter {
-        // Debrid is FOSS-only; the Play flavor hides the tile entirely.
-        com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED || it.screen != Screen.DebridLibrary
-    }
-
-    val availableItems = builtInItems + DashboardItem(
-        icon = Icons.Default.History,
-        title = "Cast History",
-        subtitle = "Recent casts",
-        screen = Screen.CastHistory,
-        gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00)),
-    ) + if (bridgedApps.isEmpty()) {
-        listOf(DashboardItem(
-            icon = Icons.Default.Apps,
-            title = "Bridged Apps",
-            subtitle = "Open Browser to add",
-            screen = Screen.Browser,
-            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
-            id = "bridged-apps",
-        ))
-    } else {
-        bridgedApps.map { app ->
-            DashboardItem(
-                icon = Icons.Default.Apps,
-                title = app.name,
-                subtitle = "Bridged App",
-                screen = Screen.Browser,
-                gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
-                id = "app:${app.origin}",
-                app = app,
-            )
-        }
-    }
+    val availableItems = dashboardItems(isConnected, remoteSubtitle, bridgedApps)
     val availableIds = availableItems.map { it.id }
     val orderedIds = remember(savedOrder, availableIds) {
         if (!onboardingPrefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
@@ -984,24 +882,3 @@ private fun isCurrentScreen(current: Screen, target: Screen): Boolean {
         else -> current == target
     }
 }
-
-private data class DashboardItem(
-    val icon: ImageVector,
-    val title: String,
-    val subtitle: String,
-    val screen: Screen,
-    val gradientColors: List<Color>,
-    val id: String = when (screen) {
-        Screen.Browser -> "browser"
-        Screen.Library -> "library"
-        Screen.Connection -> "connection"
-        Screen.ScreenMirror -> "screen-mirror"
-        Screen.PhoneFiles -> "phone-files"
-        Screen.DebridLibrary -> "debrid"
-        Screen.Iptv -> "iptv"
-        Screen.Collections -> "collections"
-        Screen.CastHistory -> "cast-history"
-        else -> error("Unsupported dashboard destination")
-    },
-    val app: BridgedApp? = null,
-)

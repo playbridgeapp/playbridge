@@ -25,7 +25,20 @@ import java.util.concurrent.atomic.AtomicLong
 /** ABI of `pb_atv_*`. Independent of the Google Cast session ABI. */
 internal const val ATV_REMOTE_ABI = 1
 
-internal const val ATV_CLIENT_NAME = "PlayBridge"
+internal const val ATV_CLIENT_NAME = "PlayBridge (Android)"
+
+internal fun atvClientName(model: String, phoneUUID: String): String {
+    require(phoneUUID.isNotEmpty()) { "Phone identity unavailable" }
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(("atv-remote:" + phoneUUID).toByteArray(Charsets.UTF_8))
+    val suffix = digest.take(4).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    return atvClientLabel(model) + " " + suffix
+}
+
+internal fun atvClientLabel(model: String): String {
+    val safe = model.filter { it.isLetterOrDigit() && it.code < 128 || it in " ._-" }.trim().take(32)
+    return "PlayBridge (${safe.ifBlank { "Android" }})"
+}
 
 internal class AtvCommandException(val kind: String, message: String) : Exception(message)
 
@@ -40,7 +53,12 @@ internal data class AtvDiscoveredDevice(
         get() = txt.firstOrNull { (key, _) -> key.equals("bt", ignoreCase = true) }?.second
 }
 
-internal data class AtvIdentity(val certPem: String, val keyPem: String, val fingerprint: String)
+internal data class AtvIdentity(
+    val certPem: String, val keyPem: String, val fingerprint: String,
+    val clientName: String? = null, val replacesLegacy: Boolean = false,
+) {
+    override fun toString(): String = "AtvIdentity(redacted)"
+}
 
 internal data class AtvPairingStarted(val serverName: String?, val fingerprint: String, val mac: String?)
 
@@ -80,6 +98,7 @@ internal interface AtvControlSession {
     val television: StateFlow<AtvTelevisionState?>
     suspend fun discover(timeoutMs: Long): List<AtvDiscoveredDevice>
     suspend fun generateIdentity(clientName: String): AtvIdentity
+    suspend fun preparePairingIdentity(existing: AtvClientIdentity?): AtvIdentity
     suspend fun startPairing(host: String, certPem: String, keyPem: String, clientName: String): AtvPairingStarted
     suspend fun finishPairing(code: String): AtvPaired
     suspend fun cancelPairing()
@@ -97,6 +116,7 @@ internal interface AtvControlSession {
 internal class AtvRemoteClient(
     private val native: AtvNativeBoundary,
     private val scope: CoroutineScope,
+    private val phoneUUID: () -> String,
 ) : AtvControlSession {
     private val ids = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
@@ -116,8 +136,16 @@ internal class AtvRemoteClient(
         return parseDevices(event)
     }
 
-    override suspend fun generateIdentity(clientName: String): AtvIdentity {
-        val event = roundTrip(command("generate_identity") { put("client_name", clientName) }, 30_000L)
+    override suspend fun generateIdentity(clientName: String): AtvIdentity = prepareIdentity(clientName, null)
+
+    override suspend fun preparePairingIdentity(existing: AtvClientIdentity?): AtvIdentity =
+        prepareIdentity(atvClientName(android.os.Build.MODEL.orEmpty(), phoneUUID()), existing)
+
+    private suspend fun prepareIdentity(clientName: String, existing: AtvClientIdentity?): AtvIdentity {
+        val event = roundTrip(command("generate_identity") {
+            put("client_name", clientName)
+            existing?.let { put("cert_pem", it.certPem); put("key_pem", it.keyPem) }
+        }, 30_000L)
         return parseIdentity(event)
     }
 
@@ -384,7 +412,11 @@ internal fun parseIdentity(event: JSONObject): AtvIdentity {
     if (cert.isBlank() || key.isBlank() || !isFingerprint(fingerprint)) {
         throw AtvCommandException("protocol", "invalid Android TV remote event")
     }
-    return AtvIdentity(cert, key, fingerprint)
+    val name = event.optString("client_name").takeIf { it.isNotBlank() }
+    if (name != null && (name.length > 64 || name.any(Char::isISOControl))) {
+        throw AtvCommandException("protocol", "invalid Android TV remote event")
+    }
+    return AtvIdentity(cert, key, fingerprint, name, event.optBoolean("replaces_legacy", false))
 }
 
 internal fun parsePairingStarted(event: JSONObject): AtvPairingStarted = AtvPairingStarted(

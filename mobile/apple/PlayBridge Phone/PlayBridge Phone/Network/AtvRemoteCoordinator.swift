@@ -25,17 +25,21 @@ struct AtvPairingState: Equatable {
     @Published private(set) var channel = AtvChannelState()
     @Published private(set) var pairing = AtvPairingState()
     @Published private(set) var records: [AtvTvRecord] = []
+    @Published private(set) var recordsLoaded = false
     @Published private(set) var storageError: AtvStorageError?
     @Published private(set) var identityRecovered = false
     @Published private(set) var managementBusy = false
     private let storage: AtvCoordinatorStorage
-    private let discovery: AtvCoordinatorDiscovery
     private let clock: AtvCoordinatorClock
     private let paths: AtvPathWatching
     private let makeClient: @MainActor () -> AtvCoordinatorClient
     private var receiver: AtvReceiverTarget?
     private var visible = false
-    private var foreground = false
+    private var lifetime = AtvConnectionLifetime()
+    private var foreground: Bool { lifetime.foreground }
+    private var graceWork: Task<Void, Never>?
+    private var graceGeneration = UUID()
+    private var discoveries: [AtvDiscoveredDevice] = []
     private var generation = UUID()
     private var attempt = UUID()
     private var permit = AtvStoragePermit()
@@ -58,28 +62,74 @@ struct AtvPairingState: Equatable {
     private var managementGeneration = UUID()
 
     init(storage: AtvCoordinatorStorage = AtvQueuedCredentialStore(),
-         discovery: AtvCoordinatorDiscovery? = nil,
          clock: AtvCoordinatorClock? = nil,
          paths: AtvPathWatching? = nil,
          makeClient: @escaping @MainActor () -> AtvCoordinatorClient = { AtvLiveCoordinatorClient() }) {
-        self.storage = storage; self.discovery = discovery ?? AtvBonjourBrowser(); self.clock = clock ?? AtvSystemCoordinatorClock()
+        self.storage = storage; self.clock = clock ?? AtvSystemCoordinatorClock()
         self.paths = paths ?? AtvForegroundPathMonitor(); self.makeClient = makeClient
     }
     var receiverName: String? { receiver?.name }
-    var canPair: Bool { eligible && host != nil && channel.phase != .discovering && channel.phase != .unavailable && channel.phase != .idle && !managementBusy }
-    private var eligible: Bool { visible && foreground && receiver != nil }
+    var canPair: Bool { visible && foreground && eligible && host != nil && channel.phase != .discovering && channel.phase != .unavailable && channel.phase != .idle && !managementBusy }
+    private var eligible: Bool { lifetime.keepConnection && receiver != nil }
 
     func update(receiver: AtvReceiverTarget?, remoteVisible: Bool, foreground: Bool) {
         guard self.receiver != receiver || visible != remoteVisible || self.foreground != foreground else { return }
-        self.receiver = receiver; visible = remoteVisible; self.foreground = foreground
-        restart()
+        let leftRemote = visible && !remoteVisible
+        let selectionChanged = self.receiver != receiver
+        let resumed = !self.foreground && foreground
+        let backgrounded = self.foreground && !foreground
+        let enteredRemote = !visible && remoteVisible
+        let expired = lifetime.expired(at: clock.now)
+        self.receiver = receiver; visible = remoteVisible
+        lifetime.foregroundChanged(foreground, now: clock.now)
+        if resumed || receiver == nil {
+            graceGeneration = UUID(); graceWork?.cancel(); graceWork = nil
+            if receiver == nil { lifetime.graceExpired() }
+        }
+        // Pairing and queued input lose authority immediately, independently of socket grace.
+        let dismissPairing = (!remoteVisible || !foreground) && pairing.phase != .idle
+        if leftRemote || backgrounded { cancelCommands() }
+        if selectionChanged || dismissPairing || resumed && expired {
+            restart()
+        } else if (resumed || enteredRemote) && foreground {
+            retryAttempt = 1
+            if channel.phase != .connected && channel.phase != .connecting && pairing.phase == .idle { restart() }
+            else if resumed { watchPaths(generation) }
+        }
+        if backgrounded && receiver != nil {
+            paths.stop()
+            let ticket = UUID(); graceGeneration = ticket
+            let deadline = lifetime.backgroundDeadline ?? clock.now
+            graceWork = Task { [weak self] in
+                guard let self else { return }
+                do { try await self.clock.sleep(seconds: max(0, deadline - self.clock.now)) } catch { return }
+                guard !self.foreground, self.graceGeneration == ticket else { return }
+                self.lifetime.graceExpired()
+                self.invalidate()
+                self.graceWork = nil
+            }
+        }
     }
-    func pathChanged() { guard eligible else { return }; restart() }
-    func refresh() { restart() }
+    func updateDiscovery(_ devices: [AtvDiscoveredDevice]) {
+        discoveries = devices
+        guard foreground, eligible, pairing.phase == .idle, let receiver else { return }
+        let match = AtvDeviceMatcher.match(receiver: receiver, devices: devices, records: records)
+        // An empty transient scan must not move a live socket back to a stale saved address.
+        if (match.device != nil || match.host == nil), match.host != host { restart() }
+    }
+    func pathChanged() { guard foreground, eligible else { return }; restart() }
+    func refresh() {
+        retryAttempt = 1
+        if channel.phase != .connected && channel.phase != .connecting { restart() }
+    }
+
+    private func cancelCommands() {
+        commands.values.forEach { $0.cancel() }; commandTail = nil; navigationCommand = nil
+    }
 
     private func retireClient() {
         channel.connectionID = nil
-        commands.values.forEach { $0.cancel() }; commandTail = nil; navigationCommand = nil
+        cancelCommands()
         attempt = UUID(); pendingFailure = nil; pendingTelevision = nil
         guard let old = client else { return }
         client = nil; old.onState = nil
@@ -89,7 +139,7 @@ struct AtvPairingState: Equatable {
     private func invalidate() {
         generation = UUID(); permit.invalidate(); permit = AtvStoragePermit()
         work?.cancel(); work = nil; pairWork?.cancel(); pairWork = nil
-        discovery.stop(); paths.stop(); retireClient()
+        paths.stop(); retireClient()
         host = nil; pairingIdentity = nil; pairingServerName = nil
         pairing = AtvPairingState(); channel = AtvChannelState()
     }
@@ -99,33 +149,32 @@ struct AtvPairingState: Equatable {
         retryAttempt = 1
         let ticket = generation
         watchPaths(ticket)
-        work = Task { [weak self] in await self?.discover(ticket) }
+        work = Task { [weak self] in await self?.connectSelected(ticket) }
     }
     private func watchPaths(_ ticket: UUID) {
+        guard foreground else { return }
         paths.start { [weak self] in
             guard let self, self.current(ticket) else { return }
             self.pathChanged()
         }
     }
     private func current(_ ticket: UUID) -> Bool { eligible && generation == ticket && !Task.isCancelled }
-    private func discover(_ ticket: UUID) async {
+    private func connectSelected(_ ticket: UUID) async {
         await shutdown?.value
         guard current(ticket), let receiver else { return }
-        channel = .init(phase: .discovering, endpoint: receiver.endpoint)
+        channel = .init(phase: .connecting, endpoint: receiver.endpoint)
         let saved = await storage.load()
         guard current(ticket) else { return }
-        records = saved.records; storageError = saved.error
-        discovery.start()
-        do { try await clock.sleep(seconds: 4) } catch { return }
-        guard current(ticket) else { return }
-        let devices = discovery.devices, failed = discovery.failed
-        discovery.stop()
-        let match = AtvDeviceMatcher.match(receiver: receiver, devices: devices, records: saved.records)
+        records = saved.records; recordsLoaded = true; storageError = saved.error
+        // Saved endpoint ownership and the latest passive snapshot resolve immediately.
+        let match = AtvDeviceMatcher.match(receiver: receiver, devices: discoveries, records: saved.records)
         host = match.host
+        let ambiguous = saved.records.filter { $0.receiverIds.contains(receiver.endpoint) }.count > 1
         channel = .init(phase: match.available ? .available : .unavailable, endpoint: receiver.endpoint,
-                        paired: match.record != nil, discoveryIssue: failed || devices.isEmpty)
+                        paired: match.record != nil, discoveryIssue: discoveries.isEmpty)
+        if ambiguous { channel.phase = .repairRequired; return }
         guard saved.error == nil else { channel.phase = saved.error == .corrupt ? .repairRequired : .storageUnavailable; return }
-        guard let record = match.record, let identity = saved.identity, let host = match.host else { return }
+        guard let record = match.record, let identity = saved.identity(for: record), let host = match.host else { return }
         if trustFailures[record.fingerprint]?.stopped == true { channel.phase = .repairRequired; return }
         await connect(ticket, record: record, host: host, identity: identity)
     }
@@ -200,9 +249,8 @@ struct AtvPairingState: Equatable {
             guard self.current(ticket) else { return }
             let session = self.makeClient(); self.client = session
             do {
-                let identity: AtvIdentity
-                if let stored = try await self.storage.pairingIdentity() { identity = stored }
-                else { identity = try await session.generateIdentity() }
+                let stored = try await self.storage.pairingIdentity()
+                let identity = try await session.generateIdentity(existing: stored)
                 guard self.current(ticket) else { return }
                 self.pairingIdentity = identity
                 let started = try await session.startPairing(host: host, identity: identity)
@@ -231,14 +279,14 @@ struct AtvPairingState: Equatable {
                 self.trustFailures[paired.fingerprint.lowercased()] = nil
                 let snapshot = await self.storage.load()
                 guard self.current(ticket) else { return }
-                self.records = snapshot.records; self.storageError = snapshot.error
+                self.records = snapshot.records; self.recordsLoaded = true; self.storageError = snapshot.error
                 guard snapshot.error == nil, snapshot.records.contains(where: { $0.fingerprint == paired.fingerprint.lowercased() && $0.receiverIds.contains(receiver.endpoint) }) else {
                     throw AtvStorageError.writeFailed
                 }
                 self.identityRecovered = self.identityRecovered || recovered
                 self.pairing.phase = .paired
                 self.retireClient()
-                // Keep success visible until sheet dismissal; then rediscover and use the stored pin.
+                // Keep success visible until sheet dismissal; then connect with the stored pin.
             } catch { self.pairingFailed(error, ticket: ticket) }
         }
     }
@@ -253,7 +301,7 @@ struct AtvPairingState: Equatable {
 
     var fullControl: AtvFullControlSnapshot {
         let associated = records.filter { $0.receiverIds.contains(receiver?.endpoint ?? "") }
-        let ready = eligible && channel.phase == .connected && channel.paired && associated.count == 1 && client != nil
+        let ready = foreground && eligible && channel.phase == .connected && channel.paired && associated.count == 1 && client != nil
         let ticket = ready ? receiver.map { AtvControlTicket(owner: generation, connection: attempt, endpoint: $0.endpoint) } : nil
         return .init(endpoint: channel.endpoint, ticket: ticket, paired: channel.paired,
             available: channel.paired || [.available, .repairRequired, .storageUnavailable].contains(channel.phase),
@@ -308,8 +356,9 @@ struct AtvPairingState: Equatable {
             guard let self else { return }
             let snapshot = await self.storage.load()
             guard self.managementGeneration == ticket else { return }
-            self.records = snapshot.records; self.storageError = snapshot.error
-            if snapshot.error != nil && self.channel.phase == .connected { self.restart() }
+            self.records = snapshot.records; self.recordsLoaded = true; self.storageError = snapshot.error
+            let associated = snapshot.records.filter { $0.receiverIds.contains(self.receiver?.endpoint ?? "") }
+            if (snapshot.error != nil || associated.count != 1) && self.channel.phase == .connected { self.restart() }
         }
     }
     func forget(_ fingerprint: String) {
@@ -323,7 +372,7 @@ struct AtvPairingState: Equatable {
                 try await self.storage.forget(fingerprint)
                 let snapshot = await self.storage.load()
                 guard self.managementGeneration == ticket else { return }
-                self.records = snapshot.records; self.storageError = snapshot.error
+                self.records = snapshot.records; self.recordsLoaded = true; self.storageError = snapshot.error
                 self.managementBusy = false; self.restart()
             } catch {
                 guard self.managementGeneration == ticket else { return }

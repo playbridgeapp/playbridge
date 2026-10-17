@@ -61,6 +61,8 @@ import kotlin.math.roundToInt
 @Composable
 fun RemoteScreen(
     state: RemoteUiState,
+    availability: com.playbridge.sender.cast.remote.RemoteAvailability = com.playbridge.sender.cast.remote.RemoteAvailability.resolve(
+        state.connection.ready, state.fullControlReady, state.fullControl?.paired == true),
     dispatch: (RemoteAction) -> Unit,
     modifier: Modifier = Modifier,
     detectedSubtitles: List<DetectedVideo> = emptyList(),
@@ -68,6 +70,24 @@ fun RemoteScreen(
 ) {
     val motion = rememberRemoteMotionPolicy()
     val layout = resolveRemoteLayout(state, RemoteViewport())
+    if (availability == com.playbridge.sender.cast.remote.RemoteAvailability.Offline) {
+        Column(modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
+            .padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            RemoteHeader(state, dispatch, showRetry = false)
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    androidx.compose.material3.Text(com.playbridge.sender.cast.remote.RemoteAvailability.OFFLINE_TITLE, style = MaterialTheme.typography.titleLarge)
+                    androidx.compose.material3.Text(com.playbridge.sender.cast.remote.RemoteAvailability.OFFLINE_MESSAGE)
+                    Row {
+                        androidx.compose.material3.TextButton(onClick = { dispatch(RemoteAction.RetryConnection) }) { androidx.compose.material3.Text("Retry") }
+                        androidx.compose.material3.TextButton(onClick = { dispatch(RemoteAction.OpenConnections) }) { androidx.compose.material3.Text("Switch TV") }
+                    }
+                }
+            }
+        }
+        RemoteSheets(state, dispatch, detectedSubtitles, execute)
+        return
+    }
     RemoteVolumeKeys(layout.nav.volume.enabled, state.sessionId.toString()) {
         dispatch(RemoteAction.AdjustVolume(if (it) 1 else -1))
     }
@@ -79,7 +99,7 @@ fun RemoteScreen(
                 val density = LocalDensity.current
                 val viewport = RemoteViewport(maxWidth.value.roundToInt(), maxHeight.value.roundToInt(), fontScale = density.fontScale)
                 val sections = RemoteAdaptiveSections(
-                    info = layout.info || state.linkedWebsite?.active == true,
+                    info = layout.info || state.connection.ready && state.linkedWebsite?.active == true,
                     upNext = layout.showQueue, toolbar = layout.browserRow,
                     input = layout.input,
                     seek = layout.wave, inputPresentation = layout.inputPresentation,
@@ -98,7 +118,19 @@ fun RemoteScreen(
                         action is RemoteAction.SetButtonPad || action is RemoteAction.SelectInputMode || action is RemoteAction.OpenSheet || action == RemoteAction.CloseSheet) dispatch(action)
                 }
                 val header: @Composable () -> Unit = {
-                    Box(measured { old, value -> old.copy(header = value) }) { RemoteHeader(state, dispatch) }
+                    Column(measured { old, value -> old.copy(header = value) }) {
+                        RemoteHeader(state, dispatch)
+                        if (availability == com.playbridge.sender.cast.remote.RemoteAvailability.TvRemoteOnly) {
+                            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                    androidx.compose.material3.Text(com.playbridge.sender.cast.remote.RemoteAvailability.RECEIVER_MISSING)
+                                    androidx.compose.material3.TextButton(onClick = { dispatch(RemoteAction.LaunchTvApp(com.playbridge.sender.cast.remote.RemoteAvailability.PLAYBRIDGE_PACKAGE)) }) {
+                                        androidx.compose.material3.Text("Open PlayBridge")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 val info: @Composable () -> Unit = {
                     if (sections.info || sections.upNext) RemoteInfo(state, layout, guardedDispatch, adaptive.collapseUpNext,
@@ -146,7 +178,7 @@ fun RemoteScreen(
                                 RemoteMediaInfo(state, layout, guardedDispatch)
                             }
                         }
-                        if (state.linkedWebsite?.active == true) add { max ->
+                        if (state.connection.ready && state.linkedWebsite?.active == true) add { max ->
                             RemoteSectionCard("remote.linkage", maxHeight = max) { RemoteLinkedWebsite(state, guardedDispatch) }
                         }
                         if (sections.toolbar) add { max ->

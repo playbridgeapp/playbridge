@@ -82,7 +82,9 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
 
 @main struct AtvRemoteClientTests {
     @MainActor static func main() async throws {
+        identitySuffixChecks()
         try await typedFlow()
+        try await pairingIdentityPreparation()
         try await replacementAndStaleEvents()
         try await coalescedState()
         try await limitsAndFailures()
@@ -125,10 +127,49 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         try await wait { client.state.phase == .connected }
         return id
     }
+    private static func identitySuffixChecks() {
+        let uuid = "00000000-0000-0000-0000-000000000001"
+        let name = PlayBridgePhoneIdentity.atvClientName(label: "PlayBridge (iPhone)", uuid: uuid)
+        precondition(name == "PlayBridge (iPhone) d52db763")
+        precondition(name == PlayBridgePhoneIdentity.atvClientName(label: "PlayBridge (iPhone)", uuid: uuid))
+        precondition(PlayBridgePhoneIdentity.atvClientName(label: "PlayBridge (iPhone)", uuid: "00000000-0000-0000-0000-000000000002").hasSuffix("2a87b8e8"))
+        precondition(!name.contains(uuid))
+        var stored: String?, creations = 0
+        let create = { creations += 1; return uuid }
+        let first = PlayBridgePhoneIdentity.localDeviceUUID(read: { stored }, write: { stored = $0 }, create: create)
+        let second = PlayBridgePhoneIdentity.localDeviceUUID(read: { stored }, write: { stored = $0 }, create: create)
+        precondition(first == second && stored == first && creations == 1)
+        print("PASS: shared UUID accessor, exact domain-separated suffix fixtures, stable reuse and no raw identifier in client name")
+    }
+
+    @MainActor private static func pairingIdentityPreparation() async throws {
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: FakeAtvNative())
+        await client.close()
+        let live = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
+        let task = Task { try await live.generateIdentity(existing: identity) }
+        let id = try await command(fake, 0, "generate_identity")
+        precondition(fake.command(0)?["cert_pem"] as? String == identity.certPem)
+        precondition(fake.command(0)?["key_pem"] as? String == identity.keyPem)
+        precondition(fake.command(0)?["client_name"] as? String == PlayBridgePhoneIdentity.atvClientName(label: "PlayBridge (iPhone)", uuid: "fixture-phone-uuid"))
+        precondition(!String(describing: fake.command(0)?["client_name"]).contains("fixture-phone-uuid"))
+        let name = "PlayBridge (iPhone) fixture"
+        fake.push(["event": "identity", "request_id": id, "cert_pem": identity.certPem, "key_pem": identity.keyPem,
+                   "fingerprint": pin, "client_name": name, "replaces_legacy": true])
+        let prepared = try await task.value
+        precondition(prepared.replacesLegacy && prepared.clientName == name)
+        let start = Task { try await live.startPairing(host: "127.0.0.1", identity: prepared) }
+        let pairID = try await command(fake, 1, "start_pairing")
+        precondition(fake.command(1)?["client_name"] as? String == name)
+        fake.push(["event": "pairing_started", "request_id": pairID, "server_name": "Living Room", "fingerprint": pin])
+        _ = try await start.value
+        await live.close()
+        print("PASS: explicit pairing forwards stored identity and reuses the native persisted client name without exposing it")
+    }
+
     @MainActor private static func typedFlow() async throws {
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: FakeAtvNative())
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: FakeAtvNative())
         await client.close() // Closing an unused owner has no native calls.
-        let live = AtvRemoteClient(transport: fake)
+        let live = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
         var publications = 0
         let observation = live.$state.sink { _ in precondition(Thread.isMainThread); publications += 1 }
         let discover = Task { try await live.discover(timeoutMilliseconds: 0) }
@@ -184,9 +225,9 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         withExtendedLifetime(observation) {}
     }
     @MainActor private static func replacementAndStaleEvents() async throws {
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: FakeAtvNative())
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: FakeAtvNative())
         await client.close()
-        let live = AtvRemoteClient(transport: fake)
+        let live = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
         let first = Task { try await live.connect(host: "old.test", identity: identity, pinSHA256: pin) }
         let a = try await command(fake, 0, "connect")
         let second = Task { try await live.connect(host: "new.test", identity: identity, pinSHA256: pin) }
@@ -221,7 +262,7 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         }
     }
     @MainActor private static func coalescedState() async throws {
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: fake)
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
         let id = try await connected(fake, client)
         var publications = 0
         let observation = client.$state.sink { _ in precondition(Thread.isMainThread); publications += 1 }
@@ -237,7 +278,7 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
     }
     @MainActor private static func limitsAndFailures() async throws {
         var limits = AtvClientLimits(); limits.maximumPending = 1; limits.operationTimeout = 0.25
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: fake, limits: limits)
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake, limits: limits)
         _ = try await connected(fake, client)
         let slow = Task { try await client.power() }
         _ = try await command(fake, 1, "power")
@@ -246,20 +287,20 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         await client.close(); precondition(fake.counts == (1, 1, 1))
 
         let rejected = FakeAtvNative(); rejected.accept = false
-        let rejectClient = AtvRemoteClient(transport: rejected)
+        let rejectClient = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: rejected)
         try await expect(.rejected, Task { _ = try await rejectClient.generateIdentity() })
         await rejectClient.close(); precondition(rejected.counts == (1, 1, 1))
 
-        let nativeError = FakeAtvNative(), errorClient = AtvRemoteClient(transport: FakeAtvNative())
+        let nativeError = FakeAtvNative(), errorClient = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: FakeAtvNative())
         await errorClient.close()
-        let live = AtvRemoteClient(transport: nativeError)
+        let live = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: nativeError)
         let request = Task { _ = try await live.generateIdentity() }
         let id = try await command(nativeError, 0, "generate_identity")
         nativeError.push(["event": "error", "request_id": id, "kind": "bad_code", "message": "PRIVATE-SENTINEL"])
         try await expect(.native(.badCode), request)
         await live.close()
         var tiny = AtvClientLimits(); tiny.maximumEventBytes = 32
-        let huge = FakeAtvNative(), limited = AtvRemoteClient(transport: huge, limits: tiny)
+        let huge = FakeAtvNative(), limited = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: huge, limits: tiny)
         let pending = Task { _ = try await limited.generateIdentity() }
         _ = try await command(huge, 0, "generate_identity")
         huge.pushData(Data(repeating: 65, count: 33))
@@ -267,12 +308,12 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         await limited.close(); precondition(huge.counts == (1, 1, 1))
 
         var commandLimit = AtvClientLimits(); commandLimit.maximumCommandBytes = 10
-        let noSubmit = FakeAtvNative(), bounded = AtvRemoteClient(transport: noSubmit, limits: commandLimit)
+        let noSubmit = FakeAtvNative(), bounded = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: noSubmit, limits: commandLimit)
         try await expect(.overflow, Task { _ = try await bounded.generateIdentity() })
         precondition(noSubmit.counts.start == 0); await bounded.close()
     }
     @MainActor private static func cancellationAndClose() async throws {
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: fake)
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
         let pending = Task { try await client.connect(host: "example.test", identity: identity, pinSHA256: pin) }
         let id = try await command(fake, 0, "connect")
         pending.cancel()
@@ -290,7 +331,7 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         try await expect(.cancelled, Task { try await client.connect(host: "late.test", identity: identity, pinSHA256: pin) })
         precondition(client.state.phase == .closed)
         let release = FakeAtvNative()
-        var dropped: AtvRemoteClient? = AtvRemoteClient(transport: release)
+        var dropped: AtvRemoteClient? = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: release)
         weak let weakClient = dropped
         _ = try await connected(release, dropped!)
         dropped = nil
@@ -298,7 +339,7 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         precondition(release.counts == (1, 1, 1))
     }
     @MainActor private static func pairingReplacementAndProtocolFailure() async throws {
-        let fake = FakeAtvNative(), client = AtvRemoteClient(transport: fake)
+        let fake = FakeAtvNative(), client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
         let pairing = Task { _ = try await client.startPairing(host: "example.test", identity: identity) }
         let old = try await command(fake, 0, "start_pairing")
         let cancel = Task { try await client.cancelPairing() }
@@ -314,7 +355,7 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
         try await expect(.malformedEvent, pending)
         await client.close(); precondition(fake.counts == (1, 1, 1))
 
-        let closing = FakeAtvNative(), closeClient = AtvRemoteClient(transport: closing)
+        let closing = FakeAtvNative(), closeClient = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: closing)
         let connecting = Task { try await closeClient.connect(host: "example.test", identity: identity, pinSHA256: pin) }
         _ = try await command(closing, 0, "connect")
         await closeClient.close()
@@ -344,16 +385,16 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
     @MainActor private static func unavailable() async throws {
         for abi: UInt32 in [0, 2] {
             let fake = FakeAtvNative(); fake.abi = abi
-            let client = AtvRemoteClient(transport: fake)
+            let client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: fake)
             try await expect(abi == 0 ? .unavailable : .unsupportedABI, Task { _ = try await client.generateIdentity() })
             await client.close(); precondition(fake.counts == (0, 0, 0))
         }
         let failed = FakeAtvNative(); failed.canStart = false
-        let failedClient = AtvRemoteClient(transport: failed)
+        let failedClient = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" }, transport: failed)
         try await expect(.startFailed, Task { _ = try await failedClient.generateIdentity() })
         await failedClient.close(); precondition(failed.counts == (1, 0, 0))
 #if !canImport(PlayBridgeCastCore)
-        let stub = AtvRemoteClient()
+        let stub = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" })
         try await expect(.unavailable, Task { _ = try await stub.generateIdentity() })
         await stub.close()
 #endif
@@ -361,14 +402,14 @@ private final class FakeAtvNative: AtvNativeTransport, @unchecked Sendable {
 #if ATV_NATIVE_SHIM
     @MainActor private static func nativeCBridge() async throws {
         pb_test_reset(1)
-        let client = AtvRemoteClient()
+        let client = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" })
         let value = try await client.generateIdentity()
         precondition(value.certPem == "test-cert")
         await client.close()
         precondition((0..<4).allSatisfy { pb_test_count(UInt32($0)) == 1 })
         for (mode, expected) in [(UInt32(2), AtvClientError.overflow), (UInt32(3), AtvClientError.malformedEvent)] {
             pb_test_reset(mode)
-            let invalid = AtvRemoteClient()
+            let invalid = AtvRemoteClient(phoneUUID: { "fixture-phone-uuid" })
             try await expect(expected, Task { _ = try await invalid.generateIdentity() })
             await invalid.close()
             precondition((0..<4).allSatisfy { pb_test_count(UInt32($0)) == 1 }, "Every returned C string is freed even when decoding fails")

@@ -125,7 +125,6 @@ struct RemoteControlView: View {
     @ViewBuilder private var contextBody: some View {
         if combined.fullControlReady && !vm.isConnected {
             VStack(spacing: 12) {
-                Text("TV control connected").font(Theme.font(.subheadline))
                 padArea
                 playerBottomBar
             }

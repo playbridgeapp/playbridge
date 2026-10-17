@@ -6,6 +6,8 @@ struct AtvCredentialSnapshot {
     let identity: AtvIdentity?
     let records: [AtvTvRecord]
     let error: AtvStorageError?
+    var identities: [String: AtvIdentity] = [:]
+    func identity(for record: AtvTvRecord) -> AtvIdentity? { identities[record.fingerprint] ?? identity }
 }
 
 /// Checked again on the storage queue immediately before starting a mutation. An already-started
@@ -48,7 +50,7 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
             queue.async {
                 let store = self.current()
                 store.reload()
-                continuation.resume(returning: AtvCredentialSnapshot(identity: store.identityOrNull(), records: store.records, error: store.storageError))
+                continuation.resume(returning: AtvCredentialSnapshot(identity: store.identityOrNull(), records: store.records, error: store.storageError, identities: store.identityOverrides))
             }
         }
     }
@@ -56,7 +58,7 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
     func save(_ identity: AtvIdentity, record: AtvTvRecord, permit: AtvStoragePermit) async throws {
         try await perform {
             guard permit.isValid else { throw AtvStorageError.unavailable }
-            try $0.saveVerifiedPairing(identity, record: record)
+            try $0.saveVerifiedPairing(identity, record: record, preserveOtherPairings: identity.replacesLegacy)
         }
     }
     func updateLastIp(_ fingerprint: String, host: String, permit: AtvStoragePermit) async throws {
@@ -70,7 +72,7 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
 
 @MainActor protocol AtvCoordinatorClient: AnyObject {
     var onState: ((AtvClientState) -> Void)? { get set }
-    func generateIdentity() async throws -> AtvIdentity
+    func generateIdentity(existing: AtvIdentity?) async throws -> AtvIdentity
     func startPairing(host: String, identity: AtvIdentity) async throws -> AtvPairingStarted
     func finishPairing(code: String) async throws -> AtvPaired
     func connect(host: String, identity: AtvIdentity, pin: String) async throws
@@ -81,12 +83,12 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
 
 @MainActor final class AtvLiveCoordinatorClient: AtvCoordinatorClient {
     var onState: ((AtvClientState) -> Void)?
-    private let client = AtvRemoteClient()
+    private let client = AtvRemoteClient(phoneUUID: { PlayBridgePhoneIdentity.localDeviceUUID() })
     private var observation: AnyCancellable?
     init() {
         observation = client.$state.sink { [weak self] state in self?.onState?(state) }
     }
-    func generateIdentity() async throws -> AtvIdentity { try await client.generateIdentity() }
+    func generateIdentity(existing: AtvIdentity?) async throws -> AtvIdentity { try await client.generateIdentity(existing: existing) }
     func startPairing(host: String, identity: AtvIdentity) async throws -> AtvPairingStarted {
         try await client.startPairing(host: host, port: AtvDeviceMatcher.pairingPort, identity: identity)
     }
@@ -109,18 +111,12 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
     func close() async { observation = nil; onState = nil; await client.close() }
 }
 
-@MainActor protocol AtvCoordinatorDiscovery: AnyObject {
-    var devices: [AtvDiscoveredDevice] { get }
-    var failed: Bool { get }
-    func start()
-    func stop()
-}
-extension AtvBonjourBrowser: AtvCoordinatorDiscovery {}
-
 @MainActor protocol AtvCoordinatorClock {
+    var now: TimeInterval { get }
     func sleep(seconds: TimeInterval) async throws
 }
 struct AtvSystemCoordinatorClock: AtvCoordinatorClock {
+    var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
     func sleep(seconds: TimeInterval) async throws {
         try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }

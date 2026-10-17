@@ -116,6 +116,71 @@ class AtvCredentialStoreTest {
         write(XorCipher().encrypt(document.toString().toByteArray(Charsets.UTF_8)))
     }
 
+    @Test fun legacyMigrationKeepsOtherTvIdentityAcrossReloadAndForget() {
+        val file = MemorySecretFile()
+        val cipher = XorCipher()
+        val store = AtvCredentialStore(file, cipher)
+        val old = AtvClientIdentity("OLD-CERT", "OLD-KEY")
+        val fresh = AtvClientIdentity("NEW-CERT", "NEW-KEY")
+        val first = sampleRecord()
+        val other = first.copy(fingerprint = "cd".repeat(32), receiverIds = setOf("playbridge:other"))
+        store.saveIdentity(old); store.upsert(first); store.upsert(other)
+        store.saveVerifiedPairing(fresh, first, preserveOtherPairings = true)
+        val restored = AtvCredentialStore(file, cipher)
+        assertTrue(restored.identityOrNull() == fresh)
+        assertTrue(restored.identityOrNull(first.fingerprint) == fresh)
+        assertTrue(restored.identityOrNull(other.fingerprint) == old)
+        assertEquals(2, restored.records.value.size)
+        restored.updateLastIp(other.fingerprint, "192.0.2.2")
+        assertTrue(AtvCredentialStore(file, cipher).identityOrNull(other.fingerprint) == old)
+        restored.forget(first.fingerprint)
+        assertTrue(AtvCredentialStore(file, cipher).identityOrNull(other.fingerprint) == old)
+        restored.saveVerifiedPairing(fresh, other)
+        assertTrue(AtvCredentialStore(file, cipher).identityOrNull(other.fingerprint) == fresh)
+    }
+
+    @Test fun failedMigrationWriteDoesNotReplaceIdentityOrOtherTvCredentials() {
+        val file = FaultSecretFile()
+        val store = AtvCredentialStore(file, XorCipher())
+        val old = AtvClientIdentity("OLD-CERT", "OLD-KEY")
+        store.saveIdentity(old); store.upsert(sampleRecord())
+        file.fail = true
+        assertTrue(runCatching { store.saveVerifiedPairing(AtvClientIdentity("NEW-CERT", "NEW-KEY"), sampleRecord(), true) }.isFailure)
+        assertTrue(store.identityOrNull() == old)
+        file.fail = false
+        assertTrue(AtvCredentialStore(file, XorCipher()).identityOrNull() == old)
+    }
+
+    @Test fun installLabelsUseOnlyABoundedModelAndIdentitiesHaveRedactedDescriptions() {
+        assertEquals("PlayBridge (Pixel 8)", atvClientLabel("Pixel 8"))
+        assertEquals("PlayBridge (Android)", atvClientLabel("\n"))
+        assertTrue(atvClientLabel("x".repeat(200)).length < 53)
+        assertTrue(AtvClientIdentity("secret-cert", "secret-key").toString() == "AtvClientIdentity(redacted)")
+        assertTrue(AtvIdentity("secret-cert", "secret-key", "ab".repeat(32), "secret-name").toString() == "AtvIdentity(redacted)")
+    }
+
+    @Test fun suffixUsesTheExistingPhoneUuidWithTheSpecifiedDomainAndEightLowercaseHexCharacters() {
+        val uuid = "00000000-0000-0000-0000-000000000001"
+        val name = atvClientName("Pixel 8", uuid)
+        assertTrue(name == "PlayBridge (Pixel 8) d52db763")
+        assertTrue(name == atvClientName("Pixel 8", uuid))
+        assertTrue(atvClientName("Pixel 8", "00000000-0000-0000-0000-000000000002").endsWith("2a87b8e8"))
+        assertFalse(name.contains(uuid))
+        assertTrue(name.takeLast(8).matches(Regex("[0-9a-f]{8}")))
+    }
+
+    @Test fun sharedPhoneUuidAccessorCreatesOnlyWhenAbsentAndReusesTheStoredValue() {
+        var saved: String? = null
+        var created = 0
+        val read = { saved }
+        val write: (String) -> Unit = { saved = it }
+        val create = { created++; "00000000-0000-0000-0000-000000000001" }
+        val first = com.playbridge.sender.connection.PlayBridgePhoneIdentity.uuid(read, write, create)
+        val second = com.playbridge.sender.connection.PlayBridgePhoneIdentity.uuid(read, write, create)
+        assertTrue(first == second && first == saved)
+        assertEquals(1, created)
+    }
+
     private fun sampleRecord() = AtvTvRecord(
         fingerprint = "ab".repeat(32),
         mac = "c0:e5:da:d8:c3:5f",

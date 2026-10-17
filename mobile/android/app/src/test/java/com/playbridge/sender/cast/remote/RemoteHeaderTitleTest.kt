@@ -21,6 +21,12 @@ class RemoteHeaderTitleTest {
         assertEquals("Connected to TV", remoteConnectionTitle(connected(RemoteContext.Idle).copy(receiver = null)))
     }
 
+    @Test fun pairedTvKeepsItsNameWithoutTheReceiver() {
+        val receiverDown = connected(RemoteContext.Player).copy(connection = RemoteConnection.Reconnecting(1, 3, 2))
+        assertEquals("Remote · Living Room", remoteConnectionTitle(receiverDown.copy(fullControl = FullControlStatus(connected = true, paired = true))))
+        assertEquals("Remote · Living Room", remoteConnectionTitle(receiverDown.copy(fullControl = FullControlStatus(paired = true))))
+    }
+
     private fun connected(
         context: RemoteContext,
         kind: RemoteMediaKind = RemoteMediaKind.Video,
