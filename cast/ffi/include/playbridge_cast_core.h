@@ -97,6 +97,8 @@ void pb_session_free(const CastSession *session);
  * effort if full. Free exactly once, after all concurrent calls have ended.
  * Null handles are accepted. A freed handle must never be reused.
  */
+// Compile-time counterpart of pb_atv_abi_version(); independent of Cast ABI 2.
+#define PB_ATV_REMOTE_ABI_VERSION 1
 uint32_t pb_atv_abi_version(void);
 AtvRemote *pb_atv_start(void);
 bool pb_atv_submit_json(const AtvRemote *handle, const char *command_json);
