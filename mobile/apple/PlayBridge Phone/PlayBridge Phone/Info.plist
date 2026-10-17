@@ -18,6 +18,7 @@
 	<array>
 		<string>_playbridge._tcp</string>
 		<string>_googlecast._tcp</string>
+		<string>_androidtvremote2._tcp</string>
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
