@@ -34,6 +34,11 @@ struct BrowserNavigationFailure {
 }
 
 enum BrowserSitePolicy {
+    static var blockPopups: Bool {
+        get { UserDefaults.standard.object(forKey: "pb_block_popups") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "pb_block_popups") }
+    }
+
     static func clearPopupPermissions() {
         UserDefaults.standard.removeObject(forKey: "pb_popup_origins")
     }
@@ -62,7 +67,7 @@ enum BrowserSitePolicy {
 final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
     static let world = WKContentWorld.world(name: "PlayBridge.PopupInteraction")
     weak var tab: BrowserTab?
-    private var grant: (origin: String, document: URL?, mainFrame: Bool, time: TimeInterval)?
+    private var grant: PopupClickGrant?
     private var contextLink: (url: URL, time: TimeInterval)?
 
     static func originURL(_ frame: WKFrameInfo) -> URL? {
@@ -111,21 +116,27 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
               let origin = BrowserSitePolicy.origin(Self.originURL(message.frameInfo)) else { return }
         if let body = message.body as? [String: Any], let link = body["contextLink"] as? String {
             recordContextLink(link)
-        } else if message.body as? String == "click" {
-            grant = (origin, message.frameInfo.request.url, message.frameInfo.isMainFrame,
-                     ProcessInfo.processInfo.systemUptime)
+        } else if let body = message.body as? [String: Any], body["click"] as? Bool == true {
+            let now = ProcessInfo.processInfo.systemUptime
+            let href = (body["href"] as? String).flatMap(URL.init(string:))
+            let anchor = href.map { PopupAnchor(href: $0, newWindow: body["newWindow"] as? Bool == true,
+                visible: body["visible"] as? Bool == true, viewportFraction: body["fraction"] as? Double ?? 1,
+                opacity: body["opacity"] as? Double ?? 0, pointerSafe: body["pointerSafe"] as? Bool == true) }
+            grant = PopupClickGrant(origin: origin, document: message.frameInfo.request.url,
+                mainFrame: message.frameInfo.isMainFrame, time: now, anchor: anchor)
+            tab.recordPopupInteraction(at: now, href: href)
         } else if message.body as? String == "clear" {
             clear()
         }
     }
 
-    func consume(for frame: WKFrameInfo) -> Bool {
-        guard let grant else { return false }
+    func consume(for frame: WKFrameInfo) -> (trusted: Bool, anchor: PopupAnchor?) {
+        guard let grant else { return (false, nil) }
         // A different origin/document cannot spend another frame's interaction.
-        guard grant.origin == BrowserSitePolicy.origin(Self.originURL(frame)),
-              grant.document == frame.request.url, grant.mainFrame == frame.isMainFrame else { return false }
+        guard grant.matches(origin: BrowserSitePolicy.origin(Self.originURL(frame)), document: frame.request.url,
+                            mainFrame: frame.isMainFrame, at: ProcessInfo.processInfo.systemUptime) else { return (false, nil) }
         clear()
-        return ProcessInfo.processInfo.systemUptime - grant.time < 1
+        return (true, grant.anchor)
     }
 
     static let source = #"""
@@ -155,7 +166,37 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
         window.addEventListener('click', event => {
             // UserActivation shipped in Safari 16.4; older supported WebKit still
             // supplies the unforgeable isTrusted flag on real clicks.
-            if (event.isTrusted && (!navigator.userActivation || navigator.userActivation.isActive)) send('click');
+            if (!event.isTrusted || (navigator.userActivation && !navigator.userActivation.isActive)) return;
+            const path = event.composedPath();
+            const anchor = path.find(node => node instanceof Element && node.matches('a[href],area[href]'));
+            const info = {click: true};
+            if (anchor) {
+                const rect = anchor.getBoundingClientRect();
+                const width = Math.max(1, innerWidth), height = Math.max(1, innerHeight);
+                let fraction = (rect.width * rect.height) / (width * height);
+                // A small anchor can contain a full-screen positioned child. Inspect
+                // the actual clicked descendants as well, stopping at the anchor.
+                for (const node of path.slice(0, path.indexOf(anchor) + 1)) {
+                    if (!(node instanceof Element)) continue;
+                    const bounds = node.getBoundingClientRect();
+                    fraction = Math.max(fraction, (bounds.width * bounds.height) / (width * height));
+                }
+                let opacity = 1, pointerSafe = true, visible = anchor.getClientRects().length > 0;
+                for (let node = path.find(node => node instanceof Element); node instanceof Element;
+                     node = node.parentElement || node.getRootNode().host) {
+                    const style = getComputedStyle(node);
+                    opacity *= Number(style.opacity);
+                    visible = visible && style.display !== 'none' && style.visibility === 'visible';
+                    pointerSafe = pointerSafe && style.pointerEvents !== 'none';
+                }
+                const hit = document.elementFromPoint(event.clientX, event.clientY);
+                pointerSafe = pointerSafe && !!hit && (hit === anchor || anchor.contains(hit));
+                const target = (anchor.getAttribute('target') || document.querySelector('base[target]')?.target || '').toLowerCase();
+                Object.assign(info, {href: anchor.href, newWindow: !!target && !['_self','_parent','_top'].includes(target),
+                    visible: visible && rect.width > 0 && rect.height > 0,
+                    fraction, opacity, pointerSafe});
+            }
+            send(info);
         }, true);
         window.addEventListener('pagehide', () => send('clear'), true);
         document.addEventListener('visibilitychange', () => send('clear'), true);

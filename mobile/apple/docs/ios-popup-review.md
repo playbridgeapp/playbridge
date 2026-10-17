@@ -63,3 +63,37 @@ Added a native top-level navigation check alongside the interaction policy:
 `NavigationAdRules` is a separate host-indexed matcher, avoiding the detector's lossy host-only projection. It supports host-anchored rules, paths/wildcards/separators, popup/document/all scopes and negations, match-case, positive and negative source-domain constraints, exceptions, and badfilter removal. Untyped whole-host rules can block document navigation; untyped path block rules apply to popups only, while path exceptions can exempt document navigation. Unsupported resource, party/PSL, regex, rewriting, priority, and other options are skipped rather than broadened. This is a conservative subset, not full uBlock Origin parity. Built-in ad-network hosts provide fallback coverage, while matching supported exceptions take precedence over that fallback.
 
 Validation: `--ad-navigation` tests direct popups, same-tab redirects, HTTP redirects, removal of uncommitted ad tabs, tab swaps, normal redirects, ad-block disablement, and filter matching boundaries/exceptions. It uses production navigation and matcher code with local fixture rules. Rotating live ad destinations on the reported websites have not been verified; blocking depends on supported rules matching those destinations.
+
+
+## Parity follow-up
+
+The default-on **Block pop-ups** setting now allows only a one-use trusted,
+visible new-window anchor whose resolved URL matches the request and whose site
+matches the committed page. Button/script/form/cross-site windows need Open or
+an explicit per-origin exception; turning the setting off retains the previous
+one-window-per-trusted-click behavior. The isolated content world captures anchor
+geometry, ancestor opacity, visibility and hit testing; page-world messages never
+authorize a window. Context-menu new/background tab actions are unchanged.
+
+A pure `PopupPolicy`/`TabUnderPolicy` tracks recent window requests, whether allowed
+or blocked, independently from the spendable interaction grant. During the next
+1.5 seconds, cross-site opener redirects are canceled. Clicks to their own captured
+href, form submissions, history/reload and explicit app loads stay allowed, as do
+same-site and script-only redirects without a recent window. Per-origin popup
+exceptions also disable this tab-under check. Ad-rule navigation/response checks
+still take precedence; server redirects remain outside the behavioral heuristic.
+
+One bottom toast now handles pop-up/redirect/ad-rule blocks with a coalesced count,
+a five-second countdown (paused on touch and while VoiceOver is enabled), swipe
+and button dismissal, and Reduce Motion support. Open preserves the blocked URL
+for web GET requests only; ad-rule blocks hide Open. Allow stores the existing
+origin exception and asks the user to retry. URLs remain in the in-app network
+log only; no system logging was added.
+
+Site equality uses a documented small multi-part suffix/shared-hosting list, not
+a complete Public Suffix List. OAuth/payment popups, unknown multi-part suffixes,
+large/transparent anchors and slow asynchronous flows may need Allow. The pure
+host policy/listener tests and compile-only WebKit fixtures cover the new cases;
+trusted-touch, toast interaction and real WebKit navigation execution still need
+a separately authorized Simulator/device run (this task forbids installs/device
+contact). `PB_BROWSER_BUILD_ONLY=1` compiles the fixture without installing it.

@@ -43,6 +43,7 @@ struct BrowserScreen: View {
 
 /// Renders one active tab (toolbar + web content). Keyed by tab id so it rebuilds on switch.
 private struct ActiveTabView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var tab: BrowserTab
     @ObservedObject var store: BrowserStore
     @EnvironmentObject private var vm: ConnectionViewModel
@@ -112,6 +113,14 @@ private struct ActiveTabView: View {
                     .padding(12)
                 }
             }
+            .overlay(alignment: .bottom) {
+                if let notice = tab.blockedNotice {
+                    BrowserBlockedToast(notice: notice, open: tab.openBlockedNotice,
+                        allow: tab.allowPopupsForSite, dismiss: tab.dismissBlockedNotice)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: tab.blockedNotice != nil)
             if tab.isPickingElement {
                 VStack(spacing: 8) {
                     HStack {
@@ -135,16 +144,6 @@ private struct ActiveTabView: View {
                 }
                 .padding(10)
                 .background(Theme.surfaceContainer)
-            }
-            if tab.popupBlocked {
-                HStack {
-                    Text(tab.blockedPopupOrigin.map { "Popup blocked from \($0.host ?? $0.absoluteString)" } ?? "Popup blocked").font(Theme.font(.caption))
-                    Spacer()
-                    Button("Allow for this site") { tab.allowPopupsForSite() }
-                        .disabled(tab.blockedPopupOrigin == nil)
-                    Button { tab.popupBlocked = false } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Dismiss popup notice")
-                }.padding(10).background(Theme.surfaceContainer)
             }
             if !chromeHidden { toolbar }
         }
@@ -190,34 +189,6 @@ private struct ActiveTabView: View {
         .onDisappear { tab.cancelPrompt() }
         .onChange(of: tab.urlString) { newValue in
             if !addressFocused { address = newValue }
-        }
-        .overlay(alignment: .bottom) {
-            if let msg = tab.blockedAdMessage {
-                HStack(spacing: 8) {
-                    Image(systemName: "shield.fill")
-                        .foregroundColor(Theme.primary)
-                        .font(Theme.font(size: 14, weight: .bold))
-                    Text(msg)
-                        .font(Theme.font(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.onSurface)
-                    Button { tab.blockedAdMessage = nil } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Dismiss blocked navigation notice")
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(
-                    Capsule()
-                        .fill(Theme.surfaceContainerHigh.opacity(0.95))
-                        .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 3)
-                )
-                .overlay(
-                    Capsule()
-                        .stroke(Theme.primary.opacity(0.3), lineWidth: 1)
-                )
-                .padding(.bottom, 72) // position above the bottom toolbar
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-
-            }
         }
     }
 
