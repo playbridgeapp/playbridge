@@ -11,6 +11,8 @@
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=phone&expanded=true"><img src="https://img.shields.io/badge/Phone-releases-3DDC84?logo=android&logoColor=white" alt="Phone releases"></a>
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=tv-player&expanded=true"><img src="https://img.shields.io/badge/TV%20Player-releases-3DDC84?logo=android&logoColor=white" alt="TV Player releases"></a>
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=geckoview&expanded=true"><img src="https://img.shields.io/badge/TV%20Browser-releases-3DDC84?logo=firefoxbrowser&logoColor=white" alt="TV Browser releases"></a>
+  <a href="https://testflight.apple.com/join/W4mM7jkd"><img src="https://img.shields.io/badge/iPhone-TestFlight-0D96F6?logo=apple&logoColor=white" alt="iPhone TestFlight"></a>
+  <a href="https://testflight.apple.com/join/WgjHrskB"><img src="https://img.shields.io/badge/Apple%20TV-TestFlight-0D96F6?logo=apple&logoColor=white" alt="Apple TV TestFlight"></a>
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=desktop&expanded=true"><img src="https://img.shields.io/badge/Desktop-releases-0078D4?logo=flutter&logoColor=white" alt="Desktop releases"></a>
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=cli+NOT+desktop&expanded=true"><img src="https://img.shields.io/badge/CLI-releases-555555?logo=rust&logoColor=white" alt="CLI releases"></a>
   <a href="https://github.com/playbridgeapp/playbridge/releases?q=extension&expanded=true"><img src="https://img.shields.io/badge/Extension-releases-FF7139?logo=firefoxbrowser&logoColor=white" alt="Extension releases"></a>
@@ -55,11 +57,15 @@ The PlayBridge senders and extensions are available on official store registries
 * **Android Phone (Sender)**:
   * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
   * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+* **iPhone / iPad (Sender) — TestFlight beta**:
+  * <a href="https://testflight.apple.com/join/W4mM7jkd"><img src="https://img.shields.io/badge/Join_the_beta-TestFlight-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Join the iPhone beta on TestFlight" height="44"></a>
 * **Browser Extension (Sender — Firefox & Chrome)**:
   * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
   * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
 * **Android TV (Player) — Open Testing**:
   * <a href="https://play.google.com/store/apps/details?id=com.playbridge.player"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge for Android TV on Google Play" height="80"></a>
+* **Apple TV (Player) — TestFlight beta**:
+  * <a href="https://testflight.apple.com/join/WgjHrskB"><img src="https://img.shields.io/badge/Join_the_beta-TestFlight-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Join the Apple TV beta on TestFlight" height="44"></a>
 
 ### Receiver & Manual Installation
 
@@ -68,7 +74,7 @@ The PlayBridge senders and extensions are available on official store registries
   - download the latest `tv-player` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and sideload it.
   - *Note:* on first launch the TV app asks for "Display over other apps" — required for the receiver to come to the foreground when a cast arrives.
   - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/playbridge/releases)).
-- **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
+- **Apple TV (receiver)**: join the [TestFlight beta](https://testflight.apple.com/join/WgjHrskB) (install the TestFlight app on your Apple TV first), or build and deploy from Xcode; see the [TV README](tv/).
 - **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://playbridge.app/install.sh | sh`; on Windows PowerShell, run `irm https://playbridge.app/install.ps1 | iex`. Manual archives remain on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
@@ -196,7 +202,7 @@ iPhone / iPad intentionally omits the open Library / add-on ecosystem (third-par
 | Feature | Android TV / Fire TV | Apple TV | Desktop | DLNA / UPnP TV |
 |---|---|---|---|---|
 | Supported platforms | Android TV, Fire TV | tvOS | macOS, Windows, Linux | Compatible smart TVs and renderers |
-| Receiver installation | PlayBridge TV app | PlayBridge TV app (build from source) | PlayBridge Desktop app | None |
+| Receiver installation | PlayBridge TV app | PlayBridge TV app ([TestFlight](https://testflight.apple.com/join/WgjHrskB)) | PlayBridge Desktop app | None |
 | Playback engines | Media3 / ExoPlayer + MPV | AVPlayer + MPV | MPV | TV's built-in player |
 | Direct streams, HLS, DASH, and local files | ✓ | ✓ | ✓ | Renderer-dependent; the phone proxies local files and header-protected HLS |
 | Verified, encrypted pairing | ✓ | ✓ | ✓ | N/A — standard local-network DLNA |
