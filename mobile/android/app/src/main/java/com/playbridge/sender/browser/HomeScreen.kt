@@ -197,14 +197,3 @@ fun TopSiteItem(site: TopSite, onClick: () -> Unit, isBookmark: Boolean = false)
         )
     }
 }
-
-private fun normalizeUrl(input: String): String {
-    val trimmed = input.trim()
-    return when {
-        trimmed.isEmpty() -> "about:blank"
-        trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-        trimmed.startsWith("about:") -> trimmed
-        trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
-        else -> "https://www.google.com/search?q=${trimmed.replace(" ", "+")}"
-    }
-}
