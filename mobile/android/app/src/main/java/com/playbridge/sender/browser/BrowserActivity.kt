@@ -3280,35 +3280,114 @@ class BrowserActivity : ComponentActivity() {
                     }
                 )
 
-                pendingPopup?.let { popup ->
-                    val popupPrefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
-                    fun openPopupTab() {
+                // Popup Blocked Toast (auto-dismiss, multi-popup count, gesture handling, animations)
+                val popupToastContext = androidx.compose.ui.platform.LocalContext.current
+                val toastTimeoutMs = remember(popupToastContext) { calculateToastTimeout(popupToastContext) }
+                var toastState by remember { mutableStateOf<PopupToastState?>(null) }
+                var lastToastState by remember { mutableStateOf<PopupToastState?>(null) }
+
+                if (toastState != null) {
+                    lastToastState = toastState
+                }
+
+                // When pendingPopup changes from observer
+                LaunchedEffect(pendingPopup) {
+                    val incoming = pendingPopup
+                    if (incoming != null) {
+                        val (newState, superseded) = onNewBlockedPopup(
+                            current = toastState,
+                            incoming = incoming,
+                            timeoutMs = toastTimeoutMs
+                        )
+                        if (superseded != null && superseded !== incoming) {
+                            try { superseded.engineSession.close() } catch (_: Exception) {}
+                        }
+                        toastState = newState
+                        lastToastState = newState
+                    }
+                }
+
+                // Changing tab or closing the opener tab dismisses the toast and closes the session
+                LaunchedEffect(selectedTabId, browserState.tabs) {
+                    val current = toastState
+                    if (current != null) {
+                        val openerId = current.latestPopup.openerTabId
+                        val tabChanged = openerId != null && openerId != selectedTabId
+                        val openerClosed = openerId != null && browserState.tabs.none { it.id == openerId }
+                        if (tabChanged || openerClosed) {
+                            try { current.latestPopup.engineSession.close() } catch (_: Exception) {}
+                            toastState = null
+                            pendingPopup = null
+                            pendingPopupState.value = null
+                        }
+                    }
+                }
+
+                // Allow exit animation (slide + fade) to complete before uncomposing
+                LaunchedEffect(toastState) {
+                    if (toastState == null) {
+                        kotlinx.coroutines.delay(400)
+                        lastToastState = null
+                    }
+                }
+
+                val activeOrLingeringToast = toastState ?: lastToastState
+                if (activeOrLingeringToast != null) {
+                    fun openPopupTab(targetState: PopupToastState) {
                         scope.launch(Dispatchers.Main) {
-                            val tabId = tabManager.createTab(url = popup.popupUrl, store = store, parentId = popup.openerTabId, select = true, detectorPopup = true)
-                            // Link the popup's engine session in the store —
-                            // EngineMiddleware's EngineObserver takes over
-                            // URL/title/nav/state sync and crash handling.
+                            val tabId = tabManager.createTab(
+                                url = targetState.latestPopup.popupUrl,
+                                store = store,
+                                parentId = targetState.latestPopup.openerTabId,
+                                select = true,
+                                detectorPopup = true
+                            )
                             store.dispatch(
                                 mozilla.components.browser.state.action.EngineAction.LinkEngineSessionAction(
                                     tabId,
-                                    popup.engineSession,
+                                    targetState.latestPopup.engineSession,
                                     skipLoading = true
                                 )
                             )
                         }
                     }
-                    Box(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding()), contentAlignment = androidx.compose.ui.Alignment.BottomCenter) {
-                        PopupBlockedBar(
-                            host = popup.openerHost,
-                            onAllowOnce = { openPopupTab(); pendingPopup = null; pendingPopupState.value = null },
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = innerPadding.calculateBottomPadding()),
+                        contentAlignment = androidx.compose.ui.Alignment.BottomCenter
+                    ) {
+                        PopupBlockedToast(
+                            state = activeOrLingeringToast,
+                            visible = toastState != null,
+                            onOpen = {
+                                val current = toastState ?: return@PopupBlockedToast
+                                openPopupTab(current)
+                                toastState = null
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            },
                             onAlwaysAllow = {
-                                 composeScope.launch { settingsRepository.addPopupWhitelist(popup.openerHost) }
-                                 openPopupTab()
-                                 pendingPopup = null
-                                 pendingPopupState.value = null
-                             },
+                                val current = toastState ?: return@PopupBlockedToast
+                                val host = current.latestPopup.openerHost
+                                composeScope.launch { settingsRepository.addPopupWhitelist(host) }
+                                openPopupTab(current)
+                                toastState = null
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            },
                             onDismiss = {
-                                try { popup.engineSession.close() } catch (_: Exception) {}
+                                val current = toastState ?: return@PopupBlockedToast
+                                try { current.latestPopup.engineSession.close() } catch (_: Exception) {}
+                                toastState = null
+                                pendingPopup = null
+                                pendingPopupState.value = null
+                            },
+                            onTimeout = {
+                                val current = toastState ?: return@PopupBlockedToast
+                                try { current.latestPopup.engineSession.close() } catch (_: Exception) {}
+                                toastState = null
                                 pendingPopup = null
                                 pendingPopupState.value = null
                             }

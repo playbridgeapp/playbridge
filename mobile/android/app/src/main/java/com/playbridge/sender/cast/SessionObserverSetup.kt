@@ -325,10 +325,10 @@ fun SessionObserverSetup(
                 scope.launch(Dispatchers.Main) {
                     if (shouldBlock) {
                         if (isBlacklisted) {
-                            Log.d(TAG, "Popup silently blocked (blacklist) from $openerHost: $uri")
+                            Log.d(TAG, "Popup silently blocked (blacklist) from $openerHost")
                             try { popupSession.close() } catch (_: Exception) {}
                         } else {
-                            Log.d(TAG, "Popup blocked from $openerHost: $uri")
+                            Log.d(TAG, "Popup blocked from $openerHost")
                             pendingPopup.value = PendingPopup(
                                 openerHost = openerHost,
                                 popupUrl = uri,
