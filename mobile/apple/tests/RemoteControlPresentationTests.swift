@@ -74,16 +74,7 @@ enum RemoteControlPresentationTests {
         precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "app", level: 0.19, muted: false) == "App volume 19/100")
         precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "system", level: 0.19, muted: false) == nil)
 
-        var gesture = RemoteNavigationGesture()
-        precondition(gesture.update(x: 0, y: 0) == nil)
-        precondition(gesture.end(x: 2, y: 1) == "dpad_center")
-        precondition(gesture.update(x: 34, y: 5) == "dpad_right")
-        precondition(gesture.update(x: 35, y: 7) == nil)
-        precondition(gesture.update(x: 34, y: -30) == "dpad_up")
-        precondition(gesture.end(x: 0, y: 0) == nil, "A swipe returning to its origin is not a tap")
-        precondition(gesture.update(x: 20, y: 0) == nil)
-        precondition(gesture.end(x: 0, y: 0) == nil)
-        print("PASS: remote track labels, queue text/identity/progress, honest control badges, volume reports and navigation gestures")
+        print("PASS: remote track labels, queue text/identity/progress, honest control badges and volume reports")
     }
 
     private static func headerAndInputSelection() {

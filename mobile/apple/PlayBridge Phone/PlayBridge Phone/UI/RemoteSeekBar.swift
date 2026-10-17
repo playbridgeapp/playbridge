@@ -81,6 +81,7 @@ struct RemoteSeekBar: View {
             }
             SeekGesture(hasDuration: hasDuration, durationMs: durationMs, positionMs: positionMs, enableVolume: enableVolume) { event in
                 switch event {
+                case .haptic(let feedback): RemoteHaptics.shared.perform(feedback, actionAllowed: hasDuration)
                 case .playPause: if enablePlayPause { onPlayPause() }
                 case .volumeUp:
                     volumeDirection = "up"
@@ -169,6 +170,7 @@ struct RemoteSeekBar: View {
     fileprivate enum Axis { case horizontal, vertical }
     fileprivate enum GestureEvent {
         case playPause, volumeUp, volumeDown
+        case haptic(RemoteFeedback)
         case drag(Double, Axis, RemoteSeekBehavior.Mode)
         case end(Int64?)
     }
@@ -211,11 +213,9 @@ struct RemoteSeekBar: View {
             private var axis: Axis?
             private var dragMs = 0.0
             private var volAccum: CGFloat = 0
-            private var seekAccum: CGFloat = 0
+            private var lastTick: TimeInterval?
             private var mode: RemoteSeekBehavior.Mode = .relative
             private var lastTranslation = CGPoint.zero
-            private let tickFeedback = UISelectionFeedbackGenerator()
-            private let holdFeedback = UIImpactFeedbackGenerator(style: .medium)
 
             override init(frame: CGRect) {
                 super.init(frame: frame)
@@ -240,34 +240,35 @@ struct RemoteSeekBar: View {
                 case .began:
                     claimScrollGestures()
                     setEnclosingScrollEnabled(false)
-                    tickFeedback.prepare()
+                    RemoteHaptics.shared.prepare()
                     if down == .distantPast { down = Date() }
                     mode = RemoteSeekBehavior.mode(heldFor: Date().timeIntervalSince(down))
-                    if mode == .absolute { holdFeedback.impactOccurred() }
                     axis = nil
                     volAccum = 0
-                    seekAccum = 0
+                    lastTick = nil
                     dragMs = positionMs
                     lastTranslation = .zero
                 case .changed:
                     let translation = gesture.translation(in: self)
                     let drag = CGPoint(x: translation.x - lastTranslation.x, y: translation.y - lastTranslation.y)
                     lastTranslation = translation
-                    if axis == nil {
+                    let started = axis == nil
+                    if started {
                         axis = abs(translation.x) >= abs(translation.y) ? .horizontal : .vertical
-                        tick()
                     }
                     let location = gesture.location(in: self)
                     switch axis {
                     case .horizontal where hasDuration && bounds.width > 0:
+                        let previous = dragMs
                         dragMs = RemoteSeekBehavior.target(
                             currentMs: dragMs, durationMs: durationMs, width: Double(bounds.width),
                             fingerX: Double(location.x), dragX: Double(drag.x), mode: mode
                         )
-                        seekAccum += abs(drag.x)
-                        while seekAccum >= 16 {
-                            tick()
-                            seekAccum -= 16
+                        let now = ProcessInfo.processInfo.systemUptime
+                        if let feedback = RemoteScrubFeedback.feedback(previous: previous, next: dragMs,
+                            duration: durationMs, started: started, now: now, lastTick: lastTick) {
+                            coordinator?.onEvent(.haptic(feedback))
+                            lastTick = now
                         }
                         coordinator?.onEvent(.drag(dragMs, .horizontal, mode))
                     case .vertical where enableVolume:
@@ -275,12 +276,10 @@ struct RemoteSeekBar: View {
                         let step: CGFloat = mode == .absolute ? 28 / 2.5 : 28
                         while volAccum >= step {
                             coordinator?.onEvent(.volumeUp)
-                            tick()
                             volAccum -= step
                         }
                         while volAccum <= -step {
                             coordinator?.onEvent(.volumeDown)
-                            tick()
                             volAccum += step
                         }
                         coordinator?.onEvent(.drag(positionMs, .vertical, mode))
@@ -298,7 +297,7 @@ struct RemoteSeekBar: View {
 
             override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
                 down = Date()
-                holdFeedback.prepare()
+                RemoteHaptics.shared.prepare()
                 claimScrollGestures()
                 setEnclosingScrollEnabled(false)
             }
@@ -344,10 +343,6 @@ struct RemoteSeekBar: View {
                 }
             }
 
-            private func tick() {
-                tickFeedback.selectionChanged()
-                tickFeedback.prepare()
-            }
         }
     }
 }

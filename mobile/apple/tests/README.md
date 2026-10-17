@@ -463,3 +463,36 @@ transient-disconnect entry policy, accessibility/action contracts and Settings/r
 management hooks. No real Keychain, browser, path monitor, native client or sockets are
 started. The Simulator build validates SwiftUI compilation; these host fixtures do not
 claim rendered layout, VoiceOver gesture or hardware Local Network/pairing coverage.
+
+
+Android TV combined remote controls and keyboard (host-only):
+
+```sh
+bash mobile/apple/tests/run-atv-controls-checks.sh
+bash mobile/apple/tests/run-atv-coordinator-checks.sh
+bash mobile/apple/tests/run-remote-control-checks.sh
+```
+
+Checks the Android-equivalent combined policy/router across player/browser/idle,
+receiver-down/ATV-up, exact ownership, browser receiver-text preference, no cross-channel
+retries, context/session/revision/route retirement, whole-TV menu actions, truthful badges
+and volume reports. The fake keyboard fixtures cover Unicode scalars, marked-text deferral,
+composition commit, suffix/delete/Enter ordering, limits, queue overflow, cancellation and
+partial-failure shutdown. Coordinator fixtures exercise native frame order and revoke
+keyboard authority between frames. The macOS SwiftUI bounds runner also covers the ATV-only
+layout and an expanded repair/storage header. These runners make no TV/LAN connections.
+UIKit marked-text/caret behavior, VoiceOver and real TV input need a later device check;
+Simulator/device compilation alone does not establish those hardware behaviors.
+
+The remote runner also covers the shared iOS haptics allow-list, Light/Medium/Strong
+impact mapping, persisted on/Light defaults, live preference changes, disabled and
+failed/stale-send suppression, and Android-equivalent scrub interval/bound priorities.
+These use an injected sink; they do not establish physical haptic feel or system suppression.
+
+Swipe-pad checks mirror Android's 20/56/12-point gesture policy: per-event travel
+cap/discard, dominant-axis changes, 300 ms taps, 500/150 ms hold repeat, the 100-step
+hold cap, suspension without catch-up, and release/cancel/new-down reset. The controls
+and coordinator runners pause fake native/receiver writes to check one in flight plus
+one latest pending key, dropping unsent steps on release without haptics, discrete
+D-pad coalescing, and navigation bypassing ordered keyboard acknowledgements. They
+do not install, use a TV/LAN, or verify physical UIKit touch delivery.

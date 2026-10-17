@@ -105,6 +105,23 @@ private func tv(_ endpoint: String = "playbridge:one", pin: String = pin) -> Atv
         return paired
     }
     var paired: AtvPaired { .init(serverCertificateDER: Data([1]), fingerprint: pin, mac: nil, serverName: "Living Room") }
+    var frames: [String] = []
+    var inserts: [String] = []
+    var pauseCommand = false
+    var commandGate: CheckedContinuation<Void, Error>?
+    var failFrame: Int?
+    func command(_ action: AtvControlAction) async throws {
+        switch action {
+        case .key(let key): frames.append(key)
+        case .volume: frames.append("volume")
+        case .launch: frames.append("launch")
+        case .power: frames.append("power")
+        case .edit: fatalError("Edits must be split into fenced frames")
+        }
+        if pauseCommand { pauseCommand = false; try await withCheckedThrowingContinuation { commandGate = $0 } }
+        if failFrame == frames.count { throw AtvClientError.native(.protocolError) }
+    }
+    func insertText(_ text: String) async throws { frames.append("insert"); inserts.append(text) }
     func close() async { closes += 1; onState = nil }
 }
 @MainActor private final class Rig {
@@ -324,6 +341,89 @@ private final class QueueKeychain: AtvKeychainAccess, @unchecked Sendable {
     } catch { check(false, "queued storage integration") }
 }
 
+@MainActor private func commandChecks() async {
+    let r = Rig(); await r.activate(); await r.discovered()
+    let ticket = r.coordinator.fullControl.ticket!, session = r.clients[0]
+    do {
+        try await r.coordinator.execute(.edit(deletes: 2, suffix: "😀e\u{301}", enter: true), ticket: ticket)
+        check(session.frames == ["key_delete", "key_delete", "insert", "key_enter"] && session.inserts == ["😀e\u{301}"], "production delete/insert/Enter frame order")
+        try await r.coordinator.execute(.key("menu"), ticket: ticket)
+        try await r.coordinator.execute(.volume(.mute), ticket: ticket)
+        try await r.coordinator.execute(.launch("com.example.app"), ticket: ticket)
+        try await r.coordinator.execute(.power, ticket: ticket)
+        check(session.frames.suffix(4) == ["menu", "volume", "launch", "power"], "TV menu/volume/app/power boundary")
+        session.pauseCommand = true
+        var authority = true
+        let delayed = Task { try await r.coordinator.execute(.edit(deletes: 2, suffix: "retired", enter: true), ticket: ticket, authority: { authority }) }
+        await pump()
+        let before = session.frames.count
+        authority = false // Route/context changed while the first delete was in flight.
+        session.commandGate?.resume(); session.commandGate = nil
+        do { try await delayed.value; check(false, "stale route must fail") } catch {}
+        check(session.frames.count == before, "late route cannot insert suffix or Enter after partial deletion")
+        session.failFrame = session.frames.count + 1
+        do { try await r.coordinator.execute(.edit(deletes: 2, suffix: "ambiguous", enter: true), ticket: ticket); check(false, "partial failure expected") } catch {}
+        check(session.frames.last == "key_delete", "failed delete never continues edit")
+    } catch { check(false, "unexpected native control fixture failure") }
+    await r.stop()
+    let count = session.frames.count
+    do { try await r.coordinator.execute(.power, ticket: ticket); check(false, "retired owner must fail") } catch {}
+    check(session.frames.count == count, "retired connection ticket rejected")
+}
+
+@MainActor private func navigationChecks() async {
+    let r = Rig(); await r.activate(); await r.discovered()
+    let ticket = r.coordinator.fullControl.ticket!, session = r.clients[0]
+    session.pauseCommand = true
+    let first = Task { try await r.coordinator.execute(.key("dpad_up"), ticket: ticket) }
+    await pump()
+    check(session.frames == ["dpad_up"], "navigation starts without a serial queue")
+    for _ in 0..<100 {
+        do { try await r.coordinator.execute(.key("dpad_right"), ticket: ticket); check(false, "navigation admission must be bounded") }
+        catch { check(error as? AtvClientError == .overflow, "busy navigation is dropped, never queued") }
+    }
+    check(session.frames == ["dpad_up"], "direct navigation cannot build a backlog")
+    session.commandGate?.resume(); session.commandGate = nil
+    do { try await first.value } catch { check(false, "first navigation should complete") }
+
+    session.frames = []; session.pauseCommand = true
+    let keyboard = Task { try await r.coordinator.execute(.edit(deletes: 2, suffix: "text", enter: true), ticket: ticket) }
+    await pump()
+    do { try await r.coordinator.execute(.key("dpad_left"), ticket: ticket) }
+    catch { check(false, "navigation cannot wait behind keyboard acknowledgement") }
+    check(session.frames == ["key_delete", "dpad_left"], "navigation bypasses the edit queue")
+    session.commandGate?.resume(); session.commandGate = nil
+    do { try await keyboard.value } catch { check(false, "keyboard should retain its acknowledged path") }
+    check(session.frames == ["key_delete", "dpad_left", "key_delete", "insert", "key_enter"], "keyboard frames remain ordered")
+
+    session.frames = []; session.pauseCommand = true
+    let dispatcher = RemoteNavigationDispatcher(), id = dispatcher.beginGesture()
+    var haptics = 0
+    for _ in 0..<100 {
+        dispatcher.submit(gesture: id, send: { allowed in
+            try await r.coordinator.execute(.key("dpad_right"), ticket: ticket, authority: allowed)
+        }, onSent: { haptics += 1 }, onError: { _ in })
+    }
+    await pump()
+    check(session.frames == ["dpad_right"] && dispatcher.pendingCount == 1, "slow native acknowledgement holds only one pending step")
+    dispatcher.endGesture(id)
+    session.commandGate?.resume(); session.commandGate = nil; await pump()
+    check(session.frames == ["dpad_right"] && haptics == 1 && !dispatcher.inFlight, "native release never drains pending arrows/haptics")
+    let newID = dispatcher.beginGesture()
+    dispatcher.submit(gesture: newID, send: { allowed in
+        try await r.coordinator.execute(.key("dpad_center"), ticket: ticket, authority: allowed)
+    }, onSent: { haptics += 1 }, onError: { _ in })
+    dispatcher.endGesture(newID); await pump()
+    check(session.frames == ["dpad_right"] && haptics == 1, "release before dispatch writes no OK or haptic")
+    do {
+        try await r.coordinator.execute(.key("dpad_up"), ticket: ticket, authority: { false })
+        check(false, "retired gesture authority must fail")
+    } catch {}
+    check(session.frames == ["dpad_right"], "authority checked at the native boundary")
+    await r.stop()
+    print("PASS: native navigation admission cap, keyboard queue bypass/order and release-before/after-write with no drain")
+}
+
 @MainActor private func presentationChecks() {
     check(AtvPairingPresentation.normalizedInput("ab cd-ef") == "ABCDEF", "paste normalization")
     check(AtvPairingPresentation.validCode("１２３４５６") == nil, "only ASCII hex")
@@ -340,7 +440,7 @@ private final class QueueKeychain: AtvKeychainAccess, @unchecked Sendable {
 }
 @main struct AtvCoordinatorTests {
     @MainActor static func main() async {
-        await lifecycleChecks(); await retryChecks(); await pairingChecks(); await queuedStorageChecks(); presentationChecks()
+        await lifecycleChecks(); await retryChecks(); await pairingChecks(); await queuedStorageChecks(); await commandChecks(); await navigationChecks(); presentationChecks()
         print("PASS: ATV foreground ownership, fake-clock discovery/backoff, trust stops, stale events, verified durable pairing/forget and UI state fixtures")
     }
 }

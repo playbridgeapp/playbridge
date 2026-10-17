@@ -35,6 +35,14 @@ struct RemoteContentBoundsTests {
         let landscape = await measure(width: 568, height: 300)
         checkBounds(landscape, height: 300)
         precondition(landscape["content"]!.height > landscape["viewport"]!.height)
+        for (width, height) in [(320.0, 548.0), (428.0, 845.0)] {
+            let fullControl = await measure(width: width, height: height, tvOnly: true)
+            checkBounds(fullControl, height: height)
+            precondition(fullControl["pad"]!.height > 100, "Receiver-down/ATV-up uses freed media height for the pad")
+            let repair = await measure(width: width, height: height, tallHeader: true)
+            checkBounds(repair, height: height)
+        }
+        print("PASS: ATV-only pad height and expanded repair/storage header stay within phone bounds")
         print("PASS: old overflow reproduced; bounded header/content at 320×568, SE 2/3, 12 Pro Max, enlarged controls and short landscape; pad absorbs height before scroll fallback")
     }
 
@@ -47,9 +55,9 @@ struct RemoteContentBoundsTests {
         precondition(content.minY >= viewport.minY - 1, "Scrolling starts at the content's leading edge")
     }
 
-    @MainActor private static func measure(width: CGFloat, height: CGFloat, textScale: CGFloat = 1, bounded: Bool = true) async -> [String: CGRect] {
+    @MainActor private static func measure(width: CGFloat, height: CGFloat, textScale: CGFloat = 1, bounded: Bool = true, tvOnly: Bool = false, tallHeader: Bool = false) async -> [String: CGRect] {
         var frames: [String: CGRect] = [:]
-        let root = RemoteBoundsFixture(bounded: bounded, textScale: textScale)
+        let root = RemoteBoundsFixture(bounded: bounded, textScale: textScale, tvOnly: tvOnly, tallHeader: tallHeader)
             .frame(width: width, height: height)
             .coordinateSpace(name: "remote-layout-test")
             .onPreferenceChange(RemoteBoundsFrames.self) { frames = $0 }
@@ -66,10 +74,12 @@ struct RemoteContentBoundsTests {
 private struct RemoteBoundsFixture: View {
     let bounded: Bool
     let textScale: CGFloat
+    let tvOnly: Bool
+    let tallHeader: Bool
 
     var body: some View {
         VStack(spacing: 8) {
-            Color.green.frame(height: 56 * textScale).modifier(RemoteBoundsProbe(name: "header"))
+            Color.green.frame(height: (tallHeader ? 100 : 56) * textScale).modifier(RemoteBoundsProbe(name: "header"))
             if bounded {
                 RemoteContentBounds { player }.modifier(RemoteBoundsProbe(name: "viewport"))
             } else {
@@ -80,11 +90,15 @@ private struct RemoteBoundsFixture: View {
 
     private var player: some View {
         VStack(spacing: 12) {
-            Color.blue.frame(height: 96 * textScale) // Title/chips section.
-            Color.orange.frame(height: 142 * textScale) // Up Next section.
+            if !tvOnly {
+                Color.blue.frame(height: 96 * textScale) // Title/chips section.
+                Color.orange.frame(height: 142 * textScale) // Up Next section.
+            }
             Color.gray.frame(minHeight: 100, maxHeight: .infinity).modifier(RemoteBoundsProbe(name: "pad"))
-            Color.purple.frame(height: 86) // Existing seek surface.
-            Color.red.frame(height: 64 * textScale) // Media row.
+            if !tvOnly {
+                Color.purple.frame(height: 86) // Existing seek surface.
+                Color.red.frame(height: 64 * textScale) // Media row.
+            }
             Color.yellow.frame(height: 56 * textScale) // Navigation row.
         }.modifier(RemoteBoundsProbe(name: "content"))
     }

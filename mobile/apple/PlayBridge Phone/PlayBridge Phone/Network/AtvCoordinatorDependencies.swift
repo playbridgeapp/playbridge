@@ -74,6 +74,8 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
     func startPairing(host: String, identity: AtvIdentity) async throws -> AtvPairingStarted
     func finishPairing(code: String) async throws -> AtvPaired
     func connect(host: String, identity: AtvIdentity, pin: String) async throws
+    func insertText(_ text: String) async throws
+    func command(_ action: AtvControlAction) async throws
     func close() async
 }
 
@@ -92,6 +94,18 @@ final class AtvQueuedCredentialStore: AtvCoordinatorStorage, @unchecked Sendable
     func connect(host: String, identity: AtvIdentity, pin: String) async throws {
         try await client.connect(host: host, port: AtvDeviceMatcher.controlPort, identity: identity, pinSHA256: pin)
     }
+    func command(_ action: AtvControlAction) async throws {
+        switch action {
+        case .key(let key):
+            guard let name = AtvControlAction.keyNames[key] else { throw AtvClientError.invalidInput }
+            try await client.key(.name(name))
+        case .volume(let value): try await client.volume(value)
+        case .edit: throw AtvClientError.invalidInput // Coordinator splits and checks every frame.
+        case .launch(let value): try await client.launchApp(value)
+        case .power: try await client.power()
+        }
+    }
+    func insertText(_ text: String) async throws { try await client.insertText(text) }
     func close() async { observation = nil; onState = nil; await client.close() }
 }
 
