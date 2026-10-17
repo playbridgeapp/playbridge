@@ -409,27 +409,6 @@ fun BrowserToolbar(
 }
 
 /**
- * Normalize user input to a valid URL.
- */
-private fun normalizeUrl(input: String): String {
-    val trimmed = input.trim()
-    return when {
-        trimmed.isEmpty() -> "about:blank"
-        trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-        trimmed.startsWith("about:") -> trimmed
-        trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
-        else -> {
-            val encodedQuery = try {
-                java.net.URLEncoder.encode(trimmed, "UTF-8")
-            } catch (e: Exception) {
-                trimmed.replace(" ", "+")
-            }
-            "https://www.google.com/search?q=$encodedQuery"
-        }
-    }
-}
-
-/**
  * Strip http:// or https:// from a URL for compact display.
  */
 private fun stripProtocol(url: String): String {

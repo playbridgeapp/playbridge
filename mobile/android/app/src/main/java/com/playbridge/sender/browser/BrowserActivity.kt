@@ -734,12 +734,12 @@ class BrowserActivity : ComponentActivity() {
             val suggestions by browserViewModel.suggestions.collectAsStateWithLifecycle()
             // URL bar tap panel state (Chrome-like panel shown before user types)
             var urlBarTapped by remember { mutableStateOf(false) }
-            var urlPanelClipboard by remember { mutableStateOf<String?>(null) }
+            var urlPanelClipboard by remember { mutableStateOf<ClipboardSuggestion?>(null) }
             LaunchedEffect(isEditing) {
                 if (isEditing) {
                     urlBarTapped = true
                     val clip = clipboardManager.getText()?.text
-                    urlPanelClipboard = if (!clip.isNullOrBlank()) clip else null
+                    urlPanelClipboard = ClipboardClassifier.classify(clip)
                 } else {
                     urlBarTapped = false
                     urlPanelClipboard = null

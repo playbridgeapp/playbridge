@@ -166,8 +166,8 @@ fun AppNavHost(
     onCurrentUrlChange: (String) -> Unit,
     urlBarTapped: Boolean,
     onUrlBarTappedChange: (Boolean) -> Unit,
-    urlPanelClipboard: String?,
-    onUrlPanelClipboardChange: (String?) -> Unit,
+    urlPanelClipboard: ClipboardSuggestion?,
+    onUrlPanelClipboardChange: (ClipboardSuggestion?) -> Unit,
     onMagnetDetected: (String) -> Unit = {},
     contextMenuUrl: String?,
     onContextMenuUrlChange: (String?) -> Unit,
@@ -721,17 +721,57 @@ fun AppNavHost(
                                                     modifier = Modifier.padding(horizontal = 16.dp),
                                                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                                                 )
+                                                val headline = when (urlPanelClipboard) {
+                                                    is ClipboardSuggestion.Link -> "Link you copied"
+                                                    is ClipboardSuggestion.Text -> "Text you copied"
+                                                    is ClipboardSuggestion.Magnet -> "Magnet link you copied"
+                                                }
+                                                val displayText = when (urlPanelClipboard) {
+                                                    is ClipboardSuggestion.Link -> urlPanelClipboard.url
+                                                    is ClipboardSuggestion.Text -> urlPanelClipboard.query
+                                                    is ClipboardSuggestion.Magnet -> urlPanelClipboard.uri
+                                                }
+                                                val leadingIcon = when (urlPanelClipboard) {
+                                                    is ClipboardSuggestion.Link -> Icons.Default.Link
+                                                    is ClipboardSuggestion.Text -> Icons.Default.Search
+                                                    is ClipboardSuggestion.Magnet -> Icons.Default.Link
+                                                }
+                                                val trailingIcon = when (urlPanelClipboard) {
+                                                    is ClipboardSuggestion.Text -> Icons.Default.Search
+                                                    else -> Icons.Default.OpenInBrowser
+                                                }
+                                                val trailingDescription = when (urlPanelClipboard) {
+                                                    is ClipboardSuggestion.Text -> "Search"
+                                                    is ClipboardSuggestion.Magnet -> "Open magnet link"
+                                                    is ClipboardSuggestion.Link -> "Open link"
+                                                }
+                                                val handleSuggestionClick = {
+                                                    when (urlPanelClipboard) {
+                                                        is ClipboardSuggestion.Link -> {
+                                                            session?.loadUrl(urlPanelClipboard.url)
+                                                        }
+                                                        is ClipboardSuggestion.Text -> {
+                                                            session?.loadUrl(searchUrl(urlPanelClipboard.query))
+                                                        }
+                                                        is ClipboardSuggestion.Magnet -> {
+                                                            onMagnetDetected(urlPanelClipboard.uri)
+                                                        }
+                                                    }
+                                                    onIsEditingChange(false)
+                                                    keyboardController?.hide()
+                                                    focusManager.clearFocus()
+                                                }
                                                 ListItem(
                                                     headlineContent = {
                                                         Text(
-                                                            "Link you copied",
+                                                            headline,
                                                             style = MaterialTheme.typography.labelMedium,
                                                             color = MaterialTheme.colorScheme.primary
                                                         )
                                                     },
                                                     supportingContent = {
                                                         Text(
-                                                            urlPanelClipboard,
+                                                            displayText,
                                                             style = MaterialTheme.typography.bodySmall,
                                                             maxLines = 1,
                                                             overflow = TextOverflow.Ellipsis,
@@ -739,36 +779,14 @@ fun AppNavHost(
                                                         )
                                                     },
                                                     leadingContent = {
-                                                        Icon(Icons.Default.Link, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                                        Icon(leadingIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                                     },
                                                     trailingContent = {
-                                                        IconButton(onClick = {
-                                                            val clip = urlPanelClipboard
-                                                            if (clip.startsWith("magnet:", ignoreCase = true)) {
-                                                                onMagnetDetected(clip.trim())
-                                                            } else {
-                                                                val url = if (clip.startsWith("http://") || clip.startsWith("https://") || clip.startsWith("about:")) clip else "https://$clip"
-                                                                session?.loadUrl(url)
-                                                            }
-                                                            onIsEditingChange(false)
-                                                            keyboardController?.hide()
-                                                            focusManager.clearFocus()
-                                                        }) {
-                                                            Icon(Icons.Default.OpenInBrowser, contentDescription = "Open link")
+                                                        IconButton(onClick = handleSuggestionClick) {
+                                                            Icon(trailingIcon, contentDescription = trailingDescription)
                                                         }
                                                     },
-                                                    modifier = Modifier.clickable {
-                                                        val clip2 = urlPanelClipboard
-                                                        if (clip2.startsWith("magnet:", ignoreCase = true)) {
-                                                            onMagnetDetected(clip2.trim())
-                                                        } else {
-                                                            val url = if (clip2.startsWith("http://") || clip2.startsWith("https://") || clip2.startsWith("about:")) clip2 else "https://$clip2"
-                                                            session?.loadUrl(url)
-                                                        }
-                                                        onIsEditingChange(false)
-                                                        keyboardController?.hide()
-                                                        focusManager.clearFocus()
-                                                    }
+                                                    modifier = Modifier.clickable(onClick = handleSuggestionClick)
                                                 )
                                             }
                                         }
