@@ -118,6 +118,8 @@ fun ConnectionScreen(
 ) {
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val remoteTVRows by viewModel.remoteTVDirectory.rows.collectAsState()
+    val selectedRemoteDevice by viewModel.selectedRemoteDevice.collectAsState()
     val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
@@ -160,31 +162,11 @@ fun ConnectionScreen(
         viewModel.pingSavedDevices(history)
     }
 
-    val playBridgeSaved = remember(
-        history,
-        pings,
-        discoveredDevices,
-        activeExternalDevice,
-        isConnected,
-        tvDevice,
-    ) {
-        ConnectionMerge.playBridgeHistory(history).map { saved ->
-            // Prefer the live discovered endpoint (DHCP / ports can change) while keeping
-            // the history entry for credentials and last-connected metadata.
-            val live = ConnectionMerge.withDiscoveredEndpoint(saved, discoveredDevices)
-            UnifiedDevice(
-                connectDevice = live,
-                historyEntry = saved,
-                isOnline = pings[saved.endpointKey.toString()] == true ||
-                    discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
-                lastConnected = saved.lastConnected,
-            )
-        }.filterNot { u -> isActiveTarget(u.connectDevice, activeExternalDevice, isConnected, tvDevice) }
-            .sortedWith(
-                compareByDescending<UnifiedDevice> { it.isOnline }
-                    .thenByDescending { it.lastConnected ?: 0L },
-            )
-    }
+    val playBridgeSaved = remoteTVRows.map { row ->
+        UnifiedDevice(row.device, history.firstOrNull { ConnectionMerge.isSameDevice(it, row.device) },
+            row.receiverReachable || row.tvReachable, row.device.lastConnected, row.status)
+    }.filterNot { isActiveTarget(it.connectDevice, activeExternalDevice, isConnected, tvDevice) }
+        .sortedWith(compareByDescending<UnifiedDevice> { it.isOnline }.thenByDescending { it.lastConnected ?: 0L })
 
     val recentExternal = remember(
         history,
@@ -362,7 +344,8 @@ fun ConnectionScreen(
                 }
             }
             item(key = "now-card") {
-                NowDestinationCard(
+                if (!(nativeSelected && !isConnected && remoteTVRows.any { it.device.endpointKey == selectedRemoteDevice?.endpointKey && (it.paired || it.ambiguous) })) NowDestinationCard(
+                    nativeStatus = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey }?.status,
                     connectionState = connectionState,
                     route = route,
                     tvDevice = tvDevice,
@@ -789,6 +772,7 @@ fun NowDestinationCard(
     onShareDiagnostics: () -> Unit = {},
     streamRouteLabel: String? = null,
     compact: Boolean = false,
+    nativeStatus: String? = null,
 ) {
     val external = activeExternalDevice
     when {
@@ -834,7 +818,7 @@ fun NowDestinationCard(
                 },
                 icon = Icons.Default.Tv,
                 badge = null,
-                statusPill = when {
+                statusPill = nativeStatus ?: when {
                     castingHere -> if (connected.secure) "Casting" else "Casting"
                     connected.secure -> "Linked"
                     else -> "Connected"
@@ -1166,6 +1150,7 @@ data class UnifiedDevice(
     val historyEntry: TvDevice?,
     val isOnline: Boolean,
     val lastConnected: Long?,
+    val remoteStatus: String? = null,
 ) {
     val isKnown: Boolean get() = historyEntry != null
 }
@@ -1294,7 +1279,7 @@ fun TvDeviceRow(
                         } else {
                             device.connectDevice.ip
                         }
-                        val statusText = when {
+                        val statusText = device.remoteStatus ?: when {
                             device.isOnline -> endpoint
                             device.lastConnected != null -> "${formatLastSeen(device.lastConnected)} · $endpoint"
                             else -> "Saved · $endpoint"
@@ -1346,7 +1331,7 @@ private fun CompactTvDeviceRow(
     } else {
         device.connectDevice.ip
     }
-    val statusText = when {
+    val statusText = device.remoteStatus ?: when {
         device.isOnline -> endpoint
         device.lastConnected != null -> "${formatLastSeen(device.lastConnected)} · $endpoint"
         else -> "Saved · $endpoint"

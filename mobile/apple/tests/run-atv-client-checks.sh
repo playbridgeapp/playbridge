@@ -6,7 +6,7 @@ trap 'rm -rf "$test_dir"' EXIT
 app="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -swift-version 5 -module-cache-path "$test_dir/cache" \
   "$app/Network/AtvNativeTransport.swift" "$app/Network/AtvClientModels.swift" \
-  "$app/Network/AtvRemoteClient.swift" "$repo_root/mobile/apple/tests/AtvRemoteClientTests.swift" \
+  "$app/Data/PlayBridgePhoneIdentity.swift" "$app/Network/AtvRemoteClient.swift" "$repo_root/mobile/apple/tests/AtvRemoteClientTests.swift" \
   -o "$test_dir/check"
 "$test_dir/check"
 
@@ -21,6 +21,6 @@ cp "$repo_root/cast/ffi/include/module.modulemap" "$test_dir/module/"
 clang -I "$test_dir/module" -c "$repo_root/mobile/apple/tests/AtvNativeShim.c" -o "$test_dir/shim.o"
 swiftc -swift-version 5 -D ATV_NATIVE_SHIM -I "$test_dir/module" -module-cache-path "$test_dir/native-cache" \
   "$app/Network/AtvNativeTransport.swift" "$app/Network/AtvClientModels.swift" \
-  "$app/Network/AtvRemoteClient.swift" "$repo_root/mobile/apple/tests/AtvRemoteClientTests.swift" \
+  "$app/Data/PlayBridgePhoneIdentity.swift" "$app/Network/AtvRemoteClient.swift" "$repo_root/mobile/apple/tests/AtvRemoteClientTests.swift" \
   "$test_dir/shim.o" -o "$test_dir/native-check"
 "$test_dir/native-check"

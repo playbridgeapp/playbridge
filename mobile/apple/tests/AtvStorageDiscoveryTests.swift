@@ -290,9 +290,32 @@ private func matcherChecks() {
     expect(scoped?.host == "fe80::7%12345", "numeric scope preserved")
 }
 
+private func legacyIdentityRetentionChecks() throws {
+    let keychain = FakeKeychain()
+    let store = AtvCredentialStore(keychain: keychain)
+    try store.saveIdentity(identity)
+    let first = record("b"), other = record("c", ids: ["playbridge:other"])
+    try store.upsert(first); try store.upsert(other)
+    keychain.updates = [errSecParam]
+    fails(.writeFailed) { try store.saveVerifiedPairing(otherIdentity, record: first, preserveOtherPairings: true) }
+    let unchanged = AtvCredentialStore(keychain: keychain)
+    expect(unchanged.identityOrNull() == identity && unchanged.records.count == 2, "failed migration preserves every existing credential")
+    try store.saveVerifiedPairing(otherIdentity, record: first, preserveOtherPairings: true)
+    let restored = AtvCredentialStore(keychain: keychain)
+    expect(restored.identityOrNull() == otherIdentity && restored.records.count == 2, "migration commits new install identity and keeps other records")
+    expect(restored.identityOverrides[other.fingerprint] == identity, "other TV retains its old client credentials")
+    try restored.updateLastIp(fingerprint: other.fingerprint, ip: "192.0.2.5")
+    try restored.forget(fingerprint: first.fingerprint)
+    let retained = AtvCredentialStore(keychain: keychain)
+    expect(retained.identityOverrides[other.fingerprint] == identity, "old client credentials survive reload, update and unrelated forget")
+    try retained.saveVerifiedPairing(otherIdentity, record: other)
+    expect(AtvCredentialStore(keychain: keychain).identityOverrides.isEmpty, "re-pairing remaining TV retires its old identity override")
+}
+
 @main struct AtvStorageDiscoveryTests {
     @MainActor static func main() throws {
         try storageChecks()
+        try legacyIdentityRetentionChecks()
         matcherChecks()
         discoveryChecks()
         print("ATV Keychain, receiver matcher and fake Bonjour checks passed (no Keychain or network access)")

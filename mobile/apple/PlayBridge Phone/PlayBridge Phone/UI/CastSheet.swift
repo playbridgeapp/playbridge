@@ -119,6 +119,17 @@ struct CastSheet: View {
                 // Keep casting actions and list tabs visible while results scroll.
                 VStack(alignment: .leading, spacing: 16) {
                     header
+                    if !vm.isConnected, let row = vm.selectedRemoteTV, row.paired {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(RemoteAvailability.receiverMissing)
+                            Button("Open PlayBridge on \(row.device.name)") {
+                                vm.requestOpenPlayBridge()
+                                nav.navigate(to: .remote)
+                                dismiss()
+                            }
+                            Text("Once PlayBridge connects, send again.").font(Theme.font(.caption))
+                        }.font(Theme.font(.subheadline)).padding(.horizontal, 16)
+                    }
                     if castAction == "browse" { capabilitySelectors }
                     if castAction != "browse" {
                         tabsSection

@@ -31,9 +31,11 @@ data class RemoteLayoutSpec(
 fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteLayoutSpec {
     val external = state.receiver?.profile == RemoteProfile.External
     val context = state.context
-    val player = context == RemoteContext.Player
-    val browser = context == RemoteContext.Browser
-    val idle = context !in setOf(RemoteContext.Player, RemoteContext.Browser)
+    val receiverReady = state.connection.ready
+    val displayReceiver = receiverReady || state.fullControl?.paired != true
+    val player = displayReceiver && context == RemoteContext.Player
+    val browser = displayReceiver && context == RemoteContext.Browser
+    val idle = !player && !browser
     val playback = state.playback
     val image = playback?.mediaKind == RemoteMediaKind.Image
     val audio = playback?.mediaKind == RemoteMediaKind.Audio
@@ -41,7 +43,7 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val whole = state.capabilities.keyScope == ControlScope.WholeDevice
     val descriptor = state.nativePolicy != null
     val hasPad = state.hasPadRoute()
-    val pointer = !external && (browser || player && image) && state.hasPointerRoute()
+    val pointer = displayReceiver && !external && (browser || player && image) && state.hasPointerRoute()
     val modes = buildList {
         if (idle && !hasPad) add(RemoteInputMode.Context)
         if (hasPad) add(RemoteInputMode.Pad)
@@ -62,7 +64,9 @@ fun resolveRemoteLayout(state: RemoteUiState, viewport: RemoteViewport): RemoteL
     val indices = queue?.items.orEmpty().map { it.index }
     val current = indices.indexOf(queue?.currentIndex)
     return RemoteLayoutSpec(
-        inputPresentation = resolveInputPresentation(state),
+        inputPresentation = if (!displayReceiver) {
+            if (state.fullControlReady) RemoteInputPresentation.Full else RemoteInputPresentation.Absent
+        } else resolveInputPresentation(state),
         modes = modes, selectedMode = state.inputMode.takeIf { it in modes && it != RemoteInputMode.Keyboard } ?: defaultMode,
         showModeRow = modes.size > 1,
         nav = RemoteNavSpec(

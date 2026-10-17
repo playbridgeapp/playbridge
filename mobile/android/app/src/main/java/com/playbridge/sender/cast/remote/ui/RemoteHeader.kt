@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast.remote.ui
 
+import com.playbridge.sender.cast.remote.fullControlReady
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,7 +46,7 @@ import com.playbridge.sender.cast.remote.ready
 /** Visible header line. TalkBack reads the same string. */
 internal fun remoteConnectionTitle(state: RemoteUiState): String {
     val name = state.receiver?.name ?: "TV"
-    if (!state.connection.ready) return "Reconnecting…"
+    if (!state.connection.ready) return if (state.fullControl?.paired == true || state.fullControlReady) "Remote · $name" else "Reconnecting…"
     if (state.receiver?.profile == RemoteProfile.External) return "Casting to $name"
     return when (state.context) {
         RemoteContext.Player -> when (state.playback?.mediaKind) {
@@ -59,7 +61,7 @@ internal fun remoteConnectionTitle(state: RemoteUiState): String {
 
 /** Phone Back and connection controls remain usable while receiver actions are disabled. */
 @Composable
-internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit) {
+internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit, showRetry: Boolean = true) {
     Row(Modifier.fillMaxWidth().testTag("remote.header"), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { dispatch(RemoteAction.BackToOrigin) }) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -82,9 +84,10 @@ internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                         style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (!state.connection.ready) Text(name, style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
-                        Text(state.receiver?.endpoint?.protocol?.displayName ?: "Receiver", style = MaterialTheme.typography.labelSmall,
+                        if (!state.connection.ready && !state.fullControlReady) Text(name, style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
+                        Text(if (!state.connection.ready && state.fullControlReady) "TV remote" else state.receiver?.endpoint?.protocol?.displayName ?: "Receiver", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary)
+                        if (!state.connection.ready && state.fullControlReady) Text("·", style = MaterialTheme.typography.labelSmall)
                         FullControlTag(state, dispatch)
                     }
                     if (state.fullControl?.storageFailure == true) {
@@ -93,7 +96,7 @@ internal fun RemoteHeader(state: RemoteUiState, dispatch: (RemoteAction) -> Unit
                 }
             }
         }
-        if (!state.connection.ready) {
+        if (showRetry && !state.connection.ready && !state.fullControlReady) {
             TextButton(onClick = { dispatch(RemoteAction.RetryConnection) }) { Text("Retry") }
         }
         FullControlMenu(state, dispatch)

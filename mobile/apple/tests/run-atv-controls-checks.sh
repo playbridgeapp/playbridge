@@ -5,6 +5,10 @@ test_dir="$(mktemp -d /private/tmp/playbridge-atv-controls.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
 app="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -swift-version 5 -warnings-as-errors -module-cache-path "$test_dir/cache" \
+  "$app/Models/ProtocolConstants.swift" "$app/Data/AtvCredentialStore.swift" \
+  "$app/Network/AtvDeviceMatcher.swift" "$app/Network/SavedReceiverEndpoint.swift" \
+  "$app/Network/RemoteAvailability.swift" "$app/Network/RemoteTVCatalog.swift" \
+  "$repo_root/mobile/apple/tests/RemoteTVCatalogTests.swift" \
   "$app/Models/Models.swift" "$app/Network/ConnectionCoordinator.swift" "$app/Network/WireProtocol.swift" \
   "$app/Network/ReceiverCapabilities.swift" "$app/Network/ReceiverRemotePolicy.swift" "$app/UI/RemoteMode.swift" \
   "$app/Network/AtvClientModels.swift" "$app/Network/AtvControlModels.swift" \

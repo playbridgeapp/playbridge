@@ -58,6 +58,7 @@ final class AtvCredentialStore {
     private let keychain: AtvKeychainAccess
     private var identity: AtvIdentity?
     private var tvs: [AtvTvRecord] = []
+    private var tvIdentities: [String: AtvIdentity] = [:]
     private var failure: AtvStorageError?
     private static let maximumBytes = 1_048_576
 
@@ -74,6 +75,7 @@ final class AtvCredentialStore {
         let version: Int
         let identity: SavedIdentity?
         let tvs: [AtvTvRecord]
+        let tvIdentities: [String: SavedIdentity]?
     }
 
     init(keychain: AtvKeychainAccess = AtvSystemKeychain()) {
@@ -83,6 +85,7 @@ final class AtvCredentialStore {
     }
 
     var records: [AtvTvRecord] { locked { tvs } }
+    var identityOverrides: [String: AtvIdentity] { locked { failure == nil ? tvIdentities : [:] } }
     var storageError: AtvStorageError? { locked { failure } }
     var recoveryRequired: Bool { locked { failure == .corrupt } }
     func identityOrNull() -> AtvIdentity? { locked { failure == nil ? identity : nil } }
@@ -104,26 +107,32 @@ final class AtvCredentialStore {
 
     /// Only call after the pairing exchange has verified this client identity and the TV pin.
     /// New identity recovery invalidates other TVs; a future UI must explain that before pairing.
-    func saveVerifiedPairing(_ value: AtvIdentity, record: AtvTvRecord) throws {
-        try saveRecord(record, verifiedIdentity: value)
+    func saveVerifiedPairing(_ value: AtvIdentity, record: AtvTvRecord, preserveOtherPairings: Bool = false) throws {
+        try saveRecord(record, verifiedIdentity: value, preserveOtherPairings: preserveOtherPairings)
     }
     /// Persist an already-verified record using the current identity; never a discovery result.
     func upsert(_ record: AtvTvRecord) throws { try saveRecord(record, verifiedIdentity: nil) }
 
-    private func saveRecord(_ record: AtvTvRecord, verifiedIdentity: AtvIdentity?) throws {
+    private func saveRecord(_ record: AtvTvRecord, verifiedIdentity: AtvIdentity?, preserveOtherPairings: Bool = false) throws {
         try locked {
             load(); try requireReadable(allowRecovery: verifiedIdentity != nil)
             let savedIdentity = verifiedIdentity ?? identity
             guard let savedIdentity, valid(savedIdentity), valid(record) else { throw AtvStorageError.invalidInput }
             // Pins/IPs/MACs never move ownership: only exact endpoint aliases and verified pin.
-            let previous = sameIdentity(identity, savedIdentity) ? tvs : []
+            let keepPrevious = sameIdentity(identity, savedIdentity) || preserveOtherPairings && failure == nil
+            let previous = keepPrevious ? tvs : []
+            var retained = keepPrevious ? tvIdentities : [:]
+            if preserveOtherPairings, failure == nil, !sameIdentity(identity, savedIdentity), let old = identity {
+                for item in previous where retained[item.fingerprint] == nil { retained[item.fingerprint] = old }
+            }
             let pin = record.fingerprint.lowercased()
             let replaced = previous.filter { $0.fingerprint == pin || !$0.receiverIds.isDisjoint(with: record.receiverIds) }
             let old = replaced.last
             let merged = AtvTvRecord(fingerprint: pin, mac: (record.mac ?? old?.mac)?.uppercased(),
                                      serverName: record.serverName ?? old?.serverName, lastIp: record.lastIp ?? old?.lastIp,
                                      receiverIds: replaced.reduce(record.receiverIds) { $0.union($1.receiverIds) })
-            try persist(savedIdentity, previous.filter { !replaced.contains($0) } + [merged])
+            replaced.forEach { retained[$0.fingerprint] = nil }
+            try persist(savedIdentity, previous.filter { !replaced.contains($0) } + [merged], savedTvIdentities: retained)
         }
     }
 
@@ -169,7 +178,7 @@ final class AtvCredentialStore {
         let (status, bytes) = keychain.read(readQuery)
         switch status {
         case errSecItemNotFound:
-            identity = nil; tvs = []; failure = nil
+            identity = nil; tvs = []; tvIdentities = [:]; failure = nil
         case errSecSuccess:
             guard let bytes, bytes.count <= Self.maximumBytes else { failure = .corrupt; return }
             // Check version before decoding the remainder; never overwrite a future document.
@@ -186,7 +195,10 @@ final class AtvCredentialStore {
                       seenIds.isDisjoint(with: record.receiverIds) else { failure = .corrupt; return }
                 seenIds.formUnion(record.receiverIds)
             }
+            let overrides = doc.tvIdentities ?? [:]
+            guard overrides.allSatisfy({ seenPins.contains($0.key) && valid($0.value.value) }) else { failure = .corrupt; return }
             identity = doc.identity?.value
+            tvIdentities = overrides.mapValues(\.value)
             tvs = doc.tvs.map { .init(fingerprint: $0.fingerprint.lowercased(), mac: $0.mac?.uppercased(),
                                      serverName: $0.serverName, lastIp: $0.lastIp, receiverIds: $0.receiverIds) }
             failure = nil
@@ -199,10 +211,12 @@ final class AtvCredentialStore {
     private func requireReadable(allowRecovery: Bool = false) throws {
         if let failure, !(allowRecovery && failure == .corrupt) { throw failure }
     }
-    private func persist(_ value: AtvIdentity?, _ records: [AtvTvRecord]) throws {
+    private func persist(_ value: AtvIdentity?, _ records: [AtvTvRecord], savedTvIdentities: [String: AtvIdentity]? = nil) throws {
         guard records.count <= 256, records.allSatisfy(valid) else { throw AtvStorageError.invalidInput }
         let bytes: Data
-        do { bytes = try JSONEncoder().encode(Document(version: 1, identity: value.map(SavedIdentity.init), tvs: records)) }
+        let retained = (savedTvIdentities ?? tvIdentities).filter { pin, _ in records.contains { $0.fingerprint == pin } }
+        do { bytes = try JSONEncoder().encode(Document(version: 1, identity: value.map(SavedIdentity.init), tvs: records,
+                                                       tvIdentities: retained.isEmpty ? nil : retained.mapValues(SavedIdentity.init))) }
         catch { throw AtvStorageError.writeFailed }
         guard bytes.count <= Self.maximumBytes else { throw AtvStorageError.invalidInput }
         var attributes = protection
@@ -222,7 +236,7 @@ final class AtvCredentialStore {
             throw AtvStorageError.writeFailed
         }
         // A single successful Security write commits identity and every pin/alias together.
-        identity = value; tvs = records; failure = nil
+        identity = value; tvs = records; tvIdentities = retained; failure = nil
     }
     private func sameIdentity(_ lhs: AtvIdentity?, _ rhs: AtvIdentity) -> Bool {
         lhs?.certPem == rhs.certPem && lhs?.keyPem == rhs.keyPem

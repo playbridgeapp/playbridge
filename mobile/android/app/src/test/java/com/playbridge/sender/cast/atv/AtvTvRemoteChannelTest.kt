@@ -34,17 +34,19 @@ class AtvTvRemoteChannelTest {
     private val endpoint = EndpointKey(CastProtocol.PLAYBRIDGE, "hisense")
     private val target = AtvReceiverTarget(endpoint, "Hisense", listOf("192.168.1.22"), androidTv = true, googleCast = false)
 
-    @Test fun hiddenRemoteDoesNotConnect() = runTest {
+    @Test fun foregroundConnectsWithoutRemoteAndWithoutDiscoveryWait() = runTest {
         val session = FakeSession()
         withChannel(session) { channel, _, _ ->
             channel.setRemoteVisible(false)
             advanceUntilIdle()
             assertEquals(0, session.discoverCount)
-            assertEquals(0, session.connectCount)
+            assertEquals(1, session.connectCount)
+            assertTrue(channel.state.value.connected)
+            assertEquals(AtvPairingPhase.Idle, channel.pairing.value.phase)
         }
     }
 
-    @Test fun visiblePairedTvConnectsAndHidingDisconnects() = runTest {
+    @Test fun visiblePairedTvConnectsAndHidingKeepsTheSocket() = runTest {
         val session = FakeSession()
         withChannel(session) { channel, _, _ ->
             channel.setRemoteVisible(true)
@@ -60,8 +62,11 @@ class AtvTvRemoteChannelTest {
             assertTrue(session.keys.all { it.second == "short" })
             channel.setRemoteVisible(false)
             advanceUntilIdle()
-            assertFalse(channel.state.value.connected)
-            assertTrue(session.disconnectCount >= 1)
+            assertTrue(channel.state.value.connected)
+            assertEquals(0, session.disconnectCount)
+            channel.setRemoteVisible(true)
+            runCurrent()
+            assertEquals(1, session.connectCount)
         }
     }
 
@@ -355,7 +360,7 @@ class AtvTvRemoteChannelTest {
         }
     }
 
-    @Test fun failedIdentitySaveShowsFixedPairingFailureAndRetryStillWorks() = runTest {
+    @Test fun identityIsSavedOnlyAfterVerificationAndFailedSaveCanRetry() = runTest {
         val file = FaultSecretFile().apply { fail = true }
         val store = AtvCredentialStore(file, XorCipher())
         val session = FakeSession()
@@ -364,15 +369,18 @@ class AtvTvRemoteChannelTest {
             runCurrent()
             channel.begin()
             runCurrent()
+            assertEquals(AtvPairingPhase.WaitingForCode, channel.pairing.value.phase)
+            assertNull(store.identityOrNull())
+            channel.submitCode("ABC123"); runCurrent()
             assertEquals(AtvPairingPhase.Failed, channel.pairing.value.phase)
             assertEquals(AtvPairingFailure.Storage, channel.pairing.value.failure)
-            assertEquals(0, session.pairStarts)
+            assertEquals(1, session.pairStarts)
             assertNull(store.identityOrNull())
             file.fail = false
             channel.begin()
             runCurrent()
             assertEquals(AtvPairingPhase.WaitingForCode, channel.pairing.value.phase)
-            assertEquals(1, session.pairStarts)
+            assertEquals(2, session.pairStarts)
         }
     }
 
@@ -443,8 +451,226 @@ class AtvTvRemoteChannelTest {
         }
     }
 
+    @Test fun backgroundGraceExpiresAtSixtySecondsAndForegroundReconnectsWithoutRemote() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            assertTrue(channel.state.value.connected)
+            channel.setAppForeground(false)
+            advanceTimeBy(59_999); runCurrent()
+            assertTrue(channel.state.value.connected)
+            assertEquals(0, session.disconnectCount)
+            advanceTimeBy(1); runCurrent()
+            assertFalse(channel.state.value.connected)
+            assertEquals(1, session.disconnectCount)
+            channel.setAppForeground(true); runCurrent()
+            assertTrue(channel.state.value.connected)
+            assertEquals(2, session.connectCount)
+        }
+    }
+
+    @Test fun hidingAndImmediatelyReopeningRemoteCannotReviveAnOldKeyboardBatch() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            channel.setRemoteVisible(true); runCurrent()
+            session.onKey = {
+                channel.setRemoteVisible(false)
+                channel.setRemoteVisible(true)
+            }
+            assertTrue(channel.editText(2, "stale", true) is RemoteCommandResult.Failed)
+            assertEquals(listOf("KEYCODE_DEL"), session.operations)
+            assertEquals(1, session.connectCount)
+            assertTrue(channel.state.value.connected)
+        }
+    }
+
+    @Test fun explicitAppLaunchFromCastUiUsesForegroundSocketWithoutRemoteButBackgroundCannotSend() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            assertEquals(RemoteCommandResult.Submitted, channel.launchApp("com.playbridge.player"))
+            assertEquals(listOf("com.playbridge.player"), session.launches)
+            channel.setAppForeground(false); runCurrent()
+            assertTrue(channel.state.value.connected)
+            assertTrue(channel.launchApp("com.playbridge.player") is RemoteCommandResult.Failed)
+            assertEquals(1, session.launches.size)
+        }
+    }
+
+    @Test fun enteringRemoteOrReturningWithinGraceDoesNotRestartAnInFlightHandshake() = runTest {
+        val session = FakeSession().apply { connectGate = CompletableDeferred() }
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            assertEquals(1, session.connectCount)
+            channel.setRemoteVisible(true); runCurrent()
+            channel.setRemoteVisible(false)
+            channel.setAppForeground(false); runCurrent()
+            advanceTimeBy(1_000); runCurrent()
+            channel.setAppForeground(true); runCurrent()
+            assertEquals(1, session.connectCount)
+            assertEquals(0, session.disconnectCount)
+            session.connectGate!!.complete(Unit); runCurrent()
+            assertTrue(channel.state.value.connected)
+        }
+    }
+
+    @Test fun foregroundAfterSuspendedDeadlineReconnectsEvenBeforeTheTimerRuns() = runTest {
+        var elapsed = 0L
+        val session = FakeSession()
+        withChannel(session, nowMs = { elapsed }) { channel, _, _ ->
+            runCurrent()
+            channel.setAppForeground(false); runCurrent()
+            elapsed = 60_001 // Simulate suspended execution: the timer has not run.
+            channel.setAppForeground(true); runCurrent()
+            assertEquals(2, session.connectCount)
+            assertEquals(1, session.disconnectCount)
+            assertTrue(channel.state.value.connected)
+        }
+    }
+
+    @Test fun returningWithinGracePreservesSocketAndCancelsTheOldDeadline() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            channel.setAppForeground(false)
+            advanceTimeBy(30_000); runCurrent()
+            channel.setAppForeground(true); runCurrent()
+            advanceTimeBy(40_000); runCurrent()
+            assertTrue(channel.state.value.connected)
+            assertEquals(1, session.connectCount)
+            assertEquals(0, session.disconnectCount)
+            channel.setAppForeground(false)
+            advanceTimeBy(60_000); runCurrent()
+            assertFalse(channel.state.value.connected)
+            assertEquals(1, session.disconnectCount)
+        }
+    }
+
+    @Test fun foregroundAndRemoteEntryInterruptLongBackoffWithoutChangingTrustPolicy() = runTest {
+        val session = FakeSession().apply { connectError = AtvCommandException("unreachable", "fixed") }
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            for (wait in listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L)) {
+                advanceTimeBy(wait); runCurrent()
+            }
+            assertEquals(6, session.connectCount) // Next retry would be in 30 seconds.
+            channel.setRemoteVisible(true); runCurrent()
+            assertEquals(7, session.connectCount)
+            advanceTimeBy(1_000); runCurrent()
+            assertEquals(8, session.connectCount)
+            channel.setRemoteVisible(false)
+            channel.setAppForeground(false); runCurrent()
+            channel.setAppForeground(true); runCurrent()
+            assertEquals(9, session.connectCount)
+            advanceTimeBy(1_000); runCurrent()
+            assertEquals(10, session.connectCount)
+            assertEquals(AtvPairingPhase.Idle, channel.pairing.value.phase)
+        }
+    }
+
+    @Test fun silentRepairOutsideRemoteNeverStartsPairingOrShowsItsCodeState() = runTest {
+        val session = FakeSession().apply { connectError = AtvCommandException("pin_mismatch", "fixed") }
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            assertTrue(channel.state.value.pinMismatch)
+            assertEquals(AtvPairingPhase.Idle, channel.pairing.value.phase)
+            channel.begin(); runCurrent()
+            assertEquals(0, session.pairStarts)
+            assertEquals(AtvPairingPhase.Idle, channel.pairing.value.phase)
+            channel.setRemoteVisible(true); runCurrent()
+            channel.begin(); runCurrent()
+            assertEquals(1, session.pairStarts)
+            channel.setAppForeground(false); runCurrent()
+            assertEquals(AtvPairingPhase.Idle, channel.pairing.value.phase)
+        }
+    }
+
+    @Test fun selectionSwitchAndDeselectCloseThePreviousSocketDuringGrace() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, store, receivers ->
+            val other = EndpointKey(CastProtocol.PLAYBRIDGE, "other")
+            store.upsert(AtvTvRecord("cd".repeat(32), null, null, null, setOf(other.toString())))
+            runCurrent()
+            channel.setAppForeground(false); runCurrent()
+            receivers.value = target.copy(endpoint = other)
+            runCurrent()
+            assertEquals(listOf("ab".repeat(32), "cd".repeat(32)), session.pins)
+            assertEquals(1, session.disconnectCount)
+            receivers.value = null; runCurrent()
+            assertFalse(channel.state.value.connected)
+            assertNull(channel.state.value.matchedEndpoint)
+            assertEquals(2, session.disconnectCount)
+            advanceTimeBy(60_000); runCurrent()
+            assertEquals(2, session.connectCount)
+        }
+    }
+
+    @Test fun passiveDiscoveryRelocatesOnlyTheVerifiedSelectedTvAndDoesNotRestartForUnrelatedRecords() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            assertEquals(0, session.discoverCount)
+            channel.updateDiscovery(listOf(AtvDiscoveredDevice("Living Room", "192.0.2.7", 6466,
+                listOf("192.0.2.7"), listOf("bt" to "C0:E5:DA:D8:C3:5F"))))
+            runCurrent()
+            assertEquals(2, session.connectCount)
+            assertEquals("192.0.2.7", session.hosts.last())
+            channel.updateDiscovery(listOf(
+                AtvDiscoveredDevice("Living Room", "192.0.2.7", 6466, listOf("192.0.2.7"), listOf("bt" to "C0:E5:DA:D8:C3:5F")),
+                AtvDiscoveredDevice("Other", "192.0.2.8", 6466, listOf("192.0.2.8"), emptyList()),
+            ))
+            runCurrent()
+            assertEquals(2, session.connectCount)
+            assertTrue(channel.state.value.connected)
+            channel.setAppForeground(false)
+            channel.updateDiscovery(emptyList()) // Process discovery stops on background.
+            runCurrent()
+            assertEquals(2, session.connectCount)
+            assertTrue(channel.state.value.connected)
+        }
+    }
+
+    @Test fun legacyPairingMigrationIsVerifiedBeforeCommitAndKeepsOtherTvCredentials() = runTest {
+        val session = FakeSession().apply {
+            preparedIdentity = AtvIdentity("NEW-CERT", "NEW-KEY", "01".repeat(32), "PlayBridge (Android) fixture", true)
+        }
+        withChannel(session) { channel, store, receivers ->
+            val old = requireNotNull(store.identityOrNull())
+            val other = AtvTvRecord("cd".repeat(32), null, "Other", null, setOf("playbridge:other"))
+            store.upsert(other)
+            channel.setRemoteVisible(true); runCurrent()
+            channel.begin(); runCurrent()
+            assertTrue(session.suppliedIdentity == old)
+            assertTrue(store.identityOrNull() == old)
+            assertTrue(session.suppliedName == session.preparedIdentity?.clientName)
+            channel.cancel(); runCurrent()
+            assertTrue(store.identityOrNull() == old)
+            channel.begin(); runCurrent()
+            channel.submitCode("ABC123"); runCurrent()
+            assertTrue(store.identityOrNull()?.certPem == "NEW-CERT")
+            assertTrue(store.identityOrNull(other.fingerprint) == old)
+            assertEquals(2, store.records.value.size)
+            receivers.value = target.copy(endpoint = EndpointKey(CastProtocol.PLAYBRIDGE, "other"))
+            runCurrent()
+            assertTrue(session.certificates.last() == old.certPem)
+        }
+    }
+
+    @Test fun repeatedPlainDisconnectsRetryWithoutOfferingRepair() = runTest {
+        val session = FakeSession()
+        withChannel(session) { channel, _, _ ->
+            runCurrent()
+            repeat(4) {
+                session.closures.send(Unit); runCurrent()
+                assertFalse(channel.state.value.needsRepair || channel.state.value.pinMismatch)
+                advanceTimeBy(1_000); runCurrent()
+                assertTrue(channel.state.value.connected)
+            }
+        }
+    }
+
     /** Foreground child of the test. backgroundScope work stays queued through advanceUntilIdle. */
-    private suspend fun TestScope.withChannel(session: FakeSession, credentialStore: AtvCredentialStore? = null, block: suspend (AtvTvRemoteChannel, AtvCredentialStore, MutableStateFlow<AtvReceiverTarget?>) -> Unit) {
+    private suspend fun TestScope.withChannel(session: FakeSession, credentialStore: AtvCredentialStore? = null, nowMs: () -> Long = { testScheduler.currentTime }, block: suspend (AtvTvRemoteChannel, AtvCredentialStore, MutableStateFlow<AtvReceiverTarget?>) -> Unit) {
         val job = SupervisorJob(coroutineContext[Job])
         val file = MemorySecretFile()
         val store = credentialStore ?: AtvCredentialStore(file, XorCipher()).apply {
@@ -465,8 +691,9 @@ class AtvTvRemoteChannelTest {
             store,
             CoroutineScope(coroutineContext + job),
             receivers,
-            discoverTimeoutMs = 0,
+            nowMs = nowMs,
         )
+        channel.setAppForeground(true)
         try {
             block(channel, store, receivers)
         } finally {
@@ -482,10 +709,17 @@ private class FakeSession : AtvControlSession {
     var disconnectCount = 0
     var discoverCount = 0
     var connectError: AtvCommandException? = null
+    var connectGate: CompletableDeferred<Unit>? = null
     val keys = mutableListOf<Pair<String?, String>>()
     val closures = Channel<Unit>(Channel.UNLIMITED)
     val pins = mutableListOf<String>()
+    val hosts = mutableListOf<String>()
+    val certificates = mutableListOf<String>()
+    val launches = mutableListOf<String>()
     val operations = mutableListOf<String>()
+    var preparedIdentity: AtvIdentity? = null
+    var suppliedIdentity: AtvClientIdentity? = null
+    var suppliedName: String? = null
     var pairStarts = 0
     var pairCancels = 0
     var pairFinishes = 0
@@ -500,8 +734,13 @@ private class FakeSession : AtvControlSession {
         return emptyList()
     }
     override suspend fun generateIdentity(clientName: String) = AtvIdentity("CERT", "KEY", "01".repeat(32))
+    override suspend fun preparePairingIdentity(existing: AtvClientIdentity?): AtvIdentity {
+        suppliedIdentity = existing
+        return preparedIdentity ?: existing?.let { AtvIdentity(it.certPem, it.keyPem, "01".repeat(32)) } ?: generateIdentity(ATV_CLIENT_NAME)
+    }
     override suspend fun startPairing(host: String, certPem: String, keyPem: String, clientName: String): AtvPairingStarted {
         pairStarts++
+        suppliedName = clientName
         return AtvPairingStarted("TV", "ab".repeat(32), null)
     }
     override suspend fun finishPairing(code: String): AtvPaired {
@@ -512,7 +751,10 @@ private class FakeSession : AtvControlSession {
     override suspend fun cancelPairing() { pairCancels++; cleanupGate?.await(); cancelError?.let { throw it } }
     override suspend fun connect(host: String, certPem: String, keyPem: String, pinSha256Hex: String) {
         connectCount++
+        hosts += host
+        certificates += certPem
         pins += pinSha256Hex
+        connectGate?.await()
         connectError?.let { throw it }
         televisionState.value = AtvTelevisionState(true, 3, 100, false, null, "Hisense", null)
     }
@@ -525,7 +767,7 @@ private class FakeSession : AtvControlSession {
     }
     override suspend fun volume(action: String) = Unit
     override suspend fun text(text: String) { operations += "text" }
-    override suspend fun launchApp(uriOrPackage: String) = Unit
+    override suspend fun launchApp(uriOrPackage: String) { launches += uriOrPackage }
     override suspend fun power() = Unit
     override suspend fun disconnect() { disconnectCount++ }
     override suspend fun close() = Unit

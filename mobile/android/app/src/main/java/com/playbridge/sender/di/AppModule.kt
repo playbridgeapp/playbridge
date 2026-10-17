@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -290,6 +291,8 @@ val appModule = module {
         com.playbridge.sender.cast.atv.AtvRemoteClient(
             com.playbridge.sender.cast.atv.RustAtvBoundary(),
             CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            phoneUUID = { com.playbridge.sender.connection.PlayBridgePhoneIdentity.uuid(
+                androidContext().getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)) },
         )
     }
     single {
@@ -303,7 +306,14 @@ val appModule = module {
             credentials = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
             receivers = receivers,
-        )
+        ).also { channel ->
+            receiverScope.launch(Dispatchers.Main.immediate) {
+                androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+                    override fun onStart(owner: androidx.lifecycle.LifecycleOwner) { channel.setAppForeground(true) }
+                    override fun onStop(owner: androidx.lifecycle.LifecycleOwner) { channel.setAppForeground(false) }
+                })
+            }
+        }
     }
     single<com.playbridge.sender.cast.remote.TvRemoteChannel> { get<com.playbridge.sender.cast.atv.AtvTvRemoteChannel>() }
     single<com.playbridge.sender.cast.atv.AtvPairingController> { get<com.playbridge.sender.cast.atv.AtvTvRemoteChannel>() }
@@ -325,6 +335,11 @@ val appModule = module {
         )
     }
 
+    single {
+        com.playbridge.sender.cast.atv.RemoteTVDirectory(androidContext(), get(), get(), get(), get(), get(), get(),
+            CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+    }
+
     // 6. ViewModels
     viewModel {
         ConnectionViewModel(
@@ -335,6 +350,7 @@ val appModule = module {
             castSessionManager = get(),
             discoveryRepository = get(),
             networkStatusRepository = get(),
+            remoteTVDirectory = get(),
         )
     }
 

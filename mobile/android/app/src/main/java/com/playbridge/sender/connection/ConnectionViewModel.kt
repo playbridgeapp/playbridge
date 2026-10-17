@@ -33,7 +33,6 @@ import java.net.Socket
 import java.net.InetSocketAddress
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import java.util.UUID
 
 class ConnectionViewModel(
     application: Application,
@@ -45,6 +44,7 @@ class ConnectionViewModel(
     val castSessionManager: CastSessionManager,
     private val discoveryRepository: ReceiverDiscoveryRepository,
     private val networkStatusRepository: NetworkStatusRepository,
+    val remoteTVDirectory: com.playbridge.sender.cast.atv.RemoteTVDirectory,
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
@@ -53,6 +53,7 @@ class ConnectionViewModel(
     // Exposed Flows
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState
     val tvDevice: Flow<TvDevice?> = connectionStore.tvDevice
+    val selectedRemoteDevice = castSessionManager.remoteDevice
 
     /** Live discovery results (sticky across rescans; all protocols). */
     val discoveredDevices: StateFlow<List<TvDevice>> = discoveryRepository.devices
@@ -61,6 +62,8 @@ class ConnectionViewModel(
     /** Wi‑Fi/Ethernet availability and VPN posture for cast banners. */
     val networkStatus: StateFlow<NetworkStatusRepository.Status> = networkStatusRepository.status
 
+    private val remoteRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val independentRemoteRequests = remoteRequests.asSharedFlow()
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
     private val _savedDevicesOnlineStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
@@ -99,6 +102,7 @@ class ConnectionViewModel(
                 }
             }.awaitAll().toMap()
             _savedDevicesOnlineStatus.value = results
+            remoteTVDirectory.updatePings(results)
         }
     }
 
@@ -141,8 +145,7 @@ class ConnectionViewModel(
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
-    private val phoneDeviceUUID: String = prefs.getString("pb_phone_uuid", null)
-        ?: UUID.randomUUID().toString().also { prefs.edit { putString("pb_phone_uuid", it) } }
+    private val phoneDeviceUUID: String = PlayBridgePhoneIdentity.uuid(prefs)
 
     private var hasAttemptedInitialConnect = false
     private var activeConnectingDevice: TvDevice? = null
@@ -326,7 +329,9 @@ class ConnectionViewModel(
         // authoritative route so playback routing and the foreground-service / reconnect
         // supervisor agree. Cold-start auto-connect goes
         // through webSocketClient.connect() directly and intentionally does NOT set this.
-        castSessionManager.selectNativeRoute()
+        val selected = castSessionManager.remoteDevice.value
+        if (selected != null && selected.endpointKey != device.endpointKey) webSocketClient.disconnect()
+        castSessionManager.selectNativeDevice(device)
         // A deliberate connect (user picked or cast to a device) re-enables auto-connect, which a
         // prior manual disconnect turned off. Set the flag directly rather than via
         // setAutoConnectEnabled() — its enable side-effect would kick off a second connect.
@@ -339,7 +344,60 @@ class ConnectionViewModel(
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
             activeConnectingDevice = merged
+            connectionStore.saveTvDevice(merged)
             webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint, merged.uuid)
+        }
+    }
+
+    suspend fun prepareIndependentRemote(onPickRequired: () -> Unit) {
+        val revision = castSessionManager.selectionRevision
+        val selected = castSessionManager.remoteDevice.value
+        if (selected != null) {
+            if (selected.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
+                (connectionState.value is WebSocketClient.ConnectionState.Disconnected || connectionState.value is WebSocketClient.ConnectionState.Error)) {
+                connect(remoteTVDirectory.rows.value.firstOrNull { it.endpoint == selected.endpointKey.toString() }?.device ?: selected)
+            }
+            return
+        }
+        if (com.playbridge.sender.cast.atv.AtvConnectionLifetime.waitForDiscovery(
+                hasSelection = false, settled = remoteTVDirectory.ready.value)) {
+            kotlinx.coroutines.withTimeoutOrNull(5_000) { remoteTVDirectory.ready.first { it } }
+        }
+        if (castSessionManager.selectionRevision != revision || !remoteTVDirectory.isForeground) return
+        val choices = remoteTVDirectory.rows.value
+        when (val selection = com.playbridge.sender.cast.remote.RemoteTVSelection.resolve(
+            castSessionManager.remoteDevice.value?.endpointKey?.toString(), choices.map { it.choice })) {
+            is com.playbridge.sender.cast.remote.RemoteTVSelection.Selected ->
+                if (castSessionManager.remoteDevice.value == null) choices.firstOrNull { it.endpoint == selection.endpoint }?.let { connect(it.device) }
+            com.playbridge.sender.cast.remote.RemoteTVSelection.Picker -> onPickRequired()
+        }
+    }
+    fun retryIndependentRemote() {
+        remoteTVDirectory.retry()
+        castSessionManager.remoteDevice.value?.let { selected ->
+            connect(remoteTVDirectory.rows.value.firstOrNull { it.endpoint == selected.endpointKey.toString() }?.device ?: selected)
+        }
+    }
+    private var launchRequest: Job? = null
+    fun cancelOpenPlayBridge() { launchRequest?.cancel(); launchRequest = null }
+    fun openPlayBridge(onOpened: () -> Unit = {}) {
+        val target = castSessionManager.remoteDevice.value?.endpointKey?.toString() ?: return
+        remoteRequests.tryEmit(Unit)
+        launchRequest?.cancel()
+        launchRequest = viewModelScope.launch {
+            // The foreground channel already owns this TV; wait without another connection or polling loop.
+            val ready = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+                remoteTVDirectory.rows.first { rows -> rows.any { it.endpoint == target && it.paired } }
+                remoteTVDirectory.awaitControl(target)
+            }
+            if (castSessionManager.remoteDevice.value?.endpointKey?.toString() != target) return@launch
+            if (connectionState.value is WebSocketClient.ConnectionState.Connected) { onOpened(); return@launch }
+            if (ready != null && remoteTVDirectory.openPlayBridge(target)) {
+                if (connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                    remoteTVDirectory.rows.value.firstOrNull { it.endpoint == target }?.device?.let(::connect)
+                }
+                onOpened()
+            } else android.widget.Toast.makeText(getApplication(), "Couldn't open PlayBridge on this TV.", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 

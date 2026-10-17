@@ -6,10 +6,10 @@ trap 'rm -rf "$test_dir"' EXIT
 app="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -swift-version 5 -warnings-as-errors -module-cache-path "$test_dir/cache" \
   "$app/Models/Models.swift" "$app/Network/AtvClientModels.swift" \
-  "$app/Network/AtvNativeTransport.swift" "$app/Network/AtvRemoteClient.swift" \
+  "$app/Network/AtvNativeTransport.swift" "$app/Data/PlayBridgePhoneIdentity.swift" "$app/Network/AtvRemoteClient.swift" \
   "$app/Data/AtvCredentialStore.swift" "$app/Network/AtvDeviceMatcher.swift" \
   "$app/Network/AtvBonjourBrowser.swift" "$app/Network/AtvCoordinatorDependencies.swift" \
-  "$app/Network/RemoteNavigationDispatcher.swift" "$app/Network/AtvControlModels.swift" "$app/Network/AtvRemoteCoordinator.swift" "$app/UI/AtvPairingPresentation.swift" \
+  "$app/Network/RemoteNavigationDispatcher.swift" "$app/Network/AtvControlModels.swift" "$app/Network/AtvConnectionLifetime.swift" "$app/Network/AtvRemoteCoordinator.swift" "$app/UI/AtvPairingPresentation.swift" \
   "$repo_root/mobile/apple/tests/AtvCoordinatorTests.swift" -o "$test_dir/check"
 "$test_dir/check"
 python3 - "$app" <<'PY'

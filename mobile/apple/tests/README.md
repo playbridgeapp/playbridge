@@ -496,3 +496,11 @@ and coordinator runners pause fake native/receiver writes to check one in flight
 one latest pending key, dropping unsent steps on release without haptics, discrete
 D-pad coalescing, and navigation bypassing ordered keyboard acknowledgements. They
 do not install, use a TV/LAN, or verify physical UIKit touch delivery.
+
+Independent TV remote availability (no receiver/TV connection in tests):
+`run-remote-control-checks.sh` covers shared state derivation, visible control
+categories, picker wording, and unique/multiple/offline/ambiguous selection.
+`run-atv-controls-checks.sh` also covers the saved/history/ATV-record catalog,
+verified alias deduplication, MAC relocation, record-only TVs, connected ownership
+and stale receiver reachability. These checks do not establish physical discovery,
+TV app launch, or rendered UI behavior.

@@ -184,6 +184,8 @@ class CastSessionManager(
 
     /** Route phone-local. Keeps an idle native link, but stops any external receiver session. */
     fun selectThisDevice() {
+        selectionClock.incrementAndGet()
+        nativeSelection.value = null
         castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
         stopAndClearExternalTarget()
@@ -210,6 +212,7 @@ class CastSessionManager(
 
     /** User picked the native TV receiver. Connecting is a separate concern (caller/Stage B). */
     fun selectNativeRoute() {
+        selectionClock.incrementAndGet()
         screenMirrorCoordinator.stop("target_changed")
         stopAndClearExternalTarget()
         _route.value = Route.NativeTv
@@ -348,11 +351,22 @@ class CastSessionManager(
         }
             .stateIn(scope, SharingStarted.Eagerly, null)
 
+    private val selectionClock = java.util.concurrent.atomic.AtomicLong()
+    val selectionRevision: Long get() = selectionClock.get()
+    private val nativeSelection = MutableStateFlow<TvDevice?>(null)
+    fun selectNativeDevice(device: TvDevice) {
+        nativeSelection.value = device
+        selectNativeRoute()
+    }
+
     private val nativeDevice: StateFlow<TvDevice?> = connectionStore.tvDevice
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     /** Selected receiver identity survives a transport disconnect, but never a route change. */
-    val remoteDevice: StateFlow<TvDevice?> = combine(route, nativeDevice, activeExternalDevice, ::selectedRemoteDevice)
+    val remoteDevice: StateFlow<TvDevice?> = combine(route, nativeDevice, activeExternalDevice, nativeSelection) { selectedRoute, stored, external, selected ->
+        val native = if (selected != null && selected.endpointKey != stored?.endpointKey) selected else stored ?: selected
+        selectedRemoteDevice(selectedRoute, native, external)
+    }
         .stateIn(scope, SharingStarted.Eagerly, selectedRemoteDevice(route.value, nativeDevice.value, activeExternalDevice.value))
 
     fun selectRokuTarget(device: TvDevice) {
@@ -1061,6 +1075,7 @@ class CastSessionManager(
     // ------------------------------------------------------------------
 
     private fun selectExternalTarget(device: TvDevice, target: CastTarget) {
+        selectionClock.incrementAndGet()
         castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
         if (_externalTarget.value != null) _externalInterrupts.tryEmit(Unit)

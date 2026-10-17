@@ -152,6 +152,7 @@ private func projection(_ receiver: ReceiverRemotePolicy = base(), connected: Bo
 }
 @main struct AtvControlsTests {
     @MainActor static func main() async {
+        RemoteTVCatalogTests.run()
         projectionChecks(); await routeChecks(); await keyboardChecks(); await RemoteNavigationDispatchTests.run()
         print("PASS: Android-equivalent combined routing, receiver-down controls, stale tickets, no retries, scalar/IME/ordered keyboard and truthful badges/volume")
     }

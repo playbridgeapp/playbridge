@@ -56,7 +56,11 @@ void pb_session_free(const CastSession *session);
  *
  * Commands (additional fields):
  * discover: timeout_ms (0 skips mDNS; capped at 60000).
- * generate_identity: client_name.
+ * generate_identity: client_name (complete model label + UUID-derived suffix); optional cert_pem +
+ *   key_pem from the stored install identity, for explicit pairing only. Reuses a
+ *   modern identity or replaces a legacy CN/serial. The identity event additionally
+ *   returns client_name (persisted certificate CN) and replaces_legacy. Commit only
+ *   after verified pairing; never log these commands or identity events.
  * start_pairing: host, port? (6467), cert_pem, key_pem, client_name.
  * finish_pairing: code. A failed finish consumes pairing; restart to retry.
  * cancel_pairing: aborts a pending or started pairing only.

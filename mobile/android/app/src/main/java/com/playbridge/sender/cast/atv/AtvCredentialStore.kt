@@ -8,7 +8,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** One client identity for this install, plus one record per paired television. */
-internal data class AtvClientIdentity(val certPem: String, val keyPem: String)
+internal data class AtvClientIdentity(val certPem: String, val keyPem: String) {
+    override fun toString(): String = "AtvClientIdentity(redacted)"
+}
 
 internal data class AtvTvRecord(
     val fingerprint: String,
@@ -44,6 +46,7 @@ internal class AtvCredentialStore(
     private val lock = Any()
     private var identity: AtvClientIdentity? = null
     private var tvs: List<AtvTvRecord> = emptyList()
+    private var tvIdentities: Map<String, AtvClientIdentity> = emptyMap()
     private var readBlocked = false
     private val recordsState = MutableStateFlow<List<AtvTvRecord>>(emptyList())
     val records: StateFlow<List<AtvTvRecord>> = recordsState.asStateFlow()
@@ -54,7 +57,9 @@ internal class AtvCredentialStore(
         load()
     }
 
-    fun identityOrNull(): AtvClientIdentity? = synchronized(lock) { identity.takeUnless { recoveryState.value } }
+    fun identityOrNull(fingerprint: String? = null): AtvClientIdentity? = synchronized(lock) {
+        (fingerprint?.let { tvIdentities[it.lowercase()] } ?: identity).takeUnless { recoveryState.value }
+    }
 
     /** An in-memory identity can still be verified during recovery; never use it to connect. */
     fun pairingIdentityOrNull(): AtvClientIdentity? = synchronized(lock) {
@@ -74,9 +79,10 @@ internal class AtvCredentialStore(
     fun upsert(record: AtvTvRecord) = saveRecord(record, null, verified = false)
 
     /** Recovery replaces unreadable credentials only after the TV verified this identity. */
-    fun saveVerifiedPairing(value: AtvClientIdentity, record: AtvTvRecord) = saveRecord(record, value, verified = true)
+    fun saveVerifiedPairing(value: AtvClientIdentity, record: AtvTvRecord, preserveOtherPairings: Boolean = false) =
+        saveRecord(record, value, verified = true, preserveOtherPairings = preserveOtherPairings)
 
-    private fun saveRecord(record: AtvTvRecord, value: AtvClientIdentity?, verified: Boolean) {
+    private fun saveRecord(record: AtvTvRecord, value: AtvClientIdentity?, verified: Boolean, preserveOtherPairings: Boolean = false) {
         val fingerprint = record.fingerprint.lowercase()
         if (!isFingerprint(fingerprint)) return
         synchronized(lock) {
@@ -96,7 +102,15 @@ internal class AtvCredentialStore(
                 receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds,
             )
             val updated = previous.filter { it !in replaced } + merged
-            persist(savedIdentity = value ?: identity, savedTvs = updated, rotateKey = recovering)
+            val retained = tvIdentities.toMutableMap()
+            if (preserveOtherPairings && !recovering && value != identity) {
+                identity?.let { old -> previous.forEach { retained.putIfAbsent(it.fingerprint, old) } }
+            }
+            // A successfully re-paired TV now uses the new install identity.
+            replaced.forEach { retained.remove(it.fingerprint) }
+            val savedIdentities = retained.filterKeys { pin -> updated.any { it.fingerprint == pin } }
+            persist(savedIdentity = value ?: identity, savedTvs = updated, rotateKey = recovering, savedTvIdentities = savedIdentities)
+            tvIdentities = savedIdentities
             if (value != null) identity = value
             tvs = updated
             recordsState.value = tvs
@@ -122,6 +136,7 @@ internal class AtvCredentialStore(
             requireReadable()
             val updated = tvs.filter { it.fingerprint != fingerprint.lowercase() }
             persist(savedTvs = updated)
+            tvIdentities = tvIdentities.filterKeys { pin -> updated.any { it.fingerprint == pin } }
             tvs = updated
             recordsState.value = tvs
         }
@@ -157,6 +172,25 @@ internal class AtvCredentialStore(
             val key = it.optString("key_pem")
             if (cert.isBlank() || key.isBlank()) null else AtvClientIdentity(cert, key)
         }
+        val overrides = json.opt("tv_identities")
+        if (overrides != null && overrides != JSONObject.NULL && overrides !is JSONObject) {
+            recoveryState.value = true
+            return
+        }
+        val retained = mutableMapOf<String, AtvClientIdentity>()
+        val saved = overrides as? JSONObject
+        if ((saved?.length() ?: 0) > 256) { recoveryState.value = true; return }
+        saved?.keys()?.forEach { pin ->
+            val item = saved.optJSONObject(pin)
+            val cert = item?.optString("cert_pem").orEmpty()
+            val key = item?.optString("key_pem").orEmpty()
+            if (!isFingerprint(pin) || pin != pin.lowercase() || cert.isBlank() || key.isBlank() || cert.length > 65_536 || key.length > 65_536) {
+                recoveryState.value = true
+                return
+            }
+            retained[pin] = AtvClientIdentity(cert, key)
+        }
+        tvIdentities = retained
         val array = json.optJSONArray("tvs") ?: JSONArray()
         tvs = buildList {
             for (index in 0 until array.length()) {
@@ -186,6 +220,10 @@ internal class AtvCredentialStore(
             val replaced = migrated.filter { it.fingerprint == record.fingerprint || it.receiverIds.any(record.receiverIds::contains) }
             migrated.filter { it !in replaced } + record.copy(receiverIds = replaced.flatMap { it.receiverIds }.toSet() + record.receiverIds)
         }
+        if (tvIdentities.keys.any { pin -> tvs.none { it.fingerprint == pin } }) {
+            recoveryState.value = true
+            return
+        }
         recordsState.value = tvs
         recoveryState.value = false
     }
@@ -203,7 +241,8 @@ internal class AtvCredentialStore(
         if (recoveryState.value) throw AtvStorageException()
     }
 
-    private fun persist(savedIdentity: AtvClientIdentity? = identity, savedTvs: List<AtvTvRecord> = tvs, rotateKey: Boolean = false) {
+    private fun persist(savedIdentity: AtvClientIdentity? = identity, savedTvs: List<AtvTvRecord> = tvs, rotateKey: Boolean = false,
+        savedTvIdentities: Map<String, AtvClientIdentity> = tvIdentities) {
         val document = JSONObject().put("version", 2)
         savedIdentity?.let { saved ->
             document.put("identity", JSONObject().put("cert_pem", saved.certPem).put("key_pem", saved.keyPem))
@@ -220,6 +259,11 @@ internal class AtvCredentialStore(
             )
         }
         document.put("tvs", array)
+        val retained = JSONObject()
+        savedTvIdentities.filterKeys { pin -> savedTvs.any { it.fingerprint == pin } }.forEach { (pin, old) ->
+            retained.put(pin, JSONObject().put("cert_pem", old.certPem).put("key_pem", old.keyPem))
+        }
+        if (retained.length() > 0) document.put("tv_identities", retained)
         try {
             if (rotateKey) cipher.rotateKey()
             val blob = cipher.encrypt(document.toString().toByteArray(Charsets.UTF_8))

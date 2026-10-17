@@ -43,6 +43,8 @@ enum Command {
     },
     GenerateIdentity {
         client_name: String,
+        cert_pem: Option<String>,
+        key_pem: Option<String>,
     },
     StartPairing {
         host: String,
@@ -430,14 +432,28 @@ async fn handle_request(
                 return;
             }
         }
-        Command::GenerateIdentity { client_name } => {
+        Command::GenerateIdentity {
+            client_name,
+            cert_pem,
+            key_pem,
+        } => {
             if jobs.len() >= COMMAND_CAPACITY {
                 Err(AtvError::Protocol("too many operations".into()))
             } else {
                 jobs.spawn(async move {
-                    match tokio::task::spawn_blocking(move || ClientIdentity::generate(&client_name)).await {
-                        Ok(Ok(identity)) => json!({"event":"identity", "request_id":id,
+                    match tokio::task::spawn_blocking(move || {
+                        let existing = match (cert_pem, key_pem) {
+                            (Some(cert), Some(key)) => Some(ClientIdentity::from_pem(&cert, &key)?),
+                            (None, None) => None,
+                            _ => return Err(AtvError::Protocol("identity requires both certificate and key".to_owned())),
+                        };
+                        let (identity, replaces_legacy) = ClientIdentity::for_pairing(&client_name, existing)?;
+                        let name = identity.client_name()?;
+                        Ok((identity, name, replaces_legacy))
+                    }).await {
+                        Ok(Ok((identity, name, replaces_legacy))) => json!({"event":"identity", "request_id":id,
                             "cert_pem":identity.certificate_pem(), "key_pem":identity.private_key_pem(),
+                            "client_name":name, "replaces_legacy":replaces_legacy,
                             "fingerprint":fingerprint_hex(&identity.fingerprint_sha256())}),
                         Ok(Err(error)) => error_event(id, &error),
                         Err(_) => error_event(id, &AtvError::Closed),
@@ -698,6 +714,37 @@ mod android_jni;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_identity_preparation_migrates_legacy_and_reuses_modern_without_network() {
+        let legacy = ClientIdentity::generate("PlayBridge").unwrap();
+        let handle = AtvRemote::start().unwrap();
+        assert!(handle.submit(&json!({"command":"generate_identity", "request_id":"first", "client_name":"PlayBridge (iPhone) aaaaaaaa",
+            "cert_pem":legacy.certificate_pem(), "key_pem":legacy.private_key_pem()}).to_string()));
+        let event = handle.next_event(30_000).unwrap();
+        assert!(event["event"] == "identity" && event["replaces_legacy"] == true);
+        let prepared = ClientIdentity::from_pem(
+            event["cert_pem"].as_str().unwrap(),
+            event["key_pem"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert!(!prepared.is_legacy().unwrap());
+        assert!(
+            event["client_name"]
+                .as_str()
+                .unwrap()
+                .starts_with("PlayBridge (iPhone) ")
+        );
+        assert!(handle.submit(&json!({"command":"generate_identity", "request_id":"second", "client_name":"PlayBridge (Android) bbbbbbbb",
+            "cert_pem":prepared.certificate_pem(), "key_pem":prepared.private_key_pem()}).to_string()));
+        let reused = handle.next_event(30_000).unwrap();
+        assert!(reused["replaces_legacy"] == false);
+        assert!(
+            reused["cert_pem"] == event["cert_pem"]
+                && reused["client_name"] == event["client_name"]
+        );
+        handle.cancel();
+    }
 
     #[test]
     fn atv_errors_keep_all_kinds_and_redact_nested_messages() {

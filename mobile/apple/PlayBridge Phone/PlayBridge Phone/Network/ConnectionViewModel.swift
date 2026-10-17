@@ -71,9 +71,15 @@ final class ConnectionViewModel: ObservableObject {
 
     @Published var state: ConnectionState = .disconnected
     @Published private(set) var nativeReceiverSelected = false
+    private(set) var destinationSelectionRevision: UInt64 = 0
     @Published var pairedDevice: PairedDevice?
     /// All TVs we've paired with (history), most-recent first.
     @Published var savedDevices: [PairedDevice] = []
+    @Published var remoteTVRecords: [AtvTvRecord] = []
+    @Published var remoteTVDiscoveries: [AtvDiscoveredDevice] = []
+    @Published var remoteTVScanComplete = false
+    @Published var remoteTVRecordsLoaded = false
+    @MainActor var pendingPlayBridgeLaunch: (endpoint: String, expires: Date)?
     /// Reachability of saved TVs, keyed by `deviceKey`.
     @Published var onlineStatus: [String: Bool] = [:]
 
@@ -237,6 +243,7 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Connect to a device found via Bonjour. Reuses a saved token/pin if we've paired with it.
     func connect(to device: DiscoveredDevice) {
+        destinationSelectionRevision &+= 1
         let sameReceiver = !isExternalReceiver && pairedDevice.map { saved in
             (!device.uuid.isEmpty && saved.uuid == device.uuid) || (saved.ip == device.ip && saved.port == device.port)
         } == true
@@ -259,6 +266,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func connectExternalReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool = false) {
+        destinationSelectionRevision &+= 1
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
         airPlay.disconnect()
         let preservingPlayback = (preservingPlayback || castPlaybackSession.isActive) && externalReceiver?.identity == device.identity
@@ -335,16 +343,17 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     /// Reconnect to the previously paired PlayBridge device.
-    func reconnectSaved() {
+    func reconnectSaved() { reconnectSaved(toHost: nil) }
+    func reconnectSaved(toHost host: String?) {
         let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
         guard route != "google_cast", route != "this_phone" else { return }
         guard let saved = pairedDevice else { return }
         state = .connecting
         endSavedReconnectDiscovery()
-        connectingDevice = DiscoveredDevice(ip: saved.ip, port: saved.port, name: saved.name,
+        connectingDevice = DiscoveredDevice(ip: host ?? saved.ip, port: saved.port, name: saved.name,
                                             uuid: saved.uuid, wssPort: saved.wssPort)
         ws.connect(
-            ip: saved.ip,
+            ip: host ?? saved.ip,
             port: saved.port,
             token: saved.token ?? "",
             serverName: saved.name,
@@ -358,12 +367,14 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Connect to a specific saved TV from the history list.
     func connectSaved(_ device: PairedDevice) {
+        destinationSelectionRevision &+= 1
         let current = savedDevices.first { deviceKey($0) == deviceKey(device) } ?? device
         let device = SavedReceiverEndpoint.refresh(current, from: browser.devices)
         let sameReceiver = !isExternalReceiver && pairedDevice.map { deviceKey($0) == deviceKey(device) } == true
         usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         pairedDevice = device
+        store.savePairedDevice(device) // Selection must survive even when the receiver is stopped.
         state = .connecting
         connectingDevice = DiscoveredDevice(ip: device.ip, port: device.port, name: device.name,
                                             uuid: device.uuid, wssPort: device.wssPort)
@@ -552,6 +563,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        destinationSelectionRevision &+= 1
         nativeReceiverSelected = false
         onUserMediaAction?()
         airPlay.disconnect()
@@ -1165,6 +1177,7 @@ final class ConnectionViewModel: ObservableObject {
     // MARK: - System playback and background casting
 
     private func adoptAirPlayDestination() {
+        destinationSelectionRevision &+= 1
         nativeReceiverSelected = false
         endCastSession()
         endSavedReconnectDiscovery()

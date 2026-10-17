@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct AtvClientLimits {
     var maximumPending = 32
@@ -16,8 +19,10 @@ final class AtvRemoteClient: ObservableObject {
     @Published private(set) var state = AtvClientState()
     private let owner: AtvClientOwner
     private let publication = AtvStatePublication()
+    private let phoneUUID: () -> String
 
-    init(transport: AtvNativeTransport = AtvNativeSession(), limits: AtvClientLimits = AtvClientLimits()) {
+    init(phoneUUID: @escaping () -> String, transport: AtvNativeTransport = AtvNativeSession(), limits: AtvClientLimits = AtvClientLimits()) {
+        self.phoneUUID = phoneUUID
         owner = AtvClientOwner(transport: transport, limits: limits)
         owner.observe { [weak self, publication] state, intent in
             guard publication.offer(state, intent: intent) else { return }
@@ -33,14 +38,31 @@ final class AtvRemoteClient: ObservableObject {
         guard case .devices(_, let devices) = event else { throw AtvClientError.malformedEvent }
         return devices
     }
-    func generateIdentity(clientName: String = "PlayBridge") async throws -> AtvIdentity {
-        try validateClientName(clientName)
-        let event = try await request("generate_identity", ["client_name": clientName], setup: true)
+    static var clientLabel: String {
+        #if canImport(UIKit)
+        return UIDevice.current.userInterfaceIdiom == .pad ? "PlayBridge (iPad)" : "PlayBridge (iPhone)"
+        #else
+        return "PlayBridge (iPhone)"
+        #endif
+    }
+    func generateIdentity(clientName: String? = nil, existing: AtvIdentity? = nil) async throws -> AtvIdentity {
+        let label = clientName ?? Self.clientLabel
+        let uuid = phoneUUID()
+        guard !uuid.isEmpty else { throw AtvClientError.invalidInput }
+        let name = PlayBridgePhoneIdentity.atvClientName(label: label, uuid: uuid)
+        try validateClientName(name)
+        var fields: [String: Any] = ["client_name": name]
+        if let existing { fields["cert_pem"] = existing.certPem; fields["key_pem"] = existing.keyPem }
+        let event = try await request("generate_identity", fields, setup: true)
         guard case .identity(_, let identity) = event else { throw AtvClientError.malformedEvent }
+        if let name = identity.clientName {
+            do { try validateClientName(name) } catch { throw AtvClientError.malformedEvent }
+        }
         return identity
     }
     func startPairing(host: String, port: UInt16? = nil, identity: AtvIdentity, clientName: String = "PlayBridge") async throws -> AtvPairingStarted {
         try validateTarget(host, port, identity)
+        let clientName = identity.clientName ?? clientName
         try validateClientName(clientName)
         let event = try await request("start_pairing", ["host": host, "port": port.map { $0 as Any } ?? NSNull(),
             "cert_pem": identity.certPem, "key_pem": identity.keyPem, "client_name": clientName], setup: true)

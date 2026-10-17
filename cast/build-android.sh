@@ -5,6 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 output_dir="$repo_dir/mobile/android/app/src/main/jniLibs"
 android_api=26
+target_root=${CARGO_TARGET_DIR:-"$repo_dir/target"}
 
 if ! command -v rustup >/dev/null 2>&1; then
     echo "rustup is required. Install it from https://rustup.rs and retry." >&2
@@ -44,7 +45,17 @@ case "$(uname -s)" in
 esac
 
 toolchain="$ndk_dir/toolchains/llvm/prebuilt/$host_tag/bin"
-rustup target add aarch64-linux-android armv7-linux-androideabi
+if [ "${PB_ANDROID_NO_INSTALL:-0}" = 1 ]; then
+    installed_targets=$(rustup target list --installed)
+    for target in aarch64-linux-android armv7-linux-androideabi; do
+        if ! printf '%s\n' "$installed_targets" | grep -qx "$target"; then
+            echo "Required Rust target is not installed: $target" >&2
+            exit 1
+        fi
+    done
+else
+    rustup target add aarch64-linux-android armv7-linux-androideabi
+fi
 
 build_target() {
     rust_target=$1
@@ -75,11 +86,12 @@ build_target() {
             --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
             --features playbridge-cast-core-ffi/sender-services-android \
-            --release \
+            --release --locked \
+            --target-dir "$target_root" \
             --target "$rust_target"
 
     mkdir -p "$output_dir/$android_abi"
-    cp "$repo_dir/target/$rust_target/release/libplaybridge_cast_core_ffi.so" \
+    cp "$target_root/$rust_target/release/libplaybridge_cast_core_ffi.so" \
         "$output_dir/$android_abi/libplaybridge_cast_core_ffi.so"
     "$toolchain/llvm-strip" "$output_dir/$android_abi/libplaybridge_cast_core_ffi.so"
 }

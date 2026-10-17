@@ -84,7 +84,12 @@ impl ClientIdentity {
         params.not_after = now
             .checked_add(time::Duration::days(CERT_YEARS * 365))
             .ok_or_else(|| AtvError::Protocol("certificate validity overflow".to_owned()))?;
-        params.serial_number = Some(SerialNumber::from_slice(&[0x03, 0xE8]));
+        let mut serial = [0_u8; 16];
+        getrandom::fill(&mut serial)
+            .map_err(|_| AtvError::Protocol("certificate serial generation failed".to_owned()))?;
+        // Positive, nonzero 127-bit serial; never expose it in diagnostics.
+        serial[0] = (serial[0] & 0x7f) | 0x40;
+        params.serial_number = Some(SerialNumber::from_slice(&serial));
         // Python's generator emits noncritical BasicConstraints (CA, pathlen 0) and no
         // SubjectKeyIdentifier. rcgen's IsCa::Ca marks that extension critical and adds SKI.
         params.is_ca = IsCa::NoCa;
@@ -108,6 +113,44 @@ impl ClientIdentity {
             cert_der: certificate.der().to_vec(),
             key_der: Zeroizing::new(key_der),
         })
+    }
+
+    /// Only explicit pairing calls this. The caller supplies its complete, UUID-derived name.
+    /// Existing control sessions keep their saved identity.
+    pub fn for_pairing(
+        client_name: &str,
+        existing: Option<Self>,
+    ) -> Result<(Self, bool), AtvError> {
+        validate_client_name(client_name)?;
+        if let Some(identity) = existing {
+            if !identity.is_legacy()? {
+                return Ok((identity, false));
+            }
+            return Self::generate(client_name).map(|identity| (identity, true));
+        }
+        Self::generate(client_name).map(|identity| (identity, false))
+    }
+
+    pub fn client_name(&self) -> Result<String, AtvError> {
+        let (_, certificate) = X509Certificate::from_der(&self.cert_der)
+            .map_err(|_| AtvError::Protocol("client certificate is not X.509".to_owned()))?;
+        let name = certificate
+            .subject()
+            .iter_common_name()
+            .next()
+            .and_then(|attribute| attribute.as_str().ok())
+            .ok_or_else(|| {
+                AtvError::Protocol("client certificate common name is invalid".to_owned())
+            })?;
+        validate_client_name(name)?;
+        Ok(name.to_owned())
+    }
+
+    pub fn is_legacy(&self) -> Result<bool, AtvError> {
+        let (_, certificate) = X509Certificate::from_der(&self.cert_der)
+            .map_err(|_| AtvError::Protocol("client certificate is not X.509".to_owned()))?;
+        Ok(self.client_name()? == "PlayBridge"
+            || strip_leading_zeros(certificate.raw_serial()) == [0x03, 0xe8])
     }
 
     /// Loads a PEM certificate and a PKCS#8 RSA private key.
@@ -462,6 +505,77 @@ mod tests {
         assert!(!format!("{identity:?}").contains("BEGIN"));
         assert!(mac_from_certificate(identity.certificate_der()).is_none());
         assert_python_basic_constraints(identity.certificate_der());
+    }
+
+    #[test]
+    fn pairing_identity_has_unique_cn_and_positive_random_serial_and_reuses_the_install() {
+        let (first, replaced) =
+            ClientIdentity::for_pairing("PlayBridge (iPhone) aaaaaaaa", None).unwrap();
+        let (second, _) =
+            ClientIdentity::for_pairing("PlayBridge (iPhone) bbbbbbbb", None).unwrap();
+        assert!(!replaced);
+        let name = first.client_name().unwrap();
+        assert!(name == "PlayBridge (iPhone) aaaaaaaa");
+        assert!(name != second.client_name().unwrap());
+        assert!(validate_client_name(&name).is_ok());
+        assert!(!first.is_legacy().unwrap());
+        let (_, a) = X509Certificate::from_der(first.certificate_der()).unwrap();
+        let (_, b) = X509Certificate::from_der(second.certificate_der()).unwrap();
+        assert!(a.raw_serial().len() == 16 && a.raw_serial()[0] & 0x80 == 0);
+        assert!(a.raw_serial() != b.raw_serial());
+        let (same_name, _) = ClientIdentity::for_pairing(&name, None).unwrap();
+        let (_, same_cert) = X509Certificate::from_der(same_name.certificate_der()).unwrap();
+        assert!(same_name.client_name().unwrap() == name);
+        assert!(a.raw_serial() != same_cert.raw_serial());
+        assert!(a.subject_alternative_name().unwrap().is_none());
+        let fingerprint = first.fingerprint_sha256();
+        let (reused, replaced) =
+            ClientIdentity::for_pairing("PlayBridge (new model)", Some(first)).unwrap();
+        assert!(!replaced && reused.fingerprint_sha256() == fingerprint);
+        assert!(reused.client_name().unwrap() == name);
+    }
+
+    #[test]
+    fn legacy_cn_or_serial_migrates_only_when_preparing_pairing() {
+        let legacy_cn = ClientIdentity::generate("PlayBridge").unwrap();
+        assert!(legacy_cn.is_legacy().unwrap());
+        let restored =
+            ClientIdentity::from_pem(legacy_cn.certificate_pem(), legacy_cn.private_key_pem())
+                .unwrap();
+        assert!(restored.fingerprint_sha256() == legacy_cn.fingerprint_sha256());
+        let (migrated, changed) =
+            ClientIdentity::for_pairing("PlayBridge (Android) aaaaaaaa", Some(restored)).unwrap();
+        assert!(changed && !migrated.is_legacy().unwrap());
+
+        let source = ClientIdentity::generate("Other legacy client").unwrap();
+        let key = KeyPair::from_pkcs8_der_and_sign_algo(
+            &PrivatePkcs8KeyDer::from(source.key_der.to_vec()),
+            &PKCS_RSA_SHA256,
+        )
+        .unwrap();
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Other legacy client");
+        params.serial_number = Some(SerialNumber::from_slice(&[0x03, 0xe8]));
+        let certificate = params.self_signed(&key).unwrap();
+        let legacy_serial =
+            ClientIdentity::from_pem(&certificate.pem(), source.private_key_pem()).unwrap();
+        assert!(legacy_serial.is_legacy().unwrap());
+        let (migrated, changed) =
+            ClientIdentity::for_pairing("PlayBridge (Android) aaaaaaaa", Some(legacy_serial))
+                .unwrap();
+        assert!(changed && !migrated.is_legacy().unwrap());
+    }
+
+    #[test]
+    fn unique_names_respect_bounds_control_validation_and_dns_san_rules() {
+        assert!(ClientIdentity::for_pairing("bad\nname", None).is_err());
+        let (identity, _) =
+            ClientIdentity::for_pairing(&format!("{} aaaaaaaa", "x".repeat(55)), None).unwrap();
+        assert!(identity.client_name().unwrap().chars().count() <= 64);
+        assert!(dns_san(&identity.client_name().unwrap()).is_none());
+        assert!(dns_san("playbridge.example").is_some());
     }
 
     #[test]

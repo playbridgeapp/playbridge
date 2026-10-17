@@ -112,7 +112,7 @@ struct DashboardScreen: View {
             DashboardTile(id: "collections", title: "Collections", subtitle: "Your playlists", systemImage: "play.rectangle.fill",
                           gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)], isActive: isSource(.collections),
                           action: { nav.navigate(to: .collections) }),
-            DashboardTile(id: "remote", title: "Remote", subtitle: "Control your TV", systemImage: "av.remote",
+            DashboardTile(id: "remote", title: "Remote", subtitle: vm.remoteSubtitle, systemImage: "av.remote",
                           gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)], isActive: isSource(.remote),
                           action: { nav.navigate(to: .remote) }),
             DashboardTile(id: "cast-history", title: "Cast History", subtitle: "Recent casts", systemImage: "clock.arrow.circlepath",

@@ -293,7 +293,6 @@ fn trust_alert(alert: rustls::AlertDescription) -> bool {
             | rustls::AlertDescription::CertificateRevoked
             | rustls::AlertDescription::UnknownCA
             | rustls::AlertDescription::UnsupportedCertificate
-            | rustls::AlertDescription::AccessDenied
     )
 }
 
@@ -305,7 +304,6 @@ fn trust_alert_text(text: &str) -> bool {
         "CertificateRevoked",
         "UnknownCA",
         "UnsupportedCertificate",
-        "AccessDenied",
     ]
     .iter()
     .any(|label| text.contains(label))
@@ -416,5 +414,42 @@ impl ClientCertVerifier for TestClientVerifier {
         self.provider
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+
+    #[test]
+    fn only_certificate_rejections_require_pairing() {
+        for kind in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::BrokenPipe,
+        ] {
+            let stream = classify_stream(
+                std::io::Error::new(kind, "superseded by another remote"),
+                false,
+            );
+            assert!(matches!(stream, AtvError::Closed));
+            let handshake = classify_handshake(std::io::Error::new(kind, "peer disconnected"));
+            assert!(!matches!(handshake, AtvError::NotTrusted));
+        }
+        let rejected = classify_handshake(std::io::Error::other(TlsError::AlertReceived(
+            rustls::AlertDescription::CertificateUnknown,
+        )));
+        assert!(matches!(rejected, AtvError::NotTrusted));
+        let denied = classify_handshake(std::io::Error::other(TlsError::AlertReceived(
+            rustls::AlertDescription::AccessDenied,
+        )));
+        assert!(!matches!(denied, AtvError::NotTrusted));
+        let reset = classify_stream(
+            std::io::Error::other(TlsError::AlertReceived(
+                rustls::AlertDescription::CloseNotify,
+            )),
+            false,
+        );
+        assert!(!matches!(reset, AtvError::NotTrusted));
     }
 }
