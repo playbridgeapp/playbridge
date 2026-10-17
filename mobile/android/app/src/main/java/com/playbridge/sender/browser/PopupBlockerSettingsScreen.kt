@@ -1,7 +1,6 @@
 package com.playbridge.sender.browser
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -310,56 +309,5 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                 }) { Text("Cancel") }
             }
         )
-    }
-}
-
-@Composable
-fun PopupBlockedBar(
-    host: String,
-    onAllowOnce: () -> Unit,
-    onAlwaysAllow: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.inverseSurface,
-        shape = CircleShape,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Popup from $host",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.inverseOnSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = onAllowOnce, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Text(
-                    "Allow once",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.inversePrimary
-                )
-            }
-            TextButton(onClick = onAlwaysAllow, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Text(
-                    "Always",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.inversePrimary
-                )
-            }
-            TextButton(onClick = onDismiss, contentPadding = PaddingValues(horizontal = 4.dp)) {
-                Text(
-                    "✕",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.inverseOnSurface
-                )
-            }
-        }
     }
 }
