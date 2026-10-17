@@ -1,17 +1,7 @@
 import Foundation
 
-enum RemoteMode: String, CaseIterable, Identifiable {
-    case context = "Context", dpad = "D-Pad", touchpad = "Touchpad", keyboard = "Keyboard"
-    var id: String { rawValue }
-    var icon: String {
-        switch self {
-        case .context: return "square.grid.2x2"
-        case .dpad: return "gamecontroller"
-        case .touchpad: return "hand.draw"
-        case .keyboard: return "keyboard"
-        }
-    }
-
+// Shared transport/timeline helpers; the remote has one context screen, without mode tabs.
+enum RemoteMode {
     static func supportsRemote(externalProtocol: String?) -> Bool {
         externalProtocol == nil || externalProtocol == "roku"
     }
@@ -22,14 +12,6 @@ enum RemoteMode: String, CaseIterable, Identifiable {
 
     static func supportsExternalSeek(externalProtocol: String?) -> Bool {
         externalProtocol == "google_cast" || externalProtocol == "dlna" || externalProtocol == "airplay"
-    }
-
-    static func available(context: String, external: Bool, supportsRemote: Bool) -> [Self] {
-        var modes: [Self] = [.context]
-        if supportsRemote { modes.append(.dpad) }
-        if !external { modes.append(.touchpad) }
-        if !external && context == "browser" { modes.append(.keyboard) }
-        return modes
     }
 
     static func canSeek(context: String, externalProtocol: String?, duration: Int64, isLive: Bool, isSeekable: Bool, isImage: Bool = false) -> Bool {
@@ -50,5 +32,53 @@ enum RemoteMode: String, CaseIterable, Identifiable {
         let remainder = seconds % 60
         let suffix = String(format: "%02lld:%02lld", minutes, remainder)
         return hours > 0 ? "\(hours):\(suffix)" : suffix
+    }
+}
+
+
+enum RemotePadSurface: Equatable {
+    case none, swipe, buttons, pointer
+}
+
+/// In-memory choices survive context changes, but are reset when the destination changes.
+struct RemotePadPreferences {
+    private var buttonContexts: Set<String> = []
+    private var pointerContexts: [String: Bool] = [:]
+
+    func buttons(in context: String) -> Bool { buttonContexts.contains(context) }
+    func pointer(in context: String) -> Bool? { pointerContexts[context] }
+    mutating func toggleButtons(in context: String) {
+        if !buttonContexts.insert(context).inserted { buttonContexts.remove(context) }
+    }
+    mutating func setPointer(_ pointer: Bool, in context: String) { pointerContexts[context] = pointer }
+}
+
+/// Presentation derived from existing policy. It never grants command authority.
+struct RemoteInputLayout {
+    let hasNavigation: Bool
+    let hasPointer: Bool
+    let hasKeyboard: Bool
+    private let defaultPointer: Bool
+
+    init(policy: ReceiverRemotePolicy, context: String, image: Bool, external: Bool, externalProtocol: String?) {
+        if policy.isLegacy {
+            hasNavigation = RemoteMode.supportsRemote(externalProtocol: externalProtocol)
+            hasPointer = !external
+            hasKeyboard = !external && context == "browser"
+            defaultPointer = context == "browser" || image
+        } else {
+            hasNavigation = policy.hasDpad
+            hasPointer = policy.hasPointer
+            hasKeyboard = policy.text.contains("replace")
+            defaultPointer = hasPointer
+        }
+    }
+
+    var canSwitchPadPointer: Bool { hasNavigation && hasPointer }
+
+    func surface(in context: String, preferences: RemotePadPreferences) -> RemotePadSurface {
+        if hasPointer && (!hasNavigation || preferences.pointer(in: context) ?? defaultPointer) { return .pointer }
+        if hasNavigation { return preferences.buttons(in: context) ? .buttons : .swipe }
+        return .none
     }
 }

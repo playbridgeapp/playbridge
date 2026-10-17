@@ -4,12 +4,13 @@ import UniformTypeIdentifiers
 struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var browserStore: BrowserStore
-    @State private var modes: [String: RemoteMode] = [:]
+    @State private var padPreferences = RemotePadPreferences()
     @State private var looping = false
     @State private var volumeDraft = 0.5
     @State private var maximized = false
     @State private var presented: Presented?
     @State private var keyboardText = ""
+    @State private var keyboardContext: String?
     @State private var agentName = ""
     @State private var agentValue = ""
     @State private var addingAgent = false
@@ -36,19 +37,13 @@ struct RemoteControlView: View {
         return RemoteMode.canSeek(context: context, externalProtocol: protocolID, duration: playback?.durationMs ?? 0,
                            isLive: isLive, isSeekable: vm.coordinator.playerIsSeekable, isImage: isImage)
     }
-    private var availableModes: [RemoteMode] {
-        if !policy.isLegacy {
-            return [.context] + (policy.hasDpad ? [.dpad] : []) + (policy.hasPointer ? [.touchpad] : []) + (policy.text.contains("replace") ? [.keyboard] : [])
-        }
-        return RemoteMode.available(context: context, external: vm.isExternalReceiver || vm.isAirPlay, supportsRemote: RemoteMode.supportsRemote(externalProtocol: protocolID))
+    private var inputLayout: RemoteInputLayout {
+        RemoteInputLayout(policy: policy, context: context, image: isImage,
+            external: vm.isExternalReceiver || vm.isAirPlay, externalProtocol: protocolID)
     }
-    private var mode: RemoteMode {
-        let selected = modes[context] ?? (context == "browser" ? .touchpad : .context)
-        // Keep an open keyboard/draft stable when only authenticated metadata changes.
-        // Execution rechecks current authority, including text removal.
-        if selected == .keyboard && modes[context] != nil { return selected }
-        return availableModes.contains(selected) ? selected : .context
-    }
+    private var padSurface: RemotePadSurface { inputLayout.surface(in: context, preferences: padPreferences) }
+    private var canUseKeyboard: Bool { vm.isConnected && inputLayout.hasKeyboard }
+    private var canEditKeyboard: Bool { canUseKeyboard && keyboardContext == context }
     private var supportsVolume: Bool { policy.isLegacy ? RemoteMode.supportsVolume(externalProtocol: protocolID) : policy.hasVolume("relative_step") }
     private func keyAllowed(_ key: String) -> Bool { policy.isLegacy || policy.keys.contains(key) }
     private func settingAllowed(_ id: String, legacy: Bool = true) -> Bool { policy.isLegacy ? legacy : policy.settings.contains(id) }
@@ -57,24 +52,17 @@ struct RemoteControlView: View {
     private var anyVolume: Bool { supportsVolume || !policy.isLegacy && (policy.hasVolume("absolute") || policy.hasVolume("mute_toggle")) }
     private var canAddSubtitle: Bool { policy.isLegacy || !policy.tracks.isDisjoint(with: ["subtitle_url_add", "subtitle_resource_add"]) }
 
+    private var canShowQueue: Bool { policy.isLegacy || policy.state.connected && !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) }
+    private var allowedPresentations: Set<String> {
+        policy.allowedPresentations.union(canShowQueue ? ["queue"] : []).union(canUseKeyboard ? ["keyboard"] : [])
+    }
+    private var volumeStatus: String? {
+        RemoteControlPresentation.volumeStatus(policy: policy, scope: vm.coordinator.receiverVolumeScope,
+            level: vm.coordinator.receiverVolumeLevel, muted: vm.coordinator.receiverVolumeMuted)
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
-            modeSelector
-            VStack(spacing: 12) {
-                switch mode {
-                case .context: contextBody
-                case .dpad:
-                    dpad.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    modeBottom
-                case .touchpad:
-                    touchpad.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    modeBottom
-                case .keyboard:
-                    keyboard.frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        RemoteContentBounds { contextBody }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .disabled(!vm.isConnected && !vm.isAirPlay)
         .overlay {
@@ -94,10 +82,12 @@ struct RemoteControlView: View {
                 case .scripts: scripts
                 case .agents: agents
                 case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
+                case .queue: queueSheet
+                case .keyboard: keyboardSheet
                 }
             }
             // Editors stay mounted with their drafts when authority disappears.
-            .disabled(!policy.allowedPresentations.contains(sheet.rawValue))
+            .disabled(sheet != .keyboard && !allowedPresentations.contains(sheet.rawValue))
         }
         .fileImporter(isPresented: $importingScript, allowedContentTypes: [.javaScript, .plainText]) { result in
             guard case .success(let url) = result, scriptImportDestinationID == vm.destinationID else { return }
@@ -107,7 +97,7 @@ struct RemoteControlView: View {
             vm.installUserScript(name: url.deletingPathExtension().lastPathComponent, content: text)
             vm.queryUserScripts()
         }
-        .onChange(of: policy.allowedPresentations) { allowed in
+        .onChange(of: allowedPresentations) { allowed in
             if let presented, !allowed.contains(presented.rawValue), !presented.preservesDraft {
                 self.presented = nil
             }
@@ -115,47 +105,36 @@ struct RemoteControlView: View {
             if !allowed.contains("agents") { addingAgent = false }
         }
         .onChange(of: playback?.title) { _ in looping = false }
-        .onChange(of: vm.destinationID) { _ in modes = [:]; keyboardText = ""; looping = false; maximized = false; presented = nil; addingAgent = false; importingScript = false }
-        .onChange(of: videoActive) { active in
-            if isBrowser && active { modes["browser"] = .context }
+        .onChange(of: vm.destinationID) { _ in
+            presented = nil; keyboardContext = nil; keyboardFocused = false; keyboardText = ""
+            padPreferences = RemotePadPreferences(); looping = false; maximized = false
+            addingAgent = false; importingScript = false
         }
-        .onAppear {
-            if isBrowser && videoActive { modes["browser"] = .context }
+        .onChange(of: context) { _ in
+            // A draft is retained, but never sent into a different context on a transition.
+            if presented == .keyboard { presented = nil; keyboardFocused = false }
         }
-    }
-
-    private var modeSelector: some View {
-        HStack(spacing: 4) {
-            ForEach(availableModes) { candidate in
-                Button { modes[context] = candidate } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: candidate.icon).font(Theme.font(size: 15))
-                        Text(candidate.rawValue).font(Theme.font(size: 11, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 10)
-                    .foregroundStyle(mode == candidate ? Theme.onPrimary : Theme.onSurfaceVariant)
-                    .background(mode == candidate ? Theme.primary : .clear, in: Capsule())
-                }.buttonStyle(.plain).accessibilityAddTraits(mode == candidate ? .isSelected : [])
-            }
-        }.padding(4).background(Theme.surfaceContainer, in: Capsule())
     }
 
     @ViewBuilder private var contextBody: some View {
         switch context {
         case "player":
             VStack(spacing: 12) {
-                VStack(spacing: 4) {
+                VStack(spacing: 8) {
                     nowPlaying(title: playback?.title, kind: vm.coordinator.mediaKind)
                     if !vm.isExternalReceiver && !isImage { tracks }
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
+                .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
                 episodes
                 if vm.isAirPlay && vm.airPlay.preparing { ProgressView("Preparing subtitles…") }
-                Spacer(minLength: 0)
+                padArea
                 if (!isImage || duration > 0) && (policy.isLegacy || canToggle || canSeek || supportsVolume) {
                     seekBar(playing: playback?.state == nil || playback?.state == "playing" || playback?.state == "buffering", browser: false)
                 }
                 mediaControls
-                if !policy.isLegacy && anyVolume { volumeRow }
+                playerBottomBar
                 if vm.isAirPlay && vm.airPlay.routeAvailable { AirPlayVolumeControl().frame(height: 30).padding(.horizontal, 12) }
                 if protocolID == "google_cast" {
                     Button("End receiver session") { playerCommand("end_receiver") }
@@ -165,7 +144,7 @@ struct RemoteControlView: View {
         case "browser":
             VStack(spacing: 12) {
                 if videoActive { nowPlaying(title: playback?.title, kind: "video") }
-                Spacer(minLength: 0)
+                padArea
                 if videoActive && (policy.isLegacy || canToggle || canSeek || supportsVolume) {
                     seekBar(playing: playback?.state == "playing" || playback?.state == "buffering", browser: true)
                 } else if anyVolume {
@@ -177,7 +156,7 @@ struct RemoteControlView: View {
                         action("goforward.10", "+10s") { vm.browserControl("seek_forward") }
                     }
                 }
-                if isBrowser { browserRow }
+                if isBrowser { browserRow } else if inputLayout.hasKeyboard { navigationBar }
             }
         default:
             VStack(spacing: 12) {
@@ -185,12 +164,8 @@ struct RemoteControlView: View {
                 Image(systemName: "tv").font(Theme.font(size: 56)).foregroundStyle(Theme.onSurfaceVariant.opacity(0.35))
                 Text(vm.isConnected ? "Nothing playing" : "Connect to a TV").font(Theme.font(.headline))
                 Text("on \(vm.receiverName ?? "your TV")").font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
-                if availableModes.contains(.touchpad) || availableModes.contains(.dpad) {
-                    Button { modes[context] = availableModes.contains(.touchpad) ? .touchpad : .dpad } label: {
-                        Label("Show touchpad & controls", systemImage: "hand.draw")
-                    }.buttonStyle(.borderedProminent).tint(Theme.primaryDim)
-                }
-                if !policy.isLegacy && anyVolume { volumeRow }
+                padArea
+                playerBottomBar
                 Spacer(minLength: 0)
             }
         }
@@ -219,7 +194,7 @@ struct RemoteControlView: View {
                 Button { presented = .subtitles } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "captions.bubble")
-                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected)?.name ?? "Off")").lineLimit(1)
+                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: vm.coordinator.subtitleTracks, subtitle: true) } ?? "Off")").lineLimit(1)
                     }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
                         .background(Theme.surfaceContainerHigh, in: Capsule())
                 }.buttonStyle(.plain)
@@ -237,13 +212,13 @@ struct RemoteControlView: View {
         Menu {
             ForEach(tracks) { track in
                 Button { playerCommand(command + track.id) } label: {
-                    if track.selected { Label(track.name, systemImage: "checkmark") } else { Text(track.name) }
+                    if track.selected { Label(RemoteControlPresentation.trackLabel(track, in: tracks), systemImage: "checkmark") } else { Text(RemoteControlPresentation.trackLabel(track, in: tracks)) }
                 }
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                Text("\(label): \(tracks.first(where: \.selected)?.name ?? "Default")").lineLimit(1)
+                Text("\(label): \(tracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: tracks) } ?? "Default")").lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(Theme.font(.caption2))
             }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(height: 32)
@@ -252,30 +227,137 @@ struct RemoteControlView: View {
     }
 
     @ViewBuilder private var episodes: some View {
-        if let playlist = vm.coordinator.playlist, playlist.items.count > 1, policy.isLegacy || !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("PLAYLIST · \(playlist.currentIndex + 1)/\(playlist.totalCount)")
-                    .font(Theme.font(.caption2).bold()).foregroundStyle(Theme.onSurfaceVariant)
+        if let playlist = vm.coordinator.playlist, playlist.items.count > 1, canShowQueue {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Up Next").font(Theme.font(.subheadline).bold())
+                    Spacer()
+                    Button { presented = vm.isAirPlay ? .airPlayQueue : .queue } label: {
+                        HStack(spacing: 4) {
+                            Text("All (\(playlist.totalCount))")
+                            Image(systemName: "chevron.right")
+                        }.font(Theme.font(.caption))
+                    }.accessibilityLabel("Show all \(playlist.totalCount) playlist items")
+                }
                 ScrollViewReader { reader in
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 10) {
                             ForEach(playlist.items) { item in
-                                Button { vm.jump(to: item) } label: {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Image(systemName: item.index == playlist.currentIndex ? "play.circle.fill" : "play.rectangle")
-                                            .font(Theme.font(.title2)).foregroundStyle(Theme.primary)
-                                        Text(item.title).font(Theme.font(.caption)).lineLimit(2)
-                                    }.frame(width: 136, height: 90, alignment: .leading).padding(12)
-                                        .background(item.index == playlist.currentIndex ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                                Button { _ = selectQueueItem(item) } label: {
+                                    queueCard(item, playlist: playlist)
                                 }.buttonStyle(.plain).id(item.index)
                             }
                         }
                     }
-                    .onAppear { reader.scrollTo(playlist.currentIndex, anchor: .center) }
-                    .onChange(of: playlist.currentIndex) { index in withAnimation { reader.scrollTo(index, anchor: .center) } }
+                    // Cards are 70 points tall plus 10 points of padding on each edge.
+                    // Keep the horizontal scroller from consuming the pad's vertical space.
+                    .frame(height: 90)
+                    .onAppear { reader.scrollTo(max(0, playlist.currentIndex - 1), anchor: .leading) }
+                    .onChange(of: playlist.currentIndex) { index in withAnimation { reader.scrollTo(max(0, index - 1), anchor: .leading) } }
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
         }
+    }
+
+    private func selectQueueItem(_ item: PlaylistEpisode) -> Bool {
+        // Re-read the current queue at the action boundary, not a captured card snapshot.
+        RemoteControlPresentation.selectQueueItem(item, playlist: vm.coordinator.playlist) { vm.jump(to: $0) }
+    }
+
+    private func queueCard(_ item: PlaylistEpisode, playlist: PlaylistUiState) -> some View {
+        let current = RemoteControlPresentation.isCurrent(item, playlist: playlist)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(RemoteControlPresentation.episodeBadge(item)).font(Theme.font(.caption2).bold())
+                Spacer()
+                if current { Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary) }
+            }
+            Text(RemoteControlPresentation.episodeTitle(item)).font(Theme.font(.caption)).lineLimit(2)
+            Spacer(minLength: 0)
+            if let progress = RemoteControlPresentation.progress(item, playlist: playlist, playback: playback, live: isLive) {
+                ProgressView(value: progress).tint(Theme.primary)
+                    .accessibilityLabel("Playback progress").accessibilityValue("\(Int(progress * 100)) percent")
+            }
+        }.frame(width: 136, height: 70, alignment: .leading).padding(10)
+            .background(current ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var queueSheet: some View {
+        NavigationStack {
+            List {
+                if let playlist = vm.coordinator.playlist {
+                    ForEach(playlist.items) { item in
+                        Button { if selectQueueItem(item) { presented = nil } } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(RemoteControlPresentation.episodeBadge(item)).font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                                    Text(RemoteControlPresentation.episodeTitle(item))
+                                }
+                                Spacer()
+                                if RemoteControlPresentation.isCurrent(item, playlist: playlist) { Image(systemName: "play.circle.fill") }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Playlist").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+        }
+    }
+
+    @ViewBuilder private var padArea: some View {
+        if padSurface == .none {
+            Spacer(minLength: 0)
+        } else {
+            ZStack(alignment: .topLeading) {
+                switch padSurface {
+                case .buttons:
+                    GeometryReader { geometry in
+                        dpad.frame(width: 236, height: 236)
+                            .scaleEffect(min(1, max(0.4, min(geometry.size.width, geometry.size.height) / 236)))
+                            .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    }
+                case .swipe:
+                    RemoteNavigationPad(allowedKeys: policy.isLegacy ? ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center"] : policy.keys) { vm.remote($0) }
+                case .pointer: touchpad
+                case .none: EmptyView()
+                }
+                if padSurface == .swipe || padSurface == .buttons {
+                    Button { padPreferences.toggleButtons(in: context) } label: {
+                        Label(padSurface == .buttons ? "Touchpad" : "D-pad", systemImage: padSurface == .buttons ? "hand.draw" : "gamecontroller")
+                            .font(Theme.font(.caption)).padding(10).frame(minWidth: 44, minHeight: 44)
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel(padSurface == .buttons ? "Show navigation touchpad" : "Show D-pad")
+                        .accessibilityValue(padSurface == .buttons ? "D-pad buttons" : "Swipe pad")
+                }
+            }
+            .id(context)
+            .overlay(alignment: .bottomTrailing) {
+                if inputLayout.canSwitchPadPointer {
+                    HStack(spacing: 4) {
+                        padSurfaceButton("Pad", icon: "gamecontroller", pointer: false)
+                        padSurfaceButton("Pointer", icon: "cursorarrow", pointer: true)
+                    }.padding(4).background(Theme.surfaceContainerHigh, in: Capsule())
+                        .padding(.trailing, 8)
+                        .padding(.bottom, padSurface == .pointer && isImage && context == "player" ? 80 : 8)
+                }
+            }
+            .frame(minHeight: padSurface == .pointer && isImage && inputLayout.canSwitchPadPointer ? 180 : 100, maxHeight: .infinity)
+        }
+    }
+
+    private func padSurfaceButton(_ title: String, icon: String, pointer: Bool) -> some View {
+        let selected = (padSurface == .pointer) == pointer
+        return Button { padPreferences.setPointer(pointer, in: context) } label: {
+            Label(title, systemImage: icon).font(Theme.font(.caption))
+                .padding(.horizontal, 10).frame(minHeight: 44)
+                .foregroundStyle(selected ? Theme.onPrimary : Theme.onSurfaceVariant)
+                .background(selected ? Theme.primary : .clear, in: Capsule())
+        }.buttonStyle(.plain).accessibilityLabel(pointer ? "Show pointer controls" : "Show navigation pad")
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func seekBar(playing: Bool, browser: Bool) -> some View {
@@ -318,28 +400,45 @@ struct RemoteControlView: View {
         }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    @ViewBuilder private var modeBottom: some View {
-        if isBrowser {
-            VStack(spacing: 8) {
-                if anyVolume { volumeRow }
-                if !policy.isLegacy && policy.transport.contains("seek_relative") && !canSeek {
-                    HStack {
-                        action("gobackward.10", "-10s") { vm.browserControl("seek_back") }
-                        action("goforward.10", "+10s") { vm.browserControl("seek_forward") }
-                    }
-                }
-                if isBrowser { browserRow }
+    private var playerBottomBar: some View {
+        let navigation = policy.isLegacy ? inputLayout.hasNavigation : !policy.keys.isDisjoint(with: ["back", "home"])
+        return VStack(spacing: 4) {
+            if let volumeStatus { Text(volumeStatus).font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant) }
+            if navigation || inputLayout.hasKeyboard || anyVolume {
+                navigationBar
             }
-        } else if context == "player" {
-            mediaControls
-            if !policy.isLegacy {
-                HStack {
-                    if keyAllowed("back") { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
-                    if keyAllowed("home") { action("house", "Home") { vm.remote("home") } }
-                }
-                if anyVolume { volumeRow }
+            if !policy.isLegacy && policy.hasVolume("absolute") { absoluteVolume }
+        }
+    }
+
+    private var navigationBar: some View {
+        HStack(spacing: 0) {
+            if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("back")) { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
+            if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("home")) { action("house", "Home") { vm.remote("home") } }
+            keyboardButton
+            if supportsVolume {
+                action("speaker.minus", "Vol −") { vm.remote("volume_down") }
+                action("speaker.plus", "Vol +") { vm.remote("volume_up") }
+            }
+            if !policy.isLegacy && policy.hasVolume("mute_toggle") { action("speaker.slash", "Mute") { vm.remote("mute") } }
+        }.padding(.vertical, 4).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder private var keyboardButton: some View {
+        if inputLayout.hasKeyboard {
+            action("keyboard", "Keyboard") {
+                guard canUseKeyboard else { return }
+                vm.endPointerGesture()
+                keyboardContext = context
+                presented = .keyboard
             }
         }
+    }
+
+    private var absoluteVolume: some View {
+        Slider(value: $volumeDraft, in: 0...1) { editing in
+            if !editing { vm.setReceiverVolume(volumeDraft) }
+        }.accessibilityLabel("Set " + policy.volumeLabel)
     }
 
     private var volumeRow: some View {
@@ -387,6 +486,7 @@ struct RemoteControlView: View {
                 vm.browserControl(maximized ? "maximize_video" : "restore_video")
             } }
             if keyAllowed("home") { action("house", "Home") { vm.remote("home") } }
+            keyboardButton
             if policy.isLegacy || !policy.browser.isDisjoint(with: ["cycle_source", "unmute", "manage_user_scripts", "manage_user_agent"]) { action("ellipsis", "More") { presented = .more } }
         }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
     }
@@ -422,6 +522,7 @@ struct RemoteControlView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDisappear { vm.endPointerGesture() }
     }
 
     private var pointerHint: String {
@@ -464,6 +565,19 @@ struct RemoteControlView: View {
         .opacity(keyAllowed(key) ? 1 : 0).accessibilityHidden(!keyAllowed(key))
     }
 
+    private func sendKeyboardEnter() {
+        guard canEditKeyboard, presented == .keyboard else { return }
+        vm.remote("key_enter")
+    }
+
+    private var keyboardSheet: some View {
+        NavigationStack {
+            keyboard.disabled(!canEditKeyboard)
+                .navigationTitle("Keyboard").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil; keyboardFocused = false } } }
+        }
+    }
+
     private var keyboard: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Tap a text box on the TV, then type here — it's sent as you type.")
@@ -474,15 +588,15 @@ struct RemoteControlView: View {
                 .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.go)
                 .padding(16).background(Theme.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 12))
                 .onChange(of: keyboardText) { text in
-                    guard vm.isConnected, mode == .keyboard else { return }
+                    guard canEditKeyboard, presented == .keyboard else { return }
                     vm.remote("text:" + Data(text.utf8).base64EncodedString())
-                }.onSubmit { vm.remote("key_enter") }
-            Button { vm.remote("key_enter") } label: { Label("Enter", systemImage: "return") }
+                }.onSubmit { sendKeyboardEnter() }
+            Button { sendKeyboardEnter() } label: { Label("Enter", systemImage: "return") }
                 .buttonStyle(.borderedProminent).tint(Theme.primaryDim).frame(maxWidth: .infinity)
                 .disabled(!policy.isLegacy && !policy.allowsKey("key_enter"))
             Spacer()
         }.padding(16).background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
-            .onAppear { keyboardFocused = true }
+            .onAppear { keyboardFocused = canEditKeyboard }
     }
 
     private var settings: some View {
@@ -543,7 +657,7 @@ struct RemoteControlView: View {
                             ForEach(group.tracks) { track in
                                 Button { playerCommand("sub_track:\(track.id)"); presented = nil } label: {
                                     HStack {
-                                        Text(track.name)
+                                        Text(RemoteControlPresentation.trackLabel(track, in: vm.coordinator.subtitleTracks, subtitle: true))
                                         Spacer()
                                         if track.selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
                                     }
@@ -747,9 +861,9 @@ struct RemoteControlView: View {
     }
 
     private enum Presented: String, Identifiable {
-        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue
+        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue, queue, keyboard
         var id: String { rawValue }
-        var preservesDraft: Bool { self == .addSubtitle || self == .agents }
+        var preservesDraft: Bool { self == .addSubtitle || self == .agents || self == .keyboard }
     }
 }
 

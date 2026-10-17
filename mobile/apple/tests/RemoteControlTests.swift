@@ -3,11 +3,8 @@ import Foundation
 @main
 struct RemoteControlTests {
     @MainActor static func main() async throws {
+        RemoteControlPresentationTests.run()
         try await ReceiverPlaybackFailureTests.run(root: URL(fileURLWithPath: CommandLine.arguments[1]))
-        precondition(RemoteMode.available(context: "browser", external: false, supportsRemote: true) == [.context, .dpad, .touchpad, .keyboard])
-        precondition(RemoteMode.available(context: "player", external: false, supportsRemote: true) == [.context, .dpad, .touchpad])
-        precondition(RemoteMode.available(context: "browser", external: true, supportsRemote: true) == [.context, .dpad])
-        precondition(RemoteMode.available(context: "player", external: true, supportsRemote: false) == [.context])
         precondition(RemoteMode.supportsRemote(externalProtocol: nil) && RemoteMode.supportsRemote(externalProtocol: "roku"))
         precondition(!RemoteMode.supportsRemote(externalProtocol: "google_cast") && !RemoteMode.supportsVolume(externalProtocol: "dlna"))
         precondition(RemoteMode.canSeek(context: "browser", externalProtocol: nil, duration: 1000, isLive: true, isSeekable: false))
@@ -52,6 +49,6 @@ struct RemoteControlTests {
         let json = try JSONSerialization.jsonObject(with: Data(message.utf8)) as! [String: Any]
         precondition(json["action"] as? String == "browser_control")
         precondition((json["payload"] as? [String: Any])?["action"] as? String == "refresh")
-        print("PASS: remote modes, timeline capabilities, track IDs, settings reset and browser commands")
+        print("PASS: remote input eligibility, timeline capabilities, track IDs, settings reset and browser commands")
     }
 }
