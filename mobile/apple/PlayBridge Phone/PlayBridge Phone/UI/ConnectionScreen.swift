@@ -5,6 +5,8 @@ import SwiftUI
 struct ConnectionScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var atv: AtvRemoteCoordinator
+    @State private var showPairedTVs = false
     @State private var rokuAddress = ""
     @State private var showDIAL = false
     @State private var dlnaLocation = ""
@@ -43,6 +45,7 @@ struct ConnectionScreen: View {
             .padding(.bottom, 32)
         }
         .background(Theme.surface.ignoresSafeArea())
+        .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
         .onAppear { vm.startDiscovery(); vm.pingSavedDevices() }
         .onDisappear { vm.stopDiscovery() }
         .onChange(of: vm.state) { newState in
@@ -93,6 +96,8 @@ struct ConnectionScreen: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 ConnectionSectionLabel("PlayBridge")
+                Button("Paired TVs") { showPairedTVs = true }
+                    .accessibilityLabel("Manage paired TVs")
                 Spacer()
                 Button {
                     refreshDiscovery()

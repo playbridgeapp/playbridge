@@ -6,6 +6,7 @@ struct ContentView: View {
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var store: BrowserStore
     @StateObject private var pageCasting = PageCastCoordinator()
+    @StateObject private var atv = AtvRemoteCoordinator()
     @State private var showDestinationPicker = false
     @State private var attemptedReconnectInForeground = false
 
@@ -36,6 +37,7 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) { playbackFailureBanner }
         .environmentObject(pageCasting)
+        .environmentObject(atv)
         .tint(Theme.primary)
         .fullScreenCover(item: $vm.websitePlayerItem) { item in
             FullScreenVideoPlayerView(session: item.session, diagnosticsReport: {
@@ -71,11 +73,16 @@ struct ContentView: View {
                 MainActor.assumeIsolated { pageCasting?.userStartedCast() }
             }
             reconnectOnActivation()
+            updateAtv()
         }
         .onReceive(vm.objectWillChange) { _ in
-            Task { @MainActor in pageCasting.refresh() }
+            Task { @MainActor in pageCasting.refresh(); updateAtv() }
         }
+        .onReceive(vm.$pairedDevice) { device in updateAtv(selection: (vm.nativeReceiverSelected, device)) }
+        .onReceive(vm.$nativeReceiverSelected) { selected in updateAtv(selection: (selected, vm.pairedDevice)) }
+        .onReceive(nav.$currentScreen) { screen in updateAtv(screen: screen) }
         .onChange(of: scenePhase) { phase in
+            updateAtv()
             if phase == .background {
                 attemptedReconnectInForeground = false
             } else if phase == .active {
@@ -100,6 +107,13 @@ struct ContentView: View {
             .padding(14).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
             .padding(.horizontal, 12).padding(.vertical, 8)
         }
+    }
+
+    private func updateAtv(selection: (Bool, PairedDevice?)? = nil, screen: AppScreen? = nil) {
+        let (selected, device) = selection ?? (vm.nativeReceiverSelected, vm.pairedDevice)
+        let target = selected && !vm.isAirPlay && !vm.isExternalReceiver
+            ? device.map { AtvReceiverTarget(playBridge: $0) } : nil
+        atv.update(receiver: target, remoteVisible: (screen ?? nav.currentScreen) == .remote && vm.websitePlayerItem == nil, foreground: scenePhase == .active)
     }
 
     private func reconnectOnActivation() {

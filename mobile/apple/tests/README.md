@@ -445,3 +445,21 @@ coordinator's storage queue; check storageError before using cached credentials,
 reload after foreground/unlock. Only verified pairing may recover a corrupt document;
 future-version documents are blocked rather than overwritten. Discovery is lazy and
 requires explicit start/stop from that coordinator; these files are not wired to UI yet.
+
+
+Android TV foreground coordinator and pairing/management (host-only):
+
+```sh
+bash mobile/apple/tests/run-atv-coordinator-checks.sh
+```
+
+Injects a fake clock, discovery, path watcher, credential storage and client. Checks
+four-second discovery; pinned connections; 1–30 second reconnect backoff; persistent
+pin-mismatch / three-attempt trust stops; visibility, background, selection and path
+teardown; old start/paired/connect/closed events; invalidated queued storage saves;
+durable save failure, recovery confirmation, retry/cancel and live Forget. UI state
+fixtures cover every pairing phase, strict ASCII-hex input, recovery/network copy,
+transient-disconnect entry policy, accessibility/action contracts and Settings/receiver
+management hooks. No real Keychain, browser, path monitor, native client or sockets are
+started. The Simulator build validates SwiftUI compilation; these host fixtures do not
+claim rendered layout, VoiceOver gesture or hardware Local Network/pairing coverage.
