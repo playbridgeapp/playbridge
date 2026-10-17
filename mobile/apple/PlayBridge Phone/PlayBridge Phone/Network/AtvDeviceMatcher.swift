@@ -1,6 +1,6 @@
 import Foundation
 
-struct AtvReceiverTarget {
+struct AtvReceiverTarget: Equatable {
     /// Protocol-qualified receiver identity, identical to Android EndpointKey.toString().
     let endpoint: String
     let name: String

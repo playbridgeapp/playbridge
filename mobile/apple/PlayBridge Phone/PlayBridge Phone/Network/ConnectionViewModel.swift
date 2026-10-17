@@ -68,6 +68,7 @@ final class ConnectionViewModel: ObservableObject {
     private var externalMediaKind = "video"
 
     @Published var state: ConnectionState = .disconnected
+    @Published private(set) var nativeReceiverSelected = false
     @Published var pairedDevice: PairedDevice?
     /// All TVs we've paired with (history), most-recent first.
     @Published var savedDevices: [PairedDevice] = []
@@ -118,6 +119,7 @@ final class ConnectionViewModel: ObservableObject {
             savedExternalReceiverDevices = (try? JSONDecoder().decode([ExternalReceiverDevice].self, from: data)) ?? []
         }
         pairedDevice = store.loadPairedDevice()
+        nativeReceiverSelected = pairedDevice != nil && (UserDefaults.standard.string(forKey: "last_receiver_protocol") ?? "playbridge") == "playbridge"
         savedDevices = store.loadSavedDevices()
         // Migrate a pre-existing single paired device into the history list.
         if savedDevices.isEmpty, let p = pairedDevice {
@@ -261,6 +263,7 @@ final class ConnectionViewModel: ObservableObject {
         if !preservingPlayback { endCastSession() }
         endSavedReconnectDiscovery()
         let device = (googleCastBrowser.devices + dlnaBrowser.devices + rokuBrowser.devices).first { $0.identity == device.identity } ?? device
+        nativeReceiverSelected = false
         externalReceiver = device
         connectingDevice = nil
         ws.disconnect()
@@ -285,6 +288,7 @@ final class ConnectionViewModel: ObservableObject {
         externalReceiver = nil
         googleCast.disconnect()
         if !preservingPlayback { routedStreamRegistrations.removeAll() }
+        nativeReceiverSelected = true
         UserDefaults.standard.set("playbridge", forKey: "last_receiver_protocol")
     }
 
@@ -546,6 +550,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        nativeReceiverSelected = false
         onUserMediaAction?()
         airPlay.disconnect()
         state = .disconnected
@@ -1126,6 +1131,7 @@ final class ConnectionViewModel: ObservableObject {
     // MARK: - System playback and background casting
 
     private func adoptAirPlayDestination() {
+        nativeReceiverSelected = false
         endCastSession()
         endSavedReconnectDiscovery()
         externalReceiver = nil

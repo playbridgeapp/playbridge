@@ -3,8 +3,10 @@ import UniformTypeIdentifiers
 
 struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var atv: AtvRemoteCoordinator
     @EnvironmentObject private var browserStore: BrowserStore
     @State private var padPreferences = RemotePadPreferences()
+    @State private var showPairedTVs = false
     @State private var looping = false
     @State private var volumeDraft = 0.5
     @State private var maximized = false
@@ -602,6 +604,11 @@ struct RemoteControlView: View {
     private var settings: some View {
         NavigationStack {
             Form {
+                Section("Receiver") {
+                    Button("Paired TVs") { showPairedTVs = true }
+                        .accessibilityLabel("Manage paired TVs")
+                        .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
+                }
                 if settingAllowed("quality", legacy: vm.coordinator.qualityAvailable) && vm.coordinator.videoTracks.filter({ $0.id != "auto" }).count > 1 {
                     Section("Quality") {
                         chipRow(vm.coordinator.videoTracks.map { ($0.name, $0.id) }, selected: vm.coordinator.qualityMaxHeight == 0 ? "auto" : "max:\(vm.coordinator.qualityMaxHeight)") { id in

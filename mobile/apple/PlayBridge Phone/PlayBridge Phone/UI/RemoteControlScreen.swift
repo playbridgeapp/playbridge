@@ -4,6 +4,8 @@ struct RemoteControlScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var pageCasting: PageCastCoordinator
+    @EnvironmentObject private var atv: AtvRemoteCoordinator
+    @State private var showAtvPairing = false
     @State private var showCastLink = false
     @State private var showDevices = false
     @State private var castURL = ""
@@ -33,6 +35,21 @@ struct RemoteControlScreen: View {
                     Image(systemName: "ellipsis").frame(width: 44, height: 44)
                 }.accessibilityLabel("Remote options")
             }
+            if vm.nativeReceiverSelected && !vm.isExternalReceiver && !vm.isAirPlay {
+                HStack {
+                    Text(AtvPairingPresentation.connection(atv.channel))
+                        .font(.caption).accessibilityIdentifier("atv-connection-state")
+                    Spacer()
+                    if let action = AtvPairingPresentation.pairingAction(atv.channel) {
+                        Button(action) { showAtvPairing = true }
+                            .font(.caption).disabled(!atv.canPair)
+                            .accessibilityIdentifier("atv-pairing-entry")
+                    } else if atv.channel.phase == .storageUnavailable {
+                        Button("Retry") { atv.refresh() }.font(.caption)
+                            .accessibilityLabel("Retry TV pairing storage")
+                    }
+                }
+            }
             if let site = pageCasting.controllerName {
                 HStack {
                     Text("Controlled by \(site)").font(Theme.font(.footnote)).lineLimit(1)
@@ -52,6 +69,7 @@ struct RemoteControlScreen: View {
         .background(Theme.surface.ignoresSafeArea())
         .onAppear { vm.queryContext() }
         .sheet(isPresented: $showDevices) { DeviceConnectionSheet() }
+        .sheet(isPresented: $showAtvPairing) { AtvPairingSheet(coordinator: atv) }
         .sheet(isPresented: $showCastLink) {
             NavigationStack {
                 Form {
