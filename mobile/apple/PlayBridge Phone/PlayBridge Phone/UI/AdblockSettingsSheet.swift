@@ -130,7 +130,7 @@ struct AdblockSettingsSheet: View {
                 } header: {
                     Text("Filter Lists")
                 } footer: {
-                    Text("Turn lists on or off. Swipe left to remove a list.")
+                    Text("EasyList, EasyPrivacy and Adblock Warning Removal are on by default. For extra protection, turn on uBlock filters, uBlock quick fixes or uBlock badware. Swipe left to remove a list.")
                 }
 
                 Section {
@@ -267,8 +267,14 @@ struct AdblockSettingsSheet: View {
         let missing = missingDefaults
         filterLists += missing
         ContentBlocker.filterListURLs = filterLists
+        // A restored default list comes back in its default state.
+        for url in missing {
+            let on = ContentBlocker.isEnabledByDefault(url: url)
+            ContentBlocker.setListEnabled(on, url: url)
+            if on { disabledLists.remove(url) } else { disabledLists.insert(url) }
+        }
         Task {
-            for url in missing where !ContentBlocker.isListDownloaded(url: url) {
+            for url in missing where ContentBlocker.isEnabledByDefault(url: url) && !ContentBlocker.isListDownloaded(url: url) {
                 try? await ContentBlocker.download(url: url)
             }
             await store.recompileAndApply()

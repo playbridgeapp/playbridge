@@ -14,6 +14,13 @@ import Foundation
         typealias Settings = ContentBlockerListSettings
         assert(Settings.load(defaults: defaults, cacheDirectory: directory) == Settings.defaultURLs)
         assert(defaults.object(forKey: Settings.key) == nil)
+        // New installs: only EasyList, EasyPrivacy and Adblock Warning Removal are on.
+        assert(Set(Settings.enabled(defaults: defaults, cacheDirectory: directory)) == Settings.enabledByDefaultURLs)
+        assert(Settings.disabled(defaults: defaults) == Set(Settings.defaultOffURLs))
+        // The switch-over runs once; a list the user turns back on stays on.
+        Settings.setEnabled(true, url: Settings.extraURL, defaults: defaults)
+        _ = Settings.load(defaults: defaults, cacheDirectory: directory)
+        assert(!Settings.disabled(defaults: defaults).contains(Settings.extraURL))
         let custom = "https://example.test/custom.txt"
         for enabled in [false, true] {
             defaults.set(enabled, forKey: "pb_adblock_enabled")
@@ -31,6 +38,14 @@ import Foundation
         assert(Settings.load(defaults: defaults, cacheDirectory: directory).isEmpty)
         defaults.set([custom], forKey: Settings.key)
         assert(Settings.load(defaults: defaults, cacheDirectory: directory) == [custom])
+        // Existing installs switch to the same defaults; custom lists keep their state.
+        let existing = UserDefaults(suiteName: suite + ".existing")!
+        defer { existing.removePersistentDomain(forName: suite + ".existing") }
+        existing.set(Settings.defaultURLs + [custom], forKey: Settings.key)
+        existing.set(true, forKey: "pb_adblock_engine_lists_v1")
+        existing.set(true, forKey: "pb_adblock_extra_in_lists_v1")
+        let enabledAfter = Settings.enabled(defaults: existing, cacheDirectory: directory)
+        assert(Set(enabledAfter) == Settings.enabledByDefaultURLs.union([custom]))
         print("PASS: content blocker list migration")
     }
 }
