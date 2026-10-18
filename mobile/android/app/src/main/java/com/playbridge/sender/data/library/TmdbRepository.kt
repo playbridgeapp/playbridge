@@ -219,7 +219,7 @@ class TmdbRepository(
                     val body = response.body?.string() ?: return@withContext null
                     json.decodeFromString<T>(body)
                 } else {
-                    Log.e(TAG, "TMDB request failed: ${response.code} for $url")
+                    Log.e(TAG, "TMDB request failed: ${response.code}")
                     null
                 }
             } catch (e: Exception) {
@@ -240,7 +240,7 @@ class TmdbRepository(
                     val body = response.body?.string() ?: return@withContext TmdbPagedResponse()
                     json.decodeFromString<TmdbPagedResponse<T>>(body)
                 } else {
-                    Log.e(TAG, "TMDB paged request failed: ${response.code} for $url")
+                    Log.e(TAG, "TMDB paged request failed: ${response.code}")
                     TmdbPagedResponse()
                 }
             } catch (e: Exception) {

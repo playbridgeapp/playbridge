@@ -337,7 +337,7 @@ fun SessionObserverSetup(
                             )
                         }
                     } else {
-                        Log.d(TAG, "Auto-opening new tab for popup: $uri")
+                        Log.d(TAG, "Auto-opening new tab for popup from $openerHost")
                         val tabId = tabManager.createTab(
                             url = uri,
                             store = store,

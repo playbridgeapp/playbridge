@@ -315,7 +315,7 @@ class GoogleCastTarget(
             val source = if (media.effectiveRoute?.prefsValue == "direct") "direct" else "phone_proxy"
             Log.d(
                 TAG,
-                "proxied Google Cast media → $proxyUrl (source=$source) " +
+                "proxied Google Cast media → ${mediaEndpoint(proxyUrl)} (source=$source) " +
                     "streamType=$streamType audio=$audioFormat video=$videoFormat",
             )
         }

@@ -221,7 +221,7 @@ class AddonRepository(
                 val manifestUrl = normalizeManifestUrl(inputUrl)
                 val baseUrl = manifestUrl.removeSuffix("/manifest.json")
 
-                Log.d(TAG, "Fetching manifest from: $manifestUrl")
+                Log.d(TAG, "Fetching manifest from: ${redactUrlForLog(manifestUrl)}")
                 val request = Request.Builder().url(manifestUrl).get().build()
                 val response = client.newCall(request).execute()
 
@@ -265,7 +265,7 @@ class AddonRepository(
                 )
 
                 addonDao.insert(entity)
-                Log.d(TAG, "Installed addon: ${entity.name} sortOrder=$sortOrder from $manifestUrl")
+                Log.d(TAG, "Installed addon: ${entity.name} sortOrder=$sortOrder")
                 entity
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to install addon", e)
@@ -422,7 +422,7 @@ class AddonRepository(
                     "${addon.baseUrl}/catalog/$type/$catalogId/skip=$skip.json"
                 else
                     "${addon.baseUrl}/catalog/$type/$catalogId.json"
-                Log.d(TAG, "Fetching catalog: $url")
+                Log.d(TAG, "Fetching catalog from ${addon.name}: type=$type, catalogId=$catalogId")
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
@@ -431,9 +431,6 @@ class AddonRepository(
                 }
                 val body = response.body?.string() ?: return@withContext emptyList()
                 Log.d(TAG, "Catalog response body length: ${body.length}")
-                if (body.length < 500) {
-                    Log.d(TAG, "Catalog response body: $body")
-                }
                 val parsed = json.decodeFromString<StremioMetasResponse>(body)
                 val items = parsed.metas ?: emptyList()
                 catalogCache[cacheKey] = Pair(System.currentTimeMillis(), items)
@@ -473,7 +470,7 @@ class AddonRepository(
             try {
                 val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8").replace("+", "%20")
                 val url = "${addon.baseUrl}/catalog/$type/$catalogId/search=$encoded.json"
-                Log.d(TAG, "Searching catalog: $url")
+                Log.d(TAG, "Searching catalog from ${addon.name}: type=$type, catalogId=$catalogId")
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
@@ -640,7 +637,7 @@ class AddonRepository(
 
         Log.d(TAG, "Found ${addons.size} meta-capable addons for type=$type, id=$id")
         addons.forEach { addon ->
-            Log.d(TAG, "  Addon in filter list: ${addon.name}, baseUrl=${addon.baseUrl}, manifestUrl=${addon.manifestUrl}")
+            Log.d(TAG, "  Addon in filter list: ${addon.name}")
         }
 
         if (addons.isEmpty()) {
@@ -691,7 +688,7 @@ class AddonRepository(
             if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                 url += "?src=${android.net.Uri.encode(forcedSource)}"
             }
-            Log.d(TAG, "Fetching meta from ${addon.name}: $url")
+            Log.d(TAG, "Fetching meta from ${addon.name}: type=$reqType, id=$id")
             val request = Request.Builder().url(url).get().build()
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
@@ -1182,7 +1179,7 @@ class AddonRepository(
             try {
                 // Kitsu API for external site mappings
                 val url = "https://kitsu.io/api/edge/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]=$malId&include=item"
-                Log.d(TAG, "Fetching Kitsu mapping for MAL:$malId: $url")
+                Log.d(TAG, "Fetching Kitsu mapping for MAL:$malId")
 
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
@@ -1243,7 +1240,7 @@ class AddonRepository(
             "$trimmed/manifest.json"
         }
 
-        Log.d(TAG, "Normalized addon URL: $url -> $result")
+        Log.d(TAG, "Normalized addon URL to manifest")
         return result
     }
 

@@ -868,7 +868,7 @@ private fun LibraryScreenContent(
                                     row = row,
                                     listState = catalogRowScrollStates.getOrPut(rowKey) { LazyListState() },
                                     onItemClick = { item ->
-                                        android.util.Log.d("LibraryScreen", "onItemClick: id=${item.id}, type=${item.type}, addonBaseUrl=${row.addonBaseUrl}")
+                                        android.util.Log.d("LibraryScreen", "onItemClick: id=${item.id}, type=${item.type}")
                                         onAddonItemClick(item.id, item.type, row.addonBaseUrl)
                                     },
                                     onLoadMore = {

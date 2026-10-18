@@ -283,7 +283,7 @@ fun ExtensionsScreen(
             onInstall = { addon ->
                 scope.launch {
                     try {
-                        Log.d(TAG, "Installing addon: ${addon.id} from ${addon.downloadUrl}")
+                        Log.d(TAG, "Installing addon: ${addon.id}")
                         Components.addonManager.installAddon(
                             url = addon.downloadUrl,
                             onSuccess = {

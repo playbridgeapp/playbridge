@@ -396,7 +396,8 @@ class PlayerActivity : ComponentActivity() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Log.e(PB_PLAYER, "error ${error.errorCodeName}: ${error.message}", error)
+                val sanitizedMsg = error.message?.let { com.playbridge.shared.logging.redactLogText(it) } ?: "unknown"
+                Log.e(PB_PLAYER, "error ${error.errorCodeName}: $sanitizedMsg")
                 recoverFromPlayerError(exo, error)
             }
         })
