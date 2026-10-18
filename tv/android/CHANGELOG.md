@@ -28,6 +28,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Video controls**: Play/pause, seek, switch video source, unmute and forward from the phone remote, D-pad control of the active video (including fullscreen), on-screen feedback, automatic unmute of muted autoplay, and the title and scrubber on the phone. Works for videos in the page and in cross-origin player frames, using the same controller as the built-in WebView browser.
 - **Fullscreen typing**: Text and Enter from the phone reach the focused field while the browser is in native fullscreen, including search fields inside embedded frames.
+- **Page zoom**: Pinch on the phone touchpad zooms pages smoothly around the TV cursor, between half and three times the page size. Zoom resets when the page changes.
 
 ### Changed
 - **Release train**: Align TV Browser's version with the other PlayBridge products.
@@ -40,6 +41,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Navigation state**: Track the current URL, close cleanly with Back/Home, and preserve the replacement player's active state when switching out of browser mode.
 - **Phone keyboard and maximize**: Typing from the phone keyboard and the maximize button work again; the page bridge never connected before.
 - **Home in fullscreen**: Home from the phone remote now exits fullscreen and closes the browser.
+- **Fullscreen from the phone**: Fullscreen and restore work repeatedly without first clicking the video on the TV. If a site blocks real fullscreen, the video fills the screen instead.
+- **Scrolling**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
 
 ### Security
 - **Browser control**: Only apps signed with the PlayBridge key can open the plugin or send it remote, touchpad, text, navigation or user-agent commands. Any app on the TV could previously control it.
