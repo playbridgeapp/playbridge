@@ -57,6 +57,57 @@ private struct PickerMenuFixture: View {
     }
 }
 
+private struct SharingMenuFixture: View {
+    @ObservedObject var store: BrowserStore
+    let webID: UUID
+    let homeID: UUID
+    let appID: UUID
+    let nonWebID: UUID
+    @State private var showMenu = false
+    @State private var pendingMenuAction: (() -> Void)?
+    var body: some View {
+        VStack {
+            HStack {
+                Button("Web page") { store.select(webID) }
+                Button("Home page") { store.select(homeID) }
+                Button("App page") { store.select(appID) }
+                Button("Non-web page") { store.select(nonWebID) }
+            }
+            if let tab = store.activeTab {
+                SharingPageFixture(tab: tab, showMenu: $showMenu)
+                .sheet(isPresented: $showMenu, onDismiss: {
+                    let action = pendingMenuAction
+                    pendingMenuAction = nil
+                    action?()
+                }) {
+                    MenuSheet(tab: tab, store: store, isPresented: $showMenu) { action in
+                        pendingMenuAction = action
+                        showMenu = false
+                    }
+                }
+            }
+        }
+        .environmentObject(NavigationViewModel()).environmentObject(store.data)
+    }
+}
+
+private struct SharingPageFixture: View {
+    @ObservedObject var tab: BrowserTab
+    @Binding var showMenu: Bool
+    var body: some View {
+        VStack {
+            Button("Browser menu") { showMenu = true }
+            HStack {
+                Button("History Back") { tab.goBack() }.disabled(!tab.canGoBack)
+                Button("History Forward") { tab.goForward() }.disabled(!tab.canGoForward)
+            }
+            Text(tab.title).accessibilityIdentifier("sharingPageTitle")
+            if !tab.isHome { WebViewContainer(tab: tab) }
+            else { Text("New Tab") }
+        }
+    }
+}
+
 // Keep unrelated networking, ad-block downloads and detector enrichment out of
 // this fixture; BrowserStore/BrowserTab and WKWebView are production code.
 final class VideoDetector: ObservableObject {
@@ -117,7 +168,7 @@ enum ContentBlocker {
                             : "PASS: browser restore, navigation, consent, dialogs, popups, search and downloads")
             }
             catch { print("FAIL: \(error)"); exit(1) }
-            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" { exit(0) }
+            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SHARING_MENU_UI"] != "1" { exit(0) }
         }
         return true
     }
@@ -423,7 +474,151 @@ enum ContentBlocker {
         print("CHECK: declared origin, embedded frames, casting, ordinary navigation, Back and redirects")
     }
 
+    @MainActor func showSharingMenuFixture() async throws {
+        let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("sharing-history-checks")
+        if ProcessInfo.processInfo.environment["SHARING_RESET"] == "1" { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("tabs.json")
+        let firstLaunch = !FileManager.default.fileExists(atPath: file.path)
+        let browser = BrowserStore(tabsFileURL: file)
+        store = browser
+        browser.browserVisible = true
+        let webTab = browser.activeTab!
+        let view = webTab.webView
+        view.frame = window!.bounds
+        window!.rootViewController!.view.addSubview(view)
+        if firstLaunch {
+            for (path, title) in [("/parent", "Parent"), ("/child", "Child"), ("/identity", "Identity")] {
+                webTab.load(base + path)
+                try await wait("UI history navigation " + title) { view.title == title && !view.isLoading }
+            }
+        } else {
+            try await wait("UI history restored") { view.title == "Identity" && !view.isLoading }
+        }
+        view.removeFromSuperview()
+        // Reuse the ordinary fixture tab after an actual process relaunch.
+        let home = browser.browserTabs.first(where: \.isHome) ?? browser.newTab()
+        let app = BridgedApp(origin: BridgedAppDeclaration.origin(of: URL(string: base)!)!,
+                             name: "Fixture", startURL: URL(string: base + "/child")!, iconURL: nil)
+        browser.bridgedApps.install(app)
+        let appTab = browser.openBridgedApp(app)!
+        let nonWeb = browser.newTab()
+        nonWeb.isHome = false
+        nonWeb.urlString = "about:blank"
+        browser.select(webTab.id)
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        window?.rootViewController = UIHostingController(rootView: SharingMenuFixture(store: browser,
+            webID: webTab.id, homeID: home.id, appID: appTab.id, nonWebID: nonWeb.id))
+    }
+
+    @MainActor func verifyInteractionHistory(base: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("tabs.json")
+        let states = directory.appendingPathComponent("browser_tab_state")
+        let browser = BrowserStore(tabsFileURL: file)
+        browser.browserVisible = true
+        let tab = browser.activeTab!
+        tab.isDesktopMode = true
+        tab.restoreUserAgent(preset: .custom, custom: "Step2HistoryFixture/1.0")
+        let view = tab.webView
+        view.frame = window!.bounds
+        window!.rootViewController!.view.addSubview(view)
+        defer { view.removeFromSuperview() }
+        for (path, title) in [("/parent", "Parent"), ("/child", "Child"), ("/identity", "Identity")] {
+            tab.load(base + path)
+            try await wait("history navigation " + title) { view.title == title && !view.isLoading }
+        }
+        browser.openInBackground(base + "/not-loaded")
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        let metadata = try Data(contentsOf: file)
+        let payload = try JSONSerialization.jsonObject(with: metadata) as! [String: Any]
+        let saved = payload["tabs"] as! [[String: Any]]
+        let stateID = saved[0]["stateID"] as! String
+        let stateFile = states.appendingPathComponent(stateID)
+        try check(FileManager.default.fileExists(atPath: stateFile.path), "Background did not flush history state")
+        let stateData = try Data(contentsOf: stateFile)
+        let restored = BrowserStore(tabsFileURL: file)
+        try check(restored.tabs.allSatisfy { $0.loadedWebView == nil }, "History restore eagerly created views")
+        restored.browserVisible = true
+        let reopened = restored.activeTab!
+        let reopenedView = reopened.webView // creation itself must consume pending history
+        reopenedView.frame = window!.bounds
+        window!.rootViewController!.view.addSubview(reopenedView)
+        defer { reopenedView.removeFromSuperview() }
+        try await wait("history C after restart") { reopenedView.title == "Identity" && !reopenedView.isLoading && reopened.canGoBack }
+        try check(reopened.isDesktopMode && reopenedView.customUserAgent == "Step2HistoryFixture/1.0", "History restore lost desktop/custom UA")
+        try check(reopenedView.backForwardList.backList.map { $0.url.path }.suffix(2) == ["/parent", "/child"], "Restored history order changed")
+        // A lifecycle save before selecting the lazy tab must preserve its existing blob.
+        let lazyPayload = ["tabs": [saved[0], saved[1]], "activeIndex": 1] as [String: Any]
+        let lazyDirectory = directory.appendingPathComponent("lazy")
+        try FileManager.default.createDirectory(at: lazyDirectory.appendingPathComponent("browser_tab_state"), withIntermediateDirectories: true)
+        let lazyFile = lazyDirectory.appendingPathComponent("tabs.json")
+        try JSONSerialization.data(withJSONObject: lazyPayload).write(to: lazyFile)
+        let lazyStateFile = lazyDirectory.appendingPathComponent("browser_tab_state/" + stateID)
+        try stateData.write(to: lazyStateFile)
+        let lazy = BrowserStore(tabsFileURL: lazyFile)
+        lazy.flushTabStates()
+        let untouched = try Data(contentsOf: lazyStateFile)
+        try check(lazy.tabs[0].loadedWebView == nil && untouched == stateData, "Unloaded tab overwrote its saved history")
+        lazy.select(lazy.tabs[0].id)
+        try await wait("selected lazy history") { lazy.activeTab!.webView.title == "Identity" && lazy.activeTab!.canGoBack }
+        reopened.goBack()
+        try await wait("history Back reaches B") { reopenedView.url?.path == "/child" && !reopenedView.isLoading && reopened.canGoForward }
+        restored.flushTabStates()
+        let forward = BrowserStore(tabsFileURL: file)
+        let forwardView = forward.activeTab!.webView
+        try await wait("restored forward history") { forwardView.url?.path == "/child" && !forwardView.isLoading && forwardView.canGoForward }
+        forward.activeTab!.goForward()
+        try await wait("Forward reaches C") { forwardView.url?.path == "/identity" && !forwardView.isLoading }
+        // In-page URL changes have no didFinish; their existing visit path must capture state.
+        _ = try await reopenedView.evaluateJavaScript("history.pushState({},'', '/history-spa');document.title='SPA history';void(0)")
+        try await wait("SPA saved URL") { reopened.urlString.hasSuffix("/history-spa") }
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let spaState = BrowserTabStatePersistence(directory: states).load(stateID, matching: base + "/history-spa")
+        try check(spaState != nil, "In-page navigation did not persist interaction state")
+        for kind in ["missing", "corrupt", "URL-mismatch", "invalid-WebKit-state", "inner-URL-mismatch"] {
+            let caseDirectory = directory.appendingPathComponent(kind)
+            let caseStates = caseDirectory.appendingPathComponent("browser_tab_state")
+            try FileManager.default.createDirectory(at: caseStates, withIntermediateDirectories: true)
+            let caseFile = caseDirectory.appendingPathComponent("tabs.json")
+            try metadata.write(to: caseFile)
+            if kind == "corrupt" { try Data("bad".utf8).write(to: caseStates.appendingPathComponent(stateID)) }
+            if kind == "URL-mismatch" {
+                let writer = BrowserTabStatePersistence(directory: caseStates)
+                writer.save(view.interactionState as! Data, url: base + "/different", id: stateID)
+                writer.flush()
+            }
+            if kind == "invalid-WebKit-state" || kind == "inner-URL-mismatch" {
+                let writer = BrowserTabStatePersistence(directory: caseStates)
+                writer.save(kind == "invalid-WebKit-state" ? Data("bad".utf8) : reopenedView.interactionState as! Data,
+                            url: base + "/identity", id: stateID)
+                writer.flush()
+            }
+            let fallback = BrowserStore(tabsFileURL: caseFile)
+            let fallbackView = fallback.activeTab!.webView
+            try await wait("state fallback " + kind) { fallbackView.title == "Identity" && !fallbackView.isLoading }
+            try check(!fallbackView.canGoBack, "Rejected state left foreign history: " + kind)
+        }
+        restored.closeTab(reopened.id)
+        restored.flushTabStates()
+        try check(!FileManager.default.fileExists(atPath: stateFile.path), "Closing tab retained its state file")
+        let orphan = states.appendingPathComponent(UUID().uuidString)
+        try Data([0]).write(to: orphan)
+        let pruned = BrowserStore(tabsFileURL: file)
+        pruned.flushTabStates()
+        try check(!FileManager.default.fileExists(atPath: orphan.path), "Launch retained an orphan state file")
+        print("CHECK: persisted A-B-C/Back/Forward, lazy history, desktop/UA, SPA capture, missing/corrupt/mismatch fallback and close/orphan cleanup")
+    }
+
     @MainActor func run() async throws {
+        if ProcessInfo.processInfo.environment["SHARING_MENU_UI"] == "1" {
+            try await showSharingMenuFixture()
+            return
+        }
         let linkInteraction = BrowserPopupInteraction()
         linkInteraction.recordContextLink("https://example.test/logo-target", now: 100)
         try check(linkInteraction.consumeContextLink(now: 101)?.absoluteString == "https://example.test/logo-target",
@@ -458,6 +653,7 @@ enum ContentBlocker {
             try await verifyDetectionPolicy(base: base)
             return
         }
+        try await verifyInteractionHistory(base: base)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("startup-tabs.json")
         let urls = (0..<20).map { "\(base)/tab/\($0)" }
         try JSONSerialization.data(withJSONObject: ["urls": urls, "activeIndex": 7]).write(to: file)
@@ -1230,6 +1426,10 @@ extension BrowserStartupChecks {
         try check(view.url?.path == "/saved-route", "Server redirect replaced the app document")
         browser.openBridgedApp(app!)
         browser.showBrowser()
+        browser.flushTabStates()
+        let appMetadata = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        try check((appMetadata["tabs"] as! [[String: Any]]).filter { $0["bridgedAppOrigin"] != nil }.allSatisfy { $0["stateID"] == nil },
+                  "Bridged app persisted deep history")
         let restored = BrowserStore(tabsFileURL: file, bridgedApps: installed)
         try check(restored.browserTabs.count == browser.browserTabs.count &&
                   restored.tabs.filter(\.isBridgedApp).count == 1, "Relaunch lost app session isolation")
@@ -1237,6 +1437,8 @@ extension BrowserStartupChecks {
                   "Restoration eagerly loaded the inactive app")
         let reopened = restored.openBridgedApp(app!)!
         try check(reopened.urlString == app!.startURL.absoluteString, "Fresh launch restored a deep link instead of the app home")
+        try await wait("app home has no restored history") { !reopened.webView.isLoading && reopened.webView.title != nil }
+        try check(!reopened.webView.canGoBack, "App restored deep back history")
         restored.closeTab(reopened.id)
         // Updating the home must not navigate or replace an already-loaded page.
         try check(browser.editBridgedApp(app!, name: "Edited Fixture", homeURL: base + "/detection"), "Home edit was rejected")

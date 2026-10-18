@@ -73,6 +73,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     private(set) var loadedWebView: WKWebView?
     let configuration: WKWebViewConfiguration
+    var onWebViewCreated: (() -> Void)?
     var webView: WKWebView {
         if let loadedWebView { return loadedWebView }
         configuration.defaultWebpagePreferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
@@ -89,7 +90,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
         view.customUserAgent = effectiveUserAgent
         observe()
-        return view
+        onWebViewCreated?()
+        return loadedWebView ?? view
     }
     let detector = VideoDetector()
     private var mediaDetectionSettings = BrowserMediaDetectionSettings.load()
@@ -423,17 +425,23 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         observations = [
             webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
                 let value = wv.estimatedProgress
-                DispatchQueue.main.async { self?.progress = value }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
+                    self.progress = value
+                }
             },
             webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
                 let value = wv.isLoading
-                DispatchQueue.main.async { self?.isLoading = value }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
+                    self.isLoading = value
+                }
             },
             webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
                 guard let title = wv.title, !title.isEmpty else { return }
                 let url = wv.url
-                DispatchQueue.main.async {
-                    guard let self else { return }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
                     self.title = title
                     self.onMetadataChanged?()
                     if let url { self.onTitleChanged?(url, title) }
@@ -444,8 +452,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                 // A change while not loading is an in-page (pushState) navigation,
                 // e.g. YouTube switching videos; no didFinish follows it.
                 let inPage = !wv.isLoading
-                DispatchQueue.main.async {
-                    guard let self else { return }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
                     self.urlString = url
                     self.onMetadataChanged?()
                     if inPage { self.recordInPageVisit() }
@@ -453,11 +461,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] wv, _ in
                 let value = wv.canGoBack
-                DispatchQueue.main.async { self?.canGoBack = value }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
+                    self.canGoBack = value
+                }
             },
             webView.observe(\.canGoForward, options: [.new]) { [weak self] wv, _ in
                 let value = wv.canGoForward
-                DispatchQueue.main.async { self?.canGoForward = value }
+                DispatchQueue.main.async { [weak wv] in
+                    guard let self, self.loadedWebView === wv else { return }
+                    self.canGoForward = value
+                }
             },
         ]
     }
@@ -488,6 +502,29 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         requestedAddress = target
         onBeforeLoad?()
         webView.load(request)
+    }
+
+    /// A fresh view restores its complete back/forward list, rather than adding a URL load.
+    /// interactionState is available on iOS 15; the phone's deployment target is iOS 16.
+    func restoreInteractionState(_ state: Data, url: URL) -> Bool {
+        processRecovery.cancelPendingReload()
+        appRequestedURL = url
+        requestedAddress = url.absoluteString
+        navigationFailure = nil
+        onBeforeLoad?()
+        let view = webView
+        view.interactionState = state
+        guard view.backForwardList.currentItem?.url == url else {
+            // A rejected/mismatched blob must not leave a foreign history entry in
+            // the URL fallback. This view has not been handed to the UI yet.
+            view.stopLoading()
+            observations.removeAll()
+            view.navigationDelegate = nil
+            view.uiDelegate = nil
+            loadedWebView = nil
+            return false
+        }
+        return true
     }
 
     /// Present the system Find-in-page bar for the current page.

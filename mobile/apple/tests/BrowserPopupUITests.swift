@@ -1,6 +1,51 @@
 import XCTest
 
 final class BrowserPopupUITests: XCTestCase {
+    func testSharingMenuAndHistoryRelaunch() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
+        app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        app.launchEnvironment["SHARING_MENU_UI"] = "1"
+        app.launchEnvironment["SHARING_RESET"] = "1"
+        app.launch()
+        let menu = app.buttons["Browser menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 30), app.debugDescription)
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "SHARING_RESET")
+        app.launch()
+        XCTAssertTrue(menu.waitForExistence(timeout: 30), app.debugDescription)
+        let title = app.staticTexts["sharingPageTitle"]
+        XCTAssertEqual(title.label, "Identity")
+        let back = app.buttons["History Back"]
+        XCTAssertTrue(back.isEnabled, "Relaunch lost Back history")
+        back.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Child"), evaluatedWith: title)
+        waitForExpectations(timeout: 10)
+        let forward = app.buttons["History Forward"]
+        XCTAssertTrue(forward.isEnabled, "Relaunch lost Forward history")
+        forward.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Identity"), evaluatedWith: title)
+        waitForExpectations(timeout: 10)
+        menu.tap()
+        XCTAssertTrue(app.buttons["Share…"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["Open in Safari"].exists, app.debugDescription)
+        app.buttons["Share…"].tap()
+        let copy = app.descendants(matching: .any).matching(identifier: "Copy").firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 10), "System share sheet did not open: " + app.debugDescription)
+        // iOS exposes share actions as cells, rather than buttons.
+        // Copy dismisses the system sheet without opening an external app.
+        copy.tap()
+        if app.buttons["Close menu"].waitForExistence(timeout: 5) { app.buttons["Close menu"].tap() }
+        for kind in ["Home page", "App page", "Non-web page"] {
+            app.buttons[kind].tap()
+            menu.tap()
+            XCTAssertTrue(app.buttons["Bookmarks"].waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertFalse(app.buttons["Share…"].exists, kind)
+            XCTAssertFalse(app.buttons["Open in Safari"].exists, kind)
+            app.buttons["Close menu"].tap()
+        }
+    }
+
     private func openContentBlocking(_ app: XCUIApplication) {
         let action = app.buttons["Content Blocking"]
         let menuScroll = app.scrollViews.containing(.button, identifier: "Bookmarks").firstMatch

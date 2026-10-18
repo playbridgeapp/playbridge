@@ -17,11 +17,13 @@ struct MenuSheet: View {
     @State private var availableBridgedApp: BridgedApp?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var bookmarkRemovalURL: String?
+    @State private var sharedPage: BrowserSharedPage?
 
     private var pageURL: URL? {
         guard !tab.isHome, let url = URL(string: tab.urlString), BrowserSitePolicy.origin(url) != nil else { return nil }
         return url
     }
+    private var shareableURL: URL? { tab.isBridgedApp ? nil : pageURL }
     private var isBookmarked: Bool { data.isBookmarked(tab.urlString) }
     private func go(_ screen: AppScreen) { dismissThen { nav.navigate(to: screen) } }
 
@@ -58,6 +60,15 @@ struct MenuSheet: View {
                         .accessibilityAddTraits(.updatesFrequently)
                 }
                 Divider().padding(.vertical, 8)
+                if let url = shareableURL {
+                    menuRow(icon: "square.and.arrow.up", label: "Share…") {
+                        sharedPage = BrowserSharedPage(url: url, title: tab.title)
+                    }
+                    menuRow(icon: "safari", label: "Open in Safari") {
+                        dismissThen { UIApplication.shared.open(url) }
+                    }
+                    Divider().padding(.vertical, 8)
+                }
                 menuRow(icon: "play.circle", label: "Media detect",
                         status: store.mediaDetectionSettings.enabled ? (tab.detectionEnabled ? "On" : "Auto off") : "Off") {
                     showMediaDetection = true
@@ -101,7 +112,8 @@ struct MenuSheet: View {
             availableBridgedApp = app
         }
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
-        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height(installableApp == nil ? 560 : 608), .large]).presentationDragIndicator(.visible)
+        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height((installableApp == nil ? 560 : 608) + (shareableURL == nil ? 0 : 112)), .large]).presentationDragIndicator(.visible)
+        .sheet(item: $sharedPage) { page in BrowserPageShareSheet(page: page) }
         .sheet(isPresented: $showDownloads) { BrowserDownloadsView(downloads: store.downloads) }
         .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
         .sheet(isPresented: $showSiteSettings) { BrowserSiteSettingsSheet(tab: tab) }
@@ -228,4 +240,26 @@ struct BrowserUserAgentSheet: View {
         .onAppear { customValue = tab.customUserAgent ?? "" }
         .presentationDetents([.large])
     }
+}
+
+/// Supplying the URL as the activity item preserves each destination's URL handling,
+/// while its subject comes from the page title (for Mail and other subject consumers).
+private final class BrowserSharedPage: NSObject, Identifiable, UIActivityItemSource {
+    let id = UUID()
+    let url: URL
+    let title: String
+    init(url: URL, title: String) { self.url = url; self.title = title }
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any { url }
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                itemForActivityType activityType: UIActivity.ActivityType?) -> Any? { url }
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                subjectForActivityType activityType: UIActivity.ActivityType?) -> String { title }
+}
+
+private struct BrowserPageShareSheet: UIViewControllerRepresentable {
+    let page: BrowserSharedPage
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [page], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

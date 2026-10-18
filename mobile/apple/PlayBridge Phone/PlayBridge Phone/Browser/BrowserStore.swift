@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import Combine
+import UIKit
 
 /// Owns the set of browser tabs and the active selection. Tabs share a `WKProcessPool` +
 /// default data store so cookies/logins persist across tabs (like a normal browser).
@@ -55,6 +56,9 @@ final class BrowserStore: ObservableObject {
 
     private var isRestoring = false
     private let tabsFileURL: URL
+    private let tabStates: BrowserTabStatePersistence
+    private var stateIDs: [UUID: String] = [:]
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private static func defaultTabsFileURL() -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -63,9 +67,17 @@ final class BrowserStore: ObservableObject {
 
     init(tabsFileURL: URL? = nil, bridgedApps: BridgedAppStore = BridgedAppStore()) {
         self.tabsFileURL = tabsFileURL ?? Self.defaultTabsFileURL()
+        tabStates = BrowserTabStatePersistence(directory: self.tabsFileURL.deletingLastPathComponent()
+            .appendingPathComponent("browser_tab_state", isDirectory: true))
         self.bridgedApps = bridgedApps
         appSubscription = bridgedApps.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         restoreTabs()
+        tabStates.prune(keeping: Set(stateIDs.values))
+        for notification in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
+                self?.flushTabStates()
+            })
+        }
         Task { @MainActor in
             // Wake only the selected restored tab, without waiting for compilation.
             flushPendingLoads()
@@ -86,8 +98,39 @@ final class BrowserStore: ObservableObject {
     /// Loads any tab URLs that were deferred while rules were still compiling.
     private func flushPendingLoads() {
         guard !pendingInitialLoads.isEmpty else { return }
-        guard let tab = activeTab, let url = pendingInitialLoads.removeValue(forKey: tab.id) else { return }
+        guard let tab = activeTab else { return }
+        loadInitialTab(tab)
+    }
+
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        tabStates.flush()
+    }
+
+    /// Called both by selection and by the first SwiftUI WebViewContainer creation.
+    /// Consume the pending URL first, so creating the view cannot restore twice.
+    private func loadInitialTab(_ tab: BrowserTab) {
+        guard rulesReady, let url = pendingInitialLoads.removeValue(forKey: tab.id) else { return }
+        applyRules(to: tab)
+        if !tab.isBridgedApp, let stateID = stateIDs[tab.id], let expected = URL(string: url),
+           let state = tabStates.load(stateID, matching: url),
+           tab.restoreInteractionState(state, url: expected) { return }
         tab.load(url)
+    }
+
+    private func captureTabState(_ tab: BrowserTab) {
+        guard tabs.contains(where: { $0.id == tab.id }), !tab.isHome, !tab.isBridgedApp,
+              pendingInitialLoads[tab.id] == nil, let view = tab.loadedWebView, !view.isLoading,
+              let url = view.backForwardList.currentItem?.url,
+              let state = view.interactionState as? Data, let stateID = stateIDs[tab.id] else { return }
+        tabStates.save(state, url: url.absoluteString, id: stateID)
+    }
+
+    /// Lifecycle barrier. Only materialized tabs supply snapshots; lazy tabs keep their files.
+    func flushTabStates() {
+        tabs.forEach(captureTabState)
+        saveTabs()
+        tabStates.flush()
     }
 
     var activeTab: BrowserTab? { tabs.first { $0.id == activeID } }
@@ -108,6 +151,11 @@ final class BrowserStore: ObservableObject {
         // message handler without changing the supplied process pool/data store.
         if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }
         let tab = BrowserTab(configuration: configuration, handler: handler, bridgedAppOrigin: bridgedAppOrigin)
+        if !tab.isBridgedApp { stateIDs[tab.id] = UUID().uuidString }
+        tab.onWebViewCreated = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.loadInitialTab(tab)
+        }
         tab.configureMediaDetection(mediaDetectionSettings)
         handler.tab = tab
         tab.isActive = { [weak self, weak tab] in
@@ -176,9 +224,10 @@ final class BrowserStore: ObservableObject {
             guard let self, let tab else { return }
             self.applyRules(to: tab)
         }
-        tab.onPageFinished = { [weak self] finishedURL, title in
+        tab.onPageFinished = { [weak self, weak tab] finishedURL, title in
             guard let self else { return }
             if let finishedURL { self.data.recordVisit(url: finishedURL.absoluteString, title: title) }
+            if let tab { self.captureTabState(tab) }
             self.saveTabs()
         }
         tab.onTitleChanged = { [weak self] url, title in
@@ -243,6 +292,7 @@ final class BrowserStore: ObservableObject {
         var userAgentPreset: String? = nil
         var customUserAgent: String? = nil
         var bridgedAppOrigin: URL? = nil
+        var stateID: String? = nil
     }
     private struct SavedTabs: Codable { var tabs: [SavedTab]; var activeIndex: Int }
     private struct LegacyTabs: Codable { var urls: [String]; var activeIndex: Int }
@@ -262,6 +312,10 @@ final class BrowserStore: ObservableObject {
                 // Keep restoration lazy and leave ordinary browser tabs unchanged.
                 let url = app?.startURL.absoluteString ?? (item.isHome ? nil : item.url)
                 let tab = makeTab(url: url, activate: false, bridgedAppOrigin: item.bridgedAppOrigin)
+                if !tab.isBridgedApp, !item.isHome, let stateID = item.stateID,
+                   UUID(uuidString: stateID) != nil, !stateIDs.values.contains(stateID) {
+                    stateIDs[tab.id] = stateID
+                }
                 if index == saved.activeIndex { restoredActive = tab }
                 tab.title = app?.name ?? (item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title)
                 tab.isDesktopMode = item.desktop
@@ -283,7 +337,7 @@ final class BrowserStore: ObservableObject {
         let items = tabs.map {
             SavedTab(url: $0.urlString, title: $0.title, isHome: $0.isHome, desktop: $0.isDesktopMode,
                      userAgentPreset: $0.userAgentPreset.rawValue, customUserAgent: $0.customUserAgent,
-                     bridgedAppOrigin: $0.bridgedAppOrigin)
+                     bridgedAppOrigin: $0.bridgedAppOrigin, stateID: $0.isHome ? nil : stateIDs[$0.id])
         }
         let payload = SavedTabs(tabs: items, activeIndex: tabs.firstIndex { $0.id == activeID } ?? 0)
         if let data = try? JSONEncoder().encode(payload) { try? data.write(to: tabsFileURL, options: .atomic) }
@@ -391,11 +445,8 @@ final class BrowserStore: ObservableObject {
         activeID = id
         activeTab?.reloadTerminatedProcessIfNeeded()
         if activeTab?.isBridgedApp == false { lastBrowserTabID = id }
-        // A deliberate user selection outranks the rules-ready deferral — load now.
-        if let url = pendingInitialLoads.removeValue(forKey: id),
-           let tab = tabs.first(where: { $0.id == id }) {
-            tab.load(url)
-        }
+        // Selection uses the same rules-ready history/URL path as first view creation.
+        if let tab = activeTab { loadInitialTab(tab) }
         saveTabs()
     }
 
@@ -474,6 +525,7 @@ final class BrowserStore: ObservableObject {
         for tab in closing {
             onPageCastInvalidated?(tab)
             pendingInitialLoads.removeValue(forKey: tab.id)
+            if let stateID = stateIDs.removeValue(forKey: tab.id) { tabStates.remove(stateID) }
             tab.detector.clear()
             tab.cancelPrompt()
             tab.stopElementPicker()
