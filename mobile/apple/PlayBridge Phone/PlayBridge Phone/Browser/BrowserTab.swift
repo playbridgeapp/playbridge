@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import Security
 import Combine
 import UIKit
 
@@ -203,6 +204,34 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             in: BrowserPlaybackScript.world,
             completionHandler: nil
         )
+    }
+
+    @Published private(set) var siteSecurity = BrowserSiteSecurity()
+    private var securityGeneration = UUID()
+    private var securityProvisional = false
+
+    /// Trust evaluation may fetch chain/revocation information; keep it off the UI
+    /// thread and fence the result against newer navigation/KVO snapshots.
+    private func refreshSiteSecurity() {
+        guard let view = loadedWebView, navigationFailure == nil else { return }
+        let generation = UUID()
+        securityGeneration = generation
+        let url = view.url
+        let onlySecure = view.hasOnlySecureContent
+        siteSecurity = BrowserSiteSecurity(url: url, connection: .derive(url: url, isHome: isHome,
+            trustValid: nil, onlySecureContent: onlySecure))
+        guard !securityProvisional, !isHome, url?.scheme?.lowercased() == "https", let trust = view.serverTrust else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self, weak view] in
+            let valid = SecTrustEvaluateWithError(trust, nil)
+            let certificate = BrowserCertificateSummary.copy(from: trust)
+            DispatchQueue.main.async {
+                guard let self, let view, self.loadedWebView === view,
+                      self.securityGeneration == generation, view.url == url else { return }
+                self.siteSecurity = BrowserSiteSecurity(url: url,
+                    connection: .derive(url: url, isHome: self.isHome, trustValid: valid, onlySecureContent: onlySecure),
+                    certificate: certificate)
+            }
+        }
     }
 
     @Published var isLoading: Bool = false
@@ -423,6 +452,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     private func observe() {
         observations = [
+            webView.observe(\.hasOnlySecureContent, options: [.new]) { [weak self] view, _ in
+                DispatchQueue.main.async { [weak view] in
+                    guard let self, self.loadedWebView === view else { return }
+                    self.refreshSiteSecurity()
+                }
+            },
+            webView.observe(\.serverTrust, options: [.new]) { [weak self] view, _ in
+                DispatchQueue.main.async { [weak view] in
+                    guard let self, self.loadedWebView === view else { return }
+                    self.refreshSiteSecurity()
+                }
+            },
             webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
                 let value = wv.estimatedProgress
                 DispatchQueue.main.async { [weak wv] in
@@ -455,6 +496,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                 DispatchQueue.main.async { [weak wv] in
                     guard let self, self.loadedWebView === wv else { return }
                     self.urlString = url
+                    self.refreshSiteSecurity()
                     self.onMetadataChanged?()
                     if inPage { self.recordInPageVisit() }
                 }
@@ -663,6 +705,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        navigationFailure = nil
+        securityProvisional = true
+        refreshSiteSecurity()
         detectionFrames.removeAll()
         detectionNavigationID = UUID()
         onPageCastInvalidated?()
@@ -672,6 +717,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        securityProvisional = false
+        refreshSiteSecurity()
         onPageCastInvalidated?()
         documentID = UUID()
         tabUnder.clear()
@@ -694,6 +741,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        securityProvisional = false
+        refreshSiteSecurity()
         navigationFailure = nil
         onPageFinished?(webView.url, webView.title)
     }
@@ -723,6 +772,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             message = "A secure connection to this website could not be established."
         default: message = "This page could not be loaded. Check the address or try again."
         }
+        securityGeneration = UUID()
+        siteSecurity = BrowserSiteSecurity(url: URL(string: address), connection: .derive(
+            url: URL(string: address), isHome: isHome, trustValid: false, onlySecureContent: false))
         navigationFailure = BrowserNavigationFailure(address: address, message: message)
         isLoading = false
     }

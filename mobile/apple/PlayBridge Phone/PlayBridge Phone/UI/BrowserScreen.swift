@@ -57,6 +57,7 @@ private struct ActiveTabView: View {
     @State private var pendingMenuAction: (() -> Void)?
     @State private var showDeviceSheet = false
     @FocusState private var addressFocused: Bool
+    @State private var editingStartAddress = ""
 
     private var chromeHidden: Bool { tab.isBridgedApp || tab.isBrowserChromeHidden }
 
@@ -85,12 +86,29 @@ private struct ActiveTabView: View {
                         else { tab.navigationFailure = nil; tab.isHome = tab.loadedWebView?.url == nil }
                     })
                 }
-                if addressFocused && !address.trimmingCharacters(in: .whitespaces).isEmpty {
-                    SuggestionsView(query: address) { url in
-                        address = url
-                        addressFocused = false
-                        tab.load(url)
+                if addressFocused {
+                    // Android's editing panel: covers the page; the current page and copied
+                    // link until the user types, then History/Bookmark suggestions.
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            if address == editingStartAddress || address.isEmpty {
+                                BrowserCurrentPageCard(tab: tab) { addressFocused = false }
+                                BrowserClipboardSuggestionRow(clipboard: store.clipboard) { url in
+                                    addressFocused = false
+                                    tab.load(url)
+                                }
+                            } else {
+                                SuggestionsView(query: address) { url in
+                                    addressFocused = false
+                                    tab.load(url)
+                                }
+                            }
+                        }
+                        .padding(.top, 12)
                     }
+                    .scrollDismissesKeyboard(.interactively)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.surface)
                 }
                 if tab.isBrowserChromeHidden && !tab.isBridgedApp {
                     VStack {
@@ -185,10 +203,24 @@ private struct ActiveTabView: View {
                 prompt.finish(accepted, text: text)
             }
         }
-        .onAppear { address = tab.urlString }
+        .task(id: addressFocused) {
+            if addressFocused { await store.clipboard.refresh() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            if addressFocused { Task { await store.clipboard.refresh() } }
+        }
+        .onAppear { address = BrowserAddressDisplay.editable(tab) }
         .onDisappear { tab.cancelPrompt() }
-        .onChange(of: tab.urlString) { newValue in
-            if !addressFocused { address = newValue }
+        .onChange(of: tab.urlString) { _ in
+            if !addressFocused { address = BrowserAddressDisplay.editable(tab) }
+        }
+        .onChange(of: tab.isHome) { _ in
+            if !addressFocused { address = BrowserAddressDisplay.editable(tab) }
+        }
+        .onChange(of: addressFocused) { focused in
+            // Editing starts from the full current address; leaving without going restores it.
+            address = BrowserAddressDisplay.editable(tab)
+            if focused { editingStartAddress = address }
         }
     }
 
@@ -199,7 +231,6 @@ private struct ActiveTabView: View {
             if addressFocused {
                 Button {
                     addressFocused = false
-                    address = tab.urlString
                 } label: {
                     Image(systemName: "arrow.backward")
                         .font(.system(size: 22)).foregroundColor(Theme.primary)
@@ -211,24 +242,10 @@ private struct ActiveTabView: View {
                 DashboardNavigationButton()
             }
 
-            // URL pill
-            HStack(spacing: 6) {
-                Image(systemName: tab.urlString.hasPrefix("https") ? "lock.fill" : "globe")
-                    .font(.system(size: 14)).foregroundColor(Theme.onSurfaceVariant)
-                TextField("Search or enter address", text: $address)
-                    .font(Theme.font(size: 13))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.webSearch)
-                    .submitLabel(.go)
-                    .focused($addressFocused)
-                    .foregroundColor(Theme.onSurface)
-                    .onSubmit { tab.load(address); addressFocused = false }
+            BrowserAddressField(tab: tab, address: $address, isFocused: $addressFocused) {
+                tab.load(address)
+                addressFocused = false
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .frame(minHeight: 40)
-            .background(Theme.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 20))
-            .padding(.horizontal, 2)
 
             if !addressFocused {
                 if vm.isConnected {
@@ -369,80 +386,6 @@ private struct SuggestionsView: View {
             .cornerRadius(12)
             .padding(.horizontal, 10)
             .shadow(color: Color.black.opacity(0.2), radius: 8, y: 4)
-        }
-    }
-}
-
-/// New-tab / home page: shows bookmarks and recent history.
-private struct BrowserHomeView: View {
-    let onOpen: (String) -> Void
-    @EnvironmentObject private var data: BrowserDataStore
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("PlayBridge")
-                    .font(Theme.font(size: 26, weight: .bold, design: .rounded))
-                    .foregroundColor(Theme.onSurface)
-                    .frame(maxWidth: .infinity).padding(.top, 24)
-
-                if !data.bookmarks.isEmpty {
-                    sectionTitle("Bookmarks")
-                    grid(items: data.bookmarks.prefix(8).map { ($0.title, $0.url) })
-                }
-                if !data.history.isEmpty {
-                    sectionTitle("Recent")
-                    VStack(spacing: 8) {
-                        ForEach(Array(data.history.prefix(8))) { h in
-                            Button { onOpen(h.url) } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "clock.arrow.circlepath")
-                                        .font(Theme.font(size: 14)).foregroundColor(Theme.onSurfaceVariant).frame(width: 22)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(h.title).font(Theme.font(size: 14)).foregroundColor(Theme.onSurface).lineLimit(1)
-                                        Text(URL(string: h.url)?.host ?? h.url).font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
-                                    }
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                                .padding(12)
-                                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surfaceContainer))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                if data.bookmarks.isEmpty && data.history.isEmpty {
-                    Text("Search or enter an address above to get started.")
-                        .font(Theme.font(size: 14)).foregroundColor(Theme.onSurfaceVariant)
-                        .frame(maxWidth: .infinity).padding(.top, 40)
-                }
-                Spacer(minLength: 20)
-            }
-            .padding(.horizontal, 16)
-        }
-        .background(Theme.surface)
-    }
-
-    private func sectionTitle(_ t: String) -> some View {
-        Text(t).font(Theme.font(size: 13, weight: .bold)).foregroundColor(Theme.onSurfaceVariant)
-    }
-
-    private func grid(items: [(String, String)]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 10)], spacing: 10) {
-            ForEach(items.indices, id: \.self) { i in
-                let item = items[i]
-                Button { onOpen(item.1) } label: {
-                    VStack(spacing: 8) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainerHigh).frame(height: 56)
-                            Image(systemName: "globe").font(.system(size: 22)).foregroundColor(Theme.primary)
-                        }
-                        Text(item.0).font(Theme.font(size: 11)).foregroundColor(Theme.onSurface).lineLimit(1)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 }

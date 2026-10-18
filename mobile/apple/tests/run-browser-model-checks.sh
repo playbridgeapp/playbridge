@@ -6,7 +6,7 @@ build_dir="$(mktemp -d /private/tmp/playbridge-browser-models.XXXXXX)"
 trap 'rm -rf "$build_dir"' EXIT
 app="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$build_dir/cache" \
-  "$app/Browser/BrowserAddressResolver.swift" "$app/Browser/BrowserProcessRecovery.swift" \
+  "$app/Browser/BrowserAddressResolver.swift" "$app/Browser/BrowserClipboardClassifier.swift" "$app/Browser/BrowserSiteSecurity.swift" "$app/Browser/BrowserProcessRecovery.swift" \
   "$app/Data/BrowserDataStore.swift" "$app/Data/BrowserDataPersistence.swift" "$app/Data/BrowserTabStatePersistence.swift" \
-  "$repo_root/mobile/apple/tests/BrowserModelTests.swift" -o "$build_dir/check"
+  "$repo_root/mobile/apple/tests/BrowserStep3ModelTests.swift" "$repo_root/mobile/apple/tests/BrowserModelTests.swift" -o "$build_dir/check"
 "$build_dir/check"

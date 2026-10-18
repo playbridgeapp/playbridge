@@ -25,6 +25,7 @@ final class BrowserStore: ObservableObject {
     var onWebsiteCast: ((BrowserTab, [String: Any]) -> Void)?
     var onPageCastInvalidated: ((BrowserTab) -> Void)?
     let downloads = BrowserDownloads()
+    let clipboard = BrowserClipboardSuggestions()
     var browserVisible = false {
         didSet {
             if browserVisible { activeTab?.reloadTerminatedProcessIfNeeded() }
