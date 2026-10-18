@@ -70,7 +70,7 @@ object Components {
 
     /** Detector native traffic may include media URLs and headers — debug builds only. */
     private fun debugDetectorLog(message: String) {
-        if (BuildConfig.DEBUG) Log.d(TAG, message)
+        if (BuildConfig.DEBUG) Log.d(TAG, com.playbridge.shared.logging.redactLogText(message))
     }
     
     /**
@@ -261,12 +261,12 @@ object Components {
             isSubframeRequest: Boolean,
         ): mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse? {
             if (uri.startsWith("magnet:?")) {
-                Log.d(TAG, "Intercepted magnet link: $uri")
+                Log.d(TAG, "Intercepted magnet link")
                 Handler(Looper.getMainLooper()).post { onMagnetDetected?.invoke(uri) }
                 return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
             }
             if (uri.startsWith("stremio://")) {
-                Log.d(TAG, "Intercepted Stremio addon link: $uri")
+                Log.d(TAG, "Intercepted Stremio addon link")
                 Handler(Looper.getMainLooper()).post { onStremioAddonDetected?.invoke(uri) }
                 return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
             }
@@ -292,7 +292,7 @@ object Components {
             errorType: mozilla.components.browser.errorpages.ErrorType,
             uri: String?,
         ): mozilla.components.concept.engine.request.RequestInterceptor.ErrorResponse {
-            Log.e(TAG, "Load error for $uri: $errorType")
+            Log.e(TAG, "Load error for ${com.playbridge.shared.logging.redactUrlForLog(uri)}: $errorType")
             return mozilla.components.concept.engine.request.RequestInterceptor.ErrorResponse(
                 ErrorPageUtils.generateErrorPage(uri ?: "unknown", "NETWORK_ERROR", errorType.name)
             )
@@ -602,7 +602,6 @@ object Components {
         
         Log.i(TAG, "=== Installing bundled video detector extension ===")
         Log.i(TAG, "Extension ID: $extensionId")
-        Log.i(TAG, "Extension URL: $extensionUrl")
         
         // Register a global message delegate on the WebExtensionController
         val globalMessageDelegate = object : GeckoWebExtension.MessageDelegate {
@@ -612,7 +611,7 @@ object Components {
                 
                 port.setDelegate(object : GeckoWebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: GeckoWebExtension.Port) {
-                        debugDetectorLog("PORT MESSAGE: $message")
+                        debugDetectorLog("PORT MESSAGE received")
                         processMessage(message)
                         
                         // Send feedback back to the extension
@@ -835,8 +834,8 @@ object Components {
                 else -> message.toString()
             }
             
-            // Full payload can include authenticated media URLs and header maps.
-            debugDetectorLog("Processing detector message: $jsonString")
+            // Detector message processed.
+            debugDetectorLog("Processing detector message")
             
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
@@ -1034,7 +1033,7 @@ object Components {
                         val url = jsonObject["url"]?.jsonPrimitive?.content
                         val title = jsonObject["title"]?.jsonPrimitive?.content
                         if (url != null && MediaNetworkPolicy.isHttpUrl(url)) {
-                            debugDetectorLog("CAST MESSAGE received via extension (legacy): $url")
+                            debugDetectorLog("CAST MESSAGE received via extension (legacy): ${com.playbridge.shared.logging.redactUrlForLog(url)}")
                             onBridgeCastRequest?.invoke(
                                 listOf(PlayPayload(url = url, title = title, detected_by = "page_cast")),
                                 0,

@@ -59,11 +59,11 @@ class TorBoxClient(
      * Logs the raw body and parsed outcome to Logcat under the tag "TorBoxClient".
      */
     private fun checkSuccess(body: String): kotlinx.serialization.json.JsonElement {
-        Log.d(TAG, "Raw API response (first 2000 chars): ${body.take(2000)}")
+        Log.d(TAG, "Raw API response received: ${body.length} chars")
         val root = try {
             json.parseToJsonElement(body).jsonObject
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse JSON: ${e.message}\nBody was: $body")
+            Log.e(TAG, "Failed to parse JSON: ${e.message}")
             throw DebridException("Failed to parse TorBox response: ${e.message}")
         }
         val success = root["success"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -71,11 +71,11 @@ class TorBoxClient(
             val detail = root["detail"]?.jsonPrimitive?.content
                 ?: root["error"]?.jsonPrimitive?.content
                 ?: "Unknown TorBox error"
-            Log.e(TAG, "TorBox API reported failure. detail='$detail' | full root=$root")
+            Log.e(TAG, "TorBox API reported failure. detail='$detail'")
             throw DebridException(detail)
         }
         val data = root["data"]
-        Log.d(TAG, "TorBox success=true, data type=${data?.let { it::class.simpleName } ?: "null"}, data=${data.toString().take(500)}")
+        Log.d(TAG, "TorBox success=true, data type=${data?.let { it::class.simpleName } ?: "null"}")
         return data ?: throw DebridException("No data field in response")
     }
 
@@ -111,11 +111,11 @@ class TorBoxClient(
         val filesArray: JsonArray? = when (filesElement) {
             is JsonArray -> filesElement
             null, is JsonNull -> {
-                Log.d(TAG, "parseTorrent: torrent '$name' (id=$id) has no files array (value=$filesElement)")
+                Log.d(TAG, "parseTorrent: torrent '$name' (id=$id) has no files array")
                 null
             }
             else -> {
-                Log.w(TAG, "parseTorrent: torrent '$name' (id=$id) 'files' field is unexpected type ${filesElement::class.simpleName}: $filesElement")
+                Log.w(TAG, "parseTorrent: torrent '$name' (id=$id) 'files' field is unexpected type ${filesElement::class.simpleName}")
                 null
             }
         }
@@ -204,7 +204,7 @@ class TorBoxClient(
         val body = response.body?.string() ?: throw DebridException("Empty response")
 
         if (!response.isSuccessful) {
-            Log.e(TAG, "getTorrentInfo HTTP error: code=${response.code} body=$body")
+            Log.e(TAG, "getTorrentInfo HTTP error: code=${response.code}")
             throw DebridException("Failed to get torrent info: ${response.code} $body")
         }
 
@@ -214,7 +214,7 @@ class TorBoxClient(
             data is JsonObject -> data
             data is JsonArray && data.size > 0 -> data[0].jsonObject
             data is JsonNull || (data is JsonArray && data.isEmpty()) -> {
-                Log.e(TAG, "getTorrentInfo: no torrent found for id=$id, data=$data")
+                Log.e(TAG, "getTorrentInfo: no torrent found for id=$id")
                 throw DebridException("Torrent $id not found")
             }
             else -> {
@@ -237,7 +237,7 @@ class TorBoxClient(
         val body = response.body?.string() ?: throw DebridException("Empty response")
 
         if (!response.isSuccessful) {
-            Log.e(TAG, "getTorrents HTTP error: code=${response.code} body=${body.take(500)}")
+            Log.e(TAG, "getTorrents HTTP error: code=${response.code}")
             throw DebridException("Failed to list torrents: ${response.code} $body")
         }
 
@@ -253,7 +253,7 @@ class TorBoxClient(
                 return@withContext emptyList()
             }
             else -> {
-                Log.w(TAG, "getTorrents: unexpected data type ${data::class.simpleName} for page=$page, value=${data.toString().take(200)}")
+                Log.w(TAG, "getTorrents: unexpected data type ${data::class.simpleName} for page=$page")
                 return@withContext emptyList()
             }
         }
@@ -262,7 +262,7 @@ class TorBoxClient(
             try {
                 parseTorrent(elem.jsonObject)
             } catch (e: Exception) {
-                Log.e(TAG, "getTorrents: failed to parse torrent at index $index: ${e.message}\nelem=${elem.toString().take(300)}")
+                Log.e(TAG, "getTorrents: failed to parse torrent at index $index: ${e.message}")
                 throw e
             }
         }

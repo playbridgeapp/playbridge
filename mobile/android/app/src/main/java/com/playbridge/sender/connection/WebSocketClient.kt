@@ -263,7 +263,7 @@ class WebSocketClient(
         val formattedHost = LinkLocalDns.encodeIpv6ToHost(ip)
         val url = "wss://$formattedHost:$wssPort/"
         val httpClient = buildPinningClient(conn?.pin)
-        Log.i(TAG, "Connecting to $url")
+        Log.i(TAG, "Connecting to $serverName (port $wssPort)")
 
         val request = try {
             Request.Builder()
@@ -271,7 +271,7 @@ class WebSocketClient(
                 .build()
         } catch (e: Exception) {
             // A malformed host (e.g. an un-bracketed IPv6 literal) must never crash the app.
-            Log.e(TAG, "Invalid connection URL '$url'", e)
+            Log.e(TAG, "Invalid connection URL")
             updateConnectionState(ConnectionState.Error("Invalid address: ${e.message}"))
             return
         }

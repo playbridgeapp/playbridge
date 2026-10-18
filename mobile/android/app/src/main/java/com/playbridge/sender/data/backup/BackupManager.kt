@@ -136,7 +136,10 @@ class BackupManager(private val context: Context) {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     Log.e(TAG, "Upload failed: ${response.code} ${response.message}")
-                    Log.e(TAG, response.body?.string() ?: "")
+                    val errorBody = response.body?.string()
+                    if (!errorBody.isNullOrBlank()) {
+                        Log.e(TAG, com.playbridge.shared.logging.redactLogText(errorBody))
+                    }
                 }
                 response.isSuccessful
             }

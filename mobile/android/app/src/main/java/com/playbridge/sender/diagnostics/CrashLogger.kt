@@ -66,6 +66,6 @@ object CrashLogger {
             append(sw.toString())
             append("\n")
         }
-        file.appendText(entry)
+        file.appendText(com.playbridge.shared.logging.redactLogText(entry))
     }
 }
