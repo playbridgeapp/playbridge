@@ -452,8 +452,8 @@ connection, shared external receiver history, Direct/Via phone/Via proxy sending
 status and play/pause/seek/stop controls. Existing Google Cast history decodes
 unchanged. DLNA volume, external subtitles, queues and app shutdown are unavailable
 in the current adapter and hidden. Real Swift/Rust SOAP fixture checks pass.
-Physical discovery is pending Apple multicast entitlement provisioning and hardware
-validation; `dlna.md` documents the supplied entitlement template and setup steps.
+Physical discovery is enabled now that Apple has granted the multicast entitlement;
+a Kodi renderer was discovered on a physical iPhone (2026-10-18). See `dlna.md`.
 
 ### Remaining Rust discovery protocols (2026-09-07)
 
@@ -462,4 +462,4 @@ routed sending and supported transport controls are integrated. Optional generic
 DIAL discovery is available in setup as informational app-receiver results; no
 unsupported generic Cast action is exposed. All SSDP searches stop on leaving
 setup, and recent-device pickers never start scans. Physical iPhone multicast
-provisioning remains pending. Real Rust Roku ECP and DLNA SOAP fixture checks pass.
+is provisioned (2026-10-18). Real Rust Roku ECP and DLNA SOAP fixture checks pass.
