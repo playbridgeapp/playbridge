@@ -6,6 +6,8 @@ class MainFlutterWindow: NSWindow {
   private var fullscreenObservers: [NSObjectProtocol] = []
 
   override func awakeFromNib() {
+    // Before the engine starts, so Dart's first read sees the migrated settings.
+    LegacyBundleMigration.run()
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
@@ -103,5 +105,37 @@ class MainFlutterWindow: NSWindow {
         }
       }
     )
+  }
+}
+
+/// One-time copy of data written under the old bundle id
+/// (`com.playbridge.playbridgeDesktop`) when the app became `app.playbridge.desktop`:
+/// Flutter settings (pairing, TVs, history) and the Application Support folder
+/// (TLS identity, logs). The old copies are left in place.
+enum LegacyBundleMigration {
+  static let legacyId = "com.playbridge.playbridgeDesktop"
+  private static let doneKey = "pb_legacy_bundle_migrated"
+
+  static func run() {
+    let defaults = UserDefaults.standard
+    guard let currentId = Bundle.main.bundleIdentifier, currentId != legacyId,
+          !defaults.bool(forKey: doneKey) else { return }
+    defer { defaults.set(true, forKey: doneKey) }
+
+    // shared_preferences stores its keys as "flutter.*" in the standard domain.
+    let hasSettings = defaults.dictionaryRepresentation().keys.contains { $0.hasPrefix("flutter.") }
+    if !hasSettings, let old = defaults.persistentDomain(forName: legacyId) {
+      for (key, value) in old where key.hasPrefix("flutter.") {
+        defaults.set(value, forKey: key)
+      }
+    }
+
+    let fm = FileManager.default
+    guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+    let oldDir = support.appendingPathComponent(legacyId, isDirectory: true)
+    let newDir = support.appendingPathComponent(currentId, isDirectory: true)
+    if fm.fileExists(atPath: oldDir.path), !fm.fileExists(atPath: newDir.path) {
+      try? fm.copyItem(at: oldDir, to: newDir)
+    }
   }
 }

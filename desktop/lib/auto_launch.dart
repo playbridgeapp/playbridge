@@ -9,39 +9,73 @@ import 'package:path_provider/path_provider.dart';
 /// Linux  — writes an XDG autostart `.desktop` file into `~/.config/autostart/`
 /// Windows — TODO (would need win32_registry to write HKCU\…\Run)
 class AutoLaunch {
-  AutoLaunch({required this.bundleId, required this.executablePath});
+  AutoLaunch({
+    required this.executablePath,
+    this.bundleId = appId,
+    this.legacyIds = legacyAppIds,
+    String? home,
+  }) : _home = home;
+
+  /// The macOS bundle id, also the LaunchAgent label / autostart file name.
+  static const appId = 'app.playbridge.desktop';
+
+  /// Entry names written by older builds: the previous bundle id (tray menu)
+  /// and `com.playbridge.desktop` (Settings). Replaced by [appId] on enable.
+  static const legacyAppIds = [
+    'com.playbridge.playbridgeDesktop',
+    'com.playbridge.desktop',
+  ];
 
   final String bundleId;
+  final List<String> legacyIds;
   final String executablePath;
+  final String? _home;
 
   Future<bool> isEnabled() async {
-    final f = await _entryFile();
-    return f != null && await f.exists();
+    for (final f in _entryFiles([bundleId, ...legacyIds])) {
+      if (await f.exists()) return true;
+    }
+    return false;
   }
 
   Future<void> enable() async {
-    final f = await _entryFile();
+    final f = _entryFile(bundleId);
     if (f == null) return;
     await f.parent.create(recursive: true);
     await f.writeAsString(_renderEntry());
+    await _deleteAll(legacyIds);
   }
 
-  Future<void> disable() async {
-    final f = await _entryFile();
-    if (f != null && await f.exists()) {
-      await f.delete();
+  Future<void> disable() => _deleteAll([bundleId, ...legacyIds]);
+
+  /// Rewrites a legacy entry under [bundleId] (pointing at this executable), so
+  /// launch-at-login survives the bundle id change without starting twice.
+  Future<void> migrateLegacy() async {
+    var legacy = false;
+    for (final f in _entryFiles(legacyIds)) {
+      if (await f.exists()) legacy = true;
+    }
+    if (legacy) await enable();
+  }
+
+  Future<void> _deleteAll(List<String> ids) async {
+    for (final f in _entryFiles(ids)) {
+      if (await f.exists()) await f.delete();
     }
   }
 
-  Future<File?> _entryFile() async {
-    final home = Platform.environment['HOME'];
+  Iterable<File> _entryFiles(List<String> ids) =>
+      ids.map(_entryFile).whereType<File>();
+
+  File? _entryFile(String id) {
+    final home = _home ?? Platform.environment['HOME'];
     if (home == null) return null;
     if (Platform.isMacOS) {
-      return File('$home/Library/LaunchAgents/$bundleId.plist');
+      return File('$home/Library/LaunchAgents/$id.plist');
     }
     if (Platform.isLinux) {
       // XDG autostart spec: any .desktop file dropped here runs at login.
-      return File('$home/.config/autostart/$bundleId.desktop');
+      return File('$home/.config/autostart/$id.desktop');
     }
     if (Platform.isWindows) {
       debugPrint('[auto_launch] Windows is not implemented yet');
