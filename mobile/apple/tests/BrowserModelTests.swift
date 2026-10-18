@@ -5,6 +5,8 @@ import Foundation
     static func main() throws {
         try BrowserStep3ModelTests.run()
         try BrowserStep4ModelTests.run()
+        try NetworkLogCategoryModelTests.run()
+        try DetectedMediaExportModelTests.run()
         try AdblockSiteSettingsModelTests.run()
         let addresses = [
             "localhost:8080": "http://localhost:8080", "localhost/path": "http://localhost/path",

@@ -94,6 +94,8 @@ struct CastSheet: View {
     @State private var playbackPreparation: Task<Void, Never>?
     @State private var playbackPreparationID: UUID?
     @State private var playbackError: String?
+    @State private var detailsItem: DetectedVideo?
+    @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
 
     private var streams: [DetectedVideo] { videos.filter(\.isVideo) }
     private var audio: [DetectedVideo] { videos.filter(\.isAudio).sorted { $0.timestamp > $1.timestamp } }
@@ -165,6 +167,10 @@ struct CastSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .accessibilityAction(.escape) { dismiss() }
             .sheet(isPresented: $showDestination) { DeviceConnectionSheet() }
+            .sheet(item: $detailsItem) { item in
+                DetectedMediaDetailsSheet(item: item, headers: exportHeaders(item),
+                                          qualities: detector.qualities[item.id] ?? [])
+            }
             .sheet(isPresented: $showAddSubtitles) {
                 SubtitleSourcePickerView(detector: nil, detected: [], title: "Add subtitles",
                     onDetected: { _ in false },
@@ -547,6 +553,7 @@ struct CastSheet: View {
                         onCopyUrl: {
                             UIPasteboard.general.string = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
                         },
+                        onShowDetails: developerTools ? { detailsItem = video } : nil,
                         onCopyDiagnostics: {
 #if DEBUG
                             UIPasteboard.general.setItems([["public.utf8-plain-text": detector.debugReport(for: video)]],
@@ -597,7 +604,7 @@ struct CastSheet: View {
                                     in: RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(.plain)
-                    .contextMenu { Button("Copy URL") { UIPasteboard.general.string = item.url } }
+                    .contextMenu { mediaExportActions(item) }
                 }
                 if !vm.supportsNativeMediaKind(kind.rawValue) {
                     Text("This receiver has not reported \(kind.title.lowercased()) support.")
@@ -679,6 +686,7 @@ struct CastSheet: View {
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu { mediaExportActions(sub) }
                     .task(id: sub.headers) {
                         await detector.loadSubtitlePreview(for: sub)
                     }
@@ -695,6 +703,21 @@ struct CastSheet: View {
     }
 
     // MARK: - Helper Methods
+
+    /// The headers PlayBridge sends for the item, used for its JSON and cURL views.
+    private func exportHeaders(_ item: DetectedVideo) -> [String: String] {
+        item.isSubtitle ? VideoDetector.subtitleHeaders(for: item) : VideoDetector.mediaHeaders(for: item)
+    }
+
+    @ViewBuilder private func mediaExportActions(_ item: DetectedVideo) -> some View {
+        Button { UIPasteboard.general.string = item.url } label: { Label("Copy URL", systemImage: "link") }
+        if developerTools {
+            Button {
+                UIPasteboard.general.string = DetectedMediaExport.curl(url: item.url, headers: exportHeaders(item))
+            } label: { Label("Copy as cURL", systemImage: "terminal") }
+            Button { detailsItem = item } label: { Label("View JSON & cURL", systemImage: "curlybraces") }
+        }
+    }
 
     private func selectVideo(_ video: DetectedVideo) {
         selectedVideo = video
@@ -930,6 +953,7 @@ struct VideoCard: View {
     let onQualitySelect: (VideoQuality?) -> Void
     let onPlayOnPhone: () -> Void
     let onCopyUrl: () -> Void
+    let onShowDetails: (() -> Void)?
     let onCopyDiagnostics: () -> Void
 #if DEBUG
     @State private var copiedDiagnostics = false
@@ -1028,6 +1052,12 @@ struct VideoCard: View {
                 }
                 Button(action: onCopyUrl) {
                     Label("Copy URL", systemImage: "doc.on.doc")
+                }
+                if let onShowDetails {
+                    Button(action: onShowDetails) {
+                        Label("JSON & cURL", systemImage: "curlybraces")
+                    }
+                    .accessibilityIdentifier("castItemDetails")
                 }
             }
             .font(Theme.font(.caption).weight(.semibold))
