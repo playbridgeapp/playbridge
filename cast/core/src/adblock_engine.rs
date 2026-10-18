@@ -466,14 +466,25 @@ mod tests {
         .join("\n");
         let e = engine(&rules);
         let c = e.cosmetic("https://example.test/article");
-        let actions: Vec<String> =
-            serde_json::from_value(c["procedural_actions"].clone()).unwrap();
+        let actions: Vec<String> = serde_json::from_value(c["procedural_actions"].clone()).unwrap();
         assert_eq!(actions.len(), 9);
-        assert!(actions.iter().any(|a| a.contains("\"has-text\"") && a.contains("\"upward\"")));
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"has-text\"") && a.contains("\"upward\""))
+        );
         assert!(actions.iter().any(|a| a.contains("\"type\":\"remove\"")));
         assert!(actions.iter().any(|a| a.contains("\"type\":\"style\"")));
-        assert!(actions.iter().any(|a| a.contains("\"type\":\"remove-attr\"")));
-        assert!(actions.iter().any(|a| a.contains("\"type\":\"remove-class\"")));
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"type\":\"remove-attr\""))
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"type\":\"remove-class\""))
+        );
 
         let sub = e.cosmetic("https://sub.example.test/article");
         let sub_actions: Vec<String> =

@@ -111,20 +111,12 @@ const SCRIPTLETS: &[ScriptletSpec] = &[
     },
     ScriptletSpec {
         name: "prevent-fetch.js",
-        aliases: &[
-            "no-fetch-if.js",
-            "prevent-fetch",
-            "no-fetch-if",
-        ],
+        aliases: &["no-fetch-if.js", "prevent-fetch", "no-fetch-if"],
         source: include_str!("prevent-fetch.js"),
     },
     ScriptletSpec {
         name: "prevent-xhr.js",
-        aliases: &[
-            "no-xhr-if.js",
-            "prevent-xhr",
-            "no-xhr-if",
-        ],
+        aliases: &["no-xhr-if.js", "prevent-xhr", "no-xhr-if"],
         source: include_str!("prevent-xhr.js"),
     },
 ];
