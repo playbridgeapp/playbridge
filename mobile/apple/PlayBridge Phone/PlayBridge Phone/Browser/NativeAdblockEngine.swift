@@ -607,7 +607,8 @@ final class AdblockSnapshot: @unchecked Sendable {
     func siteScripts(for url: URL?, enabled: Bool, isBridgedApp: Bool = false) -> AdblockSiteScripts {
         guard enabled, !isBridgedApp, let url,
               let host = AdblockCosmeticResources.normalizedHost(for: url),
-              !AdblockCosmeticResources.isHostExempt(host) else {
+              !AdblockCosmeticResources.isHostExempt(host),
+              !AdblockSiteSettings.isDisabled(host: host) else {
             return .empty
         }
         let resources = cosmetic(url: url.absoluteString)

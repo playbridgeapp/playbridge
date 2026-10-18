@@ -14,6 +14,7 @@ struct AdblockSettingsSheet: View {
     @State private var rulesCountText = ""
     @State private var userRules: [ContentBlocker.UserCosmeticRule] = ContentBlocker.userRules()
     @State private var blockedSources: [String] = ContentBlocker.userBlockedDomains()
+    @State private var sitesOff: [String] = AdblockSiteSettings.disabledSites()
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,22 @@ struct AdblockSettingsSheet: View {
                     Toggle("Block pop-ups", isOn: $blockPopups).tint(Theme.primary)
                 } header: {
                     Text("Adblock Status")
+                }
+
+                if !sitesOff.isEmpty {
+                    Section {
+                        ForEach(sitesOff, id: \.self) { site in
+                            Text(site).font(Theme.font(size: 13)).foregroundColor(Theme.onSurface)
+                        }
+                        .onDelete { offsets in
+                            offsets.map { sitesOff[$0] }.forEach { AdblockSiteSettings.setDisabled(false, site: $0) }
+                            sitesOff = AdblockSiteSettings.disabledSites()
+                        }
+                    } header: {
+                        Text("Sites with ad blocking off")
+                    } footer: {
+                        Text("Swipe left to turn ad blocking back on for a site.")
+                    }
                 }
 
                 if !userRules.isEmpty {
