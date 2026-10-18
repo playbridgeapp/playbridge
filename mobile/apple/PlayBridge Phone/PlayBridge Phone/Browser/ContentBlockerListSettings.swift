@@ -25,6 +25,24 @@ enum ContentBlockerListSettings {
         "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-online.txt"
     ]
 
+    /// The only default lists switched on: ads, trackers and "turn off your ad blocker"
+    /// walls. The other defaults stay listed but off; users switch them on as needed.
+    static let enabledByDefaultURLs: Set<String> = [
+        "https://easylist.to/easylist/easylist.txt",
+        "https://easylist.to/easylist/easyprivacy.txt",
+        "https://easylist-downloads.adblockplus.org/antiadblockfilters.txt",
+    ]
+    static var defaultOffURLs: [String] { defaultURLs.filter { !enabledByDefaultURLs.contains($0) } }
+    static let defaultSwitchesKey = "pb_adblock_default_switches_v2"
+
+    /// One-time, for new and existing installs: switch off every default list except the
+    /// three above. Custom lists keep their state.
+    static func applyDefaultSwitches(defaults: UserDefaults) {
+        guard !defaults.bool(forKey: defaultSwitchesKey) else { return }
+        defaults.set(disabled(defaults: defaults).union(defaultOffURLs).sorted(), forKey: disabledKey)
+        defaults.set(true, forKey: defaultSwitchesKey)
+    }
+
     static func cacheFilename(for url: String) -> String {
         url.components(separatedBy: CharacterSet.alphanumerics.inverted).joined(separator: "_") + ".txt"
     }
@@ -43,14 +61,17 @@ enum ContentBlockerListSettings {
 
     /// Lists in the saved order that are switched on.
     static func enabled(defaults: UserDefaults, cacheDirectory: URL) -> [String] {
+        // load() may apply the one-time default switches, so read the off set after it.
+        let lists = load(defaults: defaults, cacheDirectory: cacheDirectory)
         let off = disabled(defaults: defaults)
-        return load(defaults: defaults, cacheDirectory: cacheDirectory).filter { !off.contains($0) }
+        return lists.filter { !off.contains($0) }
     }
 
     static func load(defaults: UserDefaults, cacheDirectory: URL) -> [String] {
         // Never reuse the old download under the corrected URL. Content-hash compiled
         // lists are retired by compileAll's existing desired-ID pruning.
         try? FileManager.default.removeItem(at: cacheDirectory.appendingPathComponent(cacheFilename(for: oldFanboyURL)))
+        applyDefaultSwitches(defaults: defaults)
         guard let saved = defaults.stringArray(forKey: key) else {
             defaults.set(true, forKey: "pb_adblock_engine_lists_v1")
             defaults.set(true, forKey: "pb_adblock_extra_in_lists_v1")

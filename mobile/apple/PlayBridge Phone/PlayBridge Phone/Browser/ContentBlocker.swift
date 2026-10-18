@@ -42,6 +42,7 @@ enum ContentBlocker {
         ContentBlockerListSettings.setEnabled(enabled, url: url.absoluteString, defaults: .standard)
     }
     static var defaultFilterListURLs: [URL] { ContentBlockerListSettings.defaultURLs.compactMap(URL.init(string:)) }
+    static func isEnabledByDefault(url: URL) -> Bool { ContentBlockerListSettings.enabledByDefaultURLs.contains(url.absoluteString) }
     private static let blockResourceTypes = ["image", "style-sheet", "script", "font", "raw", "svg-document", "media", "popup"]
     @MainActor private static var generation = UUID()
     @MainActor private static var activeLists: [WKContentRuleList] = []
