@@ -17,6 +17,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Remote that matches the receiver**: The remote shows only the keys, player settings, browser controls and volume control that the connected PlayBridge receiver says it supports, and follows the engine that is active on the TV.
 - **Apple TV remote**: Control PlayBridge on Apple TV with Home, Back, all four arrows and OK, and change its app volume with steps and mute.
 - **Volume line**: One line above the remote buttons shows the volume and mute state, such as "TV volume 40/100 · Unmuted" or "App volume 60/100 · Muted" for receivers that control their own volume.
+- **TV remote without PlayBridge running**: With a Full control pairing, the Remote opens even when PlayBridge isn't running on the TV. It shows "PlayBridge isn't running on this TV." with an **Open PlayBridge** button, keeps the pad, Back, Home, keyboard and volume, and switches to the full remote in place once PlayBridge connects. The cast sheet offers **Open PlayBridge on <TV>**.
+- **TV status in the device picker**: Each TV is listed once as PlayBridge · Full control, PlayBridge, TV remote only, or Offline.
+- **Remote on the dashboard**: A Remote tile opens the remote directly.
+- **Playback failure reason**: When the TV player gives up on a video, the phone shows why, such as "The media couldn't be loaded (HTTP 403)", instead of quietly returning to idle. Needs PlayBridge TV Player 0.16.0.
+- **Live remote updates**: The remote updates as soon as the TV's supported controls change, for example when the GeckoView plugin is installed or removed, without reconnecting. Needs PlayBridge TV Player 0.16.0.
 
 ### Changed
 - **Remote redesign**: The remote adapts cleanly across portrait and landscape, replacing separate transport controls with a unified wave seek bar for playback, seeking, and volume while hiding the pad during video playback.
@@ -25,6 +30,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Player controls**: The player's Loop control is a switch when the TV reports its loop state, and Home from the player returns the TV to PlayBridge's idle screen on TVs that support it.
 - **Browser fullscreen**: The remote follows the TV browser's fullscreen state, including when you leave fullscreen with the TV's Back button. Fullscreen fills the screen with the video, even inside embedded players, and keeps the site's own player controls.
 - **Browser typing**: Text typed from the phone goes to PlayBridge's TV browsers over the PlayBridge connection, even while Full control is connected, and reaches search and text fields inside embedded players and in fullscreen.
+- **Full control connection**: The Android TV connection is ready as soon as you open the Remote: it connects to the selected TV straight away instead of scanning first, stays up while PlayBridge is open, and closes 60 seconds after PlayBridge goes to the background.
+- **Pop-up blocked toast**: A redesigned toast shows where the pop-up was going and which site opened it, with **Open**, **Always allow** and close. It dismisses itself after about 6 seconds (longer with accessibility timing settings), pauses while pressed, can be swiped away, and combines several blocked pop-ups into one.
+- **Copied text in the address bar**: Only real web addresses are offered as "Link you copied". Other copied text shows as "Text you copied" and runs a search.
+- **Local addresses**: The address bar opens localhost, local network IP addresses, `.local` names and `name:port` addresses over http instead of searching for them, and recognises `HTTP://` in capitals. Text starting with `javascript:` is searched, never run.
 
 ### Fixed
 - **Video detection in popup tabs**: Videos on pages that a site opens in a new tab or popup are detected again, even when another tab on the same site is open.
@@ -33,11 +42,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Browser fullscreen toggle**: The browser fullscreen action tracks the page's actual display state so restoring windowed mode works reliably.
 - **Player-to-browser transitions**: Switching from the video player to the TV browser immediately clears stale titles, playlists, and seek bars from the remote.
 - **Roku playback**: A stale stop command no longer interrupts newer media loads.
+- **Pairing a second phone**: Pairing another phone with the same Android TV no longer disconnects the first. Each phone now has its own identity on the TV; phones already paired keep working and switch to their own identity the next time they pair.
 
 ### Security
 - **Browser engine upgrade**: Updated GeckoView to version 157 and Android Components to 157.0.1, incorporating upstream security patches.
 - **Pairing credential encryption**: Android TV credentials are encrypted at rest using AES-GCM via the Android Keystore and excluded from cloud backups and device migration.
-- **Log privacy**: Release builds no longer write media titles, stream URLs, pairing codes, or typed text to device logs.
+- **Log privacy**: Release builds no longer write media titles, stream URLs, pairing codes, or typed text to device logs. Add-on and API URLs that can contain keys, raw API responses, pop-up and magnet links, and player error details are no longer logged in full either.
 
 ## [0.15.0] — 2026-10-09 (versionCode 228)
 
