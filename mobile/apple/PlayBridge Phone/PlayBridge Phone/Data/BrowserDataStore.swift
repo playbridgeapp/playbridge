@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct Bookmark: Codable, Identifiable, Hashable {
     var id = UUID()
@@ -59,14 +62,33 @@ final class BrowserDataStore: ObservableObject {
     private let bookmarksURL: URL
     private let historyURL: URL
     private let maxHistory = 1500
+    private let persistence: BrowserDataPersistence
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
-    init() {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    init(directory: URL? = nil, historySaveDelay: TimeInterval = 0.75,
+         write: @escaping (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) {
+        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         bookmarksURL = dir.appendingPathComponent("bookmarks.json")
         historyURL = dir.appendingPathComponent("history.json")
+        persistence = BrowserDataPersistence(historyURL: historyURL, bookmarksURL: bookmarksURL,
+                                             delay: historySaveDelay, write: write)
         load()
+        #if canImport(UIKit)
+        for name in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.flushPendingSaves()
+            })
+        }
+        #endif
     }
+
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        persistence.flush()
+    }
+
+    func flushPendingSaves() { persistence.flush() }
 
     private func load() {
         if let d = try? Data(contentsOf: bookmarksURL), let b = try? JSONDecoder().decode([Bookmark].self, from: d) { bookmarks = b }
@@ -74,10 +96,10 @@ final class BrowserDataStore: ObservableObject {
     }
 
     private func saveBookmarks() {
-        if let d = try? JSONEncoder().encode(bookmarks) { try? d.write(to: bookmarksURL, options: .atomic) }
+        persistence.saveBookmarks(bookmarks)
     }
     private func saveHistory() {
-        if let d = try? JSONEncoder().encode(history) { try? d.write(to: historyURL, options: .atomic) }
+        persistence.saveHistory(history)
     }
 
     // MARK: - History

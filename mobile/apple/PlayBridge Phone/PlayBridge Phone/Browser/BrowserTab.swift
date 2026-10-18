@@ -239,6 +239,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     /// True for a fresh tab showing the home/new-tab page (no page loaded yet).
     @Published var isHome: Bool = false
 
+    private var processRecovery = BrowserProcessRecovery()
     @Published var navigationFailure: BrowserNavigationFailure?
     @Published var prompt: BrowserPrompt?
     @Published private(set) var isPickingElement = false
@@ -474,6 +475,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     func load(_ request: URLRequest) {
         guard let url = request.url else { return }
+        processRecovery.cancelPendingReload()
         cancelPrompt()
         tabUnder.clear()
         appRequestedURL = url
@@ -544,9 +546,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         loadedWebView?.evaluateJavaScript("if(window.__pb_picker_cleanup) window.__pb_picker_cleanup();", completionHandler: nil)
     }
 
-    func goBack() { stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goBack() }
-    func goForward() { stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goForward() }
+    func goBack() { processRecovery.cancelPendingReload(); stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goBack() }
+    func goForward() { processRecovery.cancelPendingReload(); stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goForward() }
     func reload() {
+        processRecovery.cancelPendingReload()
         stopElementPicker()
         if let failure = navigationFailure { load(failure.address) }
         else { cancelPrompt(); webView.reload() }
@@ -617,12 +620,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     /// Turn an address-bar entry into a URL (add scheme) or a Google search query.
     static func resolveInput(_ text: String) -> String {
-        if text.hasPrefix("http://") || text.hasPrefix("https://") { return text }
-        // Looks like a domain (has a dot, no spaces) → assume https.
-        if text.contains("."), !text.contains(" ") {
-            return "https://\(text)"
-        }
-        return SearchEngine.current.searchURL(text)
+        BrowserAddressResolver.resolve(text, search: SearchEngine.current.searchURL)
     }
 
     // MARK: - WKNavigationDelegate
@@ -700,10 +698,26 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         pickerGeneration = UUID()
         cancelPrompt()
         detector.clear()
-        navigationFailure = BrowserNavigationFailure(address: webView.url?.absoluteString ?? urlString,
-            message: "This page stopped responding. Reload it to continue.")
+        navigationFailure = nil
         isLoading = false
+        processRecovery.markTerminated()
+        reloadTerminatedProcessIfNeeded()
     }
+
+    /// Called on selection and when Browser becomes visible again. Hidden tabs stay unloaded.
+    func reloadTerminatedProcessIfNeeded() {
+        guard isActive(), let view = loadedWebView,
+              let shouldReload = processRecovery.takeRecovery(now: ProcessInfo.processInfo.systemUptime) else { return }
+        if shouldReload {
+            navigationFailure = nil
+            if view.url != nil { view.reload() }
+            else { load(urlString) }
+        } else {
+            navigationFailure = BrowserNavigationFailure(address: view.url?.absoluteString ?? urlString,
+                message: "This page stopped responding. Reload it to continue.")
+        }
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  preferences: WKWebpagePreferences,
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {

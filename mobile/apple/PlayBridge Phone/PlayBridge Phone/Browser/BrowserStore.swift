@@ -25,7 +25,10 @@ final class BrowserStore: ObservableObject {
     var onPageCastInvalidated: ((BrowserTab) -> Void)?
     let downloads = BrowserDownloads()
     var browserVisible = false {
-        didSet { if !browserVisible { activeTab?.cancelPrompt() } }
+        didSet {
+            if browserVisible { activeTab?.reloadTerminatedProcessIfNeeded() }
+            else { activeTab?.cancelPrompt() }
+        }
     }
 
     @Published var mediaDetectionSettings = BrowserMediaDetectionSettings.load() {
@@ -386,6 +389,7 @@ final class BrowserStore: ObservableObject {
         guard tabs.contains(where: { $0.id == id }) else { return }
         if activeID != id { activeTab?.cancelPrompt() }
         activeID = id
+        activeTab?.reloadTerminatedProcessIfNeeded()
         if activeTab?.isBridgedApp == false { lastBrowserTabID = id }
         // A deliberate user selection outranks the rules-ready deferral — load now.
         if let url = pendingInitialLoads.removeValue(forKey: id),
