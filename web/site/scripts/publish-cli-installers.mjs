@@ -20,6 +20,22 @@ export async function publishCliInstallers({
   );
 }
 
+/** Desktop installers, published under a product-specific name: source → site path. */
+export const DESKTOP_INSTALLERS = { 'install.ps1': 'desktop.ps1' };
+
+export async function publishDesktopInstallers({
+  desktopDirectory = path.join(repositoryRoot, 'desktop'),
+  outputDirectory = path.join(siteRoot, 'build')
+} = {}) {
+  await mkdir(outputDirectory, { recursive: true });
+  await Promise.all(
+    Object.entries(DESKTOP_INSTALLERS).map(([source, published]) =>
+      copyFile(path.join(desktopDirectory, source), path.join(outputDirectory, published))
+    )
+  );
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await publishCliInstallers();
+  await publishDesktopInstallers();
 }

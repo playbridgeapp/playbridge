@@ -6,6 +6,7 @@ import {
   ReleaseResolverError,
   checksumFromSums,
   downloadTargetForPlatform,
+  hasUpdateTarget,
   productAssetName,
   resolveProductRelease,
   rolloutDelayHours
@@ -164,4 +165,36 @@ test('rejects unsupported targets and releases still inside the default hold', a
     }),
     /rollout-eligible/
   );
+});
+
+test('update manifests are served only for checksummed targets', () => {
+  assert.equal(hasUpdateTarget('cli', 'windows', 'x86_64'), true);
+  assert.equal(hasUpdateTarget('desktop', 'windows', 'x86_64'), true);
+  assert.equal(hasUpdateTarget('desktop', 'macos', 'aarch64'), false);
+  assert.equal(hasUpdateTarget('phone', 'arm64', 'v8a'), false);
+  assert.equal(hasUpdateTarget('desktop', 'constructor', ''), false);
+});
+
+test('desktop Windows manifest uses the GitHub asset digest', async () => {
+  const windows = release('desktop', '2.0.0', 48, {
+    assets: [
+      {
+        name: 'playbridge-desktop-windows-2.0.0.zip',
+        browser_download_url: 'https://github.test/windows.zip',
+        digest: `sha256:${SHA}`,
+        size: 2048
+      }
+    ]
+  });
+  const manifest = await resolveProductRelease({
+    product: 'desktop',
+    os: 'windows',
+    arch: 'x86_64',
+    now: NOW,
+    fetchImpl: async () => response([windows])
+  });
+  assert.equal(manifest.version, '2.0.0');
+  assert.equal(manifest.asset.name, 'playbridge-desktop-windows-2.0.0.zip');
+  assert.equal(manifest.asset.sha256, SHA);
+  assert.equal(manifest.asset.size, 2048);
 });

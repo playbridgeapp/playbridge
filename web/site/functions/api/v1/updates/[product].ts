@@ -1,5 +1,5 @@
 import {
-  productAssetName,
+  hasUpdateTarget,
   ReleaseResolverError,
   resolveProductRelease
 } from '../../../_lib/releases.js';
@@ -17,7 +17,7 @@ export const onRequestGet: PagesFunction<Env, 'product'> = async (context) => {
   if (!product || !os || !arch) {
     return jsonError('product, os, and arch are required', 400);
   }
-  if (!productAssetName(product, os, arch)) {
+  if (!hasUpdateTarget(product, os, arch)) {
     return jsonError('unsupported product or target', 404);
   }
 

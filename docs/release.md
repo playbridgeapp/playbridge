@@ -152,6 +152,16 @@ matching asset URL and SHA-256 digest. `/download/cli-<os>-<arch>` uses the same
 resolver for shell installs, preventing the installer and dashboard from drifting
 to different versions.
 
+### Desktop Windows installer
+
+`desktop/install.ps1` is published as `https://playbridge.app/desktop.ps1`
+(`irm https://playbridge.app/desktop.ps1 | iex`). It reads
+`GET /api/v1/updates/desktop?os=windows&arch=x86_64`, which resolves the newest
+rollout-eligible `desktop-v*` release and its Windows zip's GitHub SHA-256 digest,
+so it follows the same rollout delay as `/download/windows`. `PLAYBRIDGE_VERSION`
+pins a version straight from GitHub (still digest-verified). It is tested on
+PowerShell 7 and Windows PowerShell 5.1 by `installer_validation.yml`.
+
 ### Release rollout delay
 
 All PlayBridge artifacts distributed through `playbridge.app` use the same
