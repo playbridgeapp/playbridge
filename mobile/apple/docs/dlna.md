@@ -23,14 +23,14 @@ Apple requires the restricted `com.apple.developer.networking.multicast`
 entitlement for SSDP multicast on physical iOS devices:
 https://developer.apple.com/news/?id=0oi77447
 
-The existing target does not have this entitlement. Request approval for the app
-identifier, enable it in the provisioning profile, then set
-`PB_MULTICAST_ENTITLEMENT = YES` in `PlayBridge Phone/MulticastEntitlement.xcconfig`
-(or pass it to `xcodebuild`). That signs with `config/DLNAMulticast.entitlements`
-and compiles SSDP discovery in. It defaults to `NO` so existing provisioning
-profiles remain usable; device builds then skip SSDP scans and point users to
-manual connection, which uses unicast HTTP. Simulator builds always scan. The app
-also needs Local Network permission.
+Apple granted this entitlement for `app.playbridge.phone` in October 2026, and
+Multicast Networking is enabled on the App ID. `PB_MULTICAST_ENTITLEMENT = YES` in
+`PlayBridge Phone/MulticastEntitlement.xcconfig` signs with
+`config/DLNAMulticast.entitlements` and compiles SSDP discovery in. Discovery of a
+Kodi DLNA renderer was confirmed on a physical iPhone. A team or App ID without the
+entitlement can pass `PB_MULTICAST_ENTITLEMENT=NO` to `xcodebuild`; device builds
+then skip SSDP scans and point users to manual connection, which uses unicast HTTP.
+Simulator builds always scan. The app also needs Local Network permission.
 
 ## Verification
 

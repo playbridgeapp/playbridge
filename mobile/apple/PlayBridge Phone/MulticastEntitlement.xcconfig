@@ -1,9 +1,8 @@
-// Apple grants com.apple.developer.networking.multicast only on request. Keep NO until the
-// App ID and provisioning profiles include it, or signing fails. YES signs with
-// config/DLNAMulticast.entitlements and enables automatic SSDP (DLNA/Roku/DIAL)
-// discovery on physical iPhones. Can also be passed to xcodebuild:
-// PB_MULTICAST_ENTITLEMENT=YES
-PB_MULTICAST_ENTITLEMENT = NO
+// Apple granted com.apple.developer.networking.multicast for app.playbridge.phone
+// (October 2026). YES signs with config/DLNAMulticast.entitlements and enables
+// automatic SSDP (DLNA/Roku/DIAL) discovery on physical iPhones. Pass
+// PB_MULTICAST_ENTITLEMENT=NO to xcodebuild for a team or App ID without it.
+PB_MULTICAST_ENTITLEMENT = YES
 
 PB_MULTICAST_ENTITLEMENTS_FILE_YES = $(SRCROOT)/../config/DLNAMulticast.entitlements
 PB_MULTICAST_CONDITION_YES = PB_MULTICAST_ENTITLED
