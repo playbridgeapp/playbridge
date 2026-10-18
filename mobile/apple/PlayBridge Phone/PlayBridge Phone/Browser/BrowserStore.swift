@@ -178,6 +178,9 @@ final class BrowserStore: ObservableObject {
             if let finishedURL { self.data.recordVisit(url: finishedURL.absoluteString, title: title) }
             self.saveTabs()
         }
+        tab.onTitleChanged = { [weak self] url, title in
+            self?.data.updateTitle(url: url.absoluteString, title: title)
+        }
         tab.onElementPicked = { [weak self] selector, host in
             guard let self else { return }
             ContentBlocker.addUserRule(domain: host, selector: selector)
