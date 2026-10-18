@@ -6,6 +6,8 @@ import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -16,8 +18,8 @@ import org.json.JSONObject
  *  - **IntroDB** (https://introdb.app) — the original integration. IMDb-keyed,
  *    episodes only, optional API key. Response: `{ "intro": {start_ms, end_ms}, … }`.
  *  - **TheIntroDB** (https://theintrodb.org) — keyless, community-verified. Works with
- *    TMDB/IMDb ids and covers movies too. `GET /v3/media?tmdb_id=…[&season=…&episode=…]`
- *    → `{ "type": "tv", "recap": [{start_ms, end_ms|null}], "credits": […], … }` —
+ *    TMDB/IMDb ids and covers movies too. `GET /v4/media?tmdb_id=…[&season=…&episode=…]`
+ *    → `{ "tvdb_id": …, "type": "tv", "recap": [{start_ms, end_ms|null}], "credits": […], … }` —
  *    each segment type is an ARRAY, and `end_ms` may be null (runs to the end of file).
  *
  * The `skip_segments_provider` pref picks the source: "introdb", "theintrodb", or
@@ -135,6 +137,35 @@ object SkipSegmentFetcher {
 
     // ── TheIntroDB (theintrodb.org) ─────────────────────────────────────────
 
+    internal fun theIntroDbMediaUrl(
+        baseUrl: String,
+        imdbId: String?,
+        tmdbId: String?,
+        season: Int?,
+        episode: Int?,
+    ): HttpUrl? {
+        if ((season == null) != (episode == null)) return null
+        val id = when {
+            !tmdbId.isNullOrBlank() -> "tmdb_id" to tmdbId.trim()
+            !imdbId.isNullOrBlank() -> "imdb_id" to imdbId.trim()
+            else -> return null
+        }
+        val base = baseUrl.trim().ifEmpty { DEFAULT_THEINTRODB_URL }.toHttpUrlOrNull() ?: return null
+        // Saved URLs may include a previous API version; keep custom proxy paths/query values.
+        val path = base.encodedPath.trimEnd('/').replace(Regex("/v[1-4]$"), "")
+        return base.newBuilder().encodedPath("$path/v4/media").fragment(null).apply {
+            for (key in listOf("tvdb_id", "tmdb_id", "imdb_id", "season", "episode")) {
+                removeAllQueryParameters(key)
+            }
+            addQueryParameter(id.first, id.second)
+            // v4 resolves TMDB episode coordinates server-side; don't guess a mapping order.
+            if (season != null && episode != null) {
+                addQueryParameter("season", season.toString())
+                addQueryParameter("episode", episode.toString())
+            }
+        }.build()
+    }
+
     private fun fetchTheIntroDb(
         prefs: android.content.SharedPreferences,
         imdbId: String?,
@@ -142,19 +173,11 @@ object SkipSegmentFetcher {
         season: Int?,
         episode: Int?,
     ): List<SkipSegment> {
-        val baseUrl = prefs.getString("theintrodb_api_url", DEFAULT_THEINTRODB_URL)
-            ?.trim()?.removeSuffix("/") ?: DEFAULT_THEINTRODB_URL
-
-        val idQuery = when {
-            !tmdbId.isNullOrBlank() -> "tmdb_id=$tmdbId"
-            !imdbId.isNullOrBlank() -> "imdb_id=$imdbId"
-            else -> return emptyList()
-        }
-        // TV needs season+episode; without them the same endpoint is a movie lookup.
-        val episodeQuery =
-            if (season != null && episode != null) "&season=$season&episode=$episode" else ""
-        val url = "$baseUrl/v3/media?$idQuery$episodeQuery"
-        Log.i(TAG, "Fetching skip segments from TheIntroDB: ${redactUrlForLog(url)}")
+        val url = theIntroDbMediaUrl(
+            prefs.getString("theintrodb_api_url", DEFAULT_THEINTRODB_URL) ?: DEFAULT_THEINTRODB_URL,
+            imdbId, tmdbId, season, episode,
+        ) ?: return emptyList()
+        Log.i(TAG, "Fetching skip segments from TheIntroDB: ${redactUrlForLog(url.toString())}")
 
         val request = Request.Builder()
             .url(url)
@@ -170,41 +193,46 @@ object SkipSegmentFetcher {
                     return emptyList()
                 }
                 val bodyText = response.body?.string() ?: return emptyList()
-                val json = JSONObject(bodyText)
-                val segments = mutableListOf<SkipSegment>()
-
-                // TheIntroDB types → the app's segment types ("credits" feeds the same
-                // UI/auto-skip pref as "outro"). Each value is an array of ranges.
-                val typeMap = listOf(
-                    "intro" to "intro",
-                    "recap" to "recap",
-                    "outro" to "outro",
-                    "credits" to "outro",
-                    "preview" to "preview",
-                )
-                val seenTypes = mutableSetOf<String>()
-                for ((apiType, uiType) in typeMap) {
-                    if (!json.has(apiType) || json.isNull(apiType)) continue
-                    if (!seenTypes.add(uiType)) continue // e.g. both "outro" and "credits"
-                    val arr = json.optJSONArray(apiType) ?: continue
-                    for (i in 0 until arr.length()) {
-                        val segObj = arr.optJSONObject(i) ?: continue
-                        val startMs = segObj.optLong("start_ms", -1L)
-                        if (startMs < 0) continue
-                        val endMs = if (segObj.isNull("end_ms")) {
-                            OPEN_ENDED_MS // runs to the end of the file
-                        } else {
-                            segObj.optLong("end_ms", -1L).takeIf { it > startMs } ?: continue
-                        }
-                        segments.add(SkipSegment(uiType, startMs, endMs))
-                    }
-                }
+                val segments = parseTheIntroDbSegments(JSONObject(bodyText))
                 Log.i(TAG, "TheIntroDB returned ${segments.size} segments: $segments")
                 segments
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching from TheIntroDB", e)
+            // Exception messages can contain a custom URL or the rejected JSON body.
+            Log.e(TAG, "Error fetching from TheIntroDB (${e.javaClass.simpleName})")
             emptyList()
         }
+    }
+
+    internal fun parseTheIntroDbSegments(json: JSONObject): List<SkipSegment> {
+        val segments = mutableListOf<SkipSegment>()
+        // v4 identity fields are irrelevant to range parsing. Credits share the outro preference.
+        val typeMap = listOf(
+            "intro" to "intro", "recap" to "recap", "outro" to "outro",
+            "credits" to "outro", "preview" to "preview",
+        )
+        val seenTypes = mutableSetOf<String>()
+        for ((apiType, uiType) in typeMap) {
+            val arr = json.optJSONArray(apiType) ?: continue
+            if (!seenTypes.add(uiType)) continue
+            for (i in 0 until arr.length()) {
+                val range = arr.optJSONObject(i) ?: continue
+                if (!range.has("start_ms") || !range.has("end_ms")) continue
+                // The API uses null for an intro/recap starting at the beginning.
+                val startMs = if (range.isNull("start_ms") && (uiType == "intro" || uiType == "recap")) {
+                    0L
+                } else {
+                    range.optLong("start_ms", -1L)
+                }
+                if (startMs < 0) continue
+                val endMs = if (range.isNull("end_ms")) {
+                    OPEN_ENDED_MS
+                } else {
+                    range.optLong("end_ms", -1L).takeIf { it > startMs } ?: continue
+                }
+                segments.add(SkipSegment(uiType, startMs, endMs))
+            }
+        }
+        return segments
     }
 }

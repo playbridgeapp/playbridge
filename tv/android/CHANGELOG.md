@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **TheIntroDB skip segments**: Use API v4 for movie and episode lookups, retain saved custom/versioned API URLs, and handle intro/recap ranges starting at the beginning. (#379)
+
 ## Player [0.15.0] — 2026-10-09 (versionCode 231)
 
 ### Added

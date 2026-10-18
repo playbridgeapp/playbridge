@@ -94,18 +94,44 @@ class SkipSegmentFetcher {
     int? season,
     int? episode,
   }) async {
-    final root = baseUrl.trim().replaceAll(RegExp(r'/$'), '');
-    final idQuery = (tmdbId != null && tmdbId.isNotEmpty)
-        ? 'tmdb_id=$tmdbId'
-        : (imdbId != null && imdbId.isNotEmpty)
-            ? 'imdb_id=$imdbId'
-            : null;
-    if (idQuery == null) return const [];
-    final episodeQuery = (season != null && episode != null)
-        ? '&season=$season&episode=$episode'
-        : '';
-    final uri = Uri.parse('$root/v3/media?$idQuery$episodeQuery');
     try {
+      final saved = baseUrl.trim();
+      final root = Uri.parse(saved.isEmpty ? defaultTheIntroDbUrl : saved);
+      final path = root.pathSegments.toList();
+      while (path.isNotEmpty && path.last.isEmpty) {
+        path.removeLast();
+      }
+      // Accept saved versioned roots without losing a custom proxy path or query.
+      if (path.isNotEmpty && RegExp(r'^v[1-4]$').hasMatch(path.last)) {
+        path.removeLast();
+      }
+      final query = <String, dynamic>{...root.queryParametersAll};
+      for (final key in [
+        'tvdb_id',
+        'tmdb_id',
+        'imdb_id',
+        'season',
+        'episode'
+      ]) {
+        query.remove(key);
+      }
+      if (tmdbId != null && tmdbId.trim().isNotEmpty) {
+        query['tmdb_id'] = tmdbId.trim();
+      } else if (imdbId != null && imdbId.trim().isNotEmpty) {
+        query['imdb_id'] = imdbId.trim();
+      } else {
+        return const [];
+      }
+      // v4 resolves TMDB episode coordinates server-side; no guessed mapping order.
+      if (season != null && episode != null) {
+        query['season'] = '$season';
+        query['episode'] = '$episode';
+      }
+      final uri = root.replace(
+        pathSegments: [...path, 'v4', 'media'],
+        queryParameters: query,
+        fragment: '',
+      );
       final body = await _get(uri);
       if (body == null) return const [];
       final json = decodeJsonObject(body);
