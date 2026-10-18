@@ -221,6 +221,12 @@ final class BridgedAppUITests: XCTestCase {
         app.buttons["Remote"].tap()
         let remoteReturn = app.buttons["remote-return"]
         XCTAssertTrue(remoteReturn.waitForExistence(timeout: 10), app.debugDescription)
+        // With no TV selected the Remote opens the device picker over itself (#376).
+        let devicePicker = app.navigationBars["Cast to"]
+        if devicePicker.waitForExistence(timeout: 5) {
+            devicePicker.buttons["Close"].tap()
+            XCTAssertTrue(remoteReturn.waitForHittable(timeout: 5), "Device picker did not close")
+        }
         remoteReturn.tap()
         XCTAssertTrue(edge.waitForExistence(timeout: 10), "Remote did not reopen app mode")
         edge.tap()
@@ -275,5 +281,12 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Tabs, 1 open"].waitForExistence(timeout: 10), "App session leaked into the browser tab count")
         menu.tap()
         XCTAssertTrue(install.waitForExistence(timeout: 10), "Removal did not make the website installable again")
+    }
+}
+
+private extension XCUIElement {
+    func waitForHittable(timeout: TimeInterval) -> Bool {
+        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: self)
+        return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
     }
 }
