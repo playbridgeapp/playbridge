@@ -214,6 +214,7 @@ enum ContentBlocker {
     }
     static func isSiteExempt(_ source: String) -> Bool {
         guard let host = URL(string: source)?.host?.lowercased() else { return false }
+        if AdblockSiteSettings.isDisabled(host: host) { return true }
         return ["youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com"]
             .contains { NavigationAdRules.host(host, matches: $0) }
     }

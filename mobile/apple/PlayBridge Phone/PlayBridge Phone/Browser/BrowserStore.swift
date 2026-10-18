@@ -74,6 +74,15 @@ final class BrowserStore: ObservableObject {
         appSubscription = bridgedApps.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         restoreTabs()
         tabStates.prune(keeping: Set(stateIDs.values))
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: AdblockSiteSettings.changed, object: nil, queue: .main) { [weak self] note in
+            guard let self, let site = note.object as? String else { return }
+            self.applyRulesToAllTabs()
+            for tab in self.tabs where !tab.isHome && tab.loadedWebView != nil {
+                guard let host = URL(string: tab.urlString)?.host?.lowercased(),
+                      host == site || host.hasSuffix("." + site) else { continue }
+                tab.reload()
+            }
+        })
         for notification in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
                 self?.flushTabStates()
@@ -364,6 +373,7 @@ final class BrowserStore: ObservableObject {
 
     private func isExempt(_ url: URL?) -> Bool {
         guard let host = url?.host?.lowercased() else { return false }
+        if AdblockSiteSettings.isDisabled(host: host) { return true }
         return BrowserStore.adblockExemptSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
