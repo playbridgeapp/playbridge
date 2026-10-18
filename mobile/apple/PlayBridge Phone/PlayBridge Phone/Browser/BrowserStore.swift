@@ -46,7 +46,9 @@ final class BrowserStore: ObservableObject {
 
     /// Browsing starts immediately; background compilation attaches the bundled
     /// fallback and then the full rules without holding restored pages blank.
-    private var rulesReady = true
+    /// False until the saved filter lists are attached at launch (bounded wait), so the
+    /// first restored page is blocked like a reload is.
+    private var rulesReady = false
     @MainActor private var ruleGeneration = UUID()
     private var pendingInitialLoads: [UUID: String] = [:]
 
@@ -89,8 +91,6 @@ final class BrowserStore: ObservableObject {
             })
         }
         Task { @MainActor in
-            // Wake only the selected restored tab, without waiting for compilation.
-            flushPendingLoads()
             let token = UUID()
             ruleGeneration = token
             let initial = await ContentBlocker.bootstrapRules()
@@ -98,7 +98,20 @@ final class BrowserStore: ObservableObject {
                 ruleLists = initial
                 applyRulesToAllTabs()
             }
-            await recompileAndApply()
+            // Hold the restored page until the saved lists (and scriptlet engine) are
+            // attached, at most 3 s, so a slow first launch never stalls the browser.
+            let compile = Task { @MainActor in await self.recompileAndApply() }
+            if adBlockEnabled {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await compile.value }
+                    group.addTask { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+                    await group.next()
+                    group.cancelAll()
+                }
+            }
+            rulesReady = true
+            flushPendingLoads()
+            await compile.value
             // Then fetch/refresh the full filter lists and recompile.
             await ContentBlocker.ensureListsDownloaded()
             await recompileAndApply()
