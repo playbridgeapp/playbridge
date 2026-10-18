@@ -54,7 +54,7 @@ enum BrowserUserAgentPreset: String, CaseIterable, Identifiable {
 
 /// One browser tab: lazily owns a persistent `WKWebView`, publishes navigation state, and routes detection
 /// messages to its `VideoDetector`. Rough analogue of an entry in the Android `TabManager`.
-final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate, PageCastSource {
+final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate, UIGestureRecognizerDelegate, PageCastSource {
     let id = UUID()
     let bridgedAppOrigin: URL?
     var onBridgedAppExternalNavigation: ((URLRequest) -> Void)?
@@ -90,6 +90,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             view.scrollView.contentInsetAdjustmentBehavior = .never
         }
         view.customUserAgent = effectiveUserAgent
+        let imagePress = UILongPressGestureRecognizer(target: self, action: #selector(imagePressed(_:)))
+        imagePress.minimumPressDuration = 0.45
+        imagePress.allowableMovement = 10
+        imagePress.delegate = self
+        view.addGestureRecognizer(imagePress)
+        imageLongPress = imagePress
         observe()
         onWebViewCreated?()
         return loadedWebView ?? view
@@ -295,6 +301,26 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             arguments: ["message": message], in: nil, in: PageCastScript.world, completionHandler: nil)
     }
     private let popupInteraction = BrowserPopupInteraction()
+    lazy var imageActions = BrowserImageActions(tab: self)
+    private weak var imageLongPress: UILongPressGestureRecognizer?
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === imageLongPress else { return true }
+        return isActive() && !isPickingElement && popupInteraction.imageTarget(standaloneOnly: true) != nil
+    }
+    /// Run alongside WebKit's own touch handling; otherwise the image menu only
+    /// appears after WebKit gives up on the touch, i.e. when the finger lifts.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer === imageLongPress
+    }
+    @objc private func imagePressed(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began, isActive(), !isPickingElement,
+              let view = loadedWebView, let image = popupInteraction.imageTarget(standaloneOnly: true) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        imageActions.standaloneMenu(image, at: recognizer.location(in: view), in: view)
+    }
+
     private let pageCastScripts = PageCastScript.scripts()
     var popupOpenerURL: URL?
     private(set) var hasCommittedPage = false
@@ -1000,9 +1026,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                  contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
                  completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
         let trackedLink = popupInteraction.consumeContextLink()
-        guard let url = elementInfo.linkURL ?? trackedLink else { completionHandler(nil); return }
+        let url = elementInfo.linkURL ?? trackedLink
+        let image = popupInteraction.imageTarget() ?? url.flatMap(BrowserImageData.imageLink)
+        guard url != nil || image != nil else { completionHandler(nil); return }
         let config = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             guard let self else { return nil }
+            var actions: [UIMenuElement] = []
+            if let image { actions.append(UIMenu(options: .displayInline, children: self.imageActions.menu(image))) }
+            guard let url else { return UIMenu(children: actions) }
             let cast = UIAction(title: "Cast to TV", image: UIImage(systemName: "play.tv")) { _ in
                 guard self.isActive(), BrowserSitePolicy.origin(url) != nil else { return }
                 self.onPageCast?(["url": url.absoluteString], self.webView.url?.absoluteString ?? self.urlString)
@@ -1016,7 +1047,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.url = url
             }
-            return UIMenu(title: url.absoluteString, children: [cast, newTab, bgTab, copy])
+            actions.append(UIMenu(options: .displayInline, children: [cast, newTab, bgTab, copy]))
+            return UIMenu(title: url.absoluteString, children: actions)
         }
         completionHandler(config)
     }

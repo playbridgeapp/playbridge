@@ -155,6 +155,17 @@ final class BrowserDataStore: ObservableObject {
         saveBookmarks()
     }
 
+    /// Preserve identity/order and use the same background writer as additions.
+    @discardableResult
+    func updateBookmark(_ id: UUID, title: String, address: String) -> Bool {
+        guard let url = BrowserLibraryQuery.bookmarkAddress(address),
+              let index = bookmarks.firstIndex(where: { $0.id == id }) else { return false }
+        bookmarks[index].title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? url : title.trimmingCharacters(in: .whitespacesAndNewlines)
+        bookmarks[index].url = url
+        saveBookmarks()
+        return true
+    }
+
     func removeBookmark(url: String) { bookmarks.removeAll { $0.url == url }; saveBookmarks() }
     func removeBookmark(_ id: UUID) { bookmarks.removeAll { $0.id == id }; saveBookmarks() }
 

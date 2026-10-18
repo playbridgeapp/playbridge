@@ -1,6 +1,82 @@
 import XCTest
 
 final class BrowserPopupUITests: XCTestCase {
+    func testLibrarySearchEditAndImageActions() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
+        app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        app.launchEnvironment["LIBRARY_IMAGES_UI"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["Show History"].waitForExistence(timeout: 30), app.debugDescription)
+        app.buttons["Show History"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5), app.debugDescription)
+        search.tap(); search.typeText("needle")
+        XCTAssertTrue(app.staticTexts["Needle match"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Other visit"].exists, "History search did not filter")
+        app.buttons["Show Bookmarks"].tap()
+        let row = app.staticTexts["Fixture bookmark"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+        row.swipeLeft()
+        app.buttons["Edit"].tap()
+        let title = app.textFields["bookmarkEditTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5), app.debugDescription)
+        replaceText(title, with: "Edited bookmark", in: app)
+        let address = app.textFields["bookmarkEditAddress"]
+        replaceText(address, with: app.launchEnvironment["BROWSER_FIXTURE"]! + "/identity", in: app)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Edited bookmark"].waitForExistence(timeout: 5), app.debugDescription)
+        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("edited")
+        XCTAssertTrue(app.staticTexts["Edited bookmark"].exists)
+        app.buttons["Show Images"].tap()
+        let image = app.webViews.images["Standalone fixture image"].firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 5), app.debugDescription)
+        image.press(forDuration: 1)
+        for action in ["Save Image", "Share Image", "Copy Image", "Open Image in New Tab"] {
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5), app.debugDescription)
+        }
+        app.buttons["Copy Image"].tap()
+        let copied = app.staticTexts["imageCopyState"]
+        expectation(for: NSPredicate(format: "label == %@", "Copied image ready"), evaluatedWith: copied)
+        waitForExpectations(timeout: 10)
+        image.press(forDuration: 1)
+        app.buttons["Save Image"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Photos saved: 1"), evaluatedWith: app.staticTexts["imagePhotoState"])
+        waitForExpectations(timeout: 10)
+        let linked = app.webViews.images["Linked fixture image"].firstMatch
+        linked.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Save Image"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["Copy Link"].exists, "Linked image lost the link actions")
+        app.buttons["Share Image"].tap()
+        let shareCopy = app.cells.matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
+        XCTAssertTrue(shareCopy.waitForExistence(timeout: 10), "Image file share sheet did not open: " + app.debugDescription)
+        shareCopy.tap() // Dismiss without opening another app.
+        // Google-style thumbnails: a transparent layer covers the <img>.
+        let coveredLinked = app.webViews.images["Covered linked fixture image"].firstMatch
+        XCTAssertTrue(coveredLinked.waitForExistence(timeout: 5), app.debugDescription)
+        coveredLinked.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Save Image"].waitForExistence(timeout: 5), "Covered linked image lost image actions: " + app.debugDescription)
+        XCTAssertTrue(app.buttons["Copy Link"].exists, "Covered linked image lost the link actions")
+        app.buttons["Copy Link"].tap()
+        let coveredStandalone = app.webViews.images["Covered standalone fixture image"].firstMatch
+        coveredStandalone.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Save Image"].waitForExistence(timeout: 5), "Covered standalone image had no image actions: " + app.debugDescription)
+        app.buttons["Cancel"].tap()
+        image.press(forDuration: 1)
+        app.buttons["Open Image in New Tab"].tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "/protected.png?best=1"), evaluatedWith: app.staticTexts["imagePageAddress"])
+        waitForExpectations(timeout: 10)
+    }
+
+    private func replaceText(_ field: XCUIElement, with text: String, in app: XCUIApplication) {
+        field.tap()
+        field.press(forDuration: 1.1)
+        let selectAll = app.menuItems["Select All"]
+        if selectAll.waitForExistence(timeout: 2) { selectAll.tap() }
+        else if app.buttons["Select All"].exists { app.buttons["Select All"].tap() }
+        field.typeText(text)
+    }
+
     func testSiteInfoClipboardAndTopVisited() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")

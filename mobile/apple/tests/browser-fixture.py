@@ -50,6 +50,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 <script>addEventListener('message', e => { if(e.data==='play')document.querySelector('audio').play(); });</script></html>'''
             elif path == '/playback-frame':
                 data = ('<html><title>PlaybackFrame</title><iframe src="http://localhost:' + str(self.server.server_port) + '/playback"></iframe></html>').encode()
+            elif path == '/image-actions':
+                data = b'''<html><head><title>Image Actions</title><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+                <body style="margin:16px"><picture><source srcset="/protected.png?best=1 1x">
+                <img src="/invalid-image" alt="Standalone fixture image" width="150" height="100"></picture>
+                <p><a href="/child"><img src="/protected.png?linked=1" alt="Linked fixture image" width="150" height="100"></a></p>
+                <p><a href="/child" style="position:relative;display:inline-block"><img src="/protected.png?covered=1" alt="Covered linked fixture image" width="150" height="100"><span style="position:absolute;left:0;top:0;right:0;bottom:0"></span></a></p>
+                <p><span style="position:relative;display:inline-block"><img src="/protected.png?covered=2" alt="Covered standalone fixture image" width="150" height="100"><span style="position:absolute;left:0;top:0;right:0;bottom:0"></span></span></p></body></html>'''
+            elif path == '/protected.png':
+                if 'image_auth=ok' not in self.headers.get('Cookie', '') or self.headers.get('User-Agent') != 'PlayBridgeImageFixture/1.0':
+                    self.send_response(403); self.end_headers(); return
+                import struct, zlib
+                def chunk(kind, payload):
+                    return struct.pack('!I', len(payload)) + kind + payload + struct.pack('!I', zlib.crc32(kind + payload) & 0xffffffff)
+                data = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!IIBBBBB', 2, 2, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\x00\xff\x00\x00' * 2)) + chunk(b'IEND', b'')
+                content = 'image/png'
+            elif path == '/oversized-image':
+                self.send_response(200); self.send_header('Content-Length', str(51*1024*1024)); self.end_headers(); return
+            elif path == '/invalid-image':
+                data = b'not an image'; content = 'image/png'
             elif path == '/identity':
                 data = b'<html><head><title>Identity</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>Identity</body></html>'
             elif path == '/' and '--bridged-apps' in sys.argv:
@@ -115,6 +134,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', content)
         self.send_header('Content-Length', str(len(data)))
+        if path == '/image-actions': self.send_header('Set-Cookie', 'image_auth=ok; Path=/')
         if path == '/parent': self.send_header('Set-Cookie', 'fixture=present; Path=/')
         if content == 'application/octet-stream': self.send_header('Content-Disposition', 'attachment; filename="sample.bin"')
         self.end_headers()
