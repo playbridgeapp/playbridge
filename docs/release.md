@@ -68,7 +68,7 @@ stable releases after each release's rollout delay.
 | **Stream proxy** | `stream-proxy-rust/Cargo.toml` | image tags / optional git tag | `stream-proxy-rust/CHANGELOG.md` | `stream_proxy_pr.yml` | `stream_proxy_build.yml` → **public image** | Automatic on eligible `main` changes |
 | **Web** | deploy-on-main | n/a | n/a | `web_pr.yml` | — | `web_deploy.yml` (Pages) |
 | **Protocol / Rust core** | n/a (library) | n/a | n/a | contract / rust PR checks | ships inside consumers | — |
-| **Apple apps** | Xcode marketing version | store / TestFlight | Apple changelogs | local / future CI | archive | App Store Connect |
+| **Apple apps** | Xcode `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `ios-v*`, `tvos-v*` | `mobile/apple/CHANGELOG.md`, `tv/apple/CHANGELOG.md` | `apple_pr.yml` | `apple_testflight.yml` → **TestFlight** (build `<CURRENT_PROJECT_VERSION>.<run>`) | Submit for review in App Store Connect |
 
 ### Stream proxy publication exception
 

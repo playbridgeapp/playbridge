@@ -26,6 +26,7 @@ on:
       - 'cast/ffi/include/**'
       - '.github/workflows/apple_pr.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

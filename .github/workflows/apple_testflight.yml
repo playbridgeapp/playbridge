@@ -1,0 +1,188 @@
+name: Apple TestFlight
+
+# Archives the iPhone and/or Apple TV app and uploads it to TestFlight.
+# App Store submission is still promoted manually in App Store Connect.
+#
+# Runs automatically on main when an app's MARKETING_VERSION has no ios-v*/tvos-v*
+# tag yet, and tags that version after a successful upload. Use workflow_dispatch
+# to upload another build of a version that is already tagged.
+#
+# Signing is Xcode automatic (cloud) signing with an App Store Connect API key, so
+# no certificate or profile secrets are needed. The key must have the Admin role
+# (or App Manager with "Access to Cloud Managed Distribution Certificate").
+# Secrets: ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'mobile/apple/**'
+      - 'tv/apple/**'
+      - 'cast/**'
+      - 'protocol/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/apple_testflight.yml'
+  workflow_dispatch:
+    inputs:
+      app:
+        description: 'App to upload'
+        required: true
+        default: both
+        type: choice
+        options: [ both, phone, tv ]
+
+concurrency:
+  group: apple-testflight-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    uses: ./.github/workflows/apple_pr.yml
+
+  upload:
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: phone
+            tag_prefix: ios-v
+            project: mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj
+            scheme: PlayBridge Phone
+            destination: generic/platform=iOS
+          - app: tv
+            tag_prefix: tvos-v
+            project: tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj
+            scheme: PlayBridge TV
+            destination: generic/platform=tvOS
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Decide whether to upload
+      id: gate
+      env:
+        PROJECT: ${{ matrix.project }}
+        TAG_PREFIX: ${{ matrix.tag_prefix }}
+        SELECTED: ${{ github.event_name == 'workflow_dispatch' && inputs.app || 'both' }}
+        EVENT: ${{ github.event_name }}
+        HAS_KEY: ${{ secrets.ASC_KEY_P8_BASE64 != '' }}
+      run: |
+        set -euo pipefail
+        VERSION=$(grep -m1 'MARKETING_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+        BUILD=$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+        run=true
+        if [ "$SELECTED" != both ] && [ "$SELECTED" != "${{ matrix.app }}" ]; then
+          run=false
+        elif [ "$EVENT" = push ] && git rev-parse "$TAG_PREFIX$VERSION" >/dev/null 2>&1; then
+          echo "⏭️ $TAG_PREFIX$VERSION already uploaded; use workflow_dispatch for another build."
+          run=false
+        elif [ "$HAS_KEY" != true ]; then
+          echo "::warning::ASC_KEY_P8_BASE64 is not set; skipping TestFlight upload."
+          run=false
+        fi
+        echo "run=$run" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Rust
+      if: steps.gate.outputs.run == 'true' && matrix.app == 'phone'
+      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+      with:
+        toolchain: stable
+        targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+    - name: Build Rust Cast Core XCFramework
+      if: steps.gate.outputs.run == 'true' && matrix.app == 'phone'
+      run: sh cast/build-apple.sh
+
+    - name: Install App Store Connect API key
+      if: steps.gate.outputs.run == 'true'
+      env:
+        ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+      run: |
+        KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+        echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
+        echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+    - name: Archive
+      if: steps.gate.outputs.run == 'true'
+      env:
+        ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      run: |
+        set -euo pipefail
+        # <project build>.<run>: follows uprevs of CURRENT_PROJECT_VERSION and stays
+        # unique when the same commit is uploaded again.
+        BUILD_NUMBER="${{ steps.gate.outputs.build }}.${{ github.run_number }}"
+        echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+        xcodebuild archive \
+          -project "${{ matrix.project }}" \
+          -scheme "${{ matrix.scheme }}" \
+          -configuration Release \
+          -destination "${{ matrix.destination }}" \
+          -archivePath "$RUNNER_TEMP/app.xcarchive" \
+          -allowProvisioningUpdates \
+          -authenticationKeyPath "$ASC_KEY_PATH" \
+          -authenticationKeyID "$ASC_KEY_ID" \
+          -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+          CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+          > "$RUNNER_TEMP/archive.log" 2>&1 \
+          || { grep -E 'error:' "$RUNNER_TEMP/archive.log" | head -50; tail -100 "$RUNNER_TEMP/archive.log"; exit 1; }
+        tail -5 "$RUNNER_TEMP/archive.log"
+
+    - name: Upload to TestFlight
+      if: steps.gate.outputs.run == 'true'
+      env:
+        ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      run: |
+        set -euo pipefail
+        cat > "$RUNNER_TEMP/ExportOptions.plist" <<'PLIST'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>method</key><string>app-store-connect</string>
+          <key>destination</key><string>upload</string>
+          <key>signingStyle</key><string>automatic</string>
+          <key>teamID</key><string>4VL6AT677Y</string>
+          <key>manageAppVersionAndBuildNumber</key><false/>
+        </dict>
+        </plist>
+        PLIST
+        xcodebuild -exportArchive \
+          -archivePath "$RUNNER_TEMP/app.xcarchive" \
+          -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+          -exportPath "$RUNNER_TEMP/export" \
+          -allowProvisioningUpdates \
+          -authenticationKeyPath "$ASC_KEY_PATH" \
+          -authenticationKeyID "$ASC_KEY_ID" \
+          -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+        echo "✅ Uploaded ${{ matrix.app }} ${{ steps.gate.outputs.version }} ($BUILD_NUMBER) to TestFlight" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Tag uploaded version
+      if: steps.gate.outputs.run == 'true'
+      env:
+        TAG: ${{ matrix.tag_prefix }}${{ steps.gate.outputs.version }}
+      run: |
+        if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+        fi
+
+    - name: Remove API key
+      if: always()
+      run: rm -f "$RUNNER_TEMP"/AuthKey_*.p8
