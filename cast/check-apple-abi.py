@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 ATV = ["abi_version", "start", "submit_json", "next_json", "cancel", "free"]
+ADBLOCK = ["pb_adblock_" + name for name in ["abi_version", "create_json", "deserialize", "call_json", "serialize", "content_blocking_json", "destroy", "string_free", "bytes_free"]]
 REQUIRED = ["pb_atv_" + name for name in ATV] + [
     "pb_cast_core_abi_version", "pb_session_start", "pb_session_submit_json",
     "pb_session_next_json", "pb_session_cancel", "pb_session_free", "pb_string_free",
@@ -30,6 +31,10 @@ def main():
         directory = root / item["LibraryIdentifier"]
         header = (directory / item["HeadersPath"] / "playbridge_cast_core.h").read_text()
         assert re.search(r"#define\s+PB_ATV_REMOTE_ABI_VERSION\s+1\b", header), "Missing ATV ABI 1 header marker"
+        adblock_header = (directory / item["HeadersPath"] / "playbridge_adblock.h").read_text()
+        assert re.search(r"#define\s+PB_ADBLOCK_ABI_VERSION\s+1\b", adblock_header)
+        for symbol in ADBLOCK:
+            assert re.search(r"\b" + symbol + r"\s*\(", adblock_header), "Missing declaration: " + symbol
         for symbol in REQUIRED:
             assert re.search(r"\b" + symbol + r"\s*\(", header), "Missing declaration: " + symbol
         for arch in item["SupportedArchitectures"]:
@@ -38,10 +43,10 @@ def main():
             if result.returncode:
                 raise RuntimeError("nm failed; set PB_APPLE_NM to a Rust-LLVM-compatible llvm-nm: " + result.stderr[:240])
             names = set(re.findall(r"\b_?(pb_\w+)\s*$", result.stdout, re.MULTILINE))
-            missing = set(REQUIRED) - names
+            missing = set(REQUIRED + ADBLOCK) - names
             assert not missing, f"Missing {variant}/{arch} exports: {sorted(missing)}"
             checked.add((variant, arch))
-            print(f"PASS: Apple {variant}/{arch}: ATV ABI 1 and Cast ABI 2 declarations/exports")
+            print(f"PASS: Apple {variant}/{arch}: ATV ABI 1, Cast ABI 2 and Adblock ABI 1 declarations/exports")
     assert checked == {("device", "arm64"), ("simulator", "arm64"), ("simulator", "x86_64")}, checked
 
 

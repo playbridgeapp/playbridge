@@ -39,10 +39,10 @@ final class BrowserStore: ObservableObject {
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
     private var ruleLists: [WKContentRuleList] = []
 
-    /// False until the first rule compilation has been applied to the webviews.
-    /// Loads requested before then (restored tabs) are deferred so the first
-    /// pages of a session never load unfiltered.
-    private var rulesReady = false
+    /// Browsing starts immediately; background compilation attaches the bundled
+    /// fallback and then the full rules without holding restored pages blank.
+    private var rulesReady = true
+    @MainActor private var ruleGeneration = UUID()
     private var pendingInitialLoads: [UUID: String] = [:]
 
     static let homeURL = "https://www.google.com"
@@ -64,25 +64,19 @@ final class BrowserStore: ObservableObject {
         appSubscription = bridgedApps.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         restoreTabs()
         Task { @MainActor in
-            // Compile cached rules so blocking is active immediately (curated fallback).
-            ruleLists = await ContentBlocker.compileAll()
-            applyRulesToAllTabs()
-            // Rules are on the webviews — start the deferred restored-tab loads.
-            rulesReady = true
+            // Wake only the selected restored tab, without waiting for compilation.
             flushPendingLoads()
+            let token = UUID()
+            ruleGeneration = token
+            let initial = await ContentBlocker.bootstrapRules()
+            if ruleGeneration == token {
+                ruleLists = initial
+                applyRulesToAllTabs()
+            }
+            await recompileAndApply()
             // Then fetch/refresh the full filter lists and recompile.
             await ContentBlocker.ensureListsDownloaded()
-            ruleLists = await ContentBlocker.compileAll()
-            applyRulesToAllTabs()
-        }
-        // Safety valve: a full recompile (e.g. after a parser-version bump
-        // invalidates the cache) can take a long time. Never hold restored tabs
-        // blank for it — after a short grace period fall back to loading
-        // immediately; the rules attach to the webviews when compilation finishes.
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            rulesReady = true
-            flushPendingLoads()
+            await recompileAndApply()
         }
     }
 
@@ -325,20 +319,39 @@ final class BrowserStore: ObservableObject {
     /// Re-compiles rules and applies them to all active webviews
     @MainActor
     func updateAdBlockRules() async {
-        ruleLists = await ContentBlocker.compileAll()
-        applyRulesToAllTabs()
-        activeTab?.reload()
+        await refreshRules(reload: true)
     }
 
     /// Re-compiles + applies rules without reloading (used after an element-picker block,
     /// where the element is already hidden inline on the current page).
     @MainActor
     func recompileAndApply() async {
-        ruleLists = await ContentBlocker.compileAll()
+        await refreshRules(reload: false)
+    }
+
+    @MainActor func forceUpdateAdBlockRules() async throws {
+        let token = UUID()
+        ruleGeneration = token
+        let replacement = try await ContentBlocker.forceCompileAll()
+        guard ruleGeneration == token else { return }
+        ruleLists = replacement
         applyRulesToAllTabs()
+        activeTab?.reload()
+    }
+
+    @MainActor private func refreshRules(reload: Bool) async {
+        let token = UUID()
+        ruleGeneration = token
+        let replacement = await ContentBlocker.compileAll()
+        guard ruleGeneration == token else { return }
+        ruleLists = replacement
+        applyRulesToAllTabs()
+        if reload { activeTab?.reload() }
     }
 
     @MainActor func updateUserDomainRules(replacing identifier: String) async throws {
+        ruleGeneration = UUID()
+        ContentBlocker.invalidateGeneration()
         let list = try await ContentBlocker.compileUserDomainList()
         ruleLists.removeAll { $0.identifier == identifier || ContentBlocker.isUserDomainRuleList($0) }
         if let list { ruleLists.append(list) }

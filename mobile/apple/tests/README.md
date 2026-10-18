@@ -523,3 +523,20 @@ Touch cases now block forms/scripts/cross-site and full-page overlay anchors,
 allow a visible same-site anchor, retain the opener after an allowed child,
 and preserve sign-in style script-only redirects. Headless cases include
 window-then-redirect without interaction, explicit Open and origin exceptions.
+
+Adblock engine stage 1:
+
+```sh
+bash mobile/apple/tests/run-adblock-engine-checks.sh
+IOS_TEST_SIMULATOR=<iPhone-17-iOS-26.4-UUID> bash mobile/apple/tests/run-adblock-webkit-checks.sh
+```
+
+The host runner links the opt-in Rust engine and checks migration, conditional
+preprocessing/includes, native source/type matching and invalid-cache rebuilds.
+The WebKit runner uses production ContentBlocker and a loopback fixture to check
+continued enforcement during replacement, unchanged chunk reuse, superseded
+generations and retention after a failed update. It assumes the named Simulator
+is booted, installs only a throwaway fixture app, then removes that app.
+`ADBLOCK_MEASUREMENT_LISTS=/private/tmp/lists.json` optionally supplies an array
+of preprocessed filter-list texts for full-list compile/memory measurements;
+never put resources or sensitive data in that input. No list downloads occur.

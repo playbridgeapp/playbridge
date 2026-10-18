@@ -9,6 +9,7 @@ description = "UniFFI and stable C bindings for PlayBridge Cast Core"
 
 [features]
 default = []
+adblock-engine = ["playbridge-cast-core/adblock-engine"]
 # Desktop / Docker-style embed: reqwest (+ AVIO) origin fetch.
 sender-services = [
     "dep:playbridge-browser-receiver",

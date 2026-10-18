@@ -1,4 +1,5 @@
 module PlayBridgeCastCore {
   header "playbridge_cast_core.h"
+  header "playbridge_adblock.h"
   export *
 }

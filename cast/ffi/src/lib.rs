@@ -24,6 +24,9 @@ use serde_json::Value;
 
 uniffi::setup_scaffolding!();
 
+#[cfg(feature = "adblock-engine")]
+mod adblock_engine;
+
 mod atv_remote;
 #[cfg(test)]
 mod atv_tests;

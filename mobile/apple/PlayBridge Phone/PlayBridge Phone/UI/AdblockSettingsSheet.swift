@@ -6,6 +6,7 @@ struct AdblockSettingsSheet: View {
 
     @AppStorage("pb_block_popups") private var blockPopups = true
     @State private var filterLists: [URL] = ContentBlocker.filterListURLs
+    @State private var disabledLists: Set<URL> = Set(ContentBlocker.filterListURLs.filter { !ContentBlocker.isListEnabled(url: $0) })
     @State private var newUrlString: String = ""
     @State private var isUpdating = false
     @State private var updateMessage = ""
@@ -69,61 +70,50 @@ struct AdblockSettingsSheet: View {
                 }
 
                 Section {
-                    if let extra = ContentBlocker.remoteExtraListURL {
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("PlayBridge Extra Rules")
-                                    .font(Theme.font(size: 15, weight: .medium))
-                                    .foregroundColor(Theme.onSurface)
-                                Spacer()
-                                Text("Built-in")
-                                    .font(Theme.font(size: 10, weight: .bold))
-                                    .foregroundColor(Theme.primary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Theme.primary.opacity(0.15))
-                                    .clipShape(Capsule())
-                            }
-                            Text(extra.absoluteString)
-                                .font(Theme.font(size: 11))
-                                .foregroundColor(Theme.onSurfaceVariant)
-                                .lineLimit(1)
-                            Text(ContentBlocker.isListDownloaded(url: extra) ? "Active" : "Downloads on launch")
-                                .font(Theme.font(size: 11, weight: .semibold))
-                                .foregroundColor(ContentBlocker.isListDownloaded(url: extra) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
-                                .padding(.top, 2)
-                        }
-                    }
-                } header: {
-                    Text("Built-in list")
-                } footer: {
-                    Text("Always on and updated automatically. Maintained by PlayBridge — can't be removed.")
-                }
-
-                Section {
                     ForEach(filterLists, id: \.self) { url in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(getListName(for: url))
-                                .font(Theme.font(size: 15, weight: .medium))
-                                .foregroundColor(Theme.onSurface)
-                            Text(url.absoluteString)
-                                .font(Theme.font(size: 11))
-                                .foregroundColor(Theme.onSurfaceVariant)
-                                .lineLimit(1)
-                            
-                            HStack {
-                                Text(ContentBlocker.listUpdateFailed(url: url) ? "Couldn’t update" : (ContentBlocker.isListDownloaded(url: url) ? "Downloaded" : "Not downloaded"))
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(getListName(for: url))
+                                    .font(Theme.font(size: 15, weight: .medium))
+                                    .foregroundColor(isEnabled(url) ? Theme.onSurface : Theme.onSurfaceVariant)
+                                Text(url.absoluteString)
+                                    .font(Theme.font(size: 11))
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                                    .lineLimit(1)
+                                Text(status(for: url))
                                     .font(Theme.font(size: 11, weight: .semibold))
-                                    .foregroundColor(!ContentBlocker.listUpdateFailed(url: url) && ContentBlocker.isListDownloaded(url: url) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                                    .foregroundColor(statusColor(for: url))
+                                    .padding(.top, 2)
+                                if isEnabled(url), let date = ContentBlocker.lastUpdated(url: url) {
+                                    Text("Updated \(date.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant)
+                                }
                             }
-                            .padding(.top, 2)
+                            Spacer(minLength: 0)
+                            Toggle(getListName(for: url), isOn: Binding(
+                                get: { isEnabled(url) },
+                                set: { setEnabled($0, url: url) }
+                            ))
+                            .labelsHidden()
+                            .tint(Theme.primary)
+                            .disabled(isUpdating)
                         }
                     }
                     .onDelete(perform: deleteList)
+                    if !missingDefaults.isEmpty {
+                        Button {
+                            restoreDefaults()
+                        } label: {
+                            Label("Restore default lists (\(missingDefaults.count))", systemImage: "arrow.uturn.backward")
+                                .font(Theme.font(size: 14, weight: .medium))
+                                .foregroundColor(Theme.primary)
+                        }
+                        .disabled(isUpdating)
+                    }
                 } header: {
                     Text("Filter Lists")
                 } footer: {
-                    Text("Swipe left to delete custom lists. Default filter lists are enabled automatically.")
+                    Text("Turn lists on or off. Swipe left to remove a list.")
                 }
 
                 Section {
@@ -187,6 +177,32 @@ struct AdblockSettingsSheet: View {
 
     // MARK: - Logic
 
+    private func isEnabled(_ url: URL) -> Bool { !disabledLists.contains(url) }
+
+    private func status(for url: URL) -> String {
+        if !isEnabled(url) { return "Off" }
+        if ContentBlocker.listUpdateFailed(url: url) { return "Couldn’t update" }
+        return ContentBlocker.isListDownloaded(url: url) ? "On" : "Downloads on next update"
+    }
+
+    private func statusColor(for url: URL) -> Color {
+        if !isEnabled(url) { return Theme.onSurfaceVariant }
+        return !ContentBlocker.listUpdateFailed(url: url) && ContentBlocker.isListDownloaded(url: url)
+            ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)
+    }
+
+    private func setEnabled(_ enabled: Bool, url: URL) {
+        if enabled { disabledLists.remove(url) } else { disabledLists.insert(url) }
+        ContentBlocker.setListEnabled(enabled, url: url)
+        Task {
+            // A list switched on for the first time needs its file before compiling.
+            if enabled && !ContentBlocker.isListDownloaded(url: url) {
+                try? await ContentBlocker.download(url: url)
+            }
+            await store.recompileAndApply()
+        }
+    }
+
     private func getListName(for url: URL) -> String {
         let absoluteString = url.absoluteString.lowercased()
         if absoluteString.contains("easyprivacy.txt") {
@@ -198,6 +214,12 @@ struct AdblockSettingsSheet: View {
         } else if absoluteString.contains("fanboy-annoyance.txt") {
             return "Website Annoyances"
         }
+        let known = ["filters.txt": "uBlock filters", "badware.txt": "uBlock badware", "privacy.txt": "uBlock privacy",
+                     "quick-fixes.txt": "uBlock quick fixes", "unbreak.txt": "uBlock unbreak",
+                     "urlhaus-filter-online.txt": "URLhaus online"]
+        if let name = known[url.lastPathComponent] { return name }
+        if url.host == "pgl.yoyo.org" { return "Peter Lowe’s Ad and tracking list" }
+        if url.host == "playbridge.app" { return "PlayBridge Extra Rules" }
         return url.host ?? "Custom Filter List"
     }
 
@@ -213,13 +235,38 @@ struct AdblockSettingsSheet: View {
             filterLists.append(url)
             ContentBlocker.filterListURLs = filterLists
             newUrlString = ""
+            Task {
+                try? await ContentBlocker.download(url: url)
+                await store.recompileAndApply()
+            }
+        }
+    }
+
+    private var missingDefaults: [URL] {
+        ContentBlocker.defaultFilterListURLs.filter { !filterLists.contains($0) }
+    }
+
+    private func restoreDefaults() {
+        let missing = missingDefaults
+        filterLists += missing
+        ContentBlocker.filterListURLs = filterLists
+        Task {
+            for url in missing where !ContentBlocker.isListDownloaded(url: url) {
+                try? await ContentBlocker.download(url: url)
+            }
+            await store.recompileAndApply()
         }
     }
 
     private func deleteList(at offsets: IndexSet) {
-        // Prevent deleting all lists if they want, but let them delete custom ones
+        let removed = offsets.map { filterLists[$0] }
         filterLists.remove(atOffsets: offsets)
         ContentBlocker.filterListURLs = filterLists
+        for url in removed {
+            disabledLists.remove(url)
+            ContentBlocker.setListEnabled(true, url: url)
+        }
+        Task { await store.recompileAndApply() }
     }
 
     private func updateFilterLists() {
@@ -228,24 +275,17 @@ struct AdblockSettingsSheet: View {
             var successCount = 0
             var failCount = 0
             
-            for url in filterLists {
+            for url in filterLists where isEnabled(url) {
                 do {
                     try await ContentBlocker.download(url: url)
                     successCount += 1
                 } catch {
-                    print("Failed to download filter list: \(url.absoluteString), error: \(error)")
                     failCount += 1
                 }
             }
 
-            // Refresh the always-on built-in list too.
-            if let extra = ContentBlocker.remoteExtraListURL {
-                try? await ContentBlocker.download(url: extra)
-            }
-
             do {
-                let lists = try await ContentBlocker.forceCompileAll()
-                await store.updateAdBlockRules()
+                try await store.forceUpdateAdBlockRules()
                 
                 await MainActor.run {
                     isUpdating = false

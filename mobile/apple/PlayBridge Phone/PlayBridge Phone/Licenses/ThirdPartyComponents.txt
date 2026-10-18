@@ -7,6 +7,12 @@ A line that says "Apple TV only" or "phone only" applies to that app.
 PlayBridge's own code is MPL-2.0. That text is MPL-2.0.txt.
 Source: https://github.com/playbridgeapp/playbridge
 
+Phone ad-blocking engine
+-----------------------
+
+The phone also uses adblock-rust 0.13.3 (MPL-2.0). Adblock-NOTICE.txt lists
+its new Rust dependencies, licence texts and downloaded filter-list provenance.
+
 MPVKit
 ------
 

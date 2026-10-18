@@ -1,12 +1,11 @@
 import Foundation
 
-/// Conservative, host-indexed subset of filter syntax for top-level navigations.
-/// Never reuse the detector's coarse domain projection for document blocking.
+/// Popup-only compatibility subset: adblock-rust has no popup request type.
+/// Ordinary document matching belongs exclusively to the native engine.
 struct NavigationAdRules {
     private struct Rule {
         let expression: NSRegularExpression
         let popup: Bool
-        let document: Bool
         let exception: Bool
         let includes: [String]
         let excludes: [String]
@@ -33,23 +32,18 @@ struct NavigationAdRules {
             guard host.contains("."), !host.hasPrefix("."), !host.hasSuffix("."), !host.contains("..") else { continue }
             let suffix = String(pattern.dropFirst(host.count))
             guard suffix.isEmpty || suffix.first == "^" || suffix.first == "/" || suffix.first == "|" else { continue }
-            var popup = true
-            // Untyped host-wide rules can safely identify destinations; untyped
-            // path fragments commonly describe subresources, not whole pages.
-            var document = exception || suffix.isEmpty || suffix == "^" || suffix == "^|"
+            var popup = false
             var includes: [String] = [], excludes: [String] = []
             var caseSensitive = false
             var unsupported = false
             let options = parts.count == 2 ? parts[1].split(separator: ",").map { String($0).lowercased() } : []
-            if options.contains("popup") || options.contains("document") || options.contains("all") {
-                popup = options.contains("popup") || options.contains("all")
-                document = options.contains("document") || options.contains("all")
-            }
+            guard options.contains("popup") || options.contains("all") else { continue }
+            popup = true
             for option in options {
                 switch option {
                 case "popup", "document", "all": break
                 case "~popup": popup = false
-                case "~document": document = false
+                case "~document": break
                 case "match-case": caseSensitive = true
                 default:
                     if option.hasPrefix("domain=") {
@@ -67,7 +61,7 @@ struct NavigationAdRules {
                     }
                 }
             }
-            guard !unsupported, popup || document else { continue }
+            guard !unsupported, popup else { continue }
             var tail = ""
             for (index, character) in suffix.enumerated() {
                 switch character {
@@ -79,7 +73,7 @@ struct NavigationAdRules {
             }
             let expression = "^https?://(?:[^/?#:@]+\\.)*" + NSRegularExpression.escapedPattern(for: host) + "(?=[:/?#]|$)" + tail
             guard let regex = try? NSRegularExpression(pattern: expression, options: caseSensitive ? [] : [.caseInsensitive]) else { continue }
-            byHost[host, default: []].append(Rule(expression: regex, popup: popup, document: document,
+            byHost[host, default: []].append(Rule(expression: regex, popup: popup,
                                                  exception: exception, includes: includes, excludes: excludes))
         }
     }
@@ -90,7 +84,7 @@ struct NavigationAdRules {
 
     /// nil means no applicable rule; false is an explicit exception.
     func decision(url: URL, source: URL?, popup: Bool) -> Bool? {
-        guard let host = url.host?.lowercased(), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        guard popup, let host = url.host?.lowercased(), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         let sourceHost = source?.host?.lowercased() ?? ""
         let text = url.absoluteString
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -98,7 +92,7 @@ struct NavigationAdRules {
         var candidate = host
         while true {
             for rule in byHost[candidate] ?? [] {
-                guard popup ? rule.popup : rule.document,
+                guard rule.popup,
                       rule.includes.isEmpty || rule.includes.contains(where: { Self.host(sourceHost, matches: $0) }),
                       !rule.excludes.contains(where: { Self.host(sourceHost, matches: $0) }),
                       rule.expression.firstMatch(in: text, range: range) != nil else { continue }

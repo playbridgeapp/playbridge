@@ -3,7 +3,14 @@ import Foundation
 // Platform adapters are replaced so this runner exercises the production detector
 // and scheduler on macOS without WebKit, AVFoundation, networking or SwiftUI.
 final class UIImage {}
-enum ContentBlocker { static func shouldBlock(urlString: String) -> Bool { false } }
+enum ContentBlocker {
+    static var lastSource: String?
+    static var lastType: String?
+    static func shouldBlock(urlString: String, sourceURL: String?, resourceType: String) -> Bool {
+        lastSource = sourceURL; lastType = resourceType
+        return false
+    }
+}
 enum HLSParser {
     static func inspect(masterURL: String, headers: [String: String]) async -> StreamManifestInfo { StreamManifestInfo() }
 }
@@ -74,6 +81,10 @@ struct VideoDetectorEnrichmentTests {
         let headerDetector = headerProbe.detector()
         let page = "https://player.example.test/watch?id=fixture"
         headerDetector.ingest(["url": url, "detectedBy": "dom_source", "originUrl": page, "ua": "FixtureBrowser/1"])
+        precondition(ContentBlocker.lastSource == page && ContentBlocker.lastType == "media")
+        precondition(VideoDetector.adblockResourceType(detectedBy: "xhr_content_type") == "xmlhttprequest")
+        precondition(VideoDetector.adblockResourceType(detectedBy: "fetch_content_type") == "xmlhttprequest")
+        precondition(VideoDetector.adblockResourceType(detectedBy: "unknown") == "other")
         await until { headerProbe.started.count == 2 }
         precondition(headerDetector.videos[0].headers["Origin"] == nil)
         headerDetector.ingest(["url": url, "detectedBy": "xhr_content_type", "originUrl": page,
