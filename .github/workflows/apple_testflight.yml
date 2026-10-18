@@ -102,10 +102,15 @@ jobs:
       with:
         toolchain: stable
         targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+        components: llvm-tools
 
     - name: Build Rust Cast Core XCFramework
       if: steps.gate.outputs.run == 'true' && matrix.app == 'phone'
-      run: sh cast/build-apple.sh
+      run: |
+        # Xcode's nm can't read objects from Rust's newer LLVM; the ABI check needs Rust's own llvm-nm.
+        export PB_APPLE_NM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-nm"
+        test -x "$PB_APPLE_NM"
+        sh cast/build-apple.sh
 
     - name: Install App Store Connect API key
       if: steps.gate.outputs.run == 'true'
