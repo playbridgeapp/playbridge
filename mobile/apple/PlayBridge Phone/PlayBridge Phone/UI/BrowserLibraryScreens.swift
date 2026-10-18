@@ -13,6 +13,7 @@ struct BrowserSettingsScreen: View {
     @State private var engine = SearchEngine.current
     @State private var showCastPermissions = false
     @State private var showLicences = false
+    @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
 
     var body: some View {
         ZStack {
@@ -58,6 +59,11 @@ struct BrowserSettingsScreen: View {
                             .disabled(store.activeTab == nil)
                             Button("Network Logs") { showNetworkLogs = true }
                                 .disabled(store.activeTab == nil)
+                            Toggle("Developer tools", isOn: $developerTools)
+                                .tint(Theme.primary)
+                                .accessibilityIdentifier("browserDeveloperTools")
+                            Text("Adds JSON and Copy as cURL for detected media, and a full, unredacted copy of network logs. These can include cookies and tokens.")
+                                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
                         }
                     }
                 }

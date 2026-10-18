@@ -13,6 +13,44 @@ final class BrowserNetworkLog: ObservableObject {
         let method: String
         var state: String
         var status: Int?
+        /// Worked out from the unredacted URL at record time; only the category is kept.
+        var category: Category = .other
+        /// Shown in full on this device only; exports redact by default.
+        var redactedURL: String { BrowserNetworkLog.safeURL(url) }
+        var isBlocked: Bool {
+            let state = state.lowercased()
+            return state.contains("blocked") || state.contains("failed")
+        }
+    }
+
+    /// Safari-style request groups for the log's filter chips.
+    enum Category: String, CaseIterable, Identifiable {
+        case document = "Documents", fetch = "Fetch/XHR", script = "Scripts", style = "Styles",
+             image = "Images", media = "Media", font = "Fonts", other = "Other"
+        var id: String { rawValue }
+
+        private static let mediaExtensions: Set<String> = ["m3u8", "m3u", "mpd", "ts", "m4s", "mp4", "m4v", "webm", "mkv",
+            "mov", "mp3", "m4a", "aac", "ogg", "oga", "opus", "flac", "wav", "vtt", "srt", "ism", "f4m"]
+        private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "bmp", "heic", "heif"]
+        private static let fontExtensions: Set<String> = ["woff", "woff2", "ttf", "otf", "eot"]
+
+        static func of(kind rawKind: String, url: URL?) -> Category {
+            let kind = rawKind.lowercased()
+            let ext = url?.pathExtension.lowercased() ?? ""
+            // Players fetch playlists and segments with XHR/fetch; they belong under Media.
+            if mediaExtensions.contains(ext) { return .media }
+            if kind.hasPrefix("navigation") || kind == "popup" || kind == "iframe" || kind == "frame"
+                || kind == "document" || kind == "embed" || kind == "object" { return .document }
+            if kind.hasPrefix("fetch") || kind.hasPrefix("xhr") || kind == "xmlhttprequest" || kind == "beacon" { return .fetch }
+            if ["video", "audio", "source", "track"].contains(kind) { return .media }
+            if ["img", "image", "input"].contains(kind) { return .image }
+            if kind == "script" { return .script }
+            if fontExtensions.contains(ext) { return .font }
+            if imageExtensions.contains(ext) { return .image }
+            if ext == "css" || kind == "link" || kind == "css" { return ext == "js" ? .script : .style }
+            if ext == "js" || ext == "mjs" { return .script }
+            return .other
+        }
     }
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var discarded = 0
@@ -30,9 +68,10 @@ final class BrowserNetworkLog: ObservableObject {
             entries[index].status = status
             return
         }
-        entries.append(Entry(id: key, date: Date(), url: Self.safeURL(raw), host: host,
-            page: Self.frameLabel(page, isSubframe: isSubframe), isSubframe: isSubframe, kind: String(kind.prefix(40)), method: String(method.prefix(12)),
-            state: String(state.prefix(80)), status: status))
+        // Full URLs stay in memory for the user's own view; never persisted or logged.
+        entries.append(Entry(id: key, date: Date(), url: url.absoluteString, host: host,
+            page: Self.frameLabel(page, isSubframe: isSubframe, redact: false), isSubframe: isSubframe, kind: String(kind.prefix(40)), method: String(method.prefix(12)),
+            state: String(state.prefix(80)), status: status, category: Category.of(kind: kind, url: url)))
         if entries.count > Self.limit { discarded += entries.count - Self.limit; entries.removeFirst(entries.count - Self.limit) }
     }
 
@@ -46,10 +85,10 @@ final class BrowserNetworkLog: ObservableObject {
         }
     }
 
-    private static func frameLabel(_ raw: String, isSubframe: Bool) -> String {
+    private static func frameLabel(_ raw: String, isSubframe: Bool, redact: Bool = true) -> String {
         if raw == "about:srcdoc" { return "Inline frame (srcdoc)" }
         if raw == "about:blank" { return isSubframe ? "Blank embedded frame" : "Blank page" }
-        let safe = safeURL(raw)
+        let safe = redact ? safeURL(raw) : (raw.count <= 16384 ? raw : "")
         return safe.isEmpty && isSubframe ? "Embedded frame" : safe
     }
 
@@ -63,9 +102,17 @@ final class BrowserNetworkLog: ObservableObject {
         return url.string ?? ""
     }
 
-    var exportText: String {
-        (["PlayBridge browser network log (URLs redacted; in-memory observations)"] + entries.map {
-            "\($0.date.ISO8601Format()) \($0.method) \($0.kind) \($0.status.map(String.init) ?? $0.state)\n\($0.url)\nPage: \($0.page) [\($0.isSubframe ? "embedded frame" : "main page")]"
+    /// Redacted by default: bulk exports are what end up pasted publicly.
+    var exportText: String { export(redacted: true) }
+    /// Full URLs, including any tokens in them. Offered separately and labelled as such.
+    var fullExportText: String { export(redacted: false) }
+
+    private func export(redacted: Bool) -> String {
+        let header = redacted ? "PlayBridge browser network log (URLs redacted; in-memory observations)"
+            : "PlayBridge browser network log (full URLs; may contain private tokens)"
+        return ([header] + entries.map {
+            let page = redacted ? Self.frameLabel($0.page, isSubframe: $0.isSubframe) : $0.page
+            return "\($0.date.ISO8601Format()) \($0.method) \($0.kind) \($0.status.map(String.init) ?? $0.state)\n\(redacted ? $0.redactedURL : $0.url)\nPage: \(page) [\($0.isSubframe ? "embedded frame" : "main page")]"
         }).joined(separator: "\n")
     }
 }

@@ -6,6 +6,8 @@ struct BrowserNetworkLogView: View {
     @ObservedObject private var log: BrowserNetworkLog
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
+    @State private var filter: NetworkLogFilter = .all
+    @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
     @State private var domains = ContentBlocker.userBlockedDomains()
     @State private var selectedDomain = ""
     @State private var removing = false
@@ -18,7 +20,37 @@ struct BrowserNetworkLogView: View {
     }
 
     private var entries: [BrowserNetworkLog.Entry] {
-        log.entries.reversed().filter { search.isEmpty || "\($0.url) \($0.kind) \($0.state)".localizedCaseInsensitiveContains(search) }
+        log.entries.reversed().filter { filter.matches($0) &&
+            (search.isEmpty || "\($0.url) \($0.kind) \($0.state)".localizedCaseInsensitiveContains(search)) }
+    }
+    /// All, then each group that has requests (plus the selected one), like Safari's Network tab.
+    private var chips: [(filter: NetworkLogFilter, count: Int)] {
+        NetworkLogFilter.allCases.compactMap { chip in
+            let count = chip == .all ? log.entries.count : log.entries.filter(chip.matches).count
+            return chip == .all || count > 0 || chip == filter ? (chip, count) : nil
+        }
+    }
+    private var filterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(chips, id: \.filter) { chip in
+                    let selected = chip.filter == filter
+                    Button { filter = chip.filter } label: {
+                        Text("\(chip.filter.title) \(chip.count)")
+                            .font(Theme.font(size: 13, weight: selected ? .semibold : .regular))
+                            .foregroundColor(selected ? Theme.surface : Theme.onSurface)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(selected ? Theme.primary : Theme.surfaceContainerHigh, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(chip.filter.title), \(chip.count) requests")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("network-filter-\(chip.filter.title)")
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .background(Theme.surface)
     }
     private func blockedDomain(_ host: String) -> String? {
         domains.first { NavigationAdRules.host(host, matches: $0) }
@@ -52,7 +84,7 @@ struct BrowserNetworkLogView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Requests observed in this tab, including frames and navigation events. WebKit may omit some blocked, cached, or background requests. URLs are redacted; headers and bodies are not recorded.")
+                    Text("Requests observed in this tab, including frames and navigation events. WebKit may omit some blocked, cached, or background requests. Full URLs are kept only in memory on this phone; headers and bodies are not recorded.")
                         .font(Theme.font(.caption)).foregroundStyle(.secondary)
                     if tab.networkCaptureEnabled {
                         Button("Stop detailed capture") { tab.setNetworkCaptureEnabled(false) }
@@ -91,7 +123,7 @@ struct BrowserNetworkLogView: View {
                                     removing: blockedDomain(entry.host) != nil, applying: applying, action: applyDomain)
                                 if applying { ProgressView("Applying domain rules…") }
                                 if let failure { Text(failure).foregroundStyle(.red) }
-                                Button("Copy redacted URL") { UIPasteboard.general.string = entry.url }
+                                Button("Copy URL") { UIPasteboard.general.string = entry.url }
                             } footer: { Text("Domain rules apply to that host and its subdomains on all pages. Reload the page to retry existing resources.") }
                         }.navigationTitle("Request details")
                     } label: {
@@ -109,11 +141,12 @@ struct BrowserNetworkLogView: View {
                     .contextMenu {
                         Button(blockedDomain(entry.host).map { "Unblock \($0)" } ?? "Block \(entry.host)") { choose(entry) }
                             .disabled(applying)
-                        Button("Copy redacted URL") { UIPasteboard.general.string = entry.url }
+                        Button("Copy URL") { UIPasteboard.general.string = entry.url }
                     }
                 }
-                if entries.isEmpty { Text(search.isEmpty ? "No requests observed yet. Reload the page to capture activity." : "No matching requests.").foregroundStyle(.secondary) }
+                if entries.isEmpty { Text(search.isEmpty && filter == .all ? "No requests observed yet. Reload the page to capture activity." : "No matching requests.").foregroundStyle(.secondary) }
             }
+            .safeAreaInset(edge: .top, spacing: 0) { filterBar }
             .searchable(text: $search, prompt: "Filter domain, URL or type")
             .navigationTitle("Network logs")
             .navigationBarTitleDisplayMode(.inline)
@@ -122,7 +155,10 @@ struct BrowserNetworkLogView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button("Reload page") { tab.reload() }.disabled(applying)
-                        Button("Copy redacted log") { UIPasteboard.general.string = log.exportText }
+                        Button("Copy log (URLs redacted)") { UIPasteboard.general.string = log.exportText }
+                        if developerTools {
+                            Button("Copy full log (may contain private tokens)") { UIPasteboard.general.string = log.fullExportText }
+                        }
                         Button("Clear log", role: .destructive) { log.clear() }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
@@ -151,5 +187,25 @@ private struct NetworkDomainButton: View {
             .confirmationDialog("\(removing ? "Unblock" : "Block") \(domain)?", isPresented: $confirm, titleVisibility: .visible) {
                 Button(removing ? "Unblock domain" : "Block domain", role: removing ? nil : .destructive) { action(domain, removing) }
             } message: { Text("Applies to this domain and its subdomains on all pages. Existing loaded resources remain until you reload.") }
+    }
+}
+
+/// Filter chips for the network log: All, each request group, and Blocked.
+enum NetworkLogFilter: Hashable, CaseIterable {
+    case all, category(BrowserNetworkLog.Category), blocked
+    static var allCases: [NetworkLogFilter] { [.all] + BrowserNetworkLog.Category.allCases.map { .category($0) } + [.blocked] }
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .category(let category): return category.rawValue
+        case .blocked: return "Blocked"
+        }
+    }
+    func matches(_ entry: BrowserNetworkLog.Entry) -> Bool {
+        switch self {
+        case .all: return true
+        case .category(let category): return entry.category == category
+        case .blocked: return entry.isBlocked
+        }
     }
 }
