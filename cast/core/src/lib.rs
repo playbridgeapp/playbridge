@@ -7,6 +7,8 @@
 
 #[cfg(feature = "adblock-engine")]
 pub mod adblock_engine;
+#[cfg(feature = "adblock-engine")]
+pub mod adblock_scriptlets;
 
 pub mod atv_remote;
 pub mod browser;

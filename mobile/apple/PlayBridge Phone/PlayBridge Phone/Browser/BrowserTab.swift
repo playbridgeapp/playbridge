@@ -421,6 +421,30 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     })();
     """#
 
+    static let adblockCosmeticWorld = WKContentWorld.world(name: "PlayBridgeAdblockCosmetic")
+    private var adblockSiteScripts = AdblockSiteScripts.empty
+
+    func applyAdblockSiteScripts(_ scripts: AdblockSiteScripts, evaluateCosmeticsInLoadedPage: Bool = false) {
+        if adblockSiteScripts != scripts {
+            adblockSiteScripts = scripts
+            installUserScripts()
+        }
+        if evaluateCosmeticsInLoadedPage,
+           let cosmetic = scripts.cosmetic, !cosmetic.isEmpty,
+           let view = loadedWebView, !isHome, view.url != nil {
+            view.evaluateJavaScript(cosmetic, in: nil, in: Self.adblockCosmeticWorld, completionHandler: nil)
+        }
+    }
+
+    func refreshAdblockSiteScripts(for url: URL? = nil, enabled: Bool = ContentBlocker.isEnabled, evaluateCosmeticsInLoadedPage: Bool = false) {
+        let targetURL = url
+            ?? loadedWebView?.url
+            ?? (requestedAddress.isEmpty ? nil : URL(string: requestedAddress))
+            ?? (urlString.isEmpty ? nil : URL(string: urlString))
+        let scripts = AdblockSnapshot.shared.siteScripts(for: targetURL, enabled: enabled, isBridgedApp: isBridgedApp)
+        applyAdblockSiteScripts(scripts, evaluateCosmeticsInLoadedPage: evaluateCosmeticsInLoadedPage)
+    }
+
     private func installUserScripts() {
         let cc = configuration.userContentController
         cc.removeAllUserScripts()
@@ -448,6 +472,22 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if isDesktopMode && UIDevice.current.userInterfaceIdiom == .phone {
             cc.addUserScript(WKUserScript(source: Self.desktopViewportScript,
                 injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        }
+        if let scriptlet = adblockSiteScripts.scriptlet, !scriptlet.isEmpty {
+            cc.addUserScript(WKUserScript(
+                source: scriptlet,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: .page
+            ))
+        }
+        if let cosmetic = adblockSiteScripts.cosmetic, !cosmetic.isEmpty {
+            cc.addUserScript(WKUserScript(
+                source: cosmetic,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false,
+                in: Self.adblockCosmeticWorld
+            ))
         }
     }
 
@@ -568,6 +608,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         let target = url.absoluteString
         urlString = target
         requestedAddress = target
+        refreshAdblockSiteScripts(for: url)
         onBeforeLoad?()
         webView.load(request)
     }
@@ -579,6 +620,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         appRequestedURL = url
         requestedAddress = url.absoluteString
         navigationFailure = nil
+        refreshAdblockSiteScripts(for: url)
         onBeforeLoad?()
         let view = webView
         view.interactionState = state
@@ -651,13 +693,35 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         loadedWebView?.evaluateJavaScript("if(window.__pb_picker_cleanup) window.__pb_picker_cleanup();", completionHandler: nil)
     }
 
-    func goBack() { processRecovery.cancelPendingReload(); stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goBack() }
-    func goForward() { processRecovery.cancelPendingReload(); stopElementPicker(); cancelPrompt(); navigationFailure = nil; webView.goForward() }
+    func goBack() {
+        processRecovery.cancelPendingReload()
+        stopElementPicker()
+        cancelPrompt()
+        navigationFailure = nil
+        if let backURL = loadedWebView?.backForwardList.backItem?.url {
+            refreshAdblockSiteScripts(for: backURL)
+        }
+        webView.goBack()
+    }
+    func goForward() {
+        processRecovery.cancelPendingReload()
+        stopElementPicker()
+        cancelPrompt()
+        navigationFailure = nil
+        if let forwardURL = loadedWebView?.backForwardList.forwardItem?.url {
+            refreshAdblockSiteScripts(for: forwardURL)
+        }
+        webView.goForward()
+    }
     func reload() {
         processRecovery.cancelPendingReload()
         stopElementPicker()
         if let failure = navigationFailure { load(failure.address) }
-        else { cancelPrompt(); webView.reload() }
+        else {
+            cancelPrompt()
+            refreshAdblockSiteScripts(for: loadedWebView?.url ?? URL(string: urlString))
+            webView.reload()
+        }
     }
     func stop() {
         detectionNavigationID = UUID()
@@ -825,8 +889,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
               let shouldReload = processRecovery.takeRecovery(now: ProcessInfo.processInfo.systemUptime) else { return }
         if shouldReload {
             navigationFailure = nil
-            if view.url != nil { view.reload() }
-            else { load(urlString) }
+            if let currentURL = view.url {
+                refreshAdblockSiteScripts(for: currentURL)
+                view.reload()
+            } else {
+                load(urlString)
+            }
         } else {
             navigationFailure = BrowserNavigationFailure(address: view.url?.absoluteString ?? urlString,
                 message: "This page stopped responding. Reload it to continue.")
@@ -906,15 +974,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             requestedAddress = url.absoluteString
             detectionNavigationID = UUID()
             let navigationID = detectionNavigationID
+            let isBridged = isBridgedApp
+            let adblockOn = ContentBlocker.isEnabled
             Task { @MainActor [weak self, weak webView] in
-                let declared: Bool
-                if self?.isBridgedApp == true { declared = true }
-                else { declared = await BridgedAppDeclarationCache.shared.isDeclared(url) }
+                async let declaredTask: Bool = isBridged ? true : await BridgedAppDeclarationCache.shared.isDeclared(url)
+                async let scriptsTask = Task.detached(priority: .userInitiated) {
+                    AdblockSnapshot.shared.siteScripts(for: url, enabled: adblockOn, isBridgedApp: isBridged)
+                }.value
+                let (declared, scripts) = await (declaredTask, scriptsTask)
                 guard let self, let webView, self.loadedWebView === webView,
                       self.detectionNavigationID == navigationID else {
                     decisionHandler(.cancel, preferences)
                     return
                 }
+                self.applyAdblockSiteScripts(scripts)
                 self.updateDetectionPolicy(declared: declared)
                 // Apply before navigation, including Back/Forward cache restores.
                 decisionHandler(.allow, preferences)
@@ -947,15 +1020,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                 return
             }
             let navigationID = detectionNavigationID
+            let isBridged = isBridgedApp
+            let adblockOn = ContentBlocker.isEnabled
             Task { @MainActor [weak self, weak webView] in
-                let declared: Bool
-                if self?.isBridgedApp == true { declared = true }
-                else { declared = await BridgedAppDeclarationCache.shared.isDeclared(url) }
+                async let declaredTask: Bool = isBridged ? true : await BridgedAppDeclarationCache.shared.isDeclared(url)
+                async let scriptsTask = Task.detached(priority: .userInitiated) {
+                    AdblockSnapshot.shared.siteScripts(for: url, enabled: adblockOn, isBridgedApp: isBridged)
+                }.value
+                let (declared, scripts) = await (declaredTask, scriptsTask)
                 guard let self, let webView, self.loadedWebView === webView,
                       self.detectionNavigationID == navigationID else {
                     decisionHandler(.cancel)
                     return
                 }
+                self.applyAdblockSiteScripts(scripts)
                 self.updateDetectionPolicy(declared: declared)
                 decisionHandler(.allow)
             }
