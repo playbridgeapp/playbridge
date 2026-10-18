@@ -112,9 +112,9 @@ struct AdblockSettingsSheet: View {
                                 .lineLimit(1)
                             
                             HStack {
-                                Text(ContentBlocker.isListDownloaded(url: url) ? "Downloaded" : "Not downloaded")
+                                Text(ContentBlocker.listUpdateFailed(url: url) ? "Couldn’t update" : (ContentBlocker.isListDownloaded(url: url) ? "Downloaded" : "Not downloaded"))
                                     .font(Theme.font(size: 11, weight: .semibold))
-                                    .foregroundColor(ContentBlocker.isListDownloaded(url: url) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                                    .foregroundColor(!ContentBlocker.listUpdateFailed(url: url) && ContentBlocker.isListDownloaded(url: url) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
                             }
                             .padding(.top, 2)
                         }
@@ -195,7 +195,7 @@ struct AdblockSettingsSheet: View {
             return "EasyList"
         } else if absoluteString.contains("antiadblockfilters.txt") {
             return "Adblock Warning Removal"
-        } else if absoluteString.contains("fanboy-annoyances.txt") || absoluteString.contains("fanboy-annoyance.txt") {
+        } else if absoluteString.contains("fanboy-annoyance.txt") {
             return "Website Annoyances"
         }
         return url.host ?? "Custom Filter List"

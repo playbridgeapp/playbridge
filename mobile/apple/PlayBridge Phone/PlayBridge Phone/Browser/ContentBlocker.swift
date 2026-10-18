@@ -8,7 +8,7 @@ import CryptoKit
 enum ContentBlocker {
     static let identifier = "playbridge-adblock-v2"
     private static let enabledKey = "pb_adblock_enabled"
-    private static let filterListsKey = "pb_adblock_filter_lists"
+    private static let filterListsKey = ContentBlockerListSettings.key
 
     /// Stored compilation error message for diagnostic display in the UI.
     @MainActor static var lastCompilationError: String?
@@ -22,12 +22,10 @@ enum ContentBlocker {
     /// List of URLs to fetch rules from. Pre-populated with default lists.
     static var filterListURLs: [URL] {
         get {
-            let list = UserDefaults.standard.stringArray(forKey: filterListsKey) ?? [
-                "https://easylist.to/easylist/easylist.txt",
-                "https://easylist.to/easylist/easyprivacy.txt",
-                "https://easylist-downloads.adblockplus.org/antiadblockfilters.txt",
-                "https://easylist.to/easylist/fanboy-annoyances.txt"
-            ]
+            let list = ContentBlockerListSettings.load(
+                defaults: .standard,
+                cacheDirectory: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            )
             return list.compactMap { URL(string: $0) }
         }
         set {
@@ -371,26 +369,32 @@ enum ContentBlocker {
 
     /// Download a list from a URL and save it to the local Documents directory.
     static func download(url: URL) async throws {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        request.setValue("PlayBridge", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 30
+            request.setValue("PlayBridge", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw NSError(domain: "ContentBlocker", code: http.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) for \(url.lastPathComponent)"])
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw NSError(domain: "ContentBlocker", code: http.statusCode,
+                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) for \(url.lastPathComponent)"])
+            }
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw NSError(domain: "ContentBlocker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to decode list"])
+            }
+            // Guard against saving an HTML error/redirect page as if it were a filter list.
+            let head = text.prefix(4096).lowercased()
+            if head.contains("<!doctype html") || head.contains("<html") {
+                throw NSError(domain: "ContentBlocker", code: -2,
+                              userInfo: [NSLocalizedDescriptionKey: "Response was not a filter list (got HTML) for \(url.lastPathComponent)"])
+            }
+            let fileURL = getLocalListPath(for: url)
+            try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            UserDefaults.standard.removeObject(forKey: downloadFailureKey(url))
+        } catch {
+            UserDefaults.standard.set(true, forKey: downloadFailureKey(url))
+            throw error
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "ContentBlocker", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to decode list"])
-        }
-        // Guard against saving an HTML error/redirect page as if it were a filter list.
-        let head = text.prefix(4096).lowercased()
-        if head.contains("<!doctype html") || head.contains("<html") {
-            throw NSError(domain: "ContentBlocker", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Response was not a filter list (got HTML) for \(url.lastPathComponent)"])
-        }
-        let fileURL = getLocalListPath(for: url)
-        try text.write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
     /// Ensures all configured lists are present on disk, downloading any that are
@@ -421,8 +425,15 @@ enum ContentBlocker {
     static func getLocalListPath(for url: URL) -> URL {
         let fm = FileManager.default
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let safeName = url.absoluteString.components(separatedBy: CharacterSet.alphanumerics.inverted).joined(separator: "_") + ".txt"
-        return docs.appendingPathComponent(safeName)
+        return docs.appendingPathComponent(ContentBlockerListSettings.cacheFilename(for: url.absoluteString))
+    }
+
+    private static func downloadFailureKey(_ url: URL) -> String {
+        "pb_adblock_download_failed_" + url.absoluteString
+    }
+
+    static func listUpdateFailed(url: URL) -> Bool {
+        UserDefaults.standard.bool(forKey: downloadFailureKey(url))
     }
 
     static func isListDownloaded(url: URL) -> Bool {
