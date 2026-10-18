@@ -13,6 +13,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Browser fullscreen**: Both TV browsers report fullscreen on enter and exit, including exits with the TV's Back button, so the phone's fullscreen control follows.
 - **Receiver capabilities**: The player tells the phone which remote keys, player settings, browser controls and volume it supports, and which engine (ExoPlayer, MPV, WebView or GeckoView) is active, so PlayBridge Phone 0.16.0 shows matching controls.
 - **GeckoView zoom**: Pinch on the phone touchpad zooms pages in the GeckoView browser.
+- **Playback failure reason**: When the player gives up on a video after trying every engine, it tells the phone why ("The media couldn't be loaded", with the HTTP status when there is one) instead of leaving it on buffering. URLs, headers and raw error text are never sent. PlayBridge Phone 0.16.0 shows the reason.
+- **Live capability updates**: Installing, updating or removing the GeckoView plugin updates the phone's remote straight away, without reconnecting, for phones that support it (PlayBridge Phone 0.16.0).
 
 ### Changed
 - **Fullscreen video in frames**: Fullscreen video inside embedded frames keeps the site's own player controls.
