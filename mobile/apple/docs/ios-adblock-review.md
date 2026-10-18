@@ -105,8 +105,12 @@ reload without reintroducing the playback breakage the exemption was added to av
 - CSS compilation is isolated from network compilation, which is useful, but one
   rejected selector can still discard a source's cosmetic list. Surface partial
   success and consider isolating invalid selector chunks.
-- Unsupported scriptlet/extended-cosmetic syntax is intentionally omitted. Do not
-  present the EasyList subset as full uBlock/Android-extension compatibility.
+- Stage 2 supports `##+js(...)` scriptlet filters and procedural/extended CSS
+  cosmetic rules using PlayBridge's own MPL-2.0 scriptlet resources and isolated
+  procedural cosmetic applier loaded into `adblock-rust` (no uBlock Origin GPL
+  JavaScript resources are bundled or used). Do not present WebKit content blocking
+  plus this curated MPL-2.0 scriptlet/procedural set as full desktop browser
+  extension parity.
 
 ## Verification
 

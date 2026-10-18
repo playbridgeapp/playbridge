@@ -1225,7 +1225,97 @@ extension BrowserStartupChecks {
         ContentBlocker.isEnabled = false
         parent.load(base + "/ad")
         try await wait("disabled ad blocker") { view.url?.path == "/ad" && !view.isLoading }
-        print("CHECK: ad destinations, redirects, popup cleanup, tab swaps, exceptions and disabled blocking passed")
+
+        ContentBlocker.isEnabled = true
+        try ContentBlocker.setRules([
+            "127.0.0.1##+js(aopr, adsbygoogle)",
+            "127.0.0.1##+js(set, adConfig.enabled, false)",
+            "127.0.0.1##.card > .inner > span:has-text(Sponsored):upward(2)",
+            "127.0.0.1##.removable-ad:remove()",
+            "127.0.0.1##body.locked:style(overflow: auto !important)"
+        ].joined(separator: "\n"))
+        let stage2VerifyJS = """
+        (() => {
+            const s = window.__stage2 || {};
+            return s.aoprSurvived === false &&
+                   s.constantVal === false &&
+                   typeof (window.playbridge && window.playbridge.cast) === 'function' &&
+                   getComputedStyle(document.getElementById('sponsored-card')).display === 'none' &&
+                   getComputedStyle(document.getElementById('organic-card')).display !== 'none' &&
+                   document.getElementById('removable-ad') === null &&
+                   getComputedStyle(document.body).overflow === 'auto';
+        })()
+        """
+        func assertStage2(_ targetView: WKWebView, label: String) async throws {
+            for _ in 0..<40 {
+                if (try? await targetView.evaluateJavaScript(stage2VerifyJS) as? Bool) == true { return }
+                try await Task.sleep(nanoseconds: 25_000_000)
+            }
+            throw Failure(message: "Stage 2 scriptlet/procedural check failed: \(label)")
+        }
+
+        // 1. Initial load
+        parent.load(base + "/stage2")
+        try await wait("stage2 initial load") { view.title == "Stage2" && !view.isLoading }
+        try await assertStage2(view, label: "initial load")
+
+        // 2. Back / forward navigation
+        parent.load(base + "/parent")
+        try await wait("stage2 parent nav") { view.title == "Parent" && !view.isLoading }
+        parent.goBack()
+        try await wait("stage2 back nav") { view.title == "Stage2" && !view.isLoading }
+        try await assertStage2(view, label: "goBack")
+        parent.goForward()
+        try await wait("stage2 forward nav") { view.title == "Parent" && !view.isLoading }
+        parent.goBack()
+        try await wait("stage2 second back nav") { view.title == "Stage2" && !view.isLoading }
+        try await assertStage2(view, label: "second goBack")
+
+        // 3. Reload
+        _ = try await view.evaluateJavaScript("window.__reloadSentinel = true; void(0)")
+        parent.reload()
+        for _ in 0..<100 {
+            if !view.isLoading, view.title == "Stage2",
+               (try? await view.evaluateJavaScript("window.__reloadSentinel === undefined") as? Bool) == true {
+                break
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        try await assertStage2(view, label: "reload")
+
+        // 4. Restored tab via interactionState
+        let stage2URL = URL(string: base + "/stage2")!
+        guard let stateData = view.interactionState as? Data else {
+            throw Failure(message: "Missing interactionState data for stage2 restore check")
+        }
+        let restoredTab = browser.newTab(loading: nil)
+        let restoredView = restoredTab.webView
+        restoredView.frame = window!.bounds
+        window?.rootViewController?.view.addSubview(restoredView)
+        defer {
+            restoredView.removeFromSuperview()
+            browser.closeTab(restoredTab.id)
+            browser.select(parent.id)
+        }
+        try check(restoredTab.restoreInteractionState(stateData, url: stage2URL), "restoreInteractionState rejected valid stage2 state")
+        try await wait("stage2 restored tab") { restoredView.title == "Stage2" && !restoredView.isLoading }
+        try await assertStage2(restoredView, label: "restoreInteractionState")
+
+        // 5. Process-recovery reload
+        browser.select(parent.id)
+        browser.browserVisible = true
+        _ = try await view.evaluateJavaScript("window.__recoverySentinel = true; void(0)")
+        parent.webViewWebContentProcessDidTerminate(view)
+        for _ in 0..<100 {
+            if !view.isLoading, view.title == "Stage2",
+               (try? await view.evaluateJavaScript("window.__recoverySentinel === undefined") as? Bool) == true {
+                break
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        try await assertStage2(view, label: "process-recovery reload")
+
+        print("CHECK: ad destinations, redirects, popup cleanup, tab swaps, exceptions, disabled blocking and stage2 scriptlets/procedural cosmetics passed")
     }
 }
 

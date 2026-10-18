@@ -77,7 +77,9 @@ impl AdblockEngine {
         for list in config.lists {
             filters.add_filter_list(list, ParseOptions::default());
         }
-        Self(Engine::new_with_filter_set(filters), manifest)
+        let mut engine = Engine::new_with_filter_set(filters);
+        engine.use_resources(crate::adblock_scriptlets::resources());
+        Self(engine, manifest)
     }
     pub fn deserialize(bytes: &[u8], expected: CacheManifest) -> Result<Self, AdblockError> {
         if bytes.len() < 8 || &bytes[..4] != b"PBA1" {
@@ -104,6 +106,7 @@ impl AdblockEngine {
         engine
             .deserialize(payload)
             .map_err(|_| AdblockError::InvalidSerializedEngine)?;
+        engine.use_resources(crate::adblock_scriptlets::resources());
         Ok(Self(engine, expected))
     }
     pub fn serialize(&self) -> Vec<u8> {
@@ -447,6 +450,48 @@ mod tests {
         assert!(e.cosmetic("https://nohide.test")["generichide"] == true);
     }
     #[test]
+    fn procedural_actions_and_exceptions() {
+        let rules = [
+            "example.test##.card > span:has-text(Sponsored):upward(2)",
+            "example.test##.promo:has-text(/Ad\\s+Slot/i):upward(.wrapper):remove()",
+            "example.test##body.locked:style(overflow: auto !important)",
+            "example.test##[data-ad]:remove-attr(data-ad)",
+            "example.test##.overlay:remove-class(is-open)",
+            "example.test##div:matches-css(position: fixed)",
+            "example.test##div:matches-attr(data-sponsor=\"true\")",
+            "example.test##:matches-path(/article) .inline-ad",
+            "example.test##p:min-text-length(20)",
+            "sub.example.test#@#.card > span:has-text(Sponsored):upward(2)",
+        ]
+        .join("\n");
+        let e = engine(&rules);
+        let c = e.cosmetic("https://example.test/article");
+        let actions: Vec<String> = serde_json::from_value(c["procedural_actions"].clone()).unwrap();
+        assert_eq!(actions.len(), 9);
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"has-text\"") && a.contains("\"upward\""))
+        );
+        assert!(actions.iter().any(|a| a.contains("\"type\":\"remove\"")));
+        assert!(actions.iter().any(|a| a.contains("\"type\":\"style\"")));
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"type\":\"remove-attr\""))
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("\"type\":\"remove-class\""))
+        );
+
+        let sub = e.cosmetic("https://sub.example.test/article");
+        let sub_actions: Vec<String> =
+            serde_json::from_value(sub["procedural_actions"].clone()).unwrap();
+        assert_eq!(sub_actions.len(), 8);
+    }
+    #[test]
     fn conversion_replicates_exceptions_and_counts_failures() {
         let input = vec![
             "||a.test^\n||b.test^\n||c.test^\n@@||a.test/safe\nexample.test##+js(noop)".into(),
@@ -464,5 +509,108 @@ mod tests {
                 .contains_key("convert.ScriptletInjectionsNotSupported")
         );
         assert!(content_blocking(&input, 0).is_err());
+    }
+    #[test]
+    fn scriptlet_resources_aliases_exceptions_and_escaping() {
+        let rules = [
+            "example.com##+js(aopr, adsbygoogle)",
+            "example.com##+js(abort-on-property-write, __ad_write)",
+            "example.com##+js(acs, eval, /adNeedle/)",
+            "example.com##+js(acis, atob, inlineNeedle)",
+            "example.com##+js(set, adConfig.enabled, false)",
+            "example.com##+js(aeld, click, popMagic)",
+            "example.com##+js(nostif, badTimer, 1000)",
+            "example.com##+js(nosiif, badInterval, 500)",
+            "example.com##+js(nowoif, /popup\\.test/)",
+            "example.com##+js(json-prune, adSlots.primary, data)",
+            "example.com##+js(ra, oncontextmenu, body)",
+            "example.com##+js(rc, ad-locked, .article)",
+            "example.com##+js(no-fetch-if, /ads-api/, emptyObj)",
+            "example.com##+js(no-xhr-if, /xhr-ad/, emptyArr)",
+            "sub.example.com#@#+js(aopr, adsbygoogle)",
+            "exceptall.example.com#@#+js()",
+            "@@||generichide.example.com^$generichide",
+            r#"escape.test##+js(set, prop, "quote\" </script>\nline2")"#,
+        ]
+        .join("\n");
+        let e = engine(&rules);
+        let c = e.cosmetic("https://example.com/page");
+        let script = c["injected_script"].as_str().unwrap();
+        assert!(!script.is_empty());
+        assert!(script.contains("abortOnPropertyRead(\"adsbygoogle\")"));
+        assert!(script.contains("abortOnPropertyWrite(\"__ad_write\")"));
+        assert!(script.contains("abortCurrentScript(\"eval\", \"/adNeedle/\")"));
+        assert!(script.contains("abortCurrentScript(\"atob\", \"inlineNeedle\")"));
+        assert!(script.contains("setConstant(\"adConfig.enabled\", \"false\")"));
+        assert!(script.contains("addEventListenerDefuser(\"click\", \"popMagic\")"));
+        assert!(script.contains("noSetTimeoutIf(\"badTimer\", \"1000\")"));
+        assert!(script.contains("noSetIntervalIf(\"badInterval\", \"500\")"));
+        assert!(script.contains("noWindowOpenIf(\"/popup\\\\.test/\")"));
+        assert!(script.contains("jsonPrune(\"adSlots.primary\", \"data\")"));
+        assert!(script.contains("removeAttr(\"oncontextmenu\", \"body\")"));
+        assert!(script.contains("removeClass(\"ad-locked\", \".article\")"));
+        assert!(script.contains("preventFetch(\"/ads-api/\", \"emptyObj\")"));
+        assert!(script.contains("preventXhr(\"/xhr-ad/\", \"emptyArr\")"));
+
+        // Non-matching domain gets empty injected_script.
+        assert_eq!(
+            e.cosmetic("https://other.com/page")["injected_script"]
+                .as_str()
+                .unwrap(),
+            ""
+        );
+
+        // Specific exception `#@#+js(aopr, adsbygoogle)` removes only that scriptlet call on sub.example.com.
+        let sub_script = e.cosmetic("https://sub.example.com/page")["injected_script"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!sub_script.contains("abortOnPropertyRead(\"adsbygoogle\")"));
+        assert!(sub_script.contains("setConstant(\"adConfig.enabled\", \"false\")"));
+
+        // Blank `#@#+js()` uninjects all scriptlets on exceptall.example.com.
+        assert_eq!(
+            e.cosmetic("https://exceptall.example.com/page")["injected_script"]
+                .as_str()
+                .unwrap(),
+            ""
+        );
+
+        // generichide is respected alongside hostname scriptlets.
+        let gh = e.cosmetic("https://generichide.example.com/page");
+        assert_eq!(gh["generichide"], true);
+        assert!(
+            gh["injected_script"]
+                .as_str()
+                .unwrap()
+                .contains("setConstant(\"adConfig.enabled\", \"false\")")
+        );
+
+        // Argument escaping prevents breaking out of string literals with quotes, backslashes or control characters.
+        let esc_rules = [
+            r#"escape.test##+js(set, prop, 'quote" \ </script>')"#,
+            "escape.test##+js(aopr, line\twith\x0btab)",
+        ]
+        .join("\n");
+        let esc_engine = engine(&esc_rules);
+        let esc = esc_engine.cosmetic("https://escape.test/page")["injected_script"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(esc.contains(r#"setConstant("prop", "quote\" \\ </script>")"#));
+        assert!(esc.contains(r#"abortOnPropertyRead("line\twith\u000btab")"#));
+
+        // Deserialized engine re-applies resources and produces the same injected_script content.
+        let restored = AdblockEngine::deserialize(&e.serialize(), e.1.clone()).unwrap();
+        let restored_script = restored.cosmetic("https://example.com/page")["injected_script"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(restored_script.len(), script.len());
+        let mut orig_lines: Vec<&str> = script.lines().collect();
+        let mut restored_lines: Vec<&str> = restored_script.lines().collect();
+        orig_lines.sort_unstable();
+        restored_lines.sort_unstable();
+        assert_eq!(restored_lines, orig_lines);
     }
 }

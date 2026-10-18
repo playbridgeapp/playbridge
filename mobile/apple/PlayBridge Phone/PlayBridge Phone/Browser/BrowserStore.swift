@@ -424,6 +424,7 @@ final class BrowserStore: ObservableObject {
     private func applyRules(to tab: BrowserTab) {
         let cc = tab.configuration.userContentController
         cc.removeAllContentRuleLists()
+        tab.refreshAdblockSiteScripts(enabled: adBlockEnabled, evaluateCosmeticsInLoadedPage: adBlockEnabled)
         // Skip automatic lists on anti-adblock sites (e.g. YouTube) so playback
         // survives, but honor rules the user explicitly created in the picker.
         guard adBlockEnabled else { return }

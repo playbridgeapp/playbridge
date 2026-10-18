@@ -122,6 +122,72 @@ import Foundation
         precondition(popup.decision(url: URL(string: "https://pop.test")!, source: URL(string: "https://safe.page.test"), popup: true) == nil)
         precondition(popup.decision(url: URL(string: "https://off.test")!, source: nil, popup: true) == nil)
         precondition(popup.decision(url: URL(string: "https://doc.test")!, source: nil, popup: false) == nil)
+
+        let stage2Rules = [
+            "example.test##+js(aopr, adsbygoogle)",
+            "example.test##+js(aopw, __ad_write)",
+            "example.test##+js(acs, eval, /adNeedle/)",
+            "example.test##+js(acis, atob, inlineNeedle)",
+            "example.test##+js(set, adConfig.enabled, false)",
+            "example.test##+js(aeld, click, popMagic)",
+            "example.test##+js(nostif, badTimer, 1000)",
+            "example.test##+js(nosiif, badInterval, 500)",
+            "example.test##+js(nowoif, /popup\\.test/)",
+            "example.test##+js(json-prune, adSlots.primary, data)",
+            "example.test##+js(ra, oncontextmenu, body)",
+            "example.test##+js(rc, ad-locked, .article)",
+            "example.test##+js(no-fetch-if, /ads-api/, emptyObj)",
+            "example.test##+js(no-xhr-if, /xhr-ad/, emptyArr)",
+            "example.test##.card > span:has-text(Sponsored):upward(2)",
+            "example.test##body.locked:style(overflow: auto !important)",
+            "example.test##.ad-box:remove()",
+            "sub.example.test#@#+js(aopr, adsbygoogle)",
+            "sub.example.test#@#.card > span:has-text(Sponsored):upward(2)",
+            "exceptall.example.test#@#+js()",
+            "youtube.com##+js(set, ytAd, false)",
+            "youtube.com##.yt-ad:has-text(Ad)"
+        ].joined(separator: "\n")
+        let stage2Engine = try NativeAdblockEngine.load(lists: [stage2Rules], cached: nil)
+        AdblockSnapshot.shared.publish(stage2Engine)
+        let cosmetic = stage2Engine.cosmetic(url: "https://example.test/watch")
+        precondition(cosmetic.injectedScript.contains("abortOnPropertyRead(\"adsbygoogle\")"))
+        precondition(cosmetic.injectedScript.contains("abortOnPropertyWrite(\"__ad_write\")"))
+        precondition(cosmetic.injectedScript.contains("abortCurrentScript(\"eval\", \"/adNeedle/\")"))
+        precondition(cosmetic.injectedScript.contains("abortCurrentScript(\"atob\", \"inlineNeedle\")"))
+        precondition(cosmetic.injectedScript.contains("setConstant(\"adConfig.enabled\", \"false\")"))
+        precondition(cosmetic.injectedScript.contains("addEventListenerDefuser(\"click\", \"popMagic\")"))
+        precondition(cosmetic.injectedScript.contains("noSetTimeoutIf(\"badTimer\", \"1000\")"))
+        precondition(cosmetic.injectedScript.contains("noSetIntervalIf(\"badInterval\", \"500\")"))
+        precondition(cosmetic.injectedScript.contains("noWindowOpenIf(\"/popup\\\\.test/\")"))
+        precondition(cosmetic.injectedScript.contains("jsonPrune(\"adSlots.primary\", \"data\")"))
+        precondition(cosmetic.injectedScript.contains("removeAttr(\"oncontextmenu\", \"body\")"))
+        precondition(cosmetic.injectedScript.contains("removeClass(\"ad-locked\", \".article\")"))
+        precondition(cosmetic.injectedScript.contains("preventFetch(\"/ads-api/\", \"emptyObj\")"))
+        precondition(cosmetic.injectedScript.contains("preventXhr(\"/xhr-ad/\", \"emptyArr\")"))
+        precondition(cosmetic.proceduralActions.count == 3)
+
+        let subCosmetic = stage2Engine.cosmetic(url: "https://sub.example.test/watch")
+        precondition(!subCosmetic.injectedScript.contains("abortOnPropertyRead(\"adsbygoogle\")"))
+        precondition(subCosmetic.injectedScript.contains("setConstant(\"adConfig.enabled\", \"false\")"))
+        precondition(subCosmetic.proceduralActions.count == 2)
+        precondition(stage2Engine.cosmetic(url: "https://exceptall.example.test/watch").injectedScript.isEmpty)
+        precondition(stage2Engine.cosmetic(url: "https://unmatched.test/watch").injectedScript.isEmpty)
+
+        // Cached deserialize preserves scriptlet resources and procedural actions.
+        let stage2Cached = try stage2Engine.serialize()
+        let stage2Restored = try NativeAdblockEngine.load(lists: [stage2Rules], cached: stage2Cached)
+        let restoredCosmetic = stage2Restored.cosmetic(url: "https://example.test/watch")
+        precondition(restoredCosmetic.injectedScript.count == cosmetic.injectedScript.count)
+        precondition(restoredCosmetic.proceduralActions == cosmetic.proceduralActions)
+
+        // Site scripts respect global enable, bridged-app exclusion, and YouTube exemption.
+        let activeScripts = AdblockSnapshot.shared.siteScripts(for: URL(string: "https://example.test/watch"), enabled: true, isBridgedApp: false)
+        precondition(activeScripts.scriptlet != nil && activeScripts.cosmetic != nil)
+        precondition(AdblockSnapshot.shared.siteScripts(for: URL(string: "https://example.test/watch"), enabled: false, isBridgedApp: false) == .empty)
+        precondition(AdblockSnapshot.shared.siteScripts(for: URL(string: "https://example.test/watch"), enabled: true, isBridgedApp: true) == .empty)
+        precondition(AdblockSnapshot.shared.siteScripts(for: URL(string: "https://www.youtube.com/watch?v=1"), enabled: true, isBridgedApp: false) == .empty)
+        precondition(AdblockSnapshot.shared.siteScripts(for: URL(string: "https://unmatched.test/watch"), enabled: true, isBridgedApp: false) == .empty)
+
         print("PASS: adblock migration, profile/includes, native matching/types/source, cache rebuild, stable chunk JSON and popup subset")
     }
 }

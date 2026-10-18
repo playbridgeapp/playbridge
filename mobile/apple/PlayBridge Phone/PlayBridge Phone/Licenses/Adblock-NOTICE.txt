@@ -9,6 +9,9 @@ MPL-2.0 text is bundled as MPL-2.0.txt. The upstream engine is unmodified;
 PlayBridge's opt-in integration files carry MPL-2.0 SPDX notices.
 
 No uBlock Origin JavaScript resources are bundled, downloaded or injected.
+PlayBridge's scriptlet resources (cast/core/src/adblock_scriptlets/) and
+procedural cosmetic applier (Browser/NativeAdblockEngine.swift) are original
+PlayBridge code licensed under MPL-2.0 and loaded into adblock-rust.
 The filter lists are separate downloaded data, not relicensed as PlayBridge code.
 PlayBridge expands includes and applies the ublock/safari/mobile conditional
 profile locally, preserving filter comments and attribution headers. These are

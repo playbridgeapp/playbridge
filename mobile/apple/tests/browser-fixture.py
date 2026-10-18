@@ -124,6 +124,65 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif path in ('/popup-frame-window', '/popup-frame-link'):
                 action = "window.open('/frame-child','_blank');" if path.endswith('window') else "var a=document.createElement('a');a.href='/frame-child';a.target='_blank';document.body.appendChild(a);a.click();"
                 data = ("<html><script>setTimeout(function(){" + action + "parent.postMessage({popupAuditDone:true,active:!!(navigator.userActivation&&navigator.userActivation.isActive)},'*');},100);</script></html>").encode()
+            elif path in ('/safe-api', '/xhr-safe'):
+                data = b'safe-ok'
+            elif path == '/stage2':
+                data = b'''<html><head><title>Stage2</title><style>body.locked{overflow:hidden}</style></head>
+                <body class="locked" oncontextmenu="return false">
+                <script>
+                window.__stage2 = { aoprSurvived: false, aopwSurvived: false, acsSurvived: false, acisSurvived: false };
+                window.adsbygoogle = { loaded: true };
+                var _read = window.adsbygoogle;
+                window.__stage2.aoprSurvived = true;
+                </script>
+                <script>
+                window.__ad_write = 1;
+                window.__stage2.aopwSurvived = true;
+                </script>
+                <script>
+                // needle: adNeedle
+                eval("window.__stage2.acsSurvived = true");
+                </script>
+                <script>
+                // needle: inlineNeedle
+                atob("aW5saW5lTmVlZGxl");
+                window.__stage2.acisSurvived = true;
+                </script>
+                <script>
+                window.__stage2.constantVal = (window.adConfig && window.adConfig.enabled);
+                var clickCount = 0, safeCount = 0;
+                window.addEventListener("click", function popMagic() { clickCount++; });
+                window.addEventListener("click", function safeHandler() { safeCount++; });
+                document.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+                window.__stage2.defusedClick = clickCount;
+                window.__stage2.safeClick = safeCount;
+                window.__stage2.badTimerRan = false;
+                window.__stage2.goodTimerRan = false;
+                setTimeout(function() { var s = "badTimer"; window.__stage2.badTimerRan = true; }, 10);
+                setTimeout(function() { window.__stage2.goodTimerRan = true; }, 10);
+                window.__stage2.badIntervalTicks = 0;
+                window.__stage2.goodIntervalTicks = 0;
+                var bi = setInterval(function() { var s = "badInterval"; window.__stage2.badIntervalTicks++; }, 10);
+                var gi = setInterval(function() { window.__stage2.goodIntervalTicks++; clearInterval(gi); }, 10);
+                var win = window.open("https://popup.test/ad");
+                window.__stage2.nowoifClosed = (win === null);
+                var parsed = JSON.parse('{"adSlots":{"primary":[1,2]},"data":{"keep":42}}');
+                window.__stage2.pruned = !!(parsed.adSlots && parsed.adSlots.primary === undefined && parsed.data && parsed.data.keep === 42);
+                </script>
+                <div class="article ad-locked" id="article-box">Article</div>
+                <div class="card" id="sponsored-card"><div class="inner"><span>Sponsored</span></div></div>
+                <div class="card" id="organic-card"><div class="inner"><span>Organic</span></div></div>
+                <div class="except-card" id="except-card"><span>Excepted Ad</span></div>
+                <div class="removable-ad" id="removable-ad">Remove Me</div>
+                <div class="attr-target" id="attr-target" data-sponsor="true" data-remove-me="yes">Attr Target</div>
+                <div class="cls-target strip-me keep-me" id="cls-target">Class Target</div>
+                <div class="css-fixed-ad" id="css-fixed-ad" style="position:fixed;top:0px">Fixed Ad</div>
+                <div class="path-ad" id="path-ad">Path Ad</div>
+                <p class="long-ad" id="long-ad">This paragraph has more than twenty five characters in it.</p>
+                <p class="short-ad" id="short-ad">Short</p>
+                <div class="xpath-ad" id="xpath-ad"><em id="xpath-em">XPathBanner</em></div>
+                <a id="to-parent" href="/parent">Parent</a>
+                </body></html>'''
             elif path in ('/file', '/slow', '/retry'):
                 data = b'playbridge-download-fixture\n' * (100000 if path == '/slow' else 100)
             else:
