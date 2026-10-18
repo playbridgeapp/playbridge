@@ -123,7 +123,10 @@ struct MPVPhonePlayerView: View {
             feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
             controls.reveal()
         }
-        .onDisappear { controls.stop(); feedbackTask?.cancel(); feedbackTask = nil }
+        .onDisappear {
+            controls.stop(); feedbackTask?.cancel(); feedbackTask = nil
+            PhonePlayerOrientationLock.release()
+        }
         .sheet(isPresented: $showSettings, onDismiss: { controls.reveal() }) {
             PhonePlayerSettingsView(session: session)
         }
@@ -152,6 +155,12 @@ struct MPVPhonePlayerView: View {
             Button { showSettings = true } label: {
                 Text(String(format: "%g×", session.preferences.speed)).font(.callout.bold()).frame(minWidth: 44, minHeight: 44)
             }.accessibilityLabel("Playback speed").accessibilityValue(String(format: "%g times", session.preferences.speed))
+            Button {
+                controls.reveal()
+                PhonePlayerOrientationLock.toggle()
+            } label: { Image(systemName: "rotate.right").frame(width: 44, height: 44) }
+                .accessibilityLabel(PhonePlayerOrientationLock.isLandscape ? "Rotate to portrait" : "Rotate to landscape")
+                .accessibilityIdentifier("phone-player-rotate")
             Button { controls.lock() } label: { Image(systemName: "lock.fill").frame(width: 44, height: 44) }
                 .accessibilityLabel("Lock player controls").accessibilityIdentifier("phone-player-lock")
             Button { showSettings = true } label: { Image(systemName: "gearshape").frame(width: 44, height: 44) }

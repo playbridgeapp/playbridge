@@ -203,6 +203,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     /// Stops page-owned playback without waking a lazily restored tab.
     /// Cast-sheet dismissal intentionally does not resume the media.
+    /// While PlayBridge's own player is open: pause media in every frame, keep it from
+    /// resuming, and close any WebKit fullscreen video, which iOS would otherwise open
+    /// when the phone turns to landscape. Lifted when the player closes.
+    func suspendPageMedia(_ suspended: Bool) {
+        guard let view = loadedWebView else { return }
+        if suspended {
+            view.pauseAllMediaPlayback {}
+            view.closeAllMediaPresentations {}
+        }
+        view.setAllMediaPlaybackSuspended(suspended) {}
+    }
+
     func pauseMedia() {
         loadedWebView?.evaluateJavaScript(
             "window.__playbridgePauseMedia?.(); void 0;",

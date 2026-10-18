@@ -222,6 +222,8 @@ struct CastSheet: View {
                 }) {
                     fullscreenPlayerItem = nil
                 }
+                .onAppear { tab.suspendPageMedia(true) }
+                .onDisappear { tab.suspendPageMedia(false) }
             }
             .onChange(of: vm.destinationID) { _ in
                 tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)

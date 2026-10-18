@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct PlayBridgePhoneApp: App {
+    @UIApplicationDelegateAdaptor(PlayBridgeAppDelegate.self) private var appDelegate
     @StateObject private var vm = ConnectionViewModel()
     @StateObject private var nav = NavigationViewModel()
     @StateObject private var store = BrowserStore()
