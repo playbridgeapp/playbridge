@@ -112,7 +112,7 @@ List<SkipSegment> parseIntroDbSegments(Map<String, dynamic> json) {
   return segments;
 }
 
-/// TheIntroDB v3 `{ "intro": [{start_ms, end_ms}], "credits": [...], … }`.
+/// TheIntroDB v4 `{ "tvdb_id": …, "intro": [{start_ms, end_ms}], … }`.
 List<SkipSegment> parseTheIntroDbSegments(Map<String, dynamic> json) {
   const typeMap = <String, String>{
     'intro': 'intro',
@@ -130,7 +130,13 @@ List<SkipSegment> parseTheIntroDbSegments(Map<String, dynamic> json) {
     seen.add(entry.value);
     for (final item in raw) {
       if (item is! Map) continue;
-      final startMs = _asInt(item['start_ms']);
+      if (!item.containsKey('start_ms') || !item.containsKey('end_ms')) {
+        continue;
+      }
+      final startMs = item['start_ms'] == null &&
+              (entry.value == 'intro' || entry.value == 'recap')
+          ? 0
+          : _asInt(item['start_ms']);
       if (startMs == null || startMs < 0) continue;
       final endRaw = item['end_ms'];
       final int endMs;

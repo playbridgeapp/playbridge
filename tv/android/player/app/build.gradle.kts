@@ -167,6 +167,7 @@ dependencies {
     implementation(libs.androidx.media3.effect)                  // Media effects support
 
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

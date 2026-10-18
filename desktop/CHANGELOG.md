@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **TheIntroDB skip segments**: Use API v4 for movie and episode lookups, retain saved custom/versioned API URLs, and handle intro/recap ranges starting at the beginning. (#379)
+
 ## [0.15.1+33] — 2026-10-11
 
 > **Works best together**: Use PlayBridge browser extension 0.15.0 or later to choose the playback device from the browser and to let websites play through PlayBridge.
