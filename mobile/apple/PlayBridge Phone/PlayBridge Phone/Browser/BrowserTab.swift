@@ -308,6 +308,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     /// Invoked when a page finishes loading — used to record history + persist tabs.
     var onPageFinished: ((URL?, String?) -> Void)?
+    /// The page changed its title, possibly after its visit was recorded.
+    var onTitleChanged: ((URL, String) -> Void)?
     private var inPageVisitTask: Task<Void, Never>?
 
     /// Records an in-page navigation once its title has had time to update.
@@ -428,7 +430,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             },
             webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
                 guard let title = wv.title, !title.isEmpty else { return }
-                DispatchQueue.main.async { self?.title = title }
+                let url = wv.url
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.title = title
+                    self.onMetadataChanged?()
+                    if let url { self.onTitleChanged?(url, title) }
+                }
             },
             webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
                 guard let url = wv.url?.absoluteString else { return }

@@ -98,6 +98,15 @@ final class BrowserDataStore: ObservableObject {
         saveHistory()
     }
 
+    /// Keeps an existing entry's title current when a page retitles itself after the
+    /// visit was recorded (single-page sites often update the title late or twice).
+    func updateTitle(url: String, title: String) {
+        guard !title.isEmpty, let idx = history.firstIndex(where: { $0.url == url }),
+              history[idx].title != title else { return }
+        history[idx].title = title
+        saveHistory()
+    }
+
     func removeHistory(_ id: UUID) { history.removeAll { $0.id == id }; saveHistory() }
     func clearHistory() { history = []; saveHistory() }
 

@@ -337,6 +337,15 @@ enum ContentBlocker {
             try check(saved.contains("watch?v=second"), "In-page navigation was not saved for restore")
             try await wait("spa history") { spa.data.history.first?.url.hasSuffix("/watch?v=second") == true }
             try check(spa.data.history.first?.title == "Second video", "In-page history used a stale title")
+            // Single-page sites often retitle after the visit is recorded; history follows.
+            _ = try await spaView.evaluateJavaScript("history.pushState({},'', '/watch?v=third');void(0)")
+            try await wait("spa third history") { spa.data.history.first?.url.hasSuffix("/watch?v=third") == true }
+            _ = try await spaView.evaluateJavaScript("document.title='Third video (late)';void(0)")
+            try await wait("late spa title") { spa.data.history.first?.title == "Third video (late)" }
+            try check(spa.data.history.first(where: { $0.url == base + "/watch?v=second" })?.title == "Second video",
+                      "A late title overwrote an earlier history entry")
+            try check(spa.data.history.first { $0.url == base + "/watch?v=third" }?.visitCount == 1,
+                      "A title change counted as another visit")
         }
         let browser = BrowserStore(tabsFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         store = browser
