@@ -448,6 +448,8 @@ enum ContentBlocker {
         try await verifyFavicons()
         try await verifyJumpDuringScrolling()
         let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        try verifyAddressResolutionAndPersistence()
+        try await verifyProcessRecovery(base: base)
         if ProcessInfo.processInfo.environment["BRIDGED_APPS"] == "1" {
             try await verifyBridgedApps(base: base)
             return
@@ -636,10 +638,13 @@ extension BrowserStartupChecks {
         try check(parent.prompt?.title == "Open another app?", "External link had no approval")
         parent.cancelPrompt()
         try check(view.url == source, "External link navigated browser")
+        let previousFinish = parent.onPageFinished
+        var recoveredLoads = 0
+        parent.onPageFinished = { url, title in previousFinish?(url, title); recoveredLoads += 1 }
         parent.webViewWebContentProcessDidTerminate(view)
-        try check(parent.navigationFailure != nil, "WebContent termination has no recovery")
-        parent.reload()
-        try await wait("process recovery") { parent.navigationFailure == nil && !view.isLoading }
+        try check(parent.navigationFailure == nil, "WebContent termination did not attempt automatic recovery")
+        try await wait("process recovery") { recoveredLoads > 0 && parent.navigationFailure == nil && !view.isLoading }
+        parent.onPageFinished = previousFinish
         print("CHECK: dialogs/popups/external links passed")
 
         let jobCount = browser.downloads.items.count
@@ -1135,9 +1140,19 @@ extension BrowserStartupChecks {
         try await wait("Movi pagehide") { !tab.isMoviFullscreen }
         _ = try await view.evaluateJavaScript("dispatchEvent(new Event('pageshow'));void(0)")
         try await wait("Movi pageshow") { tab.isMoviFullscreen }
+        let originalFinish = tab.onPageFinished
+        var recoveryLoads = 0
+        tab.onPageFinished = { url, title in originalFinish?(url, title); recoveryLoads += 1 }
         tab.webViewWebContentProcessDidTerminate(view)
         try check(!tab.isMoviFullscreen, "Terminated page retained fullscreen")
-        _ = try await view.evaluateJavaScript("dispatchEvent(new Event('pageshow'));void(0)")
+        try await wait("Movi process recovery") { recoveryLoads > 0 && !view.isLoading }
+        tab.onPageFinished = originalFinish
+        _ = try await view.evaluateJavaScript("""
+            window.fixturePlayer = document.createElement('movi-player');
+            fixturePlayer.attachShadow({mode:'open'}).appendChild(document.createElement('canvas'));
+            fixturePlayer.classList.add('movi-pseudo-fullscreen');
+            document.body.appendChild(fixturePlayer);void(0)
+            """)
         try await wait("Movi before navigation") { tab.isMoviFullscreen }
         tab.load(base + "/identity")
         try await wait("Movi navigation reset") { view.title == "Identity" && !view.isLoading && !tab.isMoviFullscreen }
@@ -1296,4 +1311,81 @@ private final class FaviconFixtureProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+
+extension BrowserStartupChecks {
+    @MainActor private func verifyAddressResolutionAndPersistence() throws {
+        let original = SearchEngine.current
+        defer { SearchEngine.current = original }
+        SearchEngine.current = .duckduckgo
+        let cases = ["localhost:8080": "http://localhost:8080",
+                     "192.168.1.22:8080/x": "http://192.168.1.22:8080/x",
+                     "HTTP://Example.com": "HTTP://Example.com", "example.com": "https://example.com",
+                     "hello world": SearchEngine.duckduckgo.searchURL("hello world"),
+                     "nas:5000": "http://nas:5000", "about:blank": "about:blank",
+                     "10.0.0.1": "http://10.0.0.1", "[::1]:8080": "http://[::1]:8080"]
+        for (input, expected) in cases { try check(BrowserTab.resolveInput(input) == expected, "Address normalization mismatch") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let data = BrowserDataStore(directory: dir, historySaveDelay: 60)
+        data.recordVisit(url: "https://fixture.test/page", title: "Before")
+        data.updateTitle(url: "https://fixture.test/page", title: "Latest")
+        data.addBookmark(url: "https://fixture.test/page", title: "Saved")
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        let saved = try JSONDecoder().decode([HistoryEntry].self, from: Data(contentsOf: dir.appendingPathComponent("history.json")))
+        try check(saved.first?.title == "Latest", "Background flush lost the latest history snapshot")
+        data.clearHistory()
+        data.removeBookmark(url: "https://fixture.test/page")
+        NotificationCenter.default.post(name: UIApplication.willTerminateNotification, object: nil)
+        let cleared = try JSONDecoder().decode([HistoryEntry].self, from: Data(contentsOf: dir.appendingPathComponent("history.json")))
+        let bookmarks = try JSONDecoder().decode([Bookmark].self, from: Data(contentsOf: dir.appendingPathComponent("bookmarks.json")))
+        try check(cleared.isEmpty && bookmarks.isEmpty, "Termination flush lost cleared data")
+        print("CHECK: selected search engine, local addresses and lifecycle persistence flush passed")
+    }
+
+    @MainActor private func verifyProcessRecovery(base: String) async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let browser = BrowserStore(tabsFileURL: file)
+        browser.browserVisible = true
+        let visible = browser.newTab(loading: base + "/parent")
+        let view = visible.webView
+        try await wait("process recovery initial page") { view.title == "Parent" && !view.isLoading }
+        _ = try await view.evaluateJavaScript("window.processRecoveryMarker=1;void(0)")
+        visible.webViewWebContentProcessDidTerminate(view)
+        try check(visible.navigationFailure == nil, "Visible process termination showed an error before retry")
+        for _ in 0..<200 {
+            if (try? await view.evaluateJavaScript("typeof window.processRecoveryMarker")) as? String == "undefined", !view.isLoading { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let marker = try await view.evaluateJavaScript("typeof window.processRecoveryMarker") as? String
+        try check(marker == "undefined", "Visible process termination did not reload")
+        visible.webViewWebContentProcessDidTerminate(view)
+        try check(visible.navigationFailure != nil, "Automatic reload loop was not stopped")
+        let hidden = browser.newTab(loading: base + "/child")
+        let hiddenView = hidden.webView
+        try await wait("background recovery page") { hiddenView.title == "Child" && !hiddenView.isLoading }
+        browser.select(visible.id)
+        _ = try await hiddenView.evaluateJavaScript("window.processRecoveryMarker=2;void(0)")
+        hidden.webViewWebContentProcessDidTerminate(hiddenView)
+        try check(hidden.navigationFailure == nil && !hiddenView.isLoading, "Hidden termination reloaded or showed an error")
+        let pending = try await hiddenView.evaluateJavaScript("window.processRecoveryMarker") as? Int
+        try check(pending == 2, "Hidden page reloaded before selection")
+        browser.select(hidden.id)
+        for _ in 0..<200 {
+            if (try? await hiddenView.evaluateJavaScript("typeof window.processRecoveryMarker")) as? String == "undefined", !hiddenView.isLoading { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let reloaded = try await hiddenView.evaluateJavaScript("typeof window.processRecoveryMarker") as? String
+        try check(reloaded == "undefined" && hidden.navigationFailure == nil, "Selection did not reload the terminated tab")
+        let fallback = browser.newTab()
+        fallback.urlString = base + "/parent"
+        let blankView = fallback.webView
+        try check(blankView.url == nil, "Fallback fixture was already loaded")
+        fallback.webViewWebContentProcessDidTerminate(blankView)
+        try await wait("terminated tab without WebKit URL") { blankView.title == "Parent" && !blankView.isLoading }
+        try check(fallback.navigationFailure == nil, "Missing WebKit URL did not use the saved address")
+        print("CHECK: visible process recovery, repeated-crash guard, deferred hidden-tab reload and URL fallback passed")
+    }
 }

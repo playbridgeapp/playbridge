@@ -540,3 +540,15 @@ is booted, installs only a throwaway fixture app, then removes that app.
 `ADBLOCK_MEASUREMENT_LISTS=/private/tmp/lists.json` optionally supplies an array
 of preprocessed filter-list texts for full-list compile/memory measurements;
 never put resources or sensitive data in that input. No list downloads occur.
+
+Browser process recovery, address parsing and background persistence model checks:
+
+```sh
+bash mobile/apple/tests/run-browser-model-checks.sh
+```
+
+Checks local/public address schemes, deferred process recovery and the ten-second
+retry guard, immediate model updates, coalesced background writes, clear ordering
+and explicit flushes. The default browser Simulator runner also checks automatic
+visible-tab reloads, deferred hidden-tab reloads, missing-WebKit-URL recovery and
+background/termination notification flushes using a local fixture.
