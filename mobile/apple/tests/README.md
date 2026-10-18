@@ -37,6 +37,22 @@ Checks that both the first launch and a new process start on Dashboard, and that
 the Browser tile restores the saved ordinary tab. Bringing an already running app
 back to the foreground intentionally retains its current screen.
 
+Browser session history and page sharing:
+
+```sh
+bash mobile/apple/tests/run-browser-model-checks.sh
+IOS_TEST_SIMULATOR=<simulator-uuid> bash mobile/apple/tests/run-browser-startup-checks.sh
+IOS_TEST_SIMULATOR=<simulator-uuid> bash mobile/apple/tests/run-browser-startup-checks.sh --sharing-menu-ui
+```
+
+Run Simulator modes sequentially. The default fixture checks persisted Back/Forward
+history, lazy restoration, desktop/UA settings, SPA updates, invalid/missing state
+fallback, and closed/orphan state cleanup. The model suite checks bounded state
+files, debounce, flush and delete ordering, and background writes. The sharing UI
+mode terminates and relaunches its isolated app, checks Back and Forward, opens
+the system share sheet, and verifies Share…/Open in Safari are absent on Home,
+bridged apps and non-web pages. It does not launch Safari.
+
 Bridged-app installation, persistence, isolated sessions, navigation and UI:
 
 ```sh

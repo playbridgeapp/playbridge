@@ -70,6 +70,50 @@ import Foundation
         while !FileManager.default.fileExists(atPath: debounceFile.path), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         precondition(FileManager.default.fileExists(atPath: debounceFile.path))
         debounce.flushPendingSaves()
+        try verifyTabStatePersistence(directory.appendingPathComponent("tab-states"))
         print("PASS: address normalization, process recovery loop guard, coalesced background saves, flush/clear ordering and debounce")
+    }
+
+    private static func verifyTabStatePersistence(_ directory: URL) throws {
+        var writes = 0
+        let persistence = BrowserTabStatePersistence(directory: directory, delay: 60) { data, file in
+            precondition(!Thread.isMainThread)
+            writes += 1
+            try data.write(to: file, options: .atomic)
+        }
+        let id = UUID().uuidString
+        let first = Data([1, 2]), latest = Data([3, 4])
+        persistence.save(first, url: "https://example.test/first", id: id)
+        persistence.save(latest, url: "https://example.test/latest", id: id)
+        persistence.flush()
+        precondition(writes == 1 && persistence.load(id, matching: "https://example.test/latest") == latest)
+        precondition(persistence.load(id, matching: "https://example.test/first") == nil)
+        let orphan = directory.appendingPathComponent(UUID().uuidString)
+        try first.write(to: orphan)
+        persistence.prune(keeping: [id])
+        persistence.flush()
+        precondition(!FileManager.default.fileExists(atPath: orphan.path))
+        persistence.save(first, url: "https://example.test/first", id: id)
+        persistence.remove(id)
+        persistence.flush()
+        precondition(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(id).path))
+        persistence.save(Data(repeating: 0, count: BrowserTabStatePersistence.maximumBytes + 1), url: "https://example.test", id: id)
+        persistence.flush()
+        precondition(persistence.load(id, matching: "https://example.test") == nil)
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent(id))
+        precondition(persistence.load(id, matching: "https://example.test") == nil)
+        precondition(persistence.load("../outside", matching: "https://example.test") == nil)
+        persistence.save(first, url: "https://example.test", id: "../outside")
+        persistence.flush()
+        let debouncedID = UUID().uuidString
+        let debounced = BrowserTabStatePersistence(directory: directory, delay: 0.05)
+        debounced.save(first, url: "https://example.test", id: debouncedID)
+        let deadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: directory.appendingPathComponent(debouncedID).path), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        precondition(debounced.load(debouncedID, matching: "https://example.test") == first)
+        debounced.flush()
+        print("CHECK: tab-state background/coalesced writes, debounce, cap, corrupt/mismatch reads and prune/delete ordering")
     }
 }
