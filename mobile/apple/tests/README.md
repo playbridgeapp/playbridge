@@ -53,6 +53,24 @@ mode terminates and relaunches its isolated app, checks Back and Forward, opens
 the system share sheet, and verifies Share…/Open in Safari are absent on Home,
 bridged apps and non-web pages. It does not launch Safari.
 
+Connection security, clipboard suggestions and new-tab Top Visited:
+
+```sh
+IOS_TEST_SIMULATOR=<simulator-uuid> bash mobile/apple/tests/run-browser-startup-checks.sh --site-tools-ui
+```
+
+This mode starts loopback HTTP and HTTPS fixtures and generates a short-lived TLS
+certificate with the system `openssl` tool. Only the isolated test navigation
+delegate trusts that pinned certificate; no root is installed into any keychain.
+The fixture checks the production trust/certificate summary and verifies that
+clipboard pattern detection and dismissal never read clipboard contents. The UI
+fixture uses a named pasteboard so host clipboard synchronization cannot rewrite
+its generation between XCTest taps; the app uses the general pasteboard. XCTest
+covers the secure/insecure indicator, Site info and Site Settings, Home hiding,
+Top Visited navigation, and copied-link suggestion navigation and dismissal.
+The host browser-model suite also covers Android clipboard classifier cases,
+IPv6/port/length boundaries, Top Visited ranking, and security state derivation.
+
 Bridged-app installation, persistence, isolated sessions, navigation and UI:
 
 ```sh

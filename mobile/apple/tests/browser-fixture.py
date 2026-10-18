@@ -125,6 +125,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(data[i:i+4096]); self.wfile.flush()
                 if path == '/slow': time.sleep(.03)
         except (BrokenPipeError, ConnectionResetError): pass
+# Only the new mode starts TLS. Its certificate is anchored by the isolated
+# test delegate, never installed into the Simulator/system trust store.
+if '--site-tools-ui' in sys.argv:
+    import os, ssl, threading
+    tls = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(os.environ['PB_BROWSER_TLS_CERT'], os.environ['PB_BROWSER_TLS_KEY'])
+    tls.socket = context.wrap_socket(tls.socket, server_side=True)
+    with open(sys.argv[1] + '-tls', 'w') as f:
+        f.write('https://127.0.0.1:' + str(tls.server_port))
+    threading.Thread(target=tls.serve_forever, daemon=True).start()
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 with open(sys.argv[1], 'w') as f: f.write('http://127.0.0.1:' + str(server.server_port))
 server.serve_forever()

@@ -132,6 +132,19 @@ final class BrowserDataStore: ObservableObject {
     func removeHistory(_ id: UUID) { history.removeAll { $0.id == id }; saveHistory() }
     func clearHistory() { history = []; saveHistory() }
 
+    /// Match Android's four tiles. Bookmarked URLs remain eligible; ties prefer
+    /// recent visits, then URL for a deterministic order. No extra persisted score.
+    var topVisited: [HistoryEntry] {
+        Array(history.filter {
+            guard let url = URL(string: $0.url), let host = url.host, !host.isEmpty else { return false }
+            return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+        }.sorted {
+            if $0.visitCount != $1.visitCount { return $0.visitCount > $1.visitCount }
+            if $0.lastVisited != $1.lastVisited { return $0.lastVisited > $1.lastVisited }
+            return $0.url < $1.url
+        }.prefix(4))
+    }
+
     // MARK: - Bookmarks
 
     func isBookmarked(_ url: String) -> Bool { bookmarks.contains { $0.url == url } }

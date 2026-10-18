@@ -1,6 +1,67 @@
 import XCTest
 
 final class BrowserPopupUITests: XCTestCase {
+    func testSiteInfoClipboardAndTopVisited() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
+        app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        app.launchEnvironment["BROWSER_TLS_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_TLS_FIXTURE"]!
+        app.launchEnvironment["SITE_TOOLS_UI"] = "1"
+        app.launch()
+        let security = app.buttons["browserSecurityIndicator"]
+        XCTAssertTrue(security.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertEqual(security.value as? String, "Connection is secure")
+        security.tap()
+        XCTAssertTrue(app.staticTexts["siteInfoHost"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["siteInfoHost"].label, "127.0.0.1")
+        XCTAssertTrue(app.staticTexts["Connection is secure"].exists, app.debugDescription)
+        let settings = app.buttons["Site Settings"]
+        let infoForm = app.collectionViews.firstMatch
+        for _ in 0..<5 {
+            if settings.exists && settings.isHittable { break }
+            infoForm.swipeUp()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), app.debugDescription)
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Site Settings"].waitForExistence(timeout: 5))
+        app.buttons["Done"].firstMatch.tap()
+        app.buttons["Done"].firstMatch.tap()
+        app.buttons["HTTP page"].tap()
+        expectation(for: NSPredicate(format: "value == %@", "Connection is not secure"), evaluatedWith: security)
+        waitForExpectations(timeout: 10)
+        security.tap()
+        XCTAssertTrue(app.staticTexts["Connection is not secure"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Done"].firstMatch.tap()
+        app.buttons["New tab"].tap()
+        XCTAssertFalse(security.exists, "Home must not show a connection indicator")
+        XCTAssertTrue(app.staticTexts["Top Visited"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Most visited"].firstMatch.tap()
+        let current = app.staticTexts["step3CurrentAddress"]
+        expectation(for: NSPredicate(format: "label ENDSWITH %@", "/parent"), evaluatedWith: current)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.webViews.links["Open"].firstMatch.waitForExistence(timeout: 10), "Top Visited did not load its document")
+        app.buttons["New tab"].tap()
+        app.buttons["Copy fixture link"].tap()
+        let field = app.textFields["browserAddressField"]
+        field.tap()
+        let suggestion = app.buttons["browserClipboardSuggestion"]
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(suggestion.label.hasPrefix("Link you copied"), suggestion.label)
+        XCTAssertTrue(app.buttons["browserClipboardPaste"].exists, "System Paste button missing")
+        app.buttons["Dismiss copied suggestion"].tap()
+        app.buttons["Cancel editing address"].tap()
+        field.tap()
+        XCTAssertFalse(suggestion.waitForExistence(timeout: 2), "Dismissed clipboard generation was re-offered")
+        app.buttons["Cancel editing address"].tap()
+        app.buttons["Copy fixture link"].tap()
+        field.tap()
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), app.debugDescription)
+        suggestion.tap()
+        expectation(for: NSPredicate(format: "label ENDSWITH %@", "/identity?copied=1"), evaluatedWith: current)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.webViews.staticTexts["Identity"].firstMatch.waitForExistence(timeout: 10), "Copied link did not load its document")
+    }
+
     func testSharingMenuAndHistoryRelaunch() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
@@ -30,7 +91,7 @@ final class BrowserPopupUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Share…"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["Open in Safari"].exists, app.debugDescription)
         app.buttons["Share…"].tap()
-        let copy = app.descendants(matching: .any).matching(identifier: "Copy").firstMatch
+        let copy = app.cells.matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 10), "System share sheet did not open: " + app.debugDescription)
         // iOS exposes share actions as cells, rather than buttons.
         // Copy dismisses the system sheet without opening an external app.

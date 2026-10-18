@@ -168,7 +168,7 @@ enum ContentBlocker {
                             : "PASS: browser restore, navigation, consent, dialogs, popups, search and downloads")
             }
             catch { print("FAIL: \(error)"); exit(1) }
-            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SHARING_MENU_UI"] != "1" { exit(0) }
+            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SHARING_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SITE_TOOLS_UI"] != "1" { exit(0) }
         }
         return true
     }
@@ -615,6 +615,10 @@ enum ContentBlocker {
     }
 
     @MainActor func run() async throws {
+        if ProcessInfo.processInfo.environment["SITE_TOOLS_UI"] == "1" {
+            try await showSiteToolsFixture()
+            return
+        }
         if ProcessInfo.processInfo.environment["SHARING_MENU_UI"] == "1" {
             try await showSharingMenuFixture()
             return
