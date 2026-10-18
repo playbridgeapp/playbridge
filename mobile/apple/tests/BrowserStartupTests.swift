@@ -168,7 +168,7 @@ enum ContentBlocker {
                             : "PASS: browser restore, navigation, consent, dialogs, popups, search and downloads")
             }
             catch { print("FAIL: \(error)"); exit(1) }
-            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SHARING_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SITE_TOOLS_UI"] != "1" { exit(0) }
+            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SHARING_MENU_UI"] != "1" && ProcessInfo.processInfo.environment["SITE_TOOLS_UI"] != "1" && ProcessInfo.processInfo.environment["LIBRARY_IMAGES_UI"] != "1" { exit(0) }
         }
         return true
     }
@@ -298,6 +298,17 @@ enum ContentBlocker {
         try check(standaloneImage == "https://example.test/standalone.png",
                   "Standalone image did not resolve to its media URL")
         try check(plainElement == "", "Plain element incorrectly produced a context target")
+        let interaction = BrowserPopupInteraction()
+        let imageURL = "https://example.test/image.png"
+        interaction.recordContextImage(imageURL, standalone: true, now: 10)
+        try check(interaction.imageTarget(standaloneOnly: true, now: 11)?.absoluteString == imageURL, "Standalone image target lost")
+        try check(interaction.imageTarget(now: 12) == nil, "Expired image target reused")
+        interaction.recordContextImage(imageURL, standalone: false, now: 20)
+        try check(interaction.imageTarget(standaloneOnly: true, now: 20) == nil, "Linked image used standalone menu")
+        interaction.clear()
+        try check(interaction.imageTarget(now: 20) == nil, "Navigation retained image target")
+        interaction.recordContextImage("file:///private/image.png", standalone: true, now: 30)
+        try check(interaction.imageTarget(now: 30) == nil, "Unsupported image scheme accepted")
         print("CHECK: linked-logo and standalone-image context targets passed")
     }
 
@@ -615,6 +626,10 @@ enum ContentBlocker {
     }
 
     @MainActor func run() async throws {
+        if ProcessInfo.processInfo.environment["LIBRARY_IMAGES_UI"] == "1" {
+            try await showLibraryImageFixture()
+            return
+        }
         if ProcessInfo.processInfo.environment["SITE_TOOLS_UI"] == "1" {
             try await showSiteToolsFixture()
             return

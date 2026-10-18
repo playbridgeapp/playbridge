@@ -71,6 +71,23 @@ Top Visited navigation, and copied-link suggestion navigation and dismissal.
 The host browser-model suite also covers Android clipboard classifier cases,
 IPv6/port/length boundaries, Top Visited ranking, and security state derivation.
 
+History/Bookmarks search and editing, and browser image actions:
+
+```sh
+bash mobile/apple/tests/run-browser-model-checks.sh
+IOS_TEST_SIMULATOR=<simulator-uuid> bash mobile/apple/tests/run-browser-startup-checks.sh --library-images-ui
+```
+
+The model suite covers midnight/DST and day-seven grouping, locale and time-zone
+changes, title/URL search, bookmark identity and background persistence, and image
+scheme/data/size validation. The UI fixture uses the production library screens
+and WebKit interaction script, with a named pasteboard and an injected Photos
+saver; it does not request Photos permission or save into the Simulator library.
+Its loopback image endpoint requires the tab's cookie and custom user agent.
+It checks search, bookmark editing, standalone and linked-image menus, image copy,
+save delivery, the system image-file share sheet and the picture element's selected
+source. Run Simulator suites sequentially and use an explicit simulator UUID.
+
 Bridged-app installation, persistence, isolated sessions, navigation and UI:
 
 ```sh

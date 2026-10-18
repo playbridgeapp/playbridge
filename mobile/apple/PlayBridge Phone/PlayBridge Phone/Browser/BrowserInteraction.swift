@@ -69,6 +69,18 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
     weak var tab: BrowserTab?
     private var grant: PopupClickGrant?
     private var contextLink: (url: URL, time: TimeInterval)?
+    private var contextImage: (url: URL, standalone: Bool, time: TimeInterval)?
+
+    func recordContextImage(_ raw: String, standalone: Bool, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard let url = URL(string: raw), BrowserImageData.allowedURL(url) else { contextImage = nil; return }
+        contextImage = (url, standalone, now)
+    }
+    func imageTarget(standaloneOnly: Bool = false, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> URL? {
+        guard let image = contextImage, !standaloneOnly || image.standalone,
+              now >= image.time, now - image.time < 2 else { return nil }
+        return image.url
+    }
+
 
     static func originURL(_ frame: WKFrameInfo) -> URL? {
         let origin = frame.securityOrigin
@@ -92,6 +104,7 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
     func clear() {
         grant = nil
         contextLink = nil
+        contextImage = nil
     }
 
     func recordContextLink(_ rawValue: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
@@ -116,6 +129,7 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
               let origin = BrowserSitePolicy.origin(Self.originURL(message.frameInfo)) else { return }
         if let body = message.body as? [String: Any], let link = body["contextLink"] as? String {
             recordContextLink(link)
+            recordContextImage(body["contextImage"] as? String ?? "", standalone: body["standaloneImage"] as? Bool == true)
         } else if let body = message.body as? [String: Any], body["click"] as? Bool == true {
             let now = ProcessInfo.processInfo.systemUptime
             let href = (body["href"] as? String).flatMap(URL.init(string:))
@@ -156,12 +170,55 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
             return mediaURL;
         };
         Object.defineProperty(window, '__playbridgeContextTarget', {value: contextTarget});
-        window.addEventListener('touchstart', event => {
-            let link = '';
-            if (event.isTrusted && event.touches.length === 1) {
-                link = contextTarget(event.composedPath());
+        let calloutImage, previousCallout = '';
+        const restoreCallout = () => {
+            if (calloutImage) calloutImage.style.webkitTouchCallout = previousCallout;
+            calloutImage = undefined;
+        };
+        // Sites such as Google Images lay a transparent element over thumbnails, so the
+        // touched node is often not the <img>. Look for an image under the touch point.
+        const imageAt = (path, x, y) => {
+            const direct = path.find(node => node instanceof HTMLImageElement);
+            if (direct || !Number.isFinite(x) || !Number.isFinite(y)) return direct;
+            const contains = image => {
+                const r = image.getBoundingClientRect();
+                return r.width > 1 && r.height > 1 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+            };
+            const stacked = document.elementsFromPoint(x, y).find(node => node instanceof HTMLImageElement);
+            if (stacked) return stacked;
+            for (const node of path.slice(0, 6)) {
+                if (!(node instanceof Element)) continue;
+                const found = Array.from(node.getElementsByTagName('img')).slice(0, 30).find(contains);
+                if (found) return found;
             }
-            send({contextLink: link});
+            return undefined;
+        };
+        const recordContext = event => {
+            const path = event.composedPath();
+            const point = event.touches && event.touches.length ? event.touches[0] : event;
+            const image = imageAt(path, point.clientX, point.clientY);
+            const linked = path.some(node => node instanceof Element && node.closest('a[href]'));
+            let imageURL = image ? (image.currentSrc || image.src || '') : '';
+            if (!/^(https?:|data:image\/)/i.test(imageURL) || imageURL.length > 69906092) imageURL = '';
+            if (image && imageURL && !linked && event.type === 'touchstart') {
+                // WebKit's public delegate is link-only. Suppress only this image's
+                // native callout; the native image-only recognizer supplies actions.
+                calloutImage = image;
+                previousCallout = image.style.webkitTouchCallout;
+                image.style.webkitTouchCallout = 'none';
+            }
+            let link = contextTarget(path);
+            if (/^data:/i.test(link)) link = '';
+            send({contextLink: link, contextImage: imageURL, standaloneImage: !linked});
+        };
+        window.addEventListener('touchstart', event => {
+            restoreCallout();
+            if (event.isTrusted && event.touches.length === 1) recordContext(event);
+            else send({contextLink: '', contextImage: ''});
+        }, {capture: true, passive: true});
+        window.addEventListener('contextmenu', event => { if (event.isTrusted) recordContext(event); }, true);
+        for (const type of ['touchend', 'touchcancel']) window.addEventListener(type, () => {
+            setTimeout(restoreCallout, 500);
         }, {capture: true, passive: true});
         window.addEventListener('click', event => {
             // UserActivation shipped in Safari 16.4; older supported WebKit still
