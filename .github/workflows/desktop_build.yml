@@ -234,6 +234,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       skipped: ${{ steps.check_tag.outputs.skipped }}
+      signed: ${{ steps.sign.outputs.signed }}
 
     steps:
     - uses: actions/checkout@v7
@@ -287,12 +288,70 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter build macos --release
 
+    # Developer ID signing + notarization. Without the certificate secrets (forks)
+    # the build stays unsigned. Notarization reuses the App Store Connect API key.
+    - name: Sign and notarize macOS app
+      id: sign
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+        MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+      run: |
+        set -euo pipefail
+        if [ -z "$MACOS_CERT_P12_BASE64" ] || [ -z "$ASC_KEY_P8_BASE64" ]; then
+          echo "::warning::macOS signing secrets are not set; the macOS build is unsigned."
+          echo "signed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        app=build/macos/Build/Products/Release/playbridge_desktop.app
+
+        keychain="$RUNNER_TEMP/signing.keychain-db"
+        keychain_password=$(uuidgen)
+        security create-keychain -p "$keychain_password" "$keychain"
+        security set-keychain-settings -lut 21600 "$keychain"
+        security unlock-keychain -p "$keychain_password" "$keychain"
+        echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+        security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+        rm -f "$RUNNER_TEMP/cert.p12"
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+        security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+        identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+        [ -n "$identity" ] || { echo "::error::No Developer ID Application identity in the certificate"; exit 1; }
+
+        bash scripts/sign_macos.sh "$app" "$identity" macos/Runner/Release.entitlements
+
+        key="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+        echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$key"
+        ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+        xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+          --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+          --wait --timeout 45m --output-format json > "$RUNNER_TEMP/notary.json"
+        status=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+        if [ "$status" != Accepted ]; then
+          echo "::error::Notarization status: $status"
+          xcrun notarytool log "$(plutil -extract id raw "$RUNNER_TEMP/notary.json")" \
+            --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+          exit 1
+        fi
+        xcrun stapler staple "$app"
+        spctl --assess --type execute --verbose=2 "$app"
+        echo "signed=true" >> "$GITHUB_OUTPUT"
+
+    - name: Remove signing keychain and API key
+      if: always() && steps.check_tag.outputs.skipped == 'false'
+      run: |
+        security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+        rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/cert.p12"
+
     - name: Package macOS artifact
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
         cd build/macos/Build/Products/Release
-        zip -ry "$GITHUB_WORKSPACE/desktop/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
-          playbridge_desktop.app
+        ditto -c -k --keepParent playbridge_desktop.app \
+          "$GITHUB_WORKSPACE/desktop/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip"
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -361,11 +420,11 @@ jobs:
           |----------|------|
           | Windows 10+ | `playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip` — extract and run `playbridge_desktop.exe` |
           | Linux | `playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz` — extract and run `bundle/playbridge_desktop` |
-          | macOS 12+ | `playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip` — extract and right-click → Open (unsigned) |
+          | macOS 12+ | `playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip` — extract, move `playbridge_desktop.app` to Applications and open it${{ needs.build-macos.outputs.signed != 'true' && ' (unsigned)' || '' }} |
 
           **Linux:** requires `libmpv2` (`sudo apt install libmpv2` or `sudo dnf install mpv-libs`).
 
-          **macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine PlayBridge\ Desktop.app`.
+          ${{ needs.build-macos.outputs.signed == 'true' && '**macOS:** signed with Developer ID and notarized by Apple.' || '**macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine playbridge_desktop.app`.' }}
         fail_on_unmatched_files: true
         files: |
           output/playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip

@@ -56,10 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final sandboxed = await AutoLaunch.isLikelySandboxed();
     if (!Platform.isWindows) {
       final execPath = await AutoLaunch.resolveExecutablePath();
-      final al = AutoLaunch(
-        bundleId: 'com.playbridge.desktop',
-        executablePath: execPath,
-      );
+      final al = AutoLaunch(executablePath: execPath);
       final enabled = await al.isEnabled();
       if (mounted) {
         setState(() {

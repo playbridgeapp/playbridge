@@ -170,9 +170,9 @@ class TrayController with TrayListener {
     debugPrint('[tray] init starting');
     try {
       _auto = AutoLaunch(
-        bundleId: 'com.playbridge.playbridgeDesktop',
         executablePath: await AutoLaunch.resolveExecutablePath(),
       );
+      await _auto!.migrateLegacy();
       _launchAtLogin = await _auto!.isEnabled();
       if (await AutoLaunch.isLikelySandboxed()) {
         debugPrint('[tray] note: app is sandboxed; LaunchAgent writes will be '
