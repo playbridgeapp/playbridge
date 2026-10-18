@@ -29,6 +29,11 @@ function fixture(mainFrame = true, options = {}) {
   };
   const originals = { fetch: window.fetch, pushState: history.pushState, open: context.XMLHttpRequest.prototype.open, send: context.XMLHttpRequest.prototype.send };
   vm.runInNewContext(source, context);
+  // Every document asks the app for its detection policy once at load (and again on
+  // pageshow). Check that, then drop it so the assertions below count page messages only.
+  const policyRequests = messages.filter(message => message.type === 'detectionPolicyRequest');
+  assert.equal(policyRequests.length, 1, 'A document must request its detection policy exactly once at load');
+  messages.splice(messages.indexOf(policyRequests[0]), 1);
   return { messages, listeners, history, location, window, originals, document: context.document, xhr: context.XMLHttpRequest };
 }
 const page = fixture();
