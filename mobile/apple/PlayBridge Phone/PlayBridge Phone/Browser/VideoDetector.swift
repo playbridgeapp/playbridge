@@ -191,11 +191,20 @@ final class VideoDetector: ObservableObject {
     private static let fallbackUA =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     
+    static func adblockResourceType(detectedBy: String) -> String {
+        let source = detectedBy.lowercased()
+        if source.contains("xhr") || source.contains("fetch") || source.contains("body_content") { return "xmlhttprequest" }
+        if source.hasPrefix("dom_") || source == "media" { return "media" }
+        return "other"
+    }
+
     /// Ingest one `{type:'video', url, contentType, detectedBy, originUrl, ua}` message.
     func ingest(_ body: [String: Any]) {
         guard let url = body["url"] as? String, !url.isEmpty else { return }
 
-        if ContentBlocker.shouldBlock(urlString: url) {
+        let detectionSource = body["detectedBy"] as? String ?? "unknown"
+        let resourceType = Self.adblockResourceType(detectedBy: detectionSource)
+        if ContentBlocker.shouldBlock(urlString: url, sourceURL: body["originUrl"] as? String, resourceType: resourceType) {
             return
         }
 

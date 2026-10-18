@@ -271,8 +271,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     var onOpenBlockedPopup: ((URLRequest) -> Void)?
 
     @discardableResult
-    private func blockAdNavigation(_ url: URL, source: URL?, popup: Bool) -> Bool {
-        guard ContentBlocker.shouldBlockNavigation(url, source: source, popup: popup) else { return false }
+    private func blockAdNavigation(_ url: URL, source: URL?, popup: Bool, method: String = "GET") -> Bool {
+        guard ContentBlocker.shouldBlockNavigation(url, source: source, popup: popup, method: method) else { return false }
         networkLog.record(url: url.absoluteString, page: source?.absoluteString ?? urlString, kind: "navigation", state: "Blocked by ad rules")
         let notice = BrowserBlockedNotice(kind: popup ? .popup : .redirect, url: url,
             origin: source, openTarget: nil, message: nil)
@@ -709,7 +709,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if action.targetFrame == nil { recordWindowRequest() }
         if action.targetFrame == nil || action.targetFrame?.isMainFrame == true {
             let source = committedPageURL ?? popupOpenerURL ?? action.sourceFrame.request.url
-            if blockAdNavigation(url, source: source, popup: action.targetFrame == nil || (popupOpenerURL != nil && !hasCommittedPage)) {
+            if blockAdNavigation(url, source: source, popup: action.targetFrame == nil || (popupOpenerURL != nil && !hasCommittedPage), method: action.request.httpMethod ?? "GET") {
                 decisionHandler(.cancel, preferences)
                 return
             }
@@ -844,7 +844,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             guard isActive() else { return nil }
             recordWindowRequest()
             if let url = navigationAction.request.url,
-               blockAdNavigation(url, source: navigationAction.sourceFrame.request.url, popup: true) { return nil }
+               blockAdNavigation(url, source: navigationAction.sourceFrame.request.url, popup: true, method: navigationAction.request.httpMethod ?? "GET") { return nil }
             let interaction = popupInteraction.consume(for: navigationAction.sourceFrame)
             let origin = BrowserPopupInteraction.originURL(navigationAction.sourceFrame)
             let allowed = PopupPolicy.allowsWindow(blockPopups: BrowserSitePolicy.blockPopups,

@@ -15,7 +15,7 @@ enum BrowserDomainRules {
                               "action": ["type": "block"]])
             }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: rules),
+        guard let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "" }
         return json
     }

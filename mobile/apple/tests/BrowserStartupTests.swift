@@ -72,11 +72,20 @@ enum DetectionScript {
 enum ContentBlocker {
     static var isEnabled = true
     static var navigationRules = NavigationAdRules()
-    static func shouldBlockNavigation(_ url: URL, source: URL?, popup: Bool) -> Bool {
-        isEnabled && navigationRules.decision(url: url, source: source, popup: popup) == true
+    static func setRules(_ text: String) throws {
+        navigationRules = NavigationAdRules(text: text)
+        AdblockSnapshot.shared.publish(try NativeAdblockEngine.load(lists: [text], cached: nil))
+    }
+    static func shouldBlockNavigation(_ url: URL, source: URL?, popup: Bool, method: String = "GET") -> Bool {
+        guard isEnabled else { return false }
+        if popup, let decision = navigationRules.decision(url: url, source: source, popup: true) { return decision }
+        return AdblockSnapshot.shared.matches(url: url.absoluteString, source: source?.absoluteString ?? url.absoluteString, type: "document", method: method)
     }
     static let elementPickerJS = try! String(contentsOf: Bundle.main.url(forResource: "element-picker", withExtension: "js")!, encoding: .utf8)
+    static func bootstrapRules() async -> [WKContentRuleList] { [] }
     static func compileAll() async -> [WKContentRuleList] { [] }
+    static func forceCompileAll() async throws -> [WKContentRuleList] { [] }
+    static func invalidateGeneration() {}
     static func ensureListsDownloaded() async {}
     static func isUserDomainRuleList(_ list: WKContentRuleList) -> Bool { false }
     static func isUserCosmeticRuleList(_ list: WKContentRuleList) -> Bool { false }
@@ -926,32 +935,36 @@ extension BrowserStartupChecks {
 
 extension BrowserStartupChecks {
     @MainActor func verifyAdNavigations(_ browser: BrowserStore, parent: BrowserTab, base: String) async throws {
-        let rules = NavigationAdRules(text: """
-        ||ads.example^
-        @@||ads.example/allowed$document,popup
-        @@||ads.example/safe-path
+        let filterText = """
+        ||ads.example^$document
+        @@||ads.example/allowed$document
+        @@||ads.example/allowed$popup
+        @@||ads.example/safe-path$document
         ||assets.example^$script
         ||scoped.example^$popup,domain=video.example|~safe.video.example
         ||disabled.example^$popup
         ||disabled.example^$popup,badfilter
         ||path.example/ad$document
-        """)
+        """
+        let rules = try NativeAdblockEngine.load(lists: [filterText], cached: nil)
+        let popupRules = NavigationAdRules(text: filterText)
         func blocks(_ target: String, source: String = "https://video.example", popup: Bool = false) -> Bool {
-            rules.decision(url: URL(string: target)!, source: URL(string: source), popup: popup) == true
+            if popup, let decision = popupRules.decision(url: URL(string: target)!, source: URL(string: source), popup: true) { return decision }
+            return rules.matches(url: target, source: source, type: "document")
         }
         try check(blocks("https://ads.example/ad"), "Host-wide navigation rule missed")
         try check(!blocks("https://ads.example.evil.test/ad"), "Host boundary broadened")
         try check(!blocks("https://video.example/?next=ads.example"), "Query text treated as destination")
         try check(!blocks("https://assets.example/"), "Script-only rule blocked a document")
         try check(!blocks("https://ads.example/allowed"), "Exception ignored")
-        try check(!blocks("https://ads.example/safe-path"), "Untyped path exception ignored")
+        try check(!blocks("https://ads.example/safe-path"), "Document path exception ignored")
         try check(blocks("https://scoped.example/", popup: true), "Scoped popup not blocked")
         try check(!blocks("https://scoped.example/", source: "https://safe.video.example", popup: true), "Negative domain ignored")
         try check(!blocks("https://scoped.example/"), "Popup-only rule blocked a document")
         try check(!blocks("https://disabled.example/", popup: true), "Disabled rule applied")
         try check(blocks("https://path.example/ad") && !blocks("https://path.example/video"), "Path rule broadened")
-        ContentBlocker.navigationRules = NavigationAdRules(text: "||127.0.0.1^*/ad$document,popup")
-        defer { ContentBlocker.navigationRules = NavigationAdRules(); ContentBlocker.isEnabled = true; BrowserSitePolicy.setPopupsAllowed(false, url: URL(string: base)) }
+        try ContentBlocker.setRules("/ad$document\n||127.0.0.1^*/ad$popup")
+        defer { try? ContentBlocker.setRules(""); ContentBlocker.isEnabled = true; BrowserSitePolicy.setPopupsAllowed(false, url: URL(string: base)) }
         let view = parent.webView
         let original = view.url
         let count = browser.tabs.count
@@ -1006,10 +1019,10 @@ extension BrowserStartupChecks {
         try check(log.entries.filter { $0.kind == "fetch" && $0.url.contains("/fetch-test") }.count == 1, "Fetch update duplicated request")
         try check(!log.exportText.contains("secret-fixture"), "Query token retained")
         try check(log.exportText.contains("redacted"), "URL was not redacted")
-        ContentBlocker.navigationRules = NavigationAdRules(text: "||127.0.0.1^*/ad$document,popup")
+        try ContentBlocker.setRules("/ad$document\n||127.0.0.1^*/ad$popup")
         _ = try await parent.webView.evaluateJavaScript("window.open('/ad','_blank');void(0)")
         try await wait("blocked navigation observation") { log.entries.contains { $0.state == "Blocked by ad rules" } }
-        ContentBlocker.navigationRules = NavigationAdRules()
+        try? ContentBlocker.setRules("")
         try check(browser.tabs.filter { $0.id != parent.id }.allSatisfy { $0.networkLog.entries.allSatisfy { !$0.url.contains("/fetch-test") } }, "Log leaked across tabs")
         log.clear()
         try check(log.entries.isEmpty && log.discarded == 0, "Clear did not reset log")

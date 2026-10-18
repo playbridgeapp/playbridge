@@ -5,6 +5,9 @@
 //! concepts so a later production crate can expose them through multiple FFI
 //! frontends.
 
+#[cfg(feature = "adblock-engine")]
+pub mod adblock_engine;
+
 pub mod atv_remote;
 pub mod browser;
 pub mod castv2;

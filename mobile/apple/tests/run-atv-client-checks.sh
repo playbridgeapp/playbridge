@@ -17,6 +17,7 @@ cat >> "$test_dir/module/playbridge_cast_core.h" <<'HEADER'
 void pb_test_reset(unsigned mode);
 unsigned pb_test_count(unsigned index);
 HEADER
+cp "$repo_root/cast/ffi/include/playbridge_adblock.h" "$test_dir/module/"
 cp "$repo_root/cast/ffi/include/module.modulemap" "$test_dir/module/"
 clang -I "$test_dir/module" -c "$repo_root/mobile/apple/tests/AtvNativeShim.c" -o "$test_dir/shim.o"
 swiftc -swift-version 5 -D ATV_NATIVE_SHIM -I "$test_dir/module" -module-cache-path "$test_dir/native-cache" \

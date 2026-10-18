@@ -51,10 +51,11 @@ PYTHON
 cp "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Fonts/Poppins-Regular.ttf" "$app/Poppins-Regular.ttf"
 sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser"
-xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
+native="$repo_root/mobile/apple/Native/PlayBridgeCastCore.xcframework/ios-arm64_x86_64-simulator"
+xcrun --sdk iphonesimulator swiftc -I "$native/Headers" "$native/libplaybridge_cast_core_ffi.a" -lc++ -framework Security -framework SystemConfiguration -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
  "$source_dir/BridgedAppDeclaration.swift" "$source_dir/BridgedAppStore.swift" "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserMediaDetectionSettings.swift" "$source_dir/../UI/BrowserPreferenceSheets.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/PopupPolicy.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
  "$source_dir/PageCastSource.swift" "$source_dir/PageCastScript.swift" "$source_dir/PageCastRequest.swift" "$source_dir/PageCastPermissions.swift" "$source_dir/PageCastCoordinator.swift" "$source_dir/../Models/Models.swift" \
- "$source_dir/../UI/NavigationViewModel.swift" "$source_dir/../UI/TabsScreen.swift" "$source_dir/../UI/Theme.swift" "$source_dir/../UI/MenuSheet.swift" "$source_dir/../UI/BrowserNetworkLogView.swift" "$source_dir/BrowserDomainRules.swift" "$source_dir/BrowserNetworkLog.swift" "$source_dir/NavigationAdRules.swift" "$source_dir/../Data/BrowserDataStore.swift" \
+ "$source_dir/../UI/NavigationViewModel.swift" "$source_dir/../UI/TabsScreen.swift" "$source_dir/../UI/Theme.swift" "$source_dir/../UI/MenuSheet.swift" "$source_dir/../UI/BrowserNetworkLogView.swift" "$source_dir/BrowserDomainRules.swift" "$source_dir/BrowserNetworkLog.swift" "$source_dir/NavigationAdRules.swift" "$source_dir/NativeAdblockEngine.swift" "$source_dir/AdblockListPreparser.swift" "$source_dir/../Data/BrowserDataStore.swift" \
  "$repo_root/mobile/apple/tests/BrowserPageCastIntegration.swift" "$repo_root/mobile/apple/tests/BrowserStartupTests.swift" -o "$app/BrowserChecks"
 if [[ "${PB_BROWSER_BUILD_ONLY:-0}" == "1" ]]; then
     echo "PASS: browser fixture compilation (no install or launch)"
