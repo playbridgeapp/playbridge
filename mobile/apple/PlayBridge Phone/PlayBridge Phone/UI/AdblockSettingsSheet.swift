@@ -4,6 +4,7 @@ struct AdblockSettingsSheet: View {
     @ObservedObject var store: BrowserStore
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("pb_block_popups") private var blockPopups = true
     @State private var filterLists: [URL] = ContentBlocker.filterListURLs
     @State private var newUrlString: String = ""
     @State private var isUpdating = false
@@ -22,6 +23,7 @@ struct AdblockSettingsSheet: View {
                         set: { _ in store.toggleAdBlock() }
                     ))
                     .tint(Theme.primary)
+                    Toggle("Block pop-ups", isOn: $blockPopups).tint(Theme.primary)
                 } header: {
                     Text("Adblock Status")
                 }

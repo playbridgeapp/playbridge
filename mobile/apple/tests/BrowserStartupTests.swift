@@ -516,6 +516,10 @@ enum ContentBlocker {
             try await auditPopups(browser, parent: parent, base: base)
             return
         }
+        if ProcessInfo.processInfo.environment["TAB_UNDER"] == "1" {
+            try await verifyTabUnderNavigations(browser, parent: parent, base: base)
+            return
+        }
         let parentURL = webView.url
         let count = browser.tabs.count
         // These scripted requests test window/POST preservation with explicit permission.
@@ -582,7 +586,7 @@ extension BrowserStartupChecks {
         let before = browser.tabs.count
         BrowserSitePolicy.setPopupsAllowed(false, url: view.url)
         _ = try await view.evaluateJavaScript("window.open('/popup', '_blank'); void(0)")
-        try await wait("blocked popup") { parent.popupBlocked }
+        try await wait("blocked popup") { (parent.blockedNotice?.kind == .popup) }
         try check(browser.tabs.count == before, "Automatic popup escaped blocker")
         parent.allowPopupsForSite()
         _ = try await view.evaluateJavaScript("window.open('/popup', '_blank'); void(0)")
@@ -790,7 +794,7 @@ extension BrowserStartupChecks {
             try await Task.sleep(nanoseconds: 150_000_000)
             let active = (try? await view.evaluateJavaScript("window.__popupAuditActive")) as? Bool
             let added = browser.tabs.filter { !before.contains($0.id) }
-            print("POPUP AUDIT: \(name); new tabs=\(added.count); blocked notice=\(parent.popupBlocked); JS activation=\(String(describing: active))")
+            print("POPUP AUDIT: \(name); new tabs=\(added.count); blocked notice=\((parent.blockedNotice?.kind == .popup)); JS activation=\(String(describing: active))")
             let expected = name == "allowed-origin window.open" ? 1 : 0
             try check(active == false, "Fixture unexpectedly had activation: " + name)
             try check(added.count == expected, "Popup policy mismatch: " + name)
@@ -803,7 +807,56 @@ extension BrowserStartupChecks {
         _ = try await view.evaluateJavaScript("setTimeout(function(){location.href='/audit-redirect';},100);void(0)")
         try await wait("same-tab redirect audit") { view.url?.path == "/audit-redirect" && !view.isLoading }
         print("POPUP AUDIT: automatic same-tab redirect; navigated=true; new tabs=\(browser.tabs.count-before)")
+        parent.load(base + "/parent")
+        try await wait("explicit popup parent") { view.title == "Parent" && !view.isLoading }
+        let popupCount = browser.tabs.count
+        _ = try await view.evaluateJavaScript("window.open('/explicit-open?fixture=preserved','_blank');void(0)")
+        try await wait("explicit popup blocked") { parent.blockedNotice?.kind == .popup }
+        parent.openBlockedNotice()
+        try await wait("explicit popup opens selected child") {
+            browser.tabs.count == popupCount + 1 && browser.activeTab?.webView.url?.path == "/explicit-open"
+        }
+        try check(browser.activeTab?.webView.url?.query == "fixture=preserved", "Open changed original URL")
+        try check(browser.activeTab?.popupOpenerURL == view.url, "Open lost native opener ownership")
+        browser.closeTab(browser.activeID!)
+        browser.select(parent.id)
+        _ = try await view.evaluateJavaScript("document.getElementById('form').requestSubmit();void(0)")
+        try await wait("POST popup blocked") { parent.blockedNotice?.kind == .popup }
+        try check(parent.blockedNotice?.openTarget == nil, "POST popup exposed a lossy GET Open")
+        try await verifyTabUnderNavigations(browser, parent: parent, base: base)
         print("POPUP REGRESSIONS PASSED: no live filter lists attached")
+    }
+}
+
+extension BrowserStartupChecks {
+    @MainActor func verifyTabUnderNavigations(_ browser: BrowserStore, parent: BrowserTab, base: String) async throws {
+        let view = parent.webView
+        browser.select(parent.id)
+        BrowserSitePolicy.blockPopups = true
+        BrowserSitePolicy.setPopupsAllowed(false, url: URL(string: base))
+        parent.load(base + "/parent")
+        try await wait("tab-under audit parent") { view.title == "Parent" && !view.isLoading }
+        let original = view.url
+        let cross = base.replacingOccurrences(of: "127.0.0.1", with: "localhost") + "/landing"
+        _ = try await view.evaluateJavaScript("window.open('/child','_blank');location.href='\(cross)';void(0)")
+        try await wait("automatic tab-under blocked") { parent.blockedNotice?.kind == .redirect }
+        try check(view.url == original, "Automatic tab-under changed committed URL")
+        parent.openBlockedNotice()
+        try await wait("explicit redirect Open") { view.url?.host == "localhost" && !view.isLoading }
+        parent.load(base + "/parent")
+        try await wait("script-only parent") { view.title == "Parent" && !view.isLoading }
+        _ = try await view.evaluateJavaScript("location.href='\(cross)';void(0)")
+        try await wait("script-only cross-site redirect") { view.url?.host == "localhost" && !view.isLoading }
+        parent.load(base + "/parent")
+        try await wait("exception parent") { view.title == "Parent" && !view.isLoading }
+        BrowserSitePolicy.setPopupsAllowed(true, url: view.url)
+        let before = Set(browser.tabs.map(\.id))
+        _ = try await view.evaluateJavaScript("window.open('/child','_blank');location.href='\(cross)';void(0)")
+        try await wait("exception disables tab-under policy") { view.url?.host == "localhost" && !view.isLoading }
+        for child in browser.tabs where !before.contains(child.id) { browser.closeTab(child.id) }
+        BrowserSitePolicy.setPopupsAllowed(false, url: URL(string: base))
+        browser.select(parent.id)
+        print("CHECK: automatic tab-under, explicit Open, script-only redirect and Allow-on-site passed")
     }
 }
 
@@ -813,26 +866,38 @@ extension BrowserStartupChecks {
         label.accessibilityIdentifier = "popupStatus"
         window!.rootViewController!.view.addSubview(label)
         parent.webView.frame = CGRect(x: 0, y: 130, width: window!.bounds.width, height: 500)
-        for name in ["link", "form", "script", "burst", "expired", "iframe"] {
+        for name in ["link", "form", "script", "burst", "expired", "iframe", "cross",
+                     "under-script", "under-copy", "overlay", "signin", "under-allowed"] {
             browser.select(parent.id)
-            parent.load(base + (name == "iframe" ? "/touch-frame" : "/touch"))
+            let path = name == "iframe" ? "/touch-frame" :
+                (["under-script", "under-copy", "overlay", "signin", "under-allowed"].contains(name) ? "/" + name : "/touch")
+            parent.load(base + path)
             try await wait("touch fixture") { parent.webView.title == "Touch" && !parent.webView.isLoading }
-            BrowserSitePolicy.setPopupsAllowed(false, url: parent.webView.url)
+            let original = parent.webView.url
+            BrowserSitePolicy.blockPopups = true
+            BrowserSitePolicy.setPopupsAllowed(false, url: original)
             let ids = Set(browser.tabs.map(\.id))
             label.text = "Ready: " + name
-            if name == "expired" {
-                try await wait("expired interaction") { parent.popupBlocked }
-                try check(browser.tabs.count == ids.count, "Expired interaction opened a popup")
-                continue
+            if name == "link" || name == "under-allowed" {
+                try await wait("trusted allowed window") { browser.tabs.count > ids.count }
+            } else if name == "signin" {
+                try await wait("sign-in script redirect") { parent.webView.url?.host == "localhost" }
+            } else if name == "under-script" || name == "under-copy" {
+                try await wait("tab-under blocked") { parent.blockedNotice?.kind == .redirect }
+                try check(parent.webView.url == original && parent.webView.title == "Touch", "Tab-under replaced opener")
+            } else {
+                try await wait("blocked window") { parent.blockedNotice?.kind == .popup }
             }
-            try await wait("trusted tap " + name) { browser.tabs.count > ids.count }
             try await Task.sleep(nanoseconds: 300_000_000)
             let added = browser.tabs.filter { !ids.contains($0.id) }
-            try check(added.count == 1, "A single tap opened multiple windows")
-            let child = added[0]
-            try await wait("child loaded") { child.webView.title == "Child" && !child.webView.isLoading }
-            try check(child.webView.url?.path == (name == "form" ? "/post" : "/child"), "Wrong popup destination")
+            try check(added.count == ((name == "link" || name == "under-allowed") ? 1 : 0), "Unexpected window count")
+            if name == "under-allowed" {
+                // The same-site anchor opens a real child; the background opener must still be protected.
+                try await wait("allowed-window tab-under blocked") { parent.blockedNotice?.kind == .redirect }
+                try check(parent.webView.url == original, "Allowed window lost opener protection")
+            }
             for tab in added { browser.closeTab(tab.id) }
+            BrowserSitePolicy.setPopupsAllowed(false, url: original)
             print("CHECK: trusted " + name + " passed")
         }
         label.text = "PASS: trusted popups"
@@ -875,19 +940,19 @@ extension BrowserStartupChecks {
         _ = try await view.evaluateJavaScript("window.open('/ad','_blank');void(0)")
         try await wait("blocked ad popup") { blockedCount() >= 1 }
         try check(browser.tabs.count == count && view.url == original, "Ad popup left an empty tab")
-        parent.blockedAdMessage = nil
+        parent.dismissBlockedNotice()
         _ = try await view.evaluateJavaScript("location.href='/ad';void(0)")
         try await wait("blocked same-tab ad") { blockedCount() >= 2 }
         try check(view.url == original && view.title == "Parent", "Ad replaced video page")
-        parent.blockedAdMessage = nil
+        parent.dismissBlockedNotice()
         _ = try await view.evaluateJavaScript("location.href='/redirect-ad';void(0)")
         try await wait("blocked server redirect") { blockedCount() >= 3 && !view.isLoading }
         try check(view.title == "Parent" && view.url == original && parent.navigationFailure == nil, "Server redirect replaced page or showed load error")
-        parent.blockedAdMessage = nil
+        parent.dismissBlockedNotice()
         _ = try await view.evaluateJavaScript("window.open('/redirect-ad','_blank');void(0)")
         try await wait("discard redirected ad popup") { blockedCount() >= 4 && browser.tabs.count == count }
         try check(browser.activeID == parent.id, "Popup closure lost opener selection")
-        parent.blockedAdMessage = nil
+        parent.dismissBlockedNotice()
         _ = try await view.evaluateJavaScript("window.open('/parent','_blank');location.href='/ad';void(0)")
         try await wait("tab swap preserves video") { browser.tabs.count == count + 1 && blockedCount() >= 5 && browser.activeTab?.webView.title == "Parent" }
         try check(view.title == "Parent", "Tab swap discarded original video")
@@ -963,13 +1028,14 @@ extension BrowserStartupChecks {
         try check(!paths.contains("/srcdoc-image-blocked"), "Blocked resource inside srcdoc reached server")
         view.load(URLRequest(url: URL(string: base + "/top-frame-allowed")!))
         try await wait("top frame remains allowed by content rules") { view.title == "Child" && !view.isLoading }
-        parent.blockedAdMessage = nil
-        parent.showBlockedNavigationNotice("Blocked navigation")
+        parent.dismissBlockedNotice()
+        parent.showBlockedNotice(BrowserBlockedNotice(kind: .redirect, url: source, origin: source, openTarget: nil, message: nil))
         for _ in 0..<10 {
             try await Task.sleep(nanoseconds: 300_000_000)
-            parent.showBlockedNavigationNotice("Another blocked navigation")
+            parent.showBlockedNotice(BrowserBlockedNotice(kind: .redirect, url: source, origin: source, openTarget: nil, message: nil))
         }
-        try check(parent.blockedAdMessage == nil, "Repeated navigation blocks kept notice visible")
+        try check(parent.blockedNotice?.count == 11, "Repeated navigation blocks did not coalesce")
+        parent.dismissBlockedNotice()
         print("CHECK: actual WebKit domain compilation, iframe/srcdoc blocking and notice expiry passed")
     }
 }

@@ -82,14 +82,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2"/></svg>'
             elif path == '/touch-frame':
                 data = ('<html><title>Touch</title><iframe src="http://localhost:' + str(self.server.server_port) + '/touch"></iframe></html>').encode()
+            elif path in ('/under-script', '/under-copy', '/overlay', '/signin', '/under-allowed'):
+                cross = 'http://localhost:' + str(self.server.server_port) + '/landing'
+                if path == '/overlay':
+                    control = '<a href="/child" target="_blank"><span style="position:fixed;inset:0;opacity:0.01">Overlay link</span></a>'
+                elif path == '/under-allowed':
+                    control = '<a href="/under-allowed" target="_blank" onclick="setTimeout(()=>location.href=\'' + cross + '\',100)">Allowed link</a>'
+                else:
+                    action = '' if path == '/signin' else ("window.open(location.href,'_blank');" if path == '/under-copy' else "window.open('/child','_blank');")
+                    control = '<button onclick="' + action + "location.href='" + cross + "'" + '">Continue</button>'
+                data = ('<html><title>Touch</title><meta name="viewport" content="width=device-width,initial-scale=1"><body>' + control + '</body></html>').encode()
             elif path == '/touch':
                 data = b'''<html><head><title>Touch</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
                 <a href="/child" target="_blank">Open link</a>
+                <a href="http://localhost:PORT/child" target="_blank">Cross-site link</a>
                 <form action="/post" method="post" target="_blank"><input name="value" value="preserved"><button>Submit form</button></form>
                 <button onclick="window.open('/child','_blank')">Script popup</button>
                 <button onclick="window.open('/child','_blank');window.open('/extra','_blank')">Burst popup</button>
                 <button onclick="setTimeout(function(){window.open('/child','_blank')},1500)">Delayed popup</button>
                 </body></html>'''
+                data = data.replace(b'PORT', str(self.server.server_port).encode())
             elif path in ('/popup-frame-window', '/popup-frame-link'):
                 action = "window.open('/frame-child','_blank');" if path.endswith('window') else "var a=document.createElement('a');a.href='/frame-child';a.target='_blank';document.body.appendChild(a);a.click();"
                 data = ("<html><script>setTimeout(function(){" + action + "parent.postMessage({popupAuditDone:true,active:!!(navigator.userActivation&&navigator.userActivation.isActive)},'*');},100);</script></html>").encode()

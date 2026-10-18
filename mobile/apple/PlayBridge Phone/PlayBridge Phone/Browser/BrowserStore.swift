@@ -145,11 +145,18 @@ final class BrowserStore: ObservableObject {
             child.load(request)
             if self.activeID == child.id { self.onBridgedAppExternalNavigation?() }
         }
+        tab.onOpenBlockedPopup = { [weak self, weak tab] request in
+            guard let self, let tab, tab.isActive(), !tab.isPickingElement,
+                  self.tabs.contains(where: { $0.id == tab.id }), BrowserBlockedNotice.canOpen(request) else { return }
+            let child = self.makeTab(url: nil, after: tab.id)
+            child.popupOpenerURL = tab.loadedWebView?.url
+            child.load(request)
+        }
         tab.onCreateWindow = { [weak self, weak tab] configuration, request in
             guard let self, let tab else { return nil }
             let child = self.makeTab(url: request.url?.absoluteString, after: tab.id, windowConfiguration: configuration)
             child.popupOpenerURL = tab.loadedWebView?.url
-            child.onAdNavigationBlocked = { [weak self, weak child, weak tab] message in
+            child.onAdNavigationBlocked = { [weak self, weak child, weak tab] notice in
                 // Only discard a popup which never committed real content. In a
                 // popunder/tab swap, both existing video pages remain intact.
                 DispatchQueue.main.async {
@@ -161,7 +168,7 @@ final class BrowserStore: ObservableObject {
                         if let entry = child.networkLog.entries.last(where: { $0.state == "Blocked by ad rules" }) {
                             tab.networkLog.record(url: entry.url, page: entry.page, kind: "popup", state: entry.state)
                         }
-                        tab.showBlockedNavigationNotice(message)
+                        tab.showBlockedNotice(notice)
                         if wasSelected { self.select(tab.id) }
                     }
                 }

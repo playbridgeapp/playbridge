@@ -211,34 +211,36 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published private(set) var userAgentPreset: BrowserUserAgentPreset = .automatic
     @Published private(set) var customUserAgent: String?
     @Published var isBrowserChromeHidden = false
-    @Published var blockedAdMessage: String? = nil {
-        didSet {
-            if blockedAdMessage == nil { noticeDismissal?.cancel(); noticeDismissal = nil }
-            else if noticeDismissal == nil {
-                // Repeated messages share the original deadline; they never extend it.
-                noticeDismissal = Task { @MainActor [weak self] in
-                    do { try await Task.sleep(nanoseconds: 2_500_000_000) } catch { return }
-                    self?.blockedAdMessage = nil
-                }
-            }
-        }
-    }
-    private var noticeDismissal: Task<Void, Never>?
-    private var lastNavigationNotice = -Double.infinity
+    @Published private(set) var blockedNotice: BrowserBlockedNotice?
+    private var tabUnder = TabUnderPolicy()
+    private var appRequestedURL: URL?
 
-    func showBlockedNavigationNotice(_ message: String) {
-        let now = ProcessInfo.processInfo.systemUptime
-        guard blockedAdMessage == nil, now - lastNavigationNotice >= 8 else { return }
-        lastNavigationNotice = now
-        blockedAdMessage = message
+    func showBlockedNotice(_ notice: BrowserBlockedNotice) {
+        var next = notice
+        if notice.kind != .message { next.count = (blockedNotice?.kind == .message ? 0 : blockedNotice?.count ?? 0) + 1 }
+        blockedNotice = next
+    }
+    func dismissBlockedNotice() { blockedNotice = nil }
+    func showBrowserMessage(_ message: String) {
+        showBlockedNotice(BrowserBlockedNotice(kind: .message, url: nil, origin: nil, openTarget: nil, message: message))
+    }
+    func recordPopupInteraction(at time: TimeInterval, href: URL?) { tabUnder.interact(at: time, href: href) }
+    private func recordWindowRequest() { tabUnder.requestedWindow(at: ProcessInfo.processInfo.systemUptime) }
+
+    func openBlockedNotice() {
+        guard isActive(), !isPickingElement, let notice = blockedNotice,
+              let url = notice.url, let target = notice.openTarget else { return }
+        dismissBlockedNotice()
+        switch target {
+        case .newTab: onOpenBlockedPopup?(URLRequest(url: url))
+        case .currentTab: load(URLRequest(url: url))
+        }
     }
     /// True for a fresh tab showing the home/new-tab page (no page loaded yet).
     @Published var isHome: Bool = false
 
     @Published var navigationFailure: BrowserNavigationFailure?
     @Published var prompt: BrowserPrompt?
-    @Published var popupBlocked = false
-    @Published private(set) var blockedPopupOrigin: URL?
     @Published private(set) var isPickingElement = false
     @Published private(set) var pickerSelector: String?
     @Published private(set) var pickerHasSource = false
@@ -265,16 +267,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     var popupOpenerURL: URL?
     private(set) var hasCommittedPage = false
     private var committedPageURL: URL?
-    var onAdNavigationBlocked: ((String) -> Void)?
+    var onAdNavigationBlocked: ((BrowserBlockedNotice) -> Void)?
+    var onOpenBlockedPopup: ((URLRequest) -> Void)?
 
     @discardableResult
     private func blockAdNavigation(_ url: URL, source: URL?, popup: Bool) -> Bool {
         guard ContentBlocker.shouldBlockNavigation(url, source: source, popup: popup) else { return false }
         networkLog.record(url: url.absoluteString, page: source?.absoluteString ?? urlString, kind: "navigation", state: "Blocked by ad rules")
-        let message = "Blocked ad navigation to \(url.host ?? "advertising site")."
-        showBlockedNavigationNotice(message)
+        let notice = BrowserBlockedNotice(kind: popup ? .popup : .redirect, url: url,
+            origin: source, openTarget: nil, message: nil)
+        showBlockedNotice(notice)
         if let committedPageURL { urlString = committedPageURL.absoluteString }
-        onAdNavigationBlocked?(message)
+        onAdNavigationBlocked?(notice)
         return true
     }
 
@@ -289,9 +293,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         prompt = request
     }
     func allowPopupsForSite() {
-        BrowserSitePolicy.setPopupsAllowed(true, url: blockedPopupOrigin)
-        popupBlocked = false
-        blockedAdMessage = "Popups allowed for this site. Try the link again."
+        guard isActive(), !isPickingElement, let origin = blockedNotice?.origin,
+              BrowserSitePolicy.origin(origin) != nil else { return }
+        BrowserSitePolicy.setPopupsAllowed(true, url: origin)
+        showBrowserMessage("Pop-ups allowed for \(origin.host ?? "this site"). Try again.")
     }
 
     /// Invoked when the page calls `window.playbridge.cast(payload)`.
@@ -442,6 +447,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func load(_ request: URLRequest) {
         guard let url = request.url else { return }
         cancelPrompt()
+        tabUnder.clear()
+        appRequestedURL = url
+        dismissBlockedNotice()
         stopElementPicker()
         navigationFailure = nil
         isHome = false
@@ -469,7 +477,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         webView.evaluateJavaScript(ContentBlocker.elementPickerJS) { [weak self] _, error in
             guard let self, self.pickerGeneration == generation, error != nil else { return }
             self.isPickingElement = false
-            self.blockedAdMessage = "Couldn’t open the element picker on this page."
+            self.showBrowserMessage("Couldn’t open the element picker on this page.")
         }
     }
     func pickerDidFinish() {
@@ -596,14 +604,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         detectionNavigationID = UUID()
         onPageCastInvalidated?()
         navigationFailure = nil
-        popupBlocked = false
-        blockedPopupOrigin = nil
+        dismissBlockedNotice()
         cancelPrompt()
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         onPageCastInvalidated?()
         documentID = UUID()
+        tabUnder.clear()
+        appRequestedURL = nil
         playbackState = BrowserPlaybackState()
         playbackExpiryTask?.cancel()
         playbackExpiryTask = nil
@@ -616,8 +625,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         // New main-frame document — reset detections for this tab.
         detector.clear()
         navigationFailure = nil
-        popupBlocked = false
-        blockedPopupOrigin = nil
+        dismissBlockedNotice()
         cancelPrompt()
         onMainFrameCommit?(webView.url)
     }
@@ -678,9 +686,33 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
         guard !isPickingElement else { decisionHandler(.cancel, preferences); return }
         guard let url = action.request.url else { decisionHandler(.cancel, preferences); return }
+        if action.targetFrame == nil { recordWindowRequest() }
         if action.targetFrame == nil || action.targetFrame?.isMainFrame == true {
             let source = committedPageURL ?? popupOpenerURL ?? action.sourceFrame.request.url
             if blockAdNavigation(url, source: source, popup: action.targetFrame == nil || (popupOpenerURL != nil && !hasCommittedPage)) {
+                decisionHandler(.cancel, preferences)
+                return
+            }
+        }
+        if action.targetFrame?.isMainFrame == true {
+            let appInitiated = appRequestedURL == url
+            appRequestedURL = nil
+            let navigation: TabUnderPolicy.Navigation
+            switch action.navigationType {
+            case .linkActivated: navigation = .link
+            case .formSubmitted, .formResubmitted: navigation = .form
+            case .backForward: navigation = .backForward
+            case .reload: navigation = .reload
+            default: navigation = .other
+            }
+            if tabUnder.shouldBlock(destination: url, committedPage: committedPageURL,
+                navigation: navigation, mainFrame: true, appInitiated: appInitiated,
+                siteAllowed: BrowserSitePolicy.popupsAllowed(committedPageURL), at: ProcessInfo.processInfo.systemUptime) {
+                networkLog.record(url: url.absoluteString, page: committedPageURL?.absoluteString ?? urlString,
+                    kind: "navigation", state: "Blocked tab-under redirect")
+                showBlockedNotice(BrowserBlockedNotice(kind: .redirect, url: url, origin: committedPageURL,
+                    openTarget: BrowserBlockedNotice.canOpen(action.request) ? .currentTab : nil, message: nil))
+                if let committedPageURL { urlString = committedPageURL.absoluteString }
                 decisionHandler(.cancel, preferences)
                 return
             }
@@ -692,13 +724,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             decisionHandler(.cancel, preferences)
             guard action.targetFrame == nil || action.targetFrame?.isMainFrame == true else { return }
             guard !["javascript", "file", "", "intent"].contains(scheme) else {
-                blockedAdMessage = "This type of link cannot be opened on iPhone."
+                showBrowserMessage("This type of link cannot be opened on iPhone.")
                 return
             }
             present(BrowserPrompt(title: "Open another app?", message: "Open \(url.absoluteString) outside PlayBridge?", acceptLabel: "Open") { [weak self] accepted, _ in
                 guard accepted else { return }
                 UIApplication.shared.open(url, options: [:]) { success in
-                    if !success { self?.blockedAdMessage = "No app could open this link." }
+                    if !success { self?.showBrowserMessage("No app could open this link.") }
                 }
             })
             return
@@ -790,16 +822,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if navigationAction.targetFrame == nil {
             guard !isPickingElement else { return nil }
             guard isActive() else { return nil }
+            recordWindowRequest()
             if let url = navigationAction.request.url,
                blockAdNavigation(url, source: navigationAction.sourceFrame.request.url, popup: true) { return nil }
-            let interacted = popupInteraction.consume(for: navigationAction.sourceFrame)
-            let allowed = BrowserSitePolicy.popupsAllowed(BrowserPopupInteraction.originURL(navigationAction.sourceFrame))
-            guard interacted || allowed else {
+            let interaction = popupInteraction.consume(for: navigationAction.sourceFrame)
+            let origin = BrowserPopupInteraction.originURL(navigationAction.sourceFrame)
+            let allowed = PopupPolicy.allowsWindow(blockPopups: BrowserSitePolicy.blockPopups,
+                siteAllowed: BrowserSitePolicy.popupsAllowed(origin), trustedClick: interaction.trusted,
+                anchor: interaction.anchor, destination: navigationAction.request.url, page: committedPageURL)
+            guard allowed else {
                 if let url = navigationAction.request.url {
                     networkLog.record(url: url.absoluteString, page: navigationAction.sourceFrame.request.url?.absoluteString ?? urlString, kind: "popup", state: "Blocked by popup policy")
                 }
-                blockedPopupOrigin = BrowserPopupInteraction.originURL(navigationAction.sourceFrame)
-                popupBlocked = true
+                showBlockedNotice(BrowserBlockedNotice(kind: .popup, url: navigationAction.request.url,
+                    origin: origin, openTarget: BrowserBlockedNotice.canOpen(navigationAction.request) ? .newTab : nil, message: nil))
                 return nil
             }
             // WebKit loads the original request, preserving POST and window ownership.

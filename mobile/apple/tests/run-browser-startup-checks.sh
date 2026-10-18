@@ -8,6 +8,7 @@ python3 "$repo_root/mobile/apple/tests/browser-fixture.py" "$test_dir/base" "${1
 fixture_pid=$!
 for attempt in {1..100}; do [[ -s "$test_dir/base" ]] && break; sleep 0.05; done
 export SIMCTL_CHILD_BROWSER_FIXTURE="$(cat "$test_dir/base")"
+if [[ "${1:-}" == "--tab-under" ]]; then export SIMCTL_CHILD_TAB_UNDER=1; fi
 if [[ "${1:-}" == "--popup-audit" ]]; then export SIMCTL_CHILD_POPUP_AUDIT=1; fi
 if [[ "${1:-}" == "--ad-navigation" ]]; then export SIMCTL_CHILD_AD_NAVIGATION=1; fi
 if [[ "${1:-}" == "--network-log" ]]; then export SIMCTL_CHILD_NETWORK_LOG=1; fi
@@ -51,10 +52,14 @@ cp "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Fonts/Poppins-Regu
 sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser"
 xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
- "$source_dir/BridgedAppDeclaration.swift" "$source_dir/BridgedAppStore.swift" "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserMediaDetectionSettings.swift" "$source_dir/../UI/BrowserPreferenceSheets.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
+ "$source_dir/BridgedAppDeclaration.swift" "$source_dir/BridgedAppStore.swift" "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserMediaDetectionSettings.swift" "$source_dir/../UI/BrowserPreferenceSheets.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/PopupPolicy.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
  "$source_dir/PageCastSource.swift" "$source_dir/PageCastScript.swift" "$source_dir/PageCastRequest.swift" "$source_dir/PageCastPermissions.swift" "$source_dir/PageCastCoordinator.swift" "$source_dir/../Models/Models.swift" \
  "$source_dir/../UI/NavigationViewModel.swift" "$source_dir/../UI/TabsScreen.swift" "$source_dir/../UI/Theme.swift" "$source_dir/../UI/MenuSheet.swift" "$source_dir/../UI/BrowserNetworkLogView.swift" "$source_dir/BrowserDomainRules.swift" "$source_dir/BrowserNetworkLog.swift" "$source_dir/NavigationAdRules.swift" "$source_dir/../Data/BrowserDataStore.swift" \
  "$repo_root/mobile/apple/tests/BrowserPageCastIntegration.swift" "$repo_root/mobile/apple/tests/BrowserStartupTests.swift" -o "$app/BrowserChecks"
+if [[ "${PB_BROWSER_BUILD_ONLY:-0}" == "1" ]]; then
+    echo "PASS: browser fixture compilation (no install or launch)"
+    exit 0
+fi
 codesign --force --sign - "$app" >/dev/null
 xcrun simctl install "$simulator" "$app"
 if [[ "${1:-}" == "--popup-touch" || "${1:-}" == "--network-log-ui" || "${1:-}" == "--tabs-ui" || "${1:-}" == "--picker-menu-ui" || "${1:-}" == "--picker-live-ui" ]]; then

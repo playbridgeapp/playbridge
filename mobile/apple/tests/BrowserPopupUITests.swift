@@ -168,11 +168,14 @@ final class BrowserPopupUITests: XCTestCase {
         let status = app.staticTexts["popupStatus"]
         for (phase, title) in [("link", "Open link"), ("form", "Submit form"),
                                ("script", "Script popup"), ("burst", "Burst popup"),
-                               ("expired", "Delayed popup"), ("iframe", "Open link")] {
+                               ("expired", "Delayed popup"), ("iframe", "Open link"),
+                               ("cross", "Cross-site link"), ("under-script", "Continue"),
+                               ("under-copy", "Continue"), ("overlay", "Overlay link"),
+                               ("signin", "Continue"), ("under-allowed", "Allowed link")] {
             let ready = NSPredicate(format: "label == %@", "Ready: " + phase)
             expectation(for: ready, evaluatedWith: status)
             waitForExpectations(timeout: 25)
-            if phase == "link" || phase == "iframe" { app.webViews.links[title].tap() }
+            if ["link", "iframe", "cross", "overlay", "under-allowed"].contains(phase) { app.webViews.links[title].tap() }
             else { app.webViews.buttons[title].tap() }
         }
         expectation(for: NSPredicate(format: "label == %@", "PASS: trusted popups"), evaluatedWith: status)

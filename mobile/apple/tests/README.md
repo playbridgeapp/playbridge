@@ -504,3 +504,22 @@ categories, picker wording, and unique/multiple/offline/ambiguous selection.
 verified alias deduplication, MAC relocation, record-only TVs, connected ownership
 and stale receiver reachability. These checks do not establish physical discovery,
 TV app launch, or rendered UI behavior.
+
+
+Popup default blocking and tab-under policy (no install or devices):
+
+```sh
+bash mobile/apple/tests/run-popup-policy-checks.sh
+PB_BROWSER_BUILD_ONLY=1 bash mobile/apple/tests/run-browser-startup-checks.sh --popup-audit
+```
+
+The host runner checks site/anchor/frame/document bounds, the legacy toggle,
+window/redirect timing, explicit navigation exemptions, GET-only Open, display
+redaction and paused countdown; the JS fixture exercises the isolated listener.
+The compile-only browser mode exits before codesigning, installation or launch.
+With separate authorization for Simulator installs, execute `--popup-audit`,
+`--popup-touch`, `--tab-under`, and `--ad-navigation` without build-only mode.
+Touch cases now block forms/scripts/cross-site and full-page overlay anchors,
+allow a visible same-site anchor, retain the opener after an allowed child,
+and preserve sign-in style script-only redirects. Headless cases include
+window-then-redirect without interaction, explicit Open and origin exceptions.
