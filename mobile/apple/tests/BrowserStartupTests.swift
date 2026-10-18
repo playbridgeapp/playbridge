@@ -309,6 +309,26 @@ enum ContentBlocker {
         let partial = BrowserMediaDetectionSettings.load(defaults: preferences)
         try check(!partial.images && partial.videos && !partial.detectInBridgedSites,
                   "Missing preference fields did not retain safe defaults")
+        do {
+            // In-page navigations (pushState, e.g. YouTube switching videos) must be
+            // saved for restore and recorded in history even though no load finishes.
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let spa = BrowserStore(tabsFileURL: file)
+            store = spa
+            spa.browserVisible = true
+            let spaTab = spa.newTab(loading: base + "/parent")
+            let spaView = spaTab.webView
+            spaView.frame = window!.bounds
+            window!.rootViewController!.view.addSubview(spaView)
+            defer { spaView.removeFromSuperview() }
+            try await wait("spa parent") { spaView.title == "Parent" && !spaView.isLoading }
+            _ = try await spaView.evaluateJavaScript("history.pushState({},'', '/watch?v=second');document.title='Second video';void(0)")
+            try await wait("spa url") { spaTab.urlString.hasSuffix("/watch?v=second") }
+            let saved = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+            try check(saved.contains("watch?v=second"), "In-page navigation was not saved for restore")
+            try await wait("spa history") { spa.data.history.first?.url.hasSuffix("/watch?v=second") == true }
+            try check(spa.data.history.first?.title == "Second video", "In-page history used a stale title")
+        }
         let browser = BrowserStore(tabsFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         store = browser
         browser.browserVisible = true
