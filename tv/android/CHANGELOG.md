@@ -3,6 +3,36 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.16.0] — TBD (versionCode 232)
+
+> **Works best together**: Install this before GeckoView Plugin 0.15.0. The new plugin only accepts commands from a player that holds the new browser-control permission; the older plugin keeps working with this player. The phone's player Home, Loop switch and browser fullscreen controls need PlayBridge Phone 0.16.0. GeckoView browser zoom needs GeckoView Plugin 0.15.0.
+
+### Added
+- **Player Home**: Home from the phone remote finishes playback, saves progress and returns the TV to its idle screen, not the system launcher.
+- **Loop state**: The player reports whether looping is on, so the phone's Loop switch shows the real state.
+- **Browser fullscreen**: Both TV browsers report fullscreen on enter and exit, including exits with the TV's Back button, so the phone's fullscreen control follows.
+- **Receiver capabilities**: The player tells the phone which remote keys, player settings, browser controls and volume it supports, and which engine (ExoPlayer, MPV, WebView or GeckoView) is active, so PlayBridge Phone 0.16.0 shows matching controls.
+- **GeckoView zoom**: Pinch on the phone touchpad zooms pages in the GeckoView browser.
+- **Playback failure reason**: When the player gives up on a video after trying every engine, it tells the phone why ("The media couldn't be loaded", with the HTTP status when there is one) instead of leaving it on buffering. URLs, headers and raw error text are never sent. PlayBridge Phone 0.16.0 shows the reason.
+- **Live capability updates**: Installing, updating or removing the GeckoView plugin updates the phone's remote straight away, without reconnecting, for phones that support it (PlayBridge Phone 0.16.0).
+
+### Changed
+- **Fullscreen video in frames**: Fullscreen video inside embedded frames keeps the site's own player controls.
+- **Browser typing**: Text and Enter from the phone reach the focused field in both TV browsers, including search fields inside embedded frames and while in native fullscreen.
+- **Browser zoom**: Both TV browsers zoom smoothly with the phone's pinch, centred on the cursor and kept between half and three times the page size. Zoom resets when the page changes.
+
+### Fixed
+- **GeckoView browser on the phone**: Report the GeckoView browser to senders as "browser", so the phone shows the browser remote, title and scrubber instead of "Nothing playing".
+- **Low-memory TVs**: While a browser is open, release the preloaded MPV/ExoPlayer renderers instead of restarting them, and stay as important as the visible GeckoView browser so Android doesn't kill the phone connection first.
+- **Connection recovery**: If the player is restarted while the GeckoView browser is still on screen, reconnect phones immediately and resume routing remote and touchpad input to the browser.
+- **GeckoView video status**: Relay the plugin's playback status to the phone, only while the GeckoView browser is open.
+- **Browser fullscreen from the phone**: Fullscreen and restore work repeatedly without first clicking the video on the TV. If a site blocks real fullscreen, the video fills the screen instead, and the phone's fullscreen control matches what the TV shows.
+- **Scrolling in the browser**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open or control the GeckoView plugin or send it status, through a new signature permission and a protected bound service.
+- **Browser logs**: URLs in browser and player logs are redacted, header values are no longer logged, and media titles are no longer kept in the persisted queue log.
+
 ## Player [0.15.0] — 2026-10-09 (versionCode 231)
 
 ### Added
