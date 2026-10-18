@@ -7,6 +7,10 @@ build_dir="$(mktemp -d "${TMPDIR:-/tmp}/playbridge-ios-fixtures.XXXXXX")"
 trap 'rm -rf "$build_dir"' EXIT
 compiler=(swiftc -module-cache-path "$build_dir/modules" "$source_root/Browser/StreamDebugTrace.swift")
 
+"${compiler[@]}" "$source_root/Browser/ContentBlockerListSettings.swift" \
+  "$test_root/ContentBlockerListSettingsTests.swift" -o "$build_dir/list-settings"
+"$build_dir/list-settings"
+
 "${compiler[@]}" "$source_root/Models/DetectedVideo.swift" \
   "$source_root/Browser/HLSParser.swift" "$source_root/Browser/DASHParser.swift" \
   "$test_root/CastStreamRankingTests.swift" -o "$build_dir/ranking"
