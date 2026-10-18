@@ -1,9 +1,12 @@
-name: CLI Installer Validation
+name: Installer Validation
 
 on:
   push:
     branches: [main]
     paths:
+      - 'desktop/install.ps1'
+      - 'desktop/install.tests.ps1'
+      - 'web/site/functions/_lib/releases.js'
       - 'cli/install.sh'
       - 'cli/install.ps1'
       - 'cli/install.tests.ps1'
@@ -15,6 +18,9 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'desktop/install.ps1'
+      - 'desktop/install.tests.ps1'
+      - 'web/site/functions/_lib/releases.js'
       - 'cli/install.sh'
       - 'cli/install.ps1'
       - 'cli/install.tests.ps1'
@@ -52,3 +58,40 @@ jobs:
         run: |
           [scriptblock]::Create((Get-Content -Raw cli/install.ps1)) | Out-Null
           ./cli/install.tests.ps1
+
+      - name: Test Desktop installer (PowerShell 7)
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw desktop/install.ps1)) | Out-Null
+          ./desktop/install.tests.ps1
+
+      # `irm … | iex` usually runs in Windows PowerShell 5.1, not pwsh.
+      - name: Test Desktop installer (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          [scriptblock]::Create((Get-Content -Raw desktop/install.ps1)) | Out-Null
+          ./desktop/install.tests.ps1
+
+      # Real install of a published release into a scratch folder, then uninstall.
+      - name: Desktop installer end to end (Windows PowerShell 5.1)
+        shell: powershell
+        env:
+          PLAYBRIDGE_VERSION: '0.15.1'
+          PLAYBRIDGE_NO_LAUNCH: '1'
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PLAYBRIDGE_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'PlayBridge'
+          Get-Content -Raw desktop/install.ps1 | Invoke-Expression
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PlayBridgeDesktop'
+          $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'PlayBridge.lnk'
+          if (-not (Test-Path (Join-Path $env:PLAYBRIDGE_INSTALL_DIR 'playbridge_desktop.exe'))) { throw 'executable missing' }
+          if (-not (Test-Path $shortcut)) { throw 'Start menu shortcut missing' }
+          $entry = Get-ItemProperty -Path $key
+          if ($entry.DisplayVersion -ne '0.15.1') { throw "unexpected DisplayVersion $($entry.DisplayVersion)" }
+          $uninstaller = Join-Path $env:LOCALAPPDATA 'PlayBridge\uninstall-desktop.ps1'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstaller
+          foreach ($path in @($env:PLAYBRIDGE_INSTALL_DIR, $shortcut, $key, $uninstaller)) {
+            if (Test-Path $path) { throw "uninstall left $path behind" }
+          }
+          Write-Host 'Desktop installer end-to-end test passed.'

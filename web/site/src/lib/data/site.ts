@@ -21,6 +21,9 @@ export const CLI_INSTALL_COMMANDS = {
   windows: 'irm https://playbridge.app/install.ps1 | iex'
 } as const;
 
+/** Windows Desktop installer (desktop/install.ps1, published as /desktop.ps1). */
+export const DESKTOP_WINDOWS_INSTALL_COMMAND = 'irm https://playbridge.app/desktop.ps1 | iex';
+
 /** GitHub release body markers used in ?q= search links (see docs/release.md). */
 export const RELEASE_MARKERS = {
   desktop: '1a4b6c',
@@ -302,13 +305,13 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
     icon: 'windows',
     title: 'Windows Desktop',
     senderSteps: [
-      ['Download', `Latest .zip from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
-      ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
+      ['Install', `In PowerShell: ${DESKTOP_WINDOWS_INSTALL_COMMAND} (verified, per-user, no admin). Or download the .zip and run playbridge_desktop.exe.`],
+      ['Open', 'Start PlayBridge from the Start menu.'],
       ['Cast out', 'Send local files or streams to a TV / other receiver. Pair the browser extension here if you cast from Chrome or Firefox.']
     ],
     receiverSteps: [
-      ['Download', `Latest .zip from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
-      ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
+      ['Install', `In PowerShell: ${DESKTOP_WINDOWS_INSTALL_COMMAND} (verified, per-user, no admin). Or download the .zip and run playbridge_desktop.exe.`],
+      ['Open', 'Start PlayBridge from the Start menu.'],
       ['Approve senders', 'Allow phones and extensions that connect — this machine becomes the screen you watch on.']
     ],
     cmd: releaseSearchUrl(RELEASE_MARKERS.desktop),

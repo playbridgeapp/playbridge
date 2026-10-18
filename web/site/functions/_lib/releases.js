@@ -42,7 +42,12 @@ const PRODUCTS = {
     targets: {
       macos: { assetPattern: /^playbridge-desktop-macos-.*\.zip$/ },
       windows: { assetPattern: /^playbridge-desktop-windows-.*\.zip$/ },
-      linux: { assetPattern: /^playbridge-desktop-linux-.*\.tar\.gz$/ }
+      linux: { assetPattern: /^playbridge-desktop-linux-.*\.tar\.gz$/ },
+      // Update manifest for desktop/install.ps1; the checksum is GitHub's asset digest.
+      'windows-x86_64': {
+        assetPattern: /^playbridge-desktop-windows-.*\.zip$/,
+        requireChecksum: true
+      }
     }
   }
 };
@@ -62,6 +67,19 @@ export class ReleaseResolverError extends Error {
  */
 export function productAssetName(product, os, arch) {
   return PRODUCTS[product]?.targets[`${os}-${arch}`]?.assetName ?? null;
+}
+
+/**
+ * Whether `/api/v1/updates/<product>?os=&arch=` serves this target: only targets
+ * whose manifest carries a SHA-256 an installer can verify.
+ * @param {string} product
+ * @param {string} os
+ * @param {string} arch
+ */
+export function hasUpdateTarget(product, os, arch) {
+  const targets = PRODUCTS[product]?.targets ?? {};
+  const key = `${os}-${arch}`;
+  return Object.hasOwn(targets, key) && targets[key].requireChecksum === true;
 }
 
 /**

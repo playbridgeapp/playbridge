@@ -4,6 +4,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Windows one-line installer**: `irm https://playbridge.app/desktop.ps1 | iex` installs or updates PlayBridge Desktop for the current user (no administrator rights) in `%LOCALAPPDATA%\Programs\PlayBridge`, after verifying the release's SHA-256. It adds a Start menu shortcut and an Installed apps entry; uninstalling also removes the browser-extension and Explorer "Play on TV" registrations but keeps your settings and pairings. Set `PLAYBRIDGE_VERSION` to install a specific version.
+
 ### Changed
 - **Signed and notarized on macOS**: The macOS app is signed with Developer ID and notarized by Apple, so it opens without the Gatekeeper warning or the right-click → Open workaround.
 - **New macOS bundle id**: The macOS app is now `app.playbridge.desktop`, matching the iPhone and Apple TV apps. On first launch it copies your settings, pairing and TLS identity from the previous id, so paired phones keep working, and moves launch at login over. macOS may ask once more for local network access.
