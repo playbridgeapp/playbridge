@@ -113,6 +113,11 @@ class ReceiverServer extends ChangeNotifier {
   int? _wssPort;
   String? tlsError;
   bool _mirrorWasActive = false;
+  // Last player context sent to senders. Local stops, the end of the queue and
+  // closing the player never pass through a sender command, so the player's own
+  // idle transitions are broadcast too (Android TV sends context on its player
+  // activity lifecycle).
+  late bool _playerWasIdle = player.state == 'idle';
 
   int? get wssPort => _wssPort;
   int get connectedClientCount => _connectedClientCount;
@@ -800,10 +805,21 @@ class ReceiverServer extends ChangeNotifier {
   }
 
   void _broadcastStatus() {
+    _broadcastPlayerContextIfChanged();
     if (player.hasTerminalError) return;
     if (!player.isOpening) _progressReporter.update(_progressSnapshot());
     _broadcast(_statusMessage());
     _broadcastTracksIfChanged();
+  }
+
+  void _broadcastPlayerContextIfChanged() {
+    final idle = player.state == 'idle';
+    if (idle == _playerWasIdle) return;
+    _playerWasIdle = idle;
+    // Screen mirroring owns the context while it runs; its handler reports the
+    // player context when it ends.
+    if (screenMirror.isActive) return;
+    _broadcast({'type': 'context', 'active': idle ? 'idle' : 'player'});
   }
 
   Map<String, Object?> _statusMessage() => {

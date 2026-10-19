@@ -12,6 +12,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **New macOS bundle id**: The macOS app is now `app.playbridge.desktop`, matching the iPhone and Apple TV apps. On first launch it copies your settings, pairing and TLS identity from the previous id, so paired phones keep working, and moves launch at login over. macOS may ask once more for local network access.
 
 ### Fixed
+- **Phone shows "Casting" after stopping on the desktop**: The desktop now tells connected phones when its player starts or goes idle, including stopping a video on the desktop, the queue ending and closing the player. Previously only a stop from the phone did.
 - **Launch at login**: The tray menu and Settings now control the same login item. They previously wrote separate entries and could disagree.
 - **TheIntroDB skip segments**: Use API v4 for movie and episode lookups, retain saved custom/versioned API URLs, and handle intro/recap ranges starting at the beginning. (#379)
 
