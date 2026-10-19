@@ -117,6 +117,9 @@ import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.downloads.DownloadConfirmDialog
 import com.playbridge.sender.downloads.DownloadUtils
 import com.playbridge.sender.downloads.DownloadsScreen
+import com.playbridge.sender.downloads.notifications.DownloadNotificationOpen
+import com.playbridge.sender.downloads.notifications.DownloadNotifications
+import com.playbridge.sender.downloads.notifications.openCompletedDownload
 import com.playbridge.sender.downloads.PendingDownload
 import com.playbridge.sender.downloads.PendingPopup
 import com.playbridge.sender.model.TvDevice
@@ -246,6 +249,8 @@ class BrowserActivity : ComponentActivity() {
         private const val TAG = "BrowserActivity"
         const val ACTION_OPEN_MEDIA_TAB = "com.playbridge.sender.OPEN_MEDIA_TAB"
         const val ACTION_OPEN_CAST_REMOTE = "com.playbridge.sender.OPEN_CAST_REMOTE"
+        const val ACTION_OPEN_DOWNLOADS = "com.playbridge.sender.OPEN_DOWNLOADS"
+        const val EXTRA_OPEN_DOWNLOAD_FILE = "open_download_file"
         const val EXTRA_MEDIA_TAB_ID = "media_notification_tab_id"
     }
 
@@ -449,10 +454,12 @@ class BrowserActivity : ComponentActivity() {
     private val pendingLinkUrl = androidx.compose.runtime.mutableStateOf<String?>(null)
     private val pendingMediaTabId = androidx.compose.runtime.mutableStateOf<String?>(null)
     private val pendingCastRemote = androidx.compose.runtime.mutableStateOf(false)
+    private val pendingDownloadNotification = mutableStateOf<DownloadNotificationOpen?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        pendingDownloadNotification.value = null
         parseLinkIntent(intent)?.let {
             pendingCastRemote.value = false
             pendingMediaTabId.value = null
@@ -464,6 +471,14 @@ class BrowserActivity : ComponentActivity() {
         } else if (intent.action == ACTION_OPEN_CAST_REMOTE) {
             pendingMediaTabId.value = null
             pendingCastRemote.value = true
+        } else if (intent.action == ACTION_OPEN_DOWNLOADS) {
+            pendingLinkUrl.value = null
+            pendingMediaTabId.value = null
+            pendingCastRemote.value = false
+            pendingDownloadNotification.value = DownloadNotificationOpen(
+                intent.getStringExtra(DownloadNotifications.EXTRA_DOWNLOAD_ID),
+                intent.getBooleanExtra(EXTRA_OPEN_DOWNLOAD_FILE, false),
+            )
         }
     }
 
@@ -503,6 +518,9 @@ class BrowserActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         notificationPermissionHost.saveState(outState)
         outState.putBoolean("pending_cast_remote_notification", pendingCastRemote.value)
+        outState.putBoolean("pending_download_notification", pendingDownloadNotification.value != null)
+        outState.putString("pending_download_id", pendingDownloadNotification.value?.id)
+        outState.putBoolean("pending_download_open_file", pendingDownloadNotification.value?.openFile == true)
         super.onSaveInstanceState(outState)
     }
 
@@ -630,7 +648,8 @@ class BrowserActivity : ComponentActivity() {
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
-        val mediaNotificationLaunch = intent?.action == ACTION_OPEN_MEDIA_TAB || intent?.action == ACTION_OPEN_CAST_REMOTE
+        val mediaNotificationLaunch = intent?.action == ACTION_OPEN_MEDIA_TAB ||
+            intent?.action == ACTION_OPEN_CAST_REMOTE || intent?.action == ACTION_OPEN_DOWNLOADS
         if (savedInstanceState == null && !mediaNotificationLaunch) tabManager.closeAllSessions()
         VideoDetector.init(applicationContext)
 
@@ -644,6 +663,17 @@ class BrowserActivity : ComponentActivity() {
         }
         pendingCastRemote.value = savedInstanceState?.getBoolean("pending_cast_remote_notification")
             ?: (intent?.action == ACTION_OPEN_CAST_REMOTE)
+
+        val downloadRequestPending = savedInstanceState?.getBoolean("pending_download_notification")
+            ?: (intent?.action == ACTION_OPEN_DOWNLOADS)
+        if (downloadRequestPending) {
+            pendingDownloadNotification.value = DownloadNotificationOpen(
+                if (savedInstanceState != null) savedInstanceState.getString("pending_download_id")
+                else intent?.getStringExtra(DownloadNotifications.EXTRA_DOWNLOAD_ID),
+                savedInstanceState?.getBoolean("pending_download_open_file")
+                    ?: (intent?.getBooleanExtra(EXTRA_OPEN_DOWNLOAD_FILE, false) == true),
+            )
+        }
 
         notificationPermissionHost.onCreate(savedInstanceState)
 
@@ -923,6 +953,21 @@ class BrowserActivity : ComponentActivity() {
                         currentScreen = Screen.Remote
                     }
                     pendingCastRemote.value = false
+                }
+            }
+            val downloadRequest = pendingDownloadNotification.value
+            LaunchedEffect(downloadRequest, tabsRestoredOrReady.value) {
+                if (downloadRequest != null && tabsRestoredOrReady.value) {
+                    currentScreen = Screen.Downloads
+                    val entity = if (downloadRequest.openFile && downloadRequest.id != null) {
+                        withContext(Dispatchers.IO) { downloadDao.getById(downloadRequest.id) }
+                    } else null
+                    // Finish suspended lookup before clearing this effect's key. Consume
+                    // before launching another Activity so rotation/back cannot reopen it.
+                    pendingDownloadNotification.value = null
+                    intent?.takeIf { it.action == ACTION_OPEN_DOWNLOADS }?.action = null
+                    downloadRequest.id?.let { DownloadNotifications(this@BrowserActivity).clearResult(it) }
+                    if (entity != null) openCompletedDownload(this@BrowserActivity, entity)
                 }
             }
             LaunchedEffect(mediaTabRequest, tabsRestoredOrReady.value) {

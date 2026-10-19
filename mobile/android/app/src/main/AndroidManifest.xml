@@ -114,6 +114,10 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <receiver
+            android:name=".downloads.notifications.DownloadNotificationReceiver"
+            android:exported="false" />
+
         <!-- FileProvider for sharing downloaded files with external players -->
         <provider
             android:name="androidx.core.content.FileProvider"

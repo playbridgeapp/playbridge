@@ -1,26 +1,28 @@
 package com.playbridge.sender.downloads.engine
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
-import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import android.webkit.MimeTypeMap
-import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
-import androidx.work.ForegroundInfo
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.await
-import com.playbridge.sender.R
 import com.playbridge.sender.data.downloads.DownloadDao
+import com.playbridge.sender.downloads.notifications.DownloadNotificationProgress
+import com.playbridge.sender.downloads.notifications.DownloadNotifications
+import com.playbridge.sender.downloads.notifications.downloadNotificationMode
+import com.playbridge.sender.downloads.notifications.downloadNotificationProgress
+import com.playbridge.sender.downloads.notifications.downloadNotificationTitle
+import com.playbridge.sender.downloads.notifications.shouldUpdateDownloadNotification
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -45,13 +47,16 @@ class DownloadWorker(
     private val dao: DownloadDao by inject()
     private val strategies: DownloadStrategies by inject()
 
+    private val notifications by lazy { DownloadNotifications(applicationContext) }
+
     override suspend fun doWork(): Result {
         val id = inputData.getString(KEY_ID) ?: return Result.failure()
         val entity = dao.getById(id) ?: return Result.failure()
         val request = entity.toRequest()
 
         val strategy = strategies.forKind(request.kind) ?: run {
-            dao.markFailed(id, "No strategy registered for ${request.kind}")
+            dao.markFailed(id, "Unsupported download type")
+            postResultIfPresent(id, request.title, DownloadStatus.FAILED, "Unsupported download type")
             return Result.failure()
         }
 
@@ -63,17 +68,22 @@ class DownloadWorker(
             if (entity.status != DownloadStatus.PAUSED.name) {
                 dao.updateStatus(id, DownloadStatus.PAUSED.name)
             }
+            postResultIfPresent(id, request.title, DownloadStatus.PAUSED)
             return Result.success()
         }
         controller.start()
+        notifications.clearResult(id)
 
-        runCatching { setForeground(foregroundInfo(request.title)) }
-            .onFailure { Log.w(TAG, "setForeground failed (continuing): ${it.message}") }
+        val initialProgress = downloadNotificationProgress(Progress(entity.bytesDownloaded, entity.totalBytes))
+        updateForeground(id, request.title, initialProgress)
 
         dao.updateStatus(id, DownloadStatus.RUNNING.name)
 
         return coroutineScope {
             val latest = AtomicReference(Progress(entity.bytesDownloaded, entity.totalBytes))
+            var lastNotification = initialProgress
+            var lastNotificationAt = SystemClock.elapsedRealtime()
+            var finalizingNotification: Job? = null
             val ticker = launch {
                 var lastWrittenBytes = entity.bytesDownloaded
                 var lastWrittenPercent = -1
@@ -89,6 +99,13 @@ class DownloadWorker(
                         dao.updateProgress(id, p.downloadedBytes, p.totalBytes, DownloadStatus.RUNNING.name)
                         lastWrittenBytes = p.downloadedBytes
                         lastWrittenPercent = percent
+                    }
+                    val visible = downloadNotificationProgress(p)
+                    val now = SystemClock.elapsedRealtime()
+                    if (shouldUpdateDownloadNotification(lastNotification, visible, lastNotificationAt, now)) {
+                        updateForeground(id, request.title, visible)
+                        lastNotification = visible
+                        lastNotificationAt = now
                     }
                     delay(PROGRESS_INTERVAL_MS)
                 }
@@ -108,10 +125,17 @@ class DownloadWorker(
 
             try {
                 val file = strategy.download(request, dir, controller) { latest.set(it) }
-                ticker.cancel()
+                ticker.cancelAndJoin()
                 budget?.cancel()
-
                 dao.updateStatus(id, DownloadStatus.MERGING.name) // published == "finalizing"
+                val finalizing = DownloadNotificationProgress("Finalizing…", null, finalizing = true)
+                if (lastNotification != finalizing) {
+                    finalizingNotification = launch {
+                        // Phase changes share the 1 Hz limit; fast publishes need no extra post.
+                        delay((PROGRESS_INTERVAL_MS - (SystemClock.elapsedRealtime() - lastNotificationAt)).coerceAtLeast(0))
+                        updateForeground(id, request.title, finalizing)
+                    }
+                }
                 val displayName = buildDisplayName(request, file)
                 // For HLS/MPD the source mime is m3u8/mpd, but we produced an MP4 — publish
                 // with the container's real mime, not the request's.
@@ -123,16 +147,22 @@ class DownloadWorker(
                 val publishedUri = withContext(Dispatchers.IO) {
                     MediaStorePublisher.publish(applicationContext, file, displayName, mime)
                 }
+                finalizingNotification?.cancelAndJoin()
                 dir.deleteRecursively() // temp segments no longer needed
                 dao.markDone(id, publishedUri)
+                val notificationName = if (downloadNotificationTitle(request.title) == "Download") "Download" else displayName
+                postResultIfPresent(id, notificationName, DownloadStatus.DONE)
                 Result.success()
             } catch (e: DownloadPausedException) {
+                ticker.cancelAndJoin()
                 dao.updateStatus(id, DownloadStatus.PAUSED.name)
+                postResultIfPresent(id, request.title, DownloadStatus.PAUSED)
                 Result.success() // paused is a clean stop, not a failure; resume re-enqueues
             } catch (e: CancellationException) {
                 if (controller.isCancelRequested()) {
                     dir.deleteRecursively()
                     dao.delete(id)
+                    notifications.clear(id)
                     Result.success()
                 } else if (
                     Build.VERSION.SDK_INT >= 31 &&
@@ -140,17 +170,24 @@ class DownloadWorker(
                 ) {
                     Log.w(TAG, "Download $id paused (foreground service timeout)")
                     pauseAfterForegroundTimeout(id, controller)
+                    withContext(NonCancellable) { postResultIfPresent(id, request.title, DownloadStatus.PAUSED) }
                     Result.success()
                 } else {
+                    notifications.clear(id)
                     throw e // genuine coroutine/system cancellation — preserve structured concurrency
                 }
             } catch (e: Throwable) {
-                Log.e(TAG, "Download $id failed", e)
-                dao.markFailed(id, e.message ?: e.javaClass.simpleName)
+                ticker.cancelAndJoin()
+                Log.e(TAG, "Download failed (${e.javaClass.simpleName})")
+                // Exception messages may contain authenticated URLs or response headers.
+                val reason = if (e is java.io.IOException) "Could not download or save the file" else "Could not finish the download"
+                dao.markFailed(id, reason)
+                postResultIfPresent(id, request.title, DownloadStatus.FAILED, reason)
                 Result.failure()
             } finally {
                 ticker.cancel()
                 budget?.cancel()
+                finalizingNotification?.cancel()
             }
         }
     }
@@ -165,43 +202,36 @@ class DownloadWorker(
         runCatching {
             WorkManager.getInstance(applicationContext).cancelWorkById(id).await()
         }.onFailure { error ->
-            Log.w(TAG, "Could not cancel timed-out work $downloadId: ${error.message}")
+            Log.w(TAG, "Could not cancel timed-out work $downloadId: ${error.javaClass.simpleName}")
         }
         dao.updateStatus(downloadId, DownloadStatus.PAUSED.name)
     }
 
-    // --- foreground notification ---
-
-    private fun foregroundInfo(title: String): ForegroundInfo {
-        ensureChannel()
-        val notification: Notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setContentTitle("Downloading")
-            .setContentText(title)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setOngoing(true)
-            .setProgress(0, 0, true)
-            .build()
-
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(NOTIF_ID, notification)
+    private suspend fun updateForeground(id: String, title: String, progress: DownloadNotificationProgress) {
+        try {
+            setForeground(notifications.foregroundInfo(id, title, progress))
+            notifications.refreshSummary()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "setForeground failed (${error.javaClass.simpleName})")
         }
     }
 
-    private fun ensureChannel() {
-        val mgr = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
-            mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW),
-            )
+    private suspend fun postResultIfPresent(id: String, title: String, status: DownloadStatus, reason: String? = null) {
+        // Cancel removes the row; never bring back a cancelled download's notification.
+        if (dao.getById(id)?.status == status.name) {
+            try {
+                notifications.postResult(id, title, downloadNotificationMode(status), reason)
+            } catch (error: Exception) {
+                Log.w(TAG, "Result notification failed (${error.javaClass.simpleName})")
+            }
         }
     }
 
     companion object {
         const val KEY_ID = "download_id"
         const val CHANNEL_ID = "download_engine_channel"
-        const val NOTIF_ID = 4411
         const val TAG = "DownloadWorker"
         const val PROGRESS_INTERVAL_MS = 1000L
 

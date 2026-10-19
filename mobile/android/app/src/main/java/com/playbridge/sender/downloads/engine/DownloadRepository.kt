@@ -8,6 +8,8 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.playbridge.sender.data.downloads.DownloadDao
 import com.playbridge.sender.data.downloads.DownloadEntity
+import com.playbridge.sender.downloads.notifications.DownloadNotifications
+import com.playbridge.sender.notifications.NotificationPermissionRecovery
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONObject
 import java.io.File
@@ -30,6 +32,7 @@ class DownloadRepository(
     fun observe(): Flow<List<DownloadEntity>> = dao.observeAll()
 
     suspend fun enqueue(request: DownloadRequest) {
+        NotificationPermissionRecovery.onNotificationNeeded()
         dao.upsert(request.toEntity(DownloadStatus.QUEUED))
         scheduleWork(request.id)
     }
@@ -41,9 +44,13 @@ class DownloadRepository(
 
     /** Re-run the work; the strategy resumes from existing segments/bytes on disk. */
     suspend fun resume(id: String) {
+        val status = dao.getById(id)?.status ?: return
+        if (status != DownloadStatus.PAUSED.name && status != DownloadStatus.FAILED.name) return
+        NotificationPermissionRecovery.onNotificationNeeded()
+        DownloadNotifications(context).clearResult(id)
         DownloadController(DownloadPaths.dirFor(context, id)).start() // clears pause flag
         dao.updateStatus(id, DownloadStatus.QUEUED.name)
-        scheduleWork(id)
+        scheduleWork(id, if (status == DownloadStatus.PAUSED.name) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE)
     }
 
     /** Stop, drop the work, and (optionally) wipe partial files + the Room row. */
@@ -54,17 +61,20 @@ class DownloadRepository(
             DownloadPaths.dirFor(context, id).deleteRecursively()
             dao.delete(id)
         }
+        DownloadNotifications(context).clear(id)
     }
 
-    private fun scheduleWork(id: String) {
+    private fun scheduleWork(id: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val work = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setInputData(workDataOf(DownloadWorker.KEY_ID to id))
             .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS)
             .addTag(TAG)
             .build()
-        // KEEP: if a worker for this id is already running, don't double-schedule.
+        // Initial enqueue uses KEEP. Resume queues behind a paused worker still unwinding
+        // so an immediate notification tap cannot be silently dropped by KEEP. Failed
+        // work is replaced: a still-unwinding failed parent must not fail its retry too.
         WorkManager.getInstance(context)
-            .enqueueUniqueWork(workName(id), ExistingWorkPolicy.KEEP, work)
+            .enqueueUniqueWork(workName(id), policy, work)
     }
 
     private fun workName(id: String) = "download:$id"
