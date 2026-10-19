@@ -332,6 +332,29 @@ void main() {
     });
 
     test(
+        'broadcasts player and idle context when playback starts and stops locally',
+        () async {
+      final contexts = <Object?>[];
+      server.onBroadcastForTest = (msg) {
+        if (msg['type'] == 'context') contexts.add(msg['active']);
+      };
+
+      await controller.playUrl('https://example.com/video.mp4', title: 'Movie');
+      expect(contexts, ['player']);
+
+      // Pausing and repeated ticks keep the same context.
+      await controller.pause();
+      engine.setPositionMsForTest(500);
+      expect(contexts, ['player']);
+
+      // A stop on the desktop itself never goes through a sender command.
+      await controller.stop();
+      expect(contexts, ['player', 'idle']);
+      engine.setPositionMsForTest(0);
+      expect(contexts, ['player', 'idle']);
+    });
+
+    test(
         'broadcasts exactly one error status frame before transitioning to idle',
         () async {
       final broadcastFrames = <Map<String, Object?>>[];
