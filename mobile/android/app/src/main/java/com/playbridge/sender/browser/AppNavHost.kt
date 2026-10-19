@@ -1032,7 +1032,13 @@ fun AppNavHost(
                 Screen.Downloads -> {
                     BackHandler { onScreenChange(lastMainScreen) }
                     DownloadsScreen(
-                        onBack = { onScreenChange(lastMainScreen) }
+                        onBack = { onScreenChange(lastMainScreen) },
+                        onOpenAllDevices = { openAllDevicesExpanded() },
+                        // New tab: works with no tabs open and keeps the current page.
+                        onOpenUrl = { url ->
+                            tabManager.createTab(url, store)
+                            onScreenChange(Screen.Browser)
+                        },
                     )
                 }
                 Screen.Settings -> {

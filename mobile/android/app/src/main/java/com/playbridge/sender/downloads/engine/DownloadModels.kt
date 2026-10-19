@@ -30,6 +30,8 @@ data class DownloadRequest(
     /** For HLS: the specific variant playlist the user picked; null = auto. */
     val selectedVariantUrl: String? = null,
     val audioOnly: Boolean = false,
+    /** The browser page the download was started from; never sent as a header. */
+    val sourcePageUrl: String? = null,
 )
 
 /**
