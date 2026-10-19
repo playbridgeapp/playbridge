@@ -245,6 +245,7 @@ class BrowserActivity : ComponentActivity() {
     companion object {
         private const val TAG = "BrowserActivity"
         const val ACTION_OPEN_MEDIA_TAB = "com.playbridge.sender.OPEN_MEDIA_TAB"
+        const val ACTION_OPEN_CAST_REMOTE = "com.playbridge.sender.OPEN_CAST_REMOTE"
         const val EXTRA_MEDIA_TAB_ID = "media_notification_tab_id"
     }
 
@@ -447,13 +448,22 @@ class BrowserActivity : ComponentActivity() {
      */
     private val pendingLinkUrl = androidx.compose.runtime.mutableStateOf<String?>(null)
     private val pendingMediaTabId = androidx.compose.runtime.mutableStateOf<String?>(null)
+    private val pendingCastRemote = androidx.compose.runtime.mutableStateOf(false)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        parseLinkIntent(intent)?.let { pendingLinkUrl.value = it }
+        parseLinkIntent(intent)?.let {
+            pendingCastRemote.value = false
+            pendingMediaTabId.value = null
+            pendingLinkUrl.value = it
+        }
         if (intent.action == ACTION_OPEN_MEDIA_TAB) {
+            pendingCastRemote.value = false
             pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
+        } else if (intent.action == ACTION_OPEN_CAST_REMOTE) {
+            pendingMediaTabId.value = null
+            pendingCastRemote.value = true
         }
     }
 
@@ -492,6 +502,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         notificationPermissionHost.saveState(outState)
+        outState.putBoolean("pending_cast_remote_notification", pendingCastRemote.value)
         super.onSaveInstanceState(outState)
     }
 
@@ -619,7 +630,7 @@ class BrowserActivity : ComponentActivity() {
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
-        val mediaNotificationLaunch = intent?.action == ACTION_OPEN_MEDIA_TAB
+        val mediaNotificationLaunch = intent?.action == ACTION_OPEN_MEDIA_TAB || intent?.action == ACTION_OPEN_CAST_REMOTE
         if (savedInstanceState == null && !mediaNotificationLaunch) tabManager.closeAllSessions()
         VideoDetector.init(applicationContext)
 
@@ -628,9 +639,11 @@ class BrowserActivity : ComponentActivity() {
 
         // Capture a web link that launched us (tapped in another app); consumed in Compose.
         pendingLinkUrl.value = parseLinkIntent(intent)
-        if (mediaNotificationLaunch) {
+        if (intent?.action == ACTION_OPEN_MEDIA_TAB) {
             pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
         }
+        pendingCastRemote.value = savedInstanceState?.getBoolean("pending_cast_remote_notification")
+            ?: (intent?.action == ACTION_OPEN_CAST_REMOTE)
 
         notificationPermissionHost.onCreate(savedInstanceState)
 
@@ -895,6 +908,23 @@ class BrowserActivity : ComponentActivity() {
             // Notification taps select the existing playing tab after restoration,
             // preserving its live engine and any installed-app ownership.
             val mediaTabRequest = pendingMediaTabId.value
+            LaunchedEffect(pendingCastRemote.value, tabsRestoredOrReady.value) {
+                if (pendingCastRemote.value && tabsRestoredOrReady.value) {
+                    val sessions = connectionViewModel.castSessionManager
+                    if (sessions.route.value != CastSessionManager.Route.ThisDevice &&
+                        (sessions.hasActiveSession.value || sessions.isActivelyPlaying.value)
+                    ) {
+                        if (currentScreen != Screen.Remote) {
+                            remoteOrigin = currentScreen
+                            remoteOriginBridgedAppTabId = selectedTabId.takeIf {
+                                currentScreen == Screen.Browser && it == activeBridgedAppTabId
+                            }
+                        }
+                        currentScreen = Screen.Remote
+                    }
+                    pendingCastRemote.value = false
+                }
+            }
             LaunchedEffect(mediaTabRequest, tabsRestoredOrReady.value) {
                 if (mediaTabRequest != null && tabsRestoredOrReady.value) {
                     val target = com.playbridge.sender.cast.mediaNotificationTabTarget(

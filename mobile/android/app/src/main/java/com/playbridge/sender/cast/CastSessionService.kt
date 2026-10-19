@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -18,7 +19,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import com.playbridge.sender.R
+import com.playbridge.sender.browser.BrowserActivity
+import com.playbridge.sender.cast.remote.RemoteControllerRegistry
+import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
@@ -38,10 +43,10 @@ import org.koin.core.component.inject
  * Lifecycle is driven entirely by [CastSessionManager.hasActiveSession]; the notification
  * mirrors [CastSessionManager.sessionInfo].
  *
- * External playback uses this FGS only while the phone is serving the media path.
+ * External playback keeps the receiver MediaSession available while media is loaded.
  * High-performance Wi-Fi and partial CPU wake locks are held only while
  * [CastSessionManager.needsCastWakeLock] is true (phone data path or native player
- * context). Direct and remote-proxy external playback do not keep this service alive.
+ * context). Direct and remote-proxy playback keep controls available without these locks.
  */
 class CastSessionService : Service(), KoinComponent {
 
@@ -55,6 +60,8 @@ class CastSessionService : Service(), KoinComponent {
     )
 
     private val manager: CastSessionManager by inject()
+    private val coordinator: ConnectionCoordinator by inject()
+    private val remoteControllers: RemoteControllerRegistry by inject()
     private val linkedPageCastCoordinator: com.playbridge.sender.browser.LinkedPageCastCoordinator by inject()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wifiLock: WifiManager.WifiLock? = null
@@ -62,6 +69,16 @@ class CastSessionService : Service(), KoinComponent {
     private var foregroundStarted = false
     private var currentlyPlaying = false
     private var locksHeld = false
+    private lateinit var castMedia: CastMediaSession
+    private data class NotificationAppearance(
+        val info: CastSessionManager.SessionInfo,
+        val playing: Boolean,
+        val mirroring: Boolean,
+        val capturesDeviceAudio: Boolean,
+        val linkedController: String?,
+        val media: CastMediaNotificationView?,
+    )
+    private var lastAppearance: NotificationAppearance? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -76,6 +93,9 @@ class CastSessionService : Service(), KoinComponent {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "playbridge:cast").apply {
             setReferenceCounted(false)
         }
+        castMedia = CastMediaSession(this, manager, coordinator, remoteControllers, scope,
+            ::refreshCurrentNotification, { linkedPageCastCoordinator.unlink("unlinked") })
+        scope.launch { castMedia.updates.collect { refreshCurrentNotification() } }
         scope.launch {
             combine(
                 manager.sessionInfo,
@@ -134,9 +154,17 @@ class CastSessionService : Service(), KoinComponent {
                 return START_NOT_STICKY
             }
             ACTION_STOP_CAST -> manager.endCastSession()
+            ACTION_MEDIA_PLAY -> if (castMedia.matches(intent.getStringExtra(EXTRA_MEDIA_OWNER))) castMedia.setPlaying(true)
+            ACTION_MEDIA_PAUSE -> if (castMedia.matches(intent.getStringExtra(EXTRA_MEDIA_OWNER))) castMedia.setPlaying(false)
+            ACTION_MEDIA_STOP -> if (castMedia.matches(intent.getStringExtra(EXTRA_MEDIA_OWNER))) castMedia.stop()
             ACTION_DISCONNECT -> manager.disconnectSession()
-            ACTION_UNLINK_PAGE -> linkedPageCastCoordinator.unlink("unlinked")
+            ACTION_UNLINK_PAGE -> if (!intent.hasExtra(EXTRA_MEDIA_OWNER) || castMedia.matches(intent.getStringExtra(EXTRA_MEDIA_OWNER))) {
+                linkedPageCastCoordinator.unlink("unlinked")
+            }
             ACTION_NOTIFICATION_DISMISSED -> {
+                // Dismissal removes the system row even though its content has not
+                // changed. Bypass the tick cache to preserve explicit re-show behavior.
+                lastAppearance = null
                 if (manager.hasActiveSession.value) {
                     Log.i(TAG, "Cast notification dismissed while session active — re-showing")
                 }
@@ -163,6 +191,7 @@ class CastSessionService : Service(), KoinComponent {
 
     private fun stopNotificationService() {
         foregroundStarted = false
+        if (::castMedia.isInitialized) castMedia.releaseSession()
         applyResourceLocks(false)
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         stopSelf()
@@ -209,7 +238,14 @@ class CastSessionService : Service(), KoinComponent {
         capturesDeviceAudio: Boolean,
         linkedController: String? = linkedPageCastCoordinator.uiState.value.controllerName,
     ): Boolean {
-        val notif = buildNotification(info, playing, linkedController)
+        val media = castMedia.refresh(info, playing, mirroring, linkedController != null)
+        val appearance = NotificationAppearance(
+            if (media == null) info else info.copy(title = media.title),
+            playing, mirroring, capturesDeviceAudio, linkedController, media)
+        // Receiver position ticks only reach MediaSession; visible changes/type changes
+        // are the only reason to rebuild/promote this notification.
+        if (foregroundStarted && appearance == lastAppearance) return true
+        val notif = buildNotification(info, playing, linkedController, media)
         val microphoneType = if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mirroring && capturesDeviceAudio
         ) {
@@ -233,7 +269,17 @@ class CastSessionService : Service(), KoinComponent {
             promote = { ServiceCompat.startForeground(this, NOTIF_ID, notif, type) },
             onFailure = { Log.w(TAG, "Cast foreground start failed (${it.javaClass.simpleName})") },
             stop = ::stopNotificationService,
-        ).also { foregroundStarted = it }
+        ).also {
+            foregroundStarted = it
+            if (it) lastAppearance = appearance
+        }
+    }
+
+    private fun refreshCurrentNotification() {
+        if (!foregroundStarted) return
+        val mirror = manager.screenMirrorState.value
+        startForegroundWithType(manager.sessionInfo.value, manager.isActivelyPlaying.value,
+            mirror.isActive, mirror.deviceAudioRequested)
     }
 
     /**
@@ -276,6 +322,7 @@ class CastSessionService : Service(), KoinComponent {
 
     override fun onDestroy() {
         scope.cancel()
+        if (::castMedia.isInitialized) castMedia.close()
         runCatching {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
         }
@@ -291,7 +338,9 @@ class CastSessionService : Service(), KoinComponent {
         info: CastSessionManager.SessionInfo,
         playing: Boolean,
         linkedController: String?,
+        media: CastMediaNotificationView?,
     ): Notification {
+        if (media != null) return buildMediaNotification(media, linkedController)
         val stopCastPi = PendingIntent.getService(
             this, 1,
             Intent(this, CastSessionService::class.java).setAction(ACTION_STOP_CAST),
@@ -348,6 +397,47 @@ class CastSessionService : Service(), KoinComponent {
         return notification
     }
 
+    private fun buildMediaNotification(media: CastMediaNotificationView, linkedController: String?): Notification {
+        fun actionIntent(action: String, code: Int): PendingIntent = PendingIntent.getService(
+            this, code, Intent(this, CastSessionService::class.java).setAction(action)
+                .setData("playbridge-cast-control://${media.ownerToken}/$code".toUri())
+                .putExtra(EXTRA_MEDIA_OWNER, media.ownerToken),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val content = PendingIntent.getActivity(this, 5,
+            Intent(this, BrowserActivity::class.java).setAction(BrowserActivity.ACTION_OPEN_CAST_REMOTE)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        castMedia.session.setSessionActivity(content)
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(media.title).setContentText(media.subtitle)
+            .setContentIntent(content)
+            .setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_TRANSPORT).setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setDeleteIntent(actionIntent(ACTION_NOTIFICATION_DISMISSED, 2))
+        val compact = mutableListOf<Int>()
+        if (media.actions.playPause) {
+            val pause = media.state == PlaybackState.PLAYING || media.state == PlaybackState.BUFFERING
+            builder.addAction(Notification.Action.Builder(
+                Icon.createWithResource(this, if (pause) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play),
+                if (pause) "Pause" else "Play", actionIntent(if (pause) ACTION_MEDIA_PAUSE else ACTION_MEDIA_PLAY, 6)).build())
+            compact += compact.size
+        }
+        if (media.actions.stop) {
+            builder.addAction(Notification.Action.Builder(Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel), "Stop", actionIntent(ACTION_MEDIA_STOP, 7)).build())
+            compact += compact.size
+        }
+        if (linkedController != null) {
+            builder.setSubText("Controlled by $linkedController")
+            builder.addAction(Notification.Action.Builder(null, "Unlink", actionIntent(ACTION_UNLINK_PAGE, 4)).build())
+        }
+        builder.setStyle(Notification.MediaStyle().setMediaSession(castMedia.session.sessionToken)
+            .setShowActionsInCompactView(*compact.toIntArray()))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        return builder.build().apply { flags = flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR }
+    }
+
     private fun ensureChannel() {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
@@ -365,6 +455,10 @@ class CastSessionService : Service(), KoinComponent {
         private const val CHANNEL_ID = "cast_session_channel"
         private const val NOTIF_ID = 4712
         private const val ACTION_STOP_CAST = "com.playbridge.sender.cast.action.STOP_CAST"
+        private const val ACTION_MEDIA_PLAY = "com.playbridge.sender.cast.action.MEDIA_PLAY"
+        private const val ACTION_MEDIA_PAUSE = "com.playbridge.sender.cast.action.MEDIA_PAUSE"
+        private const val ACTION_MEDIA_STOP = "com.playbridge.sender.cast.action.MEDIA_STOP"
+        private const val EXTRA_MEDIA_OWNER = "cast_media_owner"
         private const val ACTION_DISCONNECT = "com.playbridge.sender.cast.action.DISCONNECT"
         private const val ACTION_UNLINK_PAGE = "com.playbridge.sender.cast.action.UNLINK_PAGE"
         private const val ACTION_NOTIFICATION_DISMISSED =

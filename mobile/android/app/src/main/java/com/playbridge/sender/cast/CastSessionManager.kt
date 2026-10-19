@@ -509,7 +509,8 @@ class CastSessionManager(
     /**
      * True while a cast session should keep the process alive (drives the FGS).
      *
-     * - External media whose bytes are being served Via phone
+     * - Loaded external media, including paused/Direct/Via proxy media, so the receiver
+     *   MediaSession remains controllable. Wake locks still depend on the phone data path.
      * - Live native WebSocket (connected/connecting), any non-external route — includes
      *   auto-connect while the persisted route is still "This Device", so a cold start
      *   still surfaces the Connected notification
@@ -520,7 +521,7 @@ class CastSessionManager(
      */
     val hasActiveSession: StateFlow<Boolean> = combine(
         combine(
-            _phonePathActive,
+            combine(_phonePathActive, _externalMediaLoaded) { phonePath, loaded -> ExternalCastServiceActivity(phonePath, loaded) },
             webSocketClient.connectionState,
             connectionCoordinator.tvActiveContext,
             _route,
@@ -530,20 +531,14 @@ class CastSessionManager(
         },
         screenMirrorState,
     ) { inputs, mirror ->
-        val externalPhonePath = inputs[0] as Boolean
+        val external = inputs[0] as ExternalCastServiceActivity
         val state = inputs[1] as WebSocketClient.ConnectionState
         val ctx = inputs[2] as String
         val route = inputs[3] as Route
         val reconnecting = inputs[4] as Boolean
         val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
             state is WebSocketClient.ConnectionState.Connecting
-        // Any live native socket — casting or idle-linked. Route.ThisDevice only means
-        // "prefer local play", not "hide the link"; Disconnect closes the socket.
-        val nativeLive = connectedOrConnecting && route !is Route.External
-        val nativeReconnecting = route is Route.NativeTv && reconnecting
-        // Keep FGS across a drop while we still think content is on the TV.
-        val nativeStickyPlaying = ctx == "player" && route !is Route.External
-        externalPhonePath || nativeLive || nativeReconnecting || nativeStickyPlaying || mirror.isActive
+        castSessionNeedsService(external, route, connectedOrConnecting, ctx == "player", reconnecting, mirror.isActive)
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
