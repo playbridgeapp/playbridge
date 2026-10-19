@@ -115,6 +115,21 @@ class TabManager {
      */
     val sessions = mutableStateMapOf<String, EngineSession>()
 
+    private data class MediaObserverRegistration(
+        val session: EngineSession,
+        val observer: MediaSessionObserver,
+    )
+
+    private val mediaObservers = mutableMapOf<String, MediaObserverRegistration>()
+
+    private fun disposeMediaObserver(tabId: String) {
+        val registration = mediaObservers.remove(tabId) ?: return
+        // Fence late callbacks and cancel jobs even if the old session has already closed.
+        registration.observer.dispose()
+        runCatching { registration.session.unregister(registration.observer) }
+        playingTabIds.remove(tabId)
+    }
+
     /** The maximum number of live EngineSessions; others are suspended (hibernated). */
     var maxAliveSessions = 5
 
@@ -199,11 +214,12 @@ class TabManager {
 
                     // 1. Mirror engine sessions for Compose consumers. When a NEW
                     // session appears for a tab, register the media bridge on it —
-                    // covers every tab, incl. background playback. (The session
-                    // unregisters all observers when closed.)
+                    // covers every tab, incl. background playback. Explicit disposal
+                    // also cancels coroutine jobs when a session closes without callbacks.
                     val engineSession = tab.engineState.engineSession
                     if (engineSession != null) {
                         if (sessions[tab.id] !== engineSession) {
+                            disposeMediaObserver(tab.id)
                             // Session replaced (crash restore / recreation): the OLD
                             // session's media observer dies without onMediaDeactivated —
                             // drop its hold on the media notification (no-op otherwise).
@@ -213,17 +229,21 @@ class TabManager {
                             if (sessions[tab.id] != null) Components.detectorSessionChanged(tab.id)
                             sessions[tab.id] = engineSession
                             Components.bindDetectionPolicy(tab.id, engineSession)
-                            engineSession.register(
-                                MediaSessionObserver(
-                                    context = Components.applicationContext,
-                                    tabId = tab.id,
-                                    tabManager = this@TabManager,
-                                    engineSession = engineSession,
-                                )
+                            val observer = MediaSessionObserver(
+                                context = Components.applicationContext,
+                                tabId = tab.id,
+                                tabManager = this@TabManager,
+                                engineSession = engineSession,
                             )
+                            mediaObservers[tab.id] = MediaObserverRegistration(engineSession, observer)
+                            engineSession.register(observer)
                         }
                     } else {
-                        if (sessions.remove(tab.id) != null) Components.detectorSessionChanged(tab.id)
+                        disposeMediaObserver(tab.id)
+                        if (sessions.remove(tab.id) != null) {
+                            MediaPlaybackService.deactivate(tab.id)
+                            Components.detectorSessionChanged(tab.id)
+                        }
                     }
 
                     // 2. Mirror back/forward state (EngineObserver keeps content state updated).
@@ -238,7 +258,8 @@ class TabManager {
                     }
                 }
                 // Drop mirror entries for tabs that no longer exist.
-                sessions.keys.toList().forEach { if (it !in liveTabIds) sessions.remove(it) }
+                (sessions.keys + mediaObservers.keys).toSet()
+                    .filter { it !in liveTabIds }.forEach { purgeTabState(it) }
                 lastSessionStates.keys.retainAll(liveTabIds)
 
                 // Re-arm crash recovery for tabs the user has switched away from.
@@ -489,6 +510,7 @@ class TabManager {
 
     /** Drop all per-tab UI state for [tabId]. Called when a tab is closed. */
     fun purgeTabState(tabId: String) {
+        disposeMediaObserver(tabId)
         Components.forgetDetectorKotlinTab(tabId)
         navigationStates.remove(tabId)
         playingTabIds.remove(tabId)
@@ -513,7 +535,7 @@ class TabManager {
      * Drops state for any tab id no longer present.
      */
     fun reconcileWithStoreTabs(liveTabIds: Set<String>) {
-        val stale = (navigationStates.keys + playingTabIds.keys + sessions.keys)
+        val stale = (navigationStates.keys + playingTabIds.keys + sessions.keys + mediaObservers.keys)
             .toSet() - liveTabIds
         stale.forEach { purgeTabState(it) }
         selectionStack.retainAll(liveTabIds)

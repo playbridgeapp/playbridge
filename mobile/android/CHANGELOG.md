@@ -3,6 +3,23 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Notification recovery**: When notifications are off, show a one-time playback or casting reminder with a shortcut to enable them or open notification settings.
+- **Website media seeking**: Show playback position, duration and speed in media controls, with seeking for supported videos and background in-app playback.
+
+### Changed
+- **Website media notifications**: Use the page title with informative media details or the site host, route controls to the displayed media owner, and open its playing tab when tapped.
+
+### Fixed
+- **Browser media cleanup**: Release media observers and their background work when tabs close or their browser sessions are replaced.
+- **Cast notification startup**: Avoid ghost Connected notifications after a killed session and stop cleanly when Android denies foreground promotion.
+- **Notification Disconnect**: Disconnect both external receivers and native TV links, and keep the cast notification until the manager finishes the session. Stop still preserves an idle native connection.
+- **Media notification cleanup**: Stop delayed service starts whose last owner has already left, and expire idle media notifications even when no playback state arrives.
+- **Media notification titles**: Restore each owner's title, artist and artwork when playback resumes after dismissing or stopping its notification.
+- **"Casting" after stopping on the receiver**: When a receiver stops playback on its own without telling the phone (such as stopping a video in PlayBridge Desktop), the phone now notices after a few seconds and the notification switches back to Connected.
+
 ## [0.15.0] — 2026-10-09 (versionCode 228)
 
 ### Added

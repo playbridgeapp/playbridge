@@ -111,6 +111,7 @@ class ConnectionCoordinator internal constructor(
     // The phone starts idle, so a player snapshot that arrives before any context
     // frame is held until the TV actually reports "player".
     private var holdingPlayerSnapshots = true
+    private val idleStatusDetector = ReceiverIdleStatusDetector()
 
     init {
         startListening()
@@ -134,27 +135,7 @@ class ConnectionCoordinator internal constructor(
                 try {
                     val json = org.json.JSONObject(message)
                     when (json.optString("type")) {
-                        "context" -> {
-                            val active = json.optString("active", "idle")
-                            val previous = tvActiveContext.value
-                            // Publish the new context before clearing so watch-progress
-                            // sees a non-player surface and does not judge the old item.
-                            tvActiveContext.value = active
-                            mutableRemoteObservation.update { it.copy(contextSequence = it.contextSequence + 1L) }
-                            logd("TV Active Context updated: $active")
-                            // Idle always drops the player snapshots. So does every other
-                            // exit from the player. Repeating the same context does not.
-                            if (active == "idle" || (previous == "player" && active != "player")) {
-                                clearPlayerStates()
-                                heldPlayerSnapshots = HeldPlayerSnapshots()
-                            }
-                            if (active == "player") {
-                                holdingPlayerSnapshots = false
-                                applyHeldPlayerSnapshots()
-                            } else {
-                                holdingPlayerSnapshots = true
-                            }
-                        }
+                        "context" -> applyActiveContext(json.optString("active", "idle"))
                         "playlist_status" -> {
                             playbackFailures.playlist((json.opt("playbackId") as? String)?.takeIf(String::isNotEmpty))
                             val itemsJson = json.optJSONArray("items")
@@ -240,6 +221,12 @@ class ConnectionCoordinator internal constructor(
                                         browserFullscreen = if (json.has("fullscreen")) json.optBoolean("fullscreen") else null,
                                     )
                                 }
+                            }
+                            // Receivers that stop locally without sending context idle
+                            // (older desktop builds) would otherwise stay "Casting".
+                            if (idleStatusDetector.onStatus(tvActiveContext.value, next.state, clock())) {
+                                logd("TV status idle in player context — treating as context idle")
+                                applyActiveContext("idle")
                             }
                         }
                         "command_result" -> {
@@ -419,6 +406,7 @@ class ConnectionCoordinator internal constructor(
         // The paused player behind the browser must not become this new session.
         heldPlayerSnapshots = HeldPlayerSnapshots()
         holdingPlayerSnapshots = false
+        idleStatusDetector.reset()
         tvActiveContext.value = "player"
     }
 
@@ -436,7 +424,30 @@ class ConnectionCoordinator internal constructor(
      * [tvActiveContext] directly.
      */
     fun markIdle() {
+        idleStatusDetector.reset()
         tvActiveContext.value = "idle"
+    }
+
+    private fun applyActiveContext(active: String) {
+        val previous = tvActiveContext.value
+        idleStatusDetector.reset()
+        // Publish the new context before clearing so watch-progress
+        // sees a non-player surface and does not judge the old item.
+        tvActiveContext.value = active
+        mutableRemoteObservation.update { it.copy(contextSequence = it.contextSequence + 1L) }
+        logd("TV Active Context updated: $active")
+        // Idle always drops the player snapshots. So does every other
+        // exit from the player. Repeating the same context does not.
+        if (active == "idle" || (previous == "player" && active != "player")) {
+            clearPlayerStates()
+            heldPlayerSnapshots = HeldPlayerSnapshots()
+        }
+        if (active == "player") {
+            holdingPlayerSnapshots = false
+            applyHeldPlayerSnapshots()
+        } else {
+            holdingPlayerSnapshots = true
+        }
     }
 
     private fun applyHeldPlayerSnapshots() {

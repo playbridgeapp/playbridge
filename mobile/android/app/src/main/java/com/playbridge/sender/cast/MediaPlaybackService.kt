@@ -20,7 +20,10 @@ import android.media.session.PlaybackState
 import android.os.Binder
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
+import android.net.Uri
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import com.playbridge.sender.R
 
@@ -32,7 +35,8 @@ import com.playbridge.sender.R
  * Lifecycle model (mirrors the Media3 pattern used by ArchiveTune):
  *  - **Owners**: each media source registers via [activate]/[deactivate] with a stable
  *    id (tab id / "inapp-player"). The service only stops when the last owner leaves,
- *    so one tab ending can't kill another tab's session.
+ *    so one tab ending can't kill another tab's session. Metadata stays with each
+ *    owner across dismiss/Stop/idle teardown and is cleared only on deactivation.
  *  - **Foreground only while playing**: on pause the service demotes itself
  *    (stopForeground(DETACH)) so the notification becomes swipe-dismissible — the old
  *    behaviour kept an ongoing FGS notification forever when Gecko never reported
@@ -79,7 +83,7 @@ class MediaPlaybackService : Service() {
                         return@launch
                     }
                     Log.d(TAG, "AudioFocus lost, triggering pause")
-                    MediaControlChannel.tryEmit(MediaControlChannel.Action.PAUSE)
+                    dispatchControl(MediaControlChannel.Action.PAUSE)
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
@@ -96,13 +100,58 @@ class MediaPlaybackService : Service() {
         
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        // Show initial notification immediately to avoid "Service.startForeground() not called" error
         createNotificationChannel()
-        setupMediaSession()
-        showNotification() 
-
+        if (notificationStart(!activeOwners.isEmpty()) == NotificationStart.FINISH_START_AND_STOP) {
+            finishUnusedStart()
+            return
+        }
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PlayBridge:MediaPlayback")
+        setupMediaSession()
+        // Restore metadata BEFORE the first notification, even if Gecko sends no new metadata.
+        refreshOwnerState()
+    }
+
+    private fun stopNotificationService() {
+        activeOwners.pauseCurrent(SystemClock.elapsedRealtime())
+        if (instance === this) instance = null
+        cancelIdleStop()
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        isForegroundActive = false
+        stopSelf()
+    }
+
+    /** Discharge an in-flight startForegroundService request after the last owner left. */
+    private fun finishUnusedStart() {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(getString(R.string.app_name))
+            .setSilent(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
+            .build()
+        val promoted = promoteNotificationForeground(
+            promote = { startForeground(NOTIFICATION_ID, notification) },
+            onFailure = { Log.w(TAG, "Media foreground start failed (${it.javaClass.simpleName})") },
+            stop = ::stopNotificationService,
+        )
+        if (promoted) stopNotificationService()
+    }
+
+    private fun refreshOwnerState() {
+        val owner = activeOwners.current() ?: return
+        applyMetadata(owner.metadata)
+        if (owner.playing != null) {
+            updatePlaybackState(owner.playing)
+        } else {
+            // An activated source that never reports playback state still expires.
+            publishPlaybackState()
+            if (showNotification()) scheduleIdleStop()
+        }
+    }
+
+    private fun refreshOwnerMetadata() {
+        applyMetadata(activeOwners.current()?.metadata)
+        showNotification()
     }
 
     private fun createNotificationChannel() {
@@ -123,18 +172,23 @@ class MediaPlaybackService : Service() {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() {
                     Log.d(TAG, "MediaSession: onPlay")
-                    MediaControlChannel.tryEmit(MediaControlChannel.Action.PLAY)
+                    dispatchControl(MediaControlChannel.Action.PLAY)
                 }
 
                 override fun onPause() {
                     Log.d(TAG, "MediaSession: onPause")
-                    MediaControlChannel.tryEmit(MediaControlChannel.Action.PAUSE)
+                    dispatchControl(MediaControlChannel.Action.PAUSE)
                 }
 
                 override fun onStop() {
                     Log.d(TAG, "MediaSession: onStop")
-                    MediaControlChannel.tryEmit(MediaControlChannel.Action.STOP)
-                    stopSelf()
+                    stopCurrentPlayback()
+                }
+
+                override fun onSeekTo(pos: Long) {
+                    val owner = activeOwners.current() ?: return
+                    val target = mediaNotificationSeekTarget(owner.position, owner.seekSupported, pos) ?: return
+                    dispatchControl(MediaControlChannel.Action.SEEK_TO, positionMs = target)
                 }
             })
             isActive = true
@@ -145,17 +199,13 @@ class MediaPlaybackService : Service() {
     /**
      * Update the notification and media session metadata.
      */
-    fun updateMetadata(title: String?, artist: String?, artwork: Bitmap? = null) {
+    private fun applyMetadata(metadata: MediaNotificationMetadata<Bitmap>?) {
         val metadataBuilder = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, title ?: "Web Video")
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, artist ?: "PlayBridge Browser")
-        
-        if (artwork != null) {
-            metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork)
-        }
-        
+            .putString(MediaMetadata.METADATA_KEY_TITLE, metadata?.title ?: "Web Video")
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, metadata?.artist ?: "Browser")
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, activeOwners.current()?.position?.durationMs ?: -1L)
+        metadata?.artwork?.let { metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
         mediaSession?.setMetadata(metadataBuilder.build())
-        showNotification()
     }
 
     /**
@@ -163,18 +213,8 @@ class MediaPlaybackService : Service() {
      */
     @SuppressLint("WakelockTimeout")
     fun updatePlaybackState(isPlaying: Boolean) {
-        val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-        val playbackState = PlaybackState.Builder()
-            .setActions(
-                PlaybackState.ACTION_PLAY or
-                PlaybackState.ACTION_PAUSE or
-                PlaybackState.ACTION_STOP
-            )
-            .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1.0f)
-            .build()
-
-        mediaSession?.setPlaybackState(playbackState)
-        showNotification()
+        publishPlaybackState()
+        if (!showNotification()) return
 
         if (isPlaying) {
             cancelIdleStop()
@@ -194,13 +234,61 @@ class MediaPlaybackService : Service() {
         }
     }
 
+    /** Position ticks update the platform session only; no notification/focus/wakelock churn. */
+    private fun publishPlaybackState() {
+        val owner = activeOwners.current() ?: return
+        val playing = owner.playing == true
+        val now = SystemClock.elapsedRealtime()
+        var actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_STOP
+        if (mediaNotificationCanSeek(owner.position, owner.seekSupported)) actions = actions or PlaybackState.ACTION_SEEK_TO
+        val playbackState = PlaybackState.Builder()
+            .setActions(actions)
+            .setState(
+                if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                owner.position?.positionAt(now, playing) ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                if (playing) owner.position?.playbackRate ?: 1f else 0f,
+                now,
+            )
+            .build()
+        mediaSession?.setPlaybackState(playbackState)
+    }
+
+    private fun dispatchControl(
+        action: MediaControlChannel.Action,
+        requestedOwnerId: String? = null,
+        positionMs: Long? = null,
+    ): Boolean {
+        val command = notificationMediaControl(activeOwners.current()?.ownerId, requestedOwnerId, action, positionMs)
+            ?: return false
+        return MediaControlChannel.tryEmit(command)
+    }
+
+    private fun stopCurrentPlayback(requestedOwnerId: String? = null) {
+        val ownerId = activeOwners.current()?.ownerId ?: return
+        if (!dispatchControl(MediaControlChannel.Action.STOP, requestedOwnerId)) return
+        activeOwners.updatePlayback(ownerId, false, SystemClock.elapsedRealtime())
+        if (activeOwners.current()?.playing == true) refreshOwnerState() else stopNotificationService()
+    }
+
+    /** Whole-service termination preserves the old stop-all behavior, but every
+     * command is explicitly addressed. Notification controls use only the selected owner. */
+    private fun stopMediaForTermination() {
+        for (ownerId in activeOwners.ownerIds()) {
+            MediaControlChannel.tryEmit(MediaControlChannel.Command(ownerId, MediaControlChannel.Action.STOP))
+            activeOwners.updatePlayback(ownerId, false, SystemClock.elapsedRealtime())
+        }
+        stopNotificationService()
+    }
+
     /** Paused sessions don't live forever: tear down after [PAUSED_IDLE_STOP_MS]. */
     private fun scheduleIdleStop() {
-        idleStopJob?.cancel()
+        if (idleStopJob?.isActive == true) return
         idleStopJob = scope.launch {
             delay(PAUSED_IDLE_STOP_MS)
-            Log.d(TAG, "Idle (paused) for ${PAUSED_IDLE_STOP_MS / 60_000} min — stopping service")
-            stopSelf()
+            if (mediaNotificationNeedsIdleStop(activeOwners.current()?.playing)) {
+                Log.d(TAG, "Media idle for ${PAUSED_IDLE_STOP_MS / 60_000} min — stopping service")
+                stopNotificationService()
+            }
         }
     }
 
@@ -235,7 +323,11 @@ class MediaPlaybackService : Service() {
         }
     }
 
-    private fun showNotification() {
+    private fun showNotification(): Boolean {
+        if (activeOwners.isEmpty()) {
+            finishUnusedStart()
+            return false
+        }
         val metadata = mediaSession?.controller?.metadata
         val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Web Video"
         val artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "Browser"
@@ -245,12 +337,17 @@ class MediaPlaybackService : Service() {
         // Tap target: the owning surface (e.g. the in-app player) when one registered
         // itself, else the browser. FLAG_UPDATE_CURRENT is required — the request code
         // is fixed, so without it the system would keep serving the first target.
-        val intent = contentIntentOverride?.let { Intent(it) }
-            ?: Intent(this, BrowserActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
+        val ownerId = activeOwners.current()?.ownerId
+        val intent = if (ownerId == OWNER_INAPP_PLAYER) contentIntentOverride?.let { Intent(it) } else null
+        val contentIntent = intent ?: Intent(this, BrowserActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            action = BrowserActivity.ACTION_OPEN_MEDIA_TAB
+            putExtra(BrowserActivity.EXTRA_MEDIA_TAB_ID, ownerId)
+            data = Uri.Builder().scheme("playbridge-media-tab").authority("notification")
+                .appendPath(ownerId.orEmpty()).build()
+        }
         val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
+            this, 0, contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -290,18 +387,14 @@ class MediaPlaybackService : Service() {
         // notification" bug: Gecko doesn't reliably deactivate ended media, leaving an
         // undismissible ongoing notification behind.
         if (isPlaying || !startedForegroundOnce) {
-            runCatching { startForeground(NOTIFICATION_ID, notification) }
-                .onSuccess {
-                    isForegroundActive = true
-                    startedForegroundOnce = true
-                }
-                .onFailure {
-                    // FGS promotion can be denied from the background (Android 12+);
-                    // degrade to a plain notification rather than crash.
-                    Log.w(TAG, "startForeground denied: ${it.message}")
-                    getSystemService(NotificationManager::class.java)
-                        .notify(NOTIFICATION_ID, notification)
-                }
+            if (!promoteNotificationForeground(
+                    promote = { startForeground(NOTIFICATION_ID, notification) },
+                    onFailure = { Log.w(TAG, "Media foreground start failed (${it.javaClass.simpleName})") },
+                    stop = ::stopNotificationService,
+                )
+            ) return false
+            isForegroundActive = true
+            startedForegroundOnce = true
         } else {
             if (isForegroundActive) {
                 stopForeground(STOP_FOREGROUND_DETACH)
@@ -310,51 +403,58 @@ class MediaPlaybackService : Service() {
             getSystemService(NotificationManager::class.java)
                 .notify(NOTIFICATION_ID, notification)
         }
+        return true
     }
 
     private fun createPlaybackPendingIntent(action: String): PendingIntent {
+        val ownerId = activeOwners.current()?.ownerId
         val intent = Intent(this, MediaPlaybackService::class.java).apply {
             this.action = action
+            putExtra(EXTRA_OWNER_ID, ownerId)
+            data = Uri.Builder().scheme("playbridge-media-control").authority("notification")
+                .appendPath(ownerId.orEmpty()).appendPath(action).build()
         }
-        return PendingIntent.getService(this, action.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE)
+        return PendingIntent.getService(this, action.hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (notificationStart(!activeOwners.isEmpty()) == NotificationStart.FINISH_START_AND_STOP) {
+            finishUnusedStart()
+            return START_NOT_STICKY
+        }
         Log.d(TAG, "onStartCommand: action=${intent?.action}")
         when (intent?.action) {
-            ACTION_PLAY -> {
-                Log.d(TAG, "ACTION_PLAY received")
-                MediaControlChannel.tryEmit(MediaControlChannel.Action.PLAY)
-            }
-            ACTION_PAUSE -> {
-                Log.d(TAG, "ACTION_PAUSE received")
-                MediaControlChannel.tryEmit(MediaControlChannel.Action.PAUSE)
-            }
+            ACTION_PLAY -> dispatchControl(MediaControlChannel.Action.PLAY, intent.getStringExtra(EXTRA_OWNER_ID))
+            ACTION_PAUSE -> dispatchControl(MediaControlChannel.Action.PAUSE, intent.getStringExtra(EXTRA_OWNER_ID))
             ACTION_STOP -> {
-                Log.d(TAG, "ACTION_STOP received (user initiated)")
-                MediaControlChannel.tryEmit(MediaControlChannel.Action.STOP)
-                stopSelf()
-            }
-            ACTION_DESTROY_SERVICE -> {
-                Log.d(TAG, "ACTION_DESTROY_SERVICE received (programmatic)")
-                stopSelf()
-            }
-            ACTION_UPDATE_METADATA -> {
-                val title = intent.getStringExtra(EXTRA_TITLE)
-                val artist = intent.getStringExtra(EXTRA_ARTIST)
-                updateMetadata(title, artist)
-            }
-            ACTION_UPDATE_STATE -> {
-                val isPlaying = intent.getBooleanExtra(EXTRA_IS_PLAYING, false)
-                updatePlaybackState(isPlaying)
+                stopCurrentPlayback(intent.getStringExtra(EXTRA_OWNER_ID))
+                return START_NOT_STICKY
             }
             ACTION_NOTIFICATION_DISMISSED -> {
-                // User swiped the (paused) notification away: tear the service down but
-                // leave playback state alone — playing again re-creates everything.
-                Log.d(TAG, "Notification dismissed — stopping service")
-                stopSelf()
+                if (notificationMediaControl(activeOwners.current()?.ownerId,
+                        intent.getStringExtra(EXTRA_OWNER_ID), MediaControlChannel.Action.PAUSE) == null
+                ) return START_NOT_STICKY
+                if (activeOwners.current()?.playing != true) stopNotificationService() else refreshOwnerState()
+                return START_NOT_STICKY
             }
+            ACTION_DESTROY_SERVICE -> {
+                // Retain owners/metadata. Only a later PLAYING event restarts the service.
+                stopNotificationService()
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_METADATA -> {
+                val ownerId = intent.getStringExtra(EXTRA_OWNER_ID) ?: activeOwners.current()?.ownerId
+                if (ownerId != null) activeOwners.updateMetadata(
+                    ownerId,
+                    MediaNotificationMetadata(intent.getStringExtra(EXTRA_TITLE), intent.getStringExtra(EXTRA_ARTIST)),
+                )
+            }
+            // State is cached before enqueuing a start. Read the latest owner snapshot,
+            // not a stale PLAYING extra from an earlier owner/start request.
+            ACTION_UPDATE_STATE -> Unit
         }
+        refreshOwnerState()
         return START_NOT_STICKY
     }
 
@@ -368,8 +468,7 @@ class MediaPlaybackService : Service() {
 
     private fun handleForegroundTimeout(startId: Int, fgsType: Int) {
         Log.w(TAG, "FGS timeout startId=$startId type=$fgsType — stopping")
-        MediaControlChannel.tryEmit(MediaControlChannel.Action.STOP)
-        stopSelf()
+        stopMediaForTermination()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -377,13 +476,12 @@ class MediaPlaybackService : Service() {
         // playing with no way to control it. Stop media and go away instead of leaving
         // an orphaned notification.
         Log.d(TAG, "Task removed — stopping media and service")
-        MediaControlChannel.tryEmit(MediaControlChannel.Action.STOP)
-        stopSelf()
+        stopMediaForTermination()
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
-        instance = null
+        if (instance === this) instance = null
         cancelIdleStop()
         abandonAudioFocus()
         scope.cancel()
@@ -395,7 +493,7 @@ class MediaPlaybackService : Service() {
         // A DETACHed (paused) notification survives stopSelf — remove it explicitly so
         // a dead service can't leave a zombie notification behind.
         runCatching {
-            getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+            if (instance == null) getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         }
         Log.d(TAG, "MediaPlaybackService destroyed")
         super.onDestroy()
@@ -417,6 +515,7 @@ class MediaPlaybackService : Service() {
         const val EXTRA_TITLE = "extra_title"
         const val EXTRA_ARTIST = "extra_artist"
         const val EXTRA_IS_PLAYING = "extra_is_playing"
+        private const val EXTRA_OWNER_ID = "extra_owner_id"
 
         /** Owner id used by the in-app player's background-mode session. */
         const val OWNER_INAPP_PLAYER = "inapp-player"
@@ -434,8 +533,7 @@ class MediaPlaybackService : Service() {
          * tab's deactivation stopped the shared service, and a tab closed while playing
          * (which never fires onMediaDeactivated) left it running forever.
          */
-        private val activeOwners: MutableSet<String> =
-            java.util.Collections.synchronizedSet(mutableSetOf())
+        private val activeOwners = MediaNotificationOwners<Bitmap>()
 
         /**
          * Where a notification tap should land. Defaults to the browser; the in-app
@@ -456,7 +554,7 @@ class MediaPlaybackService : Service() {
             if (instance == null) {
                 runCatching {
                     context.startForegroundService(Intent(context, MediaPlaybackService::class.java))
-                }.onFailure { Log.w(TAG, "Could not start media service: ${it.message}") }
+                }.onFailure { Log.w(TAG, "Could not start media service (${it.javaClass.simpleName})") }
             }
         }
 
@@ -465,48 +563,65 @@ class MediaPlaybackService : Service() {
             if (!activeOwners.remove(ownerId)) return
             if (activeOwners.isEmpty()) {
                 Log.d(TAG, "Last media owner gone — stopping service")
-                instance?.stopSelf()
+                instance?.stopNotificationService()
+            } else {
+                instance?.refreshOwnerState()
             }
         }
 
-        fun sendMetadataUpdate(context: Context, title: String?, artist: String?) {
-            val svc = instance
-            if (svc != null) {
-                svc.updateMetadata(title, artist)
-                return
-            }
-            // Service still starting (startForegroundService is async) — deliver via intent.
-            if (activeOwners.isEmpty()) return
-            runCatching {
-                context.startForegroundService(
-                    Intent(context, MediaPlaybackService::class.java).apply {
-                        action = ACTION_UPDATE_METADATA
-                        putExtra(EXTRA_TITLE, title)
-                        putExtra(EXTRA_ARTIST, artist)
-                    }
-                )
+        fun sendMetadataUpdate(ownerId: String, title: String?, artist: String?, artwork: Bitmap? = null) {
+            if (!activeOwners.updateMetadata(ownerId, MediaNotificationMetadata(title, artist, artwork))) return
+            // Cache even while dismissed/stopped; metadata alone must not resurrect a notification.
+            instance?.refreshOwnerMetadata()
+        }
+
+        fun sendPositionUpdate(
+            ownerId: String,
+            durationSeconds: Double,
+            positionSeconds: Double,
+            playbackRate: Double,
+            seekSupported: Boolean? = null,
+        ) {
+            val before = activeOwners.current()
+            val position = MediaNotificationPosition.fromSeconds(
+                durationSeconds, positionSeconds, playbackRate, SystemClock.elapsedRealtime(),
+            )
+            if (!activeOwners.updatePosition(ownerId, position)) return
+            if (seekSupported != null) activeOwners.updateSeekSupported(ownerId, seekSupported)
+            val owner = activeOwners.current() ?: return
+            if (owner.ownerId != ownerId) return
+            instance?.let { service ->
+                if (before?.position?.durationMs != owner.position?.durationMs) service.applyMetadata(owner.metadata)
+                service.publishPlaybackState()
             }
         }
 
-        fun sendStateUpdate(context: Context, isPlaying: Boolean) {
+        fun sendSeekAvailability(ownerId: String, supported: Boolean) {
+            if (!activeOwners.updateSeekSupported(ownerId, supported)) return
+            if (activeOwners.current()?.ownerId == ownerId) instance?.publishPlaybackState()
+        }
+
+        fun sendStateUpdate(context: Context, ownerId: String, isPlaying: Boolean) {
+            if (!activeOwners.updatePlayback(ownerId, isPlaying, SystemClock.elapsedRealtime())) return
             val svc = instance
             if (svc != null) {
-                svc.updatePlaybackState(isPlaying)
+                svc.refreshOwnerState()
                 return
             }
-            // No live service: only a PLAYING update justifies (re)starting it. A paused
-            // update with no service (e.g. right after the user dismissed/stopped it)
-            // must not resurrect the notification.
-            if (!isPlaying || activeOwners.isEmpty()) return
+            // Paused events never resurrect a dismissed notification. PLAYING restores
+            // the owner's cached title/artist/artwork into the new MediaSession.
+            if (!isPlaying) return
             runCatching {
                 context.startForegroundService(
                     Intent(context, MediaPlaybackService::class.java).apply {
                         action = ACTION_UPDATE_STATE
+                        putExtra(EXTRA_OWNER_ID, ownerId)
                         putExtra(EXTRA_IS_PLAYING, true)
                     }
                 )
-            }
+            }.onFailure { Log.w(TAG, "Could not resume media service (${it.javaClass.simpleName})") }
         }
+
     }
 
 }

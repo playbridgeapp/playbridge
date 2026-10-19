@@ -4,6 +4,7 @@ import com.playbridge.sender.library.*
 import com.playbridge.sender.cast.*
 import com.playbridge.sender.ui.TvDeviceGuard
 import com.playbridge.sender.ui.WrongDeviceDialog
+import com.playbridge.sender.notifications.NotificationPermissionPromptHost
 
 import android.os.Bundle
 import android.util.Log
@@ -221,6 +222,7 @@ fun AnimatedMenuItem(
 class BrowserActivity : ComponentActivity() {
 
     private val remoteVolumeKeys = com.playbridge.sender.cast.remote.RemoteVolumeKeyHandler()
+    private val notificationPermissionHost by lazy { NotificationPermissionPromptHost(this) }
 
     internal fun registerRemoteVolumeKeys(onVolume: (Boolean) -> Unit): () -> Unit =
         remoteVolumeKeys.register(onVolume)
@@ -242,6 +244,8 @@ class BrowserActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "BrowserActivity"
+        const val ACTION_OPEN_MEDIA_TAB = "com.playbridge.sender.OPEN_MEDIA_TAB"
+        const val EXTRA_MEDIA_TAB_ID = "media_notification_tab_id"
     }
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
@@ -442,11 +446,15 @@ class BrowserActivity : ComponentActivity() {
      * [onNewIntent] updates trigger recomposition of the consuming effect.
      */
     private val pendingLinkUrl = androidx.compose.runtime.mutableStateOf<String?>(null)
+    private val pendingMediaTabId = androidx.compose.runtime.mutableStateOf<String?>(null)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         parseLinkIntent(intent)?.let { pendingLinkUrl.value = it }
+        if (intent.action == ACTION_OPEN_MEDIA_TAB) {
+            pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
+        }
     }
 
     /** Extracts an http/https URL from a VIEW intent, or null if it isn't one we handle. */
@@ -480,6 +488,16 @@ class BrowserActivity : ComponentActivity() {
         Components.extensionPrompts.detach(this)
         super.onPause()
         saveTabs()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        notificationPermissionHost.saveState(outState)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        notificationPermissionHost.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     private fun saveTabs() {
@@ -601,7 +619,8 @@ class BrowserActivity : ComponentActivity() {
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
-        if (savedInstanceState == null) tabManager.closeAllSessions()
+        val mediaNotificationLaunch = intent?.action == ACTION_OPEN_MEDIA_TAB
+        if (savedInstanceState == null && !mediaNotificationLaunch) tabManager.closeAllSessions()
         VideoDetector.init(applicationContext)
 
         // Fire-and-forget update check on cold start; only surfaces UI if a newer build exists.
@@ -609,13 +628,11 @@ class BrowserActivity : ComponentActivity() {
 
         // Capture a web link that launched us (tapped in another app); consumed in Compose.
         pendingLinkUrl.value = parseLinkIntent(intent)
-
-        // Request notification permission for media controls on Android 13+
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
-            }
+        if (mediaNotificationLaunch) {
+            pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
         }
+
+        notificationPermissionHost.onCreate(savedInstanceState)
 
         // Install the bundled video detector extension
         Components.installBundledExtension()
@@ -659,7 +676,7 @@ class BrowserActivity : ComponentActivity() {
             }
         }
 
-        browserViewModel.restoreTabs(tabManager, Components.store, freshLaunch = savedInstanceState == null) {
+        browserViewModel.restoreTabs(tabManager, Components.store, freshLaunch = savedInstanceState == null && !mediaNotificationLaunch) {
             tabsRestoredOrReady.value = true
         }
 
@@ -875,10 +892,35 @@ class BrowserActivity : ComponentActivity() {
                     previousBrowserTabId = tabManager.createTab("about:blank", store)
                 }
             }
+            // Notification taps select the existing playing tab after restoration,
+            // preserving its live engine and any installed-app ownership.
+            val mediaTabRequest = pendingMediaTabId.value
+            LaunchedEffect(mediaTabRequest, tabsRestoredOrReady.value) {
+                if (mediaTabRequest != null && tabsRestoredOrReady.value) {
+                    val target = com.playbridge.sender.cast.mediaNotificationTabTarget(
+                        mediaTabRequest, store.state.tabs.map { it.id },
+                    )
+                    if (target != null) {
+                        val appTab = target in bridgedAppTabIds || target in Components.bridgedAppOriginsByTabId
+                        activeBridgedAppTabId = target.takeIf { appTab }
+                        if (!appTab) previousBrowserTabId = target
+                        tabManager.selectTab(target, store)
+                        // SelectTabAction is asynchronous. Keep the app-tab guard
+                        // suspended until the store acknowledges this selection/removal.
+                        withTimeoutOrNull(2_000) {
+                            store.flow().first { state ->
+                                state.selectedTabId == target || state.tabs.none { it.id == target }
+                            }
+                        }
+                    }
+                    currentScreen = Screen.Browser
+                    pendingMediaTabId.value = null
+                }
+            }
             LaunchedEffect(tabsRestoredOrReady.value, currentScreen, selectedTabId,
-                activeBridgedAppTabId, bridgedAppTabIds) {
+                activeBridgedAppTabId, bridgedAppTabIds, pendingMediaTabId.value) {
                 // A cold start must not expose a saved app tab as an ordinary browser tab.
-                if (tabsRestoredOrReady.value && currentScreen == Screen.Browser &&
+                if (pendingMediaTabId.value == null && tabsRestoredOrReady.value && currentScreen == Screen.Browser &&
                     selectedTabId != null && selectedTabId in bridgedAppTabIds &&
                     selectedTabId != activeBridgedAppTabId) {
                     selectNormalBrowserTab()
@@ -2293,6 +2335,7 @@ class BrowserActivity : ComponentActivity() {
                 }
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                        snackbarHost = { SnackbarHost(notificationPermissionHost.snackbar) },
                         topBar = {
                         if (isFullscreen || (currentScreen == Screen.Browser && isBrowserChromeHidden)) {
                             // Media fullscreen and chrome-hidden browsing both hide the toolbar.
