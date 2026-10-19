@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Receiver media controls**: Control cast playback and seeking from the notification and lock screen, adjust supported receiver volume, and tap to open the remote.
+- **Direct cast controls in the background**: Keep receiver controls available while external media is loaded or paused, including Direct and Via proxy routes, without holding CPU or Wi-Fi locks for those routes.
 - **Notification recovery**: When notifications are off, show a one-time playback or casting reminder with a shortcut to enable them or open notification settings.
 - **Website media seeking**: Show playback position, duration and speed in media controls, with seeking for supported videos and background in-app playback.
 
