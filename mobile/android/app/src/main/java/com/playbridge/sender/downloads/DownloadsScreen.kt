@@ -65,7 +65,6 @@ import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.playbridge.sender.cast.CastSessionManager
-import com.playbridge.sender.cast.DeviceChip
 import com.playbridge.sender.cast.DeviceConnectionDialog
 import com.playbridge.sender.cast.MediaKind
 import com.playbridge.sender.connection.ConnectionViewModel
@@ -107,6 +106,7 @@ private fun accentFor(status: String): Accent = when (status) {
 fun DownloadsScreen(
     onBack: () -> Unit,
     onOpenAllDevices: () -> Unit = {},
+    onOpenRemote: () -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
 ) {
     val repository: DownloadRepository = koinInject()
@@ -213,7 +213,14 @@ fun DownloadsScreen(
             durationMs = DownloadFiles.cached(stored)?.durationMs ?: 0L,
             mediaKind = kind,
         )
-        if (ok) showMessage("Casting ${item.title}") else castPickerFor = item
+        if (ok) {
+            scope.launch {
+                val result = snackbar.showSnackbar("Casting ${item.title}", actionLabel = "Remote", duration = SnackbarDuration.Short)
+                if (result == SnackbarResult.ActionPerformed) onOpenRemote()
+            }
+        } else {
+            castPickerFor = item
+        }
     }
 
     // After "Cast to…" picks a receiver, cast once it's ready (connections take a moment).
@@ -452,12 +459,17 @@ fun DownloadsScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item(key = "header") {
-                HeaderStrip(
-                    summary = buildString {
+                // Where a tap plays (and the Remote) is the shared now-playing bar at the bottom.
+                Text(
+                    buildString {
                         if (sections.inProgress.isNotEmpty()) append("${sections.inProgress.size} downloading · ")
                         append(librarySummary(sections.saved, freeBytes))
                     },
-                    onOpenAllDevices = onOpenAllDevices,
+                    modifier = Modifier.padding(start = 2.dp, bottom = 2.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -547,21 +559,6 @@ private fun deletedMessage(count: Int) = if (count == 1) "File deleted" else "$c
 /* ------------------------------------------------------------------ *
  *  Header + section label                                            *
  * ------------------------------------------------------------------ */
-
-@Composable
-private fun HeaderStrip(summary: String, onOpenAllDevices: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            summary,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        // Where a tap plays — same chip as the cast sheet; tap to switch.
-        DeviceChip(onOpenAllDevices = onOpenAllDevices, showThisDevice = true)
-    }
-}
 
 @Composable
 private fun SectionLabel(text: String, count: Int) {

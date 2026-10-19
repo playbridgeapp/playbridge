@@ -1034,6 +1034,7 @@ fun AppNavHost(
                     DownloadsScreen(
                         onBack = { onScreenChange(lastMainScreen) },
                         onOpenAllDevices = { openAllDevicesExpanded() },
+                        onOpenRemote = { onScreenChange(Screen.Remote) },
                         // New tab: works with no tabs open and keeps the current page.
                         onOpenUrl = { url ->
                             tabManager.createTab(url, store)
@@ -1752,6 +1753,7 @@ fun AppNavHost(
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
             val showNowPlayingBar = (targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
+                targetScreen == Screen.Downloads ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
                 targetScreen == Screen.Iptv ||

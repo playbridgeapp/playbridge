@@ -6,7 +6,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Downloads library**: Thumbnails and video length, date and source site for every download, search and sort, multi-select delete, and tap to play on the selected device (cast to a receiver or play in the app). Each download's menu adds Cast to…, Open with…, Share, Rename, Open source page, Show in Downloads folder and Remove from list with undo. In-progress downloads show speed and time left.
+- **Downloads library**: Thumbnails and video length, date and source site for every download, search and sort, multi-select delete, tap to play on the selected device (cast to a receiver or play in the app), and the now-playing bar for quick access to the remote. Each download's menu adds Cast to…, Open with…, Share, Rename, Open source page, Show in Downloads folder and Remove from list with undo. In-progress downloads show speed and time left.
 - **Download notifications**: Follow each download's progress, pause/resume/cancel from the shade, retry failures, and open completed files. Multiple downloads are grouped together.
 - **Receiver media controls**: Control cast playback and seeking from the notification and lock screen, adjust supported receiver volume, and tap to open the remote.
 - **Direct cast controls in the background**: Keep receiver controls available while external media is loaded or paused, including Direct and Via proxy routes, without holding CPU or Wi-Fi locks for those routes.
