@@ -64,6 +64,22 @@ class DownloadRepository(
         DownloadNotifications(context).clear(id)
     }
 
+    /** Drop a finished download from the list; the saved file is left alone. */
+    suspend fun removeFromList(id: String) {
+        DownloadPaths.dirFor(context, id).deleteRecursively()
+        dao.delete(id)
+        DownloadNotifications(context).clear(id)
+    }
+
+    /** Undo for [removeFromList]: put the row back exactly as it was. */
+    suspend fun restore(entity: DownloadEntity) {
+        dao.upsert(entity)
+    }
+
+    suspend fun rename(id: String, title: String) {
+        dao.updateTitle(id, title)
+    }
+
     private fun scheduleWork(id: String, policy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP) {
         val work = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setInputData(workDataOf(DownloadWorker.KEY_ID to id))
@@ -103,6 +119,7 @@ fun DownloadRequest.toEntity(status: DownloadStatus): DownloadEntity = DownloadE
     status = status.name,
     mimeType = mimeType,
     headersJson = if (headers.isEmpty()) null else JSONObject(headers as Map<*, *>).toString(),
+    sourcePageUrl = sourcePageUrl,
 )
 
 fun DownloadEntity.toRequest(): DownloadRequest = DownloadRequest(
@@ -112,6 +129,7 @@ fun DownloadEntity.toRequest(): DownloadRequest = DownloadRequest(
     kind = runCatching { DownloadKind.valueOf(kind) }.getOrDefault(DownloadKind.FILE),
     mimeType = mimeType,
     headers = decodeHeaders(headersJson),
+    sourcePageUrl = sourcePageUrl,
 )
 
 private fun decodeHeaders(json: String?): Map<String, String> {

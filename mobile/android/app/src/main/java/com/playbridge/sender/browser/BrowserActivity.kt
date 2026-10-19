@@ -315,6 +315,7 @@ class BrowserActivity : ComponentActivity() {
         cookie: String?,
         referer: String?,
         pageTitle: String?,
+        pageUrl: String?,
     ) {
         val headers = buildMap {
             userAgent?.let { put("User-Agent", it) }
@@ -331,6 +332,7 @@ class BrowserActivity : ComponentActivity() {
                    else com.playbridge.sender.downloads.engine.DownloadKind.FILE,
             mimeType = contentType,
             headers = headers,
+            sourcePageUrl = pageUrl?.takeIf { it.startsWith("https://") || it.startsWith("http://") },
         )
         lifecycleScope.launch { downloadRepository.enqueue(request) }
         Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show()
@@ -3232,7 +3234,7 @@ class BrowserActivity : ComponentActivity() {
                         forcePlaylistSheet = null
                     },
                     onDownloadVideo = { video ->
-                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer"), selectedTab?.content?.title)
+                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer"), selectedTab?.content?.title, selectedTab?.content?.url)
                     },
                     onClearVideos = { com.playbridge.sender.cast.VideoDetector.clearTab(selectedTabId ?: "") },
                     playerMode = sheetPlayerMode,
@@ -3516,7 +3518,7 @@ class BrowserActivity : ComponentActivity() {
                 DownloadConfirmDialog(
                     pendingDownload = pendingDownload,
                     onConfirm = { download ->
-                        enqueueEngineDownload(download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, selectedTab?.content?.title)
+                        enqueueEngineDownload(download.url, download.fileName, download.contentType, download.userAgent, download.cookie, download.referer, selectedTab?.content?.title, selectedTab?.content?.url)
                         pendingDownload = null
                         pendingDownloadState.value = null
                     },

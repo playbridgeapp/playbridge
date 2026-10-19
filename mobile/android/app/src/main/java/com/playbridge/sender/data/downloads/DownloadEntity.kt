@@ -33,6 +33,8 @@ data class DownloadEntity(
     val errorReason: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** The tab's page when the download started (for "Open source page" / refresh). */
+    val sourcePageUrl: String? = null,
 )
 
 @Dao
@@ -74,4 +76,7 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("UPDATE downloads SET title = :title WHERE id = :id")
+    suspend fun updateTitle(id: String, title: String)
 }
