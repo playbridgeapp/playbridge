@@ -331,7 +331,8 @@ void main() {
       PlaybackRequestPreparer.clearFailedHosts();
     });
 
-    test('broadcasts player and idle context when playback starts and stops locally',
+    test(
+        'broadcasts player and idle context when playback starts and stops locally',
         () async {
       final contexts = <Object?>[];
       server.onBroadcastForTest = (msg) {
