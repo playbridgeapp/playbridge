@@ -26,6 +26,7 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
+import com.playbridge.sender.notifications.NotificationPermissionRecovery
 import com.playbridge.shared.logging.runCatchingLogged
 import com.playbridge.shared.logging.suspendRunCatchingLogged
 import kotlinx.coroutines.CoroutineScope
@@ -735,6 +736,7 @@ class CastSessionManager(
         scope.launch {
             hasActiveSession.collectLatest { active ->
                 if (active) {
+                    NotificationPermissionRecovery.onNotificationNeeded()
                     // From the background this can throw (FGS start restrictions); sessions
                     // begin from a user action in the foreground, so this is belt-and-braces.
                     Log.d(TAG, "hasActiveSession=true → ensure cast FGS")
@@ -1225,6 +1227,8 @@ class CastSessionManager(
 
     fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
         val target = _externalTarget.value ?: return false
+        // Direct external casts may not need a phone foreground service.
+        NotificationPermissionRecovery.onNotificationNeeded()
         if (userInitiated) {
             runCatchingLogged(TAG, "Could not supersede linked page queue") {
                 org.koin.core.context.GlobalContext.get()
@@ -1581,7 +1585,7 @@ class CastSessionManager(
     /**
      * Drop the link entirely (notification **Disconnect** while connected/idle).
      *
-     * User-initiated: tears down the WebSocket (or external target), routes to This Device,
+     * User-initiated: tears down the WebSocket and any external target, routes to This Device,
      * and stops the reconnect supervisor so the casting FGS does not come back.
      */
     fun disconnectSession() {
@@ -1589,11 +1593,9 @@ class CastSessionManager(
         screenMirrorCoordinator.stop("disconnect")
         externalScreenMirrorCoordinator.stop("disconnect")
         connectionCoordinator.markIdle()
-        val external = _externalTarget.value
-        if (external != null) {
-            stopAndClearExternalTarget()
-            return
-        }
+        // Disconnect means ALL links, even when an external receiver and an idle native
+        // socket coexist. selectThisDevice also stops/releases the external target.
+        // Stop/select-target callers retain their narrower semantics.
         // Flag as user disconnect before close so the reconnect supervisor does not re-arm.
         webSocketClient.disconnect()
         selectThisDevice()

@@ -245,13 +245,31 @@ class PlayerActivity : ComponentActivity() {
     // controls, no notification, and nothing keeping the process alive.
     private var backgroundSessionActive = false
     private var mediaControlJob: kotlinx.coroutines.Job? = null
+    private var backgroundPositionJob: Job? = null
 
     private val backgroundStateListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (backgroundSessionActive) {
-                com.playbridge.sender.cast.MediaPlaybackService.sendStateUpdate(this@PlayerActivity, isPlaying)
+                com.playbridge.sender.cast.MediaPlaybackService.sendStateUpdate(
+                    this@PlayerActivity,
+                    com.playbridge.sender.cast.MediaPlaybackService.OWNER_INAPP_PLAYER,
+                    isPlaying,
+                )
+                publishBackgroundMediaPosition()
             }
         }
+    }
+
+    private fun publishBackgroundMediaPosition() {
+        val current = player ?: return
+        if (!backgroundSessionActive) return
+        com.playbridge.sender.cast.MediaPlaybackService.sendPositionUpdate(
+            com.playbridge.sender.cast.MediaPlaybackService.OWNER_INAPP_PLAYER,
+            durationSeconds = current.duration.takeIf { it > 0 }?.div(1000.0) ?: -1.0,
+            positionSeconds = current.currentPosition.coerceAtLeast(0) / 1000.0,
+            playbackRate = current.playbackParameters.speed.toDouble(),
+            seekSupported = current.isCurrentMediaItemSeekable,
+        )
     }
 
     private fun startBackgroundMediaSession() {
@@ -268,25 +286,38 @@ class PlayerActivity : ComponentActivity() {
         )
         service.activate(this, service.OWNER_INAPP_PLAYER)
         service.sendMetadataUpdate(
-            this,
+            ownerId = service.OWNER_INAPP_PLAYER,
             title = intent.getStringExtra(EXTRA_TITLE) ?: "Video",
             artist = "PlayBridge Player",
         )
-        service.sendStateUpdate(this, exo.isPlaying)
+        service.sendStateUpdate(this, service.OWNER_INAPP_PLAYER, exo.isPlaying)
         exo.addListener(backgroundStateListener)
+        publishBackgroundMediaPosition()
+        backgroundPositionJob?.cancel()
+        backgroundPositionJob = lifecycleScope.launch {
+            while (backgroundSessionActive) {
+                delay(1_000)
+                publishBackgroundMediaPosition()
+            }
+        }
         // Obey notification controls. lifecycleScope keeps collecting while STOPPED
         // (it only dies with the activity), which is exactly the window we need.
         mediaControlJob?.cancel()
         mediaControlJob = lifecycleScope.launch {
-            com.playbridge.sender.cast.MediaControlChannel.actions.collect { action ->
-                if (!backgroundSessionActive) return@collect
+            com.playbridge.sender.cast.MediaControlChannel.actions.collect { command ->
+                if (!backgroundSessionActive || !command.targets(com.playbridge.sender.cast.MediaPlaybackService.OWNER_INAPP_PLAYER)) return@collect
                 val p = player ?: return@collect
-                when (action) {
+                when (command.action) {
                     com.playbridge.sender.cast.MediaControlChannel.Action.PLAY -> p.play()
                     com.playbridge.sender.cast.MediaControlChannel.Action.PAUSE -> p.pause()
                     com.playbridge.sender.cast.MediaControlChannel.Action.STOP -> {
                         p.pause()
                         finish()
+                    }
+                    com.playbridge.sender.cast.MediaControlChannel.Action.SEEK_TO -> {
+                        val target = command.positionMs ?: return@collect
+                        if (p.isCurrentMediaItemSeekable && p.duration > 0) p.seekTo(target.coerceIn(0, p.duration))
+                        publishBackgroundMediaPosition()
                     }
                 }
             }
@@ -298,6 +329,8 @@ class PlayerActivity : ComponentActivity() {
         backgroundSessionActive = false
         mediaControlJob?.cancel()
         mediaControlJob = null
+        backgroundPositionJob?.cancel()
+        backgroundPositionJob = null
         player?.removeListener(backgroundStateListener)
         com.playbridge.sender.cast.MediaPlaybackService.setContentIntent(null)
         com.playbridge.sender.cast.MediaPlaybackService.deactivate(

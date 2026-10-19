@@ -108,7 +108,10 @@ class CastSessionService : Service(), KoinComponent {
                 } else {
                     @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_PROJECTION_PERMISSION)
                 }
-                if (permission == null) return START_NOT_STICKY
+                if (permission == null) {
+                    if (!foregroundStarted) finishUnusedStart()
+                    return START_NOT_STICKY
+                }
                 val quality = ScreenMirrorCoordinator.Quality.fromId(
                     intent.getStringExtra(EXTRA_SCREEN_MIRROR_QUALITY),
                 )
@@ -119,87 +122,71 @@ class CastSessionService : Service(), KoinComponent {
                     PackageManager.PERMISSION_GRANTED
                 val options = ScreenMirrorCoordinator.Options(quality, deviceAudio)
                 // Android requires this foreground-service type before MediaProjection is acquired.
-                foregroundStarted = true
-                startForegroundWithType(
-                    manager.sessionInfo.value,
-                    playing = true,
-                    mirroring = true,
-                    capturesDeviceAudio = deviceAudio,
-                )
+                if (!startForegroundWithType(
+                        manager.sessionInfo.value,
+                        playing = true,
+                        mirroring = true,
+                        capturesDeviceAudio = deviceAudio,
+                    )
+                ) return START_NOT_STICKY
                 applyResourceLocks(true)
-                if (!manager.startScreenMirror(permission, options)) {
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                return START_STICKY
-            }
-            ACTION_STOP_CAST -> {
-                manager.endCastSession()
-                if (!manager.hasActiveSession.value) {
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-                val playing = manager.isActivelyPlaying.value
-                currentlyPlaying = playing
-                val mirror = manager.screenMirrorState.value
-                startForegroundWithType(
-                    manager.sessionInfo.value,
-                    playing,
-                    mirror.isActive,
-                    mirror.deviceAudioRequested,
-                )
-                applyResourceLocks(manager.needsCastWakeLock.value)
-                return START_STICKY
-            }
-            ACTION_DISCONNECT -> {
-                manager.disconnectSession()
-                stopSelf()
+                if (!manager.startScreenMirror(permission, options)) stopNotificationService()
                 return START_NOT_STICKY
             }
-            ACTION_UNLINK_PAGE -> {
-                linkedPageCastCoordinator.unlink("unlinked")
-                val mirror = manager.screenMirrorState.value
-                startForegroundWithType(
-                    manager.sessionInfo.value,
-                    manager.isActivelyPlaying.value,
-                    mirror.isActive,
-                    mirror.deviceAudioRequested,
-                    null,
-                )
-                return START_STICKY
-            }
+            ACTION_STOP_CAST -> manager.endCastSession()
+            ACTION_DISCONNECT -> manager.disconnectSession()
+            ACTION_UNLINK_PAGE -> linkedPageCastCoordinator.unlink("unlinked")
             ACTION_NOTIFICATION_DISMISSED -> {
                 if (manager.hasActiveSession.value) {
                     Log.i(TAG, "Cast notification dismissed while session active — re-showing")
-                    val playing = manager.isActivelyPlaying.value
-                    currentlyPlaying = playing
-                    val mirror = manager.screenMirrorState.value
-                    startForegroundWithType(
-                        manager.sessionInfo.value,
-                        playing,
-                        mirror.isActive,
-                        mirror.deviceAudioRequested,
-                    )
-                    foregroundStarted = true
-                    applyResourceLocks(manager.needsCastWakeLock.value)
-                } else {
-                    stopSelf()
                 }
-                return START_STICKY
             }
+        }
+        // Notification actions never tear down an established service themselves.
+        // The manager owns stopping it after hasActiveSession's disconnect grace.
+        if (notificationStart(manager.hasActiveSession.value) == NotificationStart.FINISH_START_AND_STOP) {
+            if (!foregroundStarted) finishUnusedStart()
+            return START_NOT_STICKY
         }
         val playing = manager.isActivelyPlaying.value
         currentlyPlaying = playing
         val mirror = manager.screenMirrorState.value
-        startForegroundWithType(
-            manager.sessionInfo.value,
-            playing,
-            mirror.isActive,
-            mirror.deviceAudioRequested,
+        if (startForegroundWithType(
+                manager.sessionInfo.value,
+                playing,
+                mirror.isActive,
+                mirror.deviceAudioRequested,
+            )
+        ) applyResourceLocks(manager.needsCastWakeLock.value)
+        return START_NOT_STICKY
+    }
+
+    private fun stopNotificationService() {
+        foregroundStarted = false
+        applyResourceLocks(false)
+        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
+
+    /** No live session: fulfill a queued FGS start without showing a Connected row. */
+    private fun finishUnusedStart() {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(getString(R.string.app_name))
+            .setSilent(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
+            .build()
+        val promoted = promoteNotificationForeground(
+            promote = {
+                ServiceCompat.startForeground(
+                    this, NOTIF_ID, notification,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0,
+                )
+            },
+            onFailure = { Log.w(TAG, "Cast foreground start failed (${it.javaClass.simpleName})") },
+            stop = ::stopNotificationService,
         )
-        foregroundStarted = true
-        applyResourceLocks(manager.needsCastWakeLock.value)
-        return START_STICKY
+        if (promoted) stopNotificationService()
     }
 
     override fun onTimeout(startId: Int) {
@@ -221,7 +208,7 @@ class CastSessionService : Service(), KoinComponent {
         mirroring: Boolean,
         capturesDeviceAudio: Boolean,
         linkedController: String? = linkedPageCastCoordinator.uiState.value.controllerName,
-    ) {
+    ): Boolean {
         val notif = buildNotification(info, playing, linkedController)
         val microphoneType = if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mirroring && capturesDeviceAudio
@@ -240,9 +227,13 @@ class CastSessionService : Service(), KoinComponent {
         Log.d(
             TAG,
             "startForeground mirroring=$mirroring deviceAudio=$capturesDeviceAudio " +
-                "playing=$playing device=${info.deviceName} title=${info.title}",
+                "playing=$playing device=${info.deviceName}",
         )
-        ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
+        return promoteNotificationForeground(
+            promote = { ServiceCompat.startForeground(this, NOTIF_ID, notif, type) },
+            onFailure = { Log.w(TAG, "Cast foreground start failed (${it.javaClass.simpleName})") },
+            stop = ::stopNotificationService,
+        ).also { foregroundStarted = it }
     }
 
     /**
