@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,10 +70,13 @@ internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> U
             }
             if (mute && volumePill == null) RemoteButton(Icons.Default.VolumeOff, volumeTitle + when (muted) { true -> " unmute"; false -> " mute"; null -> " toggle mute" }, true) { onRemoteKey("mute") }
             // Last, beside volume and away from Back, so a hurried Back tap can't end playback.
-            if (onStop != null) RemoteButton(Icons.Default.Stop, "Stop playback", true, MaterialTheme.colorScheme.error, onStop)
+            if (onStop != null) RemoteButton(Icons.Default.Stop, "Stop playback", true, StopRed, onStop)
         }
     }
 }
+
+// The theme's dark-mode error colour is a pastel pink; Stop wants an unmistakable red in both themes.
+private val StopRed = Color(0xFFE53935)
 
 internal data class RemoteVolumeLabel(val text: String, val contentDescription: String)
 
