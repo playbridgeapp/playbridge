@@ -206,6 +206,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var subtitleTracks: List<RendererTrack> = emptyList()
     private var externalSubtitleUrls: List<String> = emptyList()
     private val lateSubtitleResources = mutableMapOf<String, SubtitleResource>()
+    // Labels sent with the item (subtitle_resources), e.g. "English · BLURAY 1080p" from a bridged page.
+    private var itemSubtitleLabels: Map<String, String> = emptyMap()
     private data class LateSubtitleRequest(
         val connectionId: Long,
         val requestId: String?,
@@ -752,7 +754,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         pendingNativeSubtitleMode = requestedMode
                         activeRenderer.addExternalSubtitle(
                             stagedUri,
-                            lateResource?.label?.takeIf(String::isNotBlank) ?: externalSubtitleName(url),
+                            externalSubtitleLabel(url),
                             sessionId,
                         )
                     } catch (error: CancellationException) {
@@ -982,6 +984,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
+        itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
         failPendingLateSubtitleRequests()
         currentExternalSubtitleUrl = null
@@ -1748,6 +1751,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 "restoreSavedExternal=$restoreSavedExternalForCurrentItem, " +
                 "savedExternalPresent=${savedExternal != null}",
         )
+        itemSubtitleLabels = item.subtitleLabelsByUrl()
         externalSubtitleUrls = (item.externalSubtitleUrls() + listOfNotNull(savedExternal))
             .filter(String::isNotBlank)
             .distinct()
@@ -1975,6 +1979,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
+        itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
         failPendingLateSubtitleRequests()
         currentExternalSubtitleUrl = null
@@ -2339,8 +2344,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             } + externalSubtitleUrls.map { url ->
                 UnifiedTrack(
                     id = url,
-                    name = lateSubtitleResources[url]?.label?.takeIf(String::isNotBlank)
-                        ?: externalSubtitleName(url),
+                    name = externalSubtitleLabel(url),
                     isSelected = url == currentExternalSubtitleUrl,
                     type = "external_sub",
                 )
@@ -2349,6 +2353,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             currentSubtitleUrl = currentExternalSubtitleUrl,
         )
     }
+
+    /** A late add's label, else the item's label, else the link's `#label` fragment or file name. */
+    private fun externalSubtitleLabel(url: String): String =
+        lateSubtitleResources[url]?.label?.takeIf(String::isNotBlank) ?: itemSubtitleLabels[url] ?: externalSubtitleName(url)
 
     private fun broadcastTracks() {
         fun encode(tracks: List<RendererTrack>, type: String) = org.json.JSONArray().apply {
@@ -2370,8 +2378,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             externalSubtitleUrls.forEach { url ->
                 put(org.json.JSONObject().apply {
                     put("id", url)
-                        put("name", lateSubtitleResources[url]?.label?.takeIf(String::isNotBlank)
-                            ?: externalSubtitleName(url))
+                        put("name", externalSubtitleLabel(url))
                     put("selected", url == currentExternalSubtitleUrl)
                     put("type", "external_sub")
                 })
