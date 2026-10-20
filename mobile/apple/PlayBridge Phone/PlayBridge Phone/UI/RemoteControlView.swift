@@ -47,7 +47,11 @@ struct RemoteControlView: View {
     private var padSurface: RemotePadSurface { inputLayout.surface(in: context, preferences: padPreferences) }
     private var canUseKeyboard: Bool { vm.remoteKeyboardTicket != nil }
     private var canEditKeyboard: Bool { keyboardTicket != nil && keyboardTicket == vm.remoteKeyboardTicket }
-    private var supportsVolume: Bool { combined.fullControlReady || (policy.isLegacy ? RemoteMode.supportsVolume(externalProtocol: protocolID) : policy.hasVolume("relative_step")) }
+    private var supportsVolume: Bool {
+        if combined.fullControlReady { return true }
+        if let protocolID, ["google_cast", "dlna"].contains(protocolID), vm.googleCast.volume.supported == false { return false }
+        return policy.isLegacy ? RemoteMode.supportsVolume(externalProtocol: protocolID) : policy.hasVolume("relative_step")
+    }
     private func keyAllowed(_ key: String) -> Bool { combined.allowsKey(key) }
     private func settingAllowed(_ id: String, legacy: Bool = true) -> Bool { policy.isLegacy ? legacy : policy.settings.contains(id) }
     private func browserAllowed(_ action: String) -> Bool { policy.isLegacy || policy.allowsBrowser(action) }
@@ -60,7 +64,9 @@ struct RemoteControlView: View {
         policy.allowedPresentations.union(canShowQueue ? ["queue"] : []).union(canUseKeyboard ? ["keyboard"] : [])
     }
     private var volumeStatus: String? {
-        combined.fullControlReady ? combined.atvVolumeStatus : RemoteControlPresentation.volumeStatus(policy: policy, scope: vm.coordinator.receiverVolumeScope,
+        if combined.fullControlReady { return combined.atvVolumeStatus }
+        if let protocolID, ["google_cast", "dlna"].contains(protocolID) { return vm.googleCast.volume.label(protocolID: protocolID) }
+        return RemoteControlPresentation.volumeStatus(policy: policy, scope: vm.coordinator.receiverVolumeScope,
             level: vm.coordinator.receiverVolumeLevel, muted: vm.coordinator.receiverVolumeMuted)
     }
 

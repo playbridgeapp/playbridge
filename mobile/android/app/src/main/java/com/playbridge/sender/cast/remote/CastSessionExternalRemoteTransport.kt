@@ -27,7 +27,7 @@ internal fun externalReceiverSnapshot(
         else -> RemotePlaybackState.Idle
     }
     val context = if (reported in setOf(RemotePlaybackState.Playing, RemotePlaybackState.Paused, RemotePlaybackState.Buffering)) RemoteContext.Player else RemoteContext.Idle
-    val caps = externalRemoteCapabilities(kind, session.capabilities, status?.volumeSupported)
+    val caps = externalRemoteCapabilities(kind, session.capabilities, status?.volumeSupported, status?.volumeLevel, status?.muted)
     val connection = when {
         reported == RemotePlaybackState.Error -> RemoteConnection.Failed(session.error ?: "Receiver operation failed")
         session.isReadyForPlayback -> RemoteConnection.Connected(receiver.name)

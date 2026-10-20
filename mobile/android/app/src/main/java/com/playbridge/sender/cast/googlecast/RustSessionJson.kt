@@ -57,7 +57,12 @@ internal fun parseRustPlaybackStatus(
     isLive = status.optBoolean("is_live", false),
     hasLiveField = status.has("is_live") && !status.isNull("is_live"),
     volumeSupported = status.optNullableBoolean("volume_supported") ?: previousVolumeSupported,
+    volumeLevel = if ((status.optNullableBoolean("volume_supported") ?: previousVolumeSupported) == false) null else status.optNormalizedVolume("volume_level"),
+    muted = if ((status.optNullableBoolean("volume_supported") ?: previousVolumeSupported) == false) null else status.opt("muted") as? Boolean,
 )
+
+internal fun JSONObject.optNormalizedVolume(name: String): Double? =
+    (opt(name) as? Number)?.toDouble()?.takeIf { it.isFinite() && it in 0.0..1.0 }
 
 internal fun JSONObject.optNullableBoolean(name: String): Boolean? =
     if (!has(name) || isNull(name)) null else optBoolean(name)

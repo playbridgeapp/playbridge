@@ -200,16 +200,13 @@ class RemoteScreenTest {
         compose.onNodeWithContentDescription("TV volume down").assertIsDisplayed()
         compose.onNodeWithContentDescription("TV volume up").assertIsDisplayed()
         compose.onNodeWithContentDescription("More player controls").assertDoesNotExist()
-        compose.onNodeWithText("More").performClick()
-        compose.onNodeWithText("Stop playback").assertIsDisplayed()
-        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithContentDescription("Stop playback").assertIsDisplayed()
         compose.runOnIdle { image.value = true }
         compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithText("D-Pad").assertDoesNotExist()
         compose.onNodeWithTag("remote.input").assertIsDisplayed()
         compose.onNodeWithTag("remote.pointer").assertIsDisplayed()
-        compose.onNodeWithText("More").performClick()
-        compose.onNodeWithText("Stop playback").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Stop playback").assertIsDisplayed()
     }
 
     @Test fun navPersistsAcrossModesAndContextsAndIdleSaysNothingPlaying() {

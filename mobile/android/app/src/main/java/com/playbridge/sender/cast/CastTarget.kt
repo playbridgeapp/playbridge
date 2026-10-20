@@ -149,6 +149,9 @@ data class PlaybackStatus(
     val loadEpoch: Long? = null,
     /** Receiver-reported volume support; null means the receiver has not reported a capability. */
     val volumeSupported: Boolean? = null,
+    /** Actual normalized receiver/app volume; null when unavailable, independent of mute. */
+    val volumeLevel: Double? = null,
+    val muted: Boolean? = null,
 )
 
 enum class PlaybackState { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ERROR }

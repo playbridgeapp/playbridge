@@ -515,6 +515,12 @@ class RustCastTransport extends TvTransport {
   }
 
   @override
+  Future<bool> sendRemoteKey(String key) =>
+      key == 'volume_up' || key == 'volume_down'
+          ? sendControl(key)
+          : Future.value(false);
+
+  @override
   Future<bool> sendControl(String command) {
     if (command == 'stop') _loadIntentGeneration++;
     return _serializeOperation(() => _sendControl(command));
@@ -524,6 +530,7 @@ class RustCastTransport extends TvTransport {
     final session = _session;
     if (!isConnected || session == null) return false;
     if ((command == 'volume_up' || command == 'volume_down') &&
+        protocol != TvProtocol.roku &&
         !rustTransportSupportsVolume(protocol, _capabilities,
             volumeSupported: _volumeSupported)) {
       return false;
@@ -558,9 +565,17 @@ class RustCastTransport extends TvTransport {
               duration: Duration.zero,
             ));
           case 'volume_up':
-            await session.adjustVolume(0.05);
+            if (protocol == TvProtocol.roku) {
+              await session.setVolume(1.0);
+            } else {
+              await session.adjustVolume(0.05);
+            }
           case 'volume_down':
-            await session.adjustVolume(-0.05);
+            if (protocol == TvProtocol.roku) {
+              await session.setVolume(0.0);
+            } else {
+              await session.adjustVolume(-0.05);
+            }
           case 'seek_forward':
             await session.relativeSeek(forward: true);
           case 'seek_back':
@@ -743,6 +758,10 @@ class RustCastTransport extends TvTransport {
       'position': status.position.inMilliseconds,
       'duration': status.duration.inMilliseconds,
       if (_currentTitle != null) 'title': _currentTitle,
+      // Internal transport status, not a native WSS status wire shape.
+      'volumeSupported': status.volumeSupported,
+      'volumeLevel': protocol == TvProtocol.roku ? null : status.volumeLevel,
+      'muted': protocol == TvProtocol.roku ? null : status.muted,
     }));
   }
 
@@ -838,6 +857,7 @@ class BrowserTransport extends TvTransport {
 
   @override
   TvProtocol get protocol => TvProtocol.webBrowser;
+  double? _volumeForCommands;
 
   @override
   Stream<SenderConnectionState> get state => _state.stream;
@@ -876,6 +896,7 @@ class BrowserTransport extends TvTransport {
 
     final previous = _sessionId;
     _sessionId = null;
+    _volumeForCommands = null;
     await _events?.cancel();
     _events = null;
 
@@ -898,6 +919,7 @@ class BrowserTransport extends TvTransport {
   Future<void> disconnect() async {
     final sessionId = _sessionId;
     _sessionId = null;
+    _volumeForCommands = null;
     await _events?.cancel();
     _events = null;
     if (sessionId != null) {
@@ -1011,6 +1033,26 @@ class BrowserTransport extends TvTransport {
   }
 
   @override
+  Future<bool> sendRemoteKey(String key) async {
+    final current = _volumeForCommands;
+    final sessionId = _sessionId;
+    if (current == null ||
+        sessionId == null ||
+        (key != 'volume_up' && key != 'volume_down')) {
+      return false;
+    }
+    final next = (current + (key == 'volume_up' ? .05 : -.05)).clamp(0.0, 1.0);
+    try {
+      await _services.controlBrowser(
+          sessionId: sessionId, action: 'set_volume', value: next);
+      _volumeForCommands = next;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
   Future<bool> playlistJump(int index) async => false;
 
   @override
@@ -1022,10 +1064,14 @@ class BrowserTransport extends TvTransport {
       if (event['event'] == 'status' || event['event'] == 'ended') {
         final status = session['status'];
         if (status is Map) {
+          final volume = rust.normalizedVolumeLevel(status['volume']);
+          _volumeForCommands = volume;
           _playbackState = status['state']?.toString() ?? _playbackState;
           _positionMs = (status['positionMs'] as num?)?.toInt() ?? _positionMs;
           _messages.add(jsonEncode({
             'type': 'status',
+            'volumeLevel': volume,
+            'muted': status['muted'] is bool ? status['muted'] : null,
             'state': _playbackState,
             'position': _positionMs,
             'duration': (status['durationMs'] as num?)?.toInt() ?? 0,
@@ -1038,6 +1084,7 @@ class BrowserTransport extends TvTransport {
     } else if (event['event'] == 'disconnected' &&
         event['session_id']?.toString() == _sessionId) {
       _sessionId = null;
+      _volumeForCommands = null;
       _setState(SenderConnectionState.disconnected);
     }
   }

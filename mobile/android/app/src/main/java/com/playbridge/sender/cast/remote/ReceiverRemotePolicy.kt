@@ -187,7 +187,12 @@ internal fun RemoteUiState.queueJump(index: Int, itemId: String?): RemoteAction.
     RemoteAction.JumpToEpisode(index, if (nativePolicy == null || capabilities.queue.jumpItem == Support.Supported) itemId else null)
 
 internal fun RemoteUiState.volumeLabel(): String =
-    if (nativePolicy != null && !fullControlSupports(RemoteAction.AdjustVolume(1)) && capabilities.volume.scope == VolumeScope.Player) "App volume" else "TV volume"
+    if (fullControlSupports(RemoteAction.AdjustVolume(1))) "TV volume" else when (capabilities.volume.scope) {
+        VolumeScope.Player -> "App volume"
+        VolumeScope.Renderer -> "Renderer volume"
+        VolumeScope.ReceiverDevice -> "Receiver volume"
+        else -> "TV volume"
+    }
 
 internal fun RemoteUiState.hasPointerRoute(): Boolean = capabilities.pointer.run {
     if (nativePolicy == null) move == Support.Supported else

@@ -397,6 +397,9 @@ class TvSenderController extends ChangeNotifier {
   ReceiverSettingsAvailability _settingsAvailability =
       const ReceiverSettingsAvailability();
   ReceiverVolumeState? _volumeState;
+  double? _externalVolumeLevel;
+  bool? _externalMuted;
+  bool? _externalVolumeSupported;
   bool? _loopEnabled;
   String? _mediaKind;
   bool _isLive = false;
@@ -460,13 +463,31 @@ class TvSenderController extends ChangeNotifier {
       (policy.isLegacy || policy.canPlaylistJumpIndex);
   bool get canSeekAbsolute => policy.canSeekAbsolute;
   bool get canSeekRelative => policy.canSeekRelative;
-  bool get hasVolume => policy.hasVolume;
-  bool get canAdjustVolume => policy.canAdjustVolume;
+  bool get hasVolume => _transport.protocol == TvProtocol.playBridge
+      ? policy.hasVolume
+      : (_transport.protocol == TvProtocol.roku ||
+          _externalVolumeSupported != false);
+  bool get canAdjustVolume => hasVolume && policy.canAdjustVolume;
   bool get canSetVolume => policy.canSetVolume;
+  bool get showVolumeSlider =>
+      canSetVolume &&
+      volumeLevel != null &&
+      !(_volumeState?.scope == 'app' && policy.volumeScope == 'system');
   bool get canToggleMute => policy.canToggleMute;
-  String? get volumeLabel => policy.volumeLabel;
-  double? get volumeLevel => policy.currentVolumeLevel;
-  bool? get isMuted => policy.isMuted;
+  String? get volumeLabel => switch (_transport.protocol) {
+        TvProtocol.playBridge => policy.volumeLabel,
+        TvProtocol.dlna => 'Renderer volume',
+        TvProtocol.webBrowser => 'App volume',
+        _ => 'Receiver volume',
+      };
+  double? get volumeLevel => _transport.protocol == TvProtocol.playBridge
+      ? policy.currentVolumeLevel
+      : _externalVolumeLevel;
+  bool? get isMuted => _transport.protocol == TvProtocol.playBridge
+      ? policy.isMuted
+      : _externalMuted;
+  String get volumeStatus =>
+      senderVolumeStatus(volumeLabel ?? 'Volume', volumeLevel, isMuted);
   bool get canLoop => policy.canLoop;
   bool? get isLoopEnabled => _loopEnabled;
   bool get canSwitchEngine => policy.canSwitchEngine;
@@ -1160,6 +1181,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   Future<bool> adjustVolume(int steps) async {
+    if (!canAdjustVolume || steps == 0) return false;
     if (policy.isLegacy) {
       final key = steps > 0 ? 'volume_up' : 'volume_down';
       return _transport.sendRemoteKey(key);
@@ -1610,6 +1632,9 @@ class TvSenderController extends ChangeNotifier {
     _settingsEngine = null;
     _settingsAvailability = const ReceiverSettingsAvailability();
     _volumeState = null;
+    _externalVolumeLevel = null;
+    _externalMuted = null;
+    _externalVolumeSupported = null;
     _loopEnabled = null;
     _mediaKind = null;
     _isLive = false;
@@ -1847,6 +1872,24 @@ class TvSenderController extends ChangeNotifier {
       if (obj is! Map) return;
       final type = obj['type'];
       if (type == 'status') {
+        if (_transport.protocol != TvProtocol.playBridge) {
+          _externalVolumeSupported = obj['volumeSupported'] is bool
+              ? obj['volumeSupported'] as bool
+              : null;
+          final reportable = _transport.protocol != TvProtocol.roku &&
+              _externalVolumeSupported != false;
+          final level = obj['volumeLevel'];
+          _externalVolumeLevel = reportable &&
+                  level is num &&
+                  level.isFinite &&
+                  level >= 0 &&
+                  level <= 1
+              ? level.toDouble()
+              : null;
+          _externalMuted =
+              reportable && obj['muted'] is bool ? obj['muted'] as bool : null;
+          notifyListeners(); // Volume is session state even when playback is idle.
+        }
         final playbackId = obj['playbackId'] as String?;
         final state = (obj['state'] as String?)?.toLowerCase();
         if (state == 'error') {
@@ -1898,10 +1941,11 @@ class TvSenderController extends ChangeNotifier {
         if (scope != null) {
           final level = (obj['level'] as num?)?.toDouble();
           final muted = obj['muted'] as bool?;
+          final previous = _volumeState?.scope == scope ? _volumeState : null;
           _volumeState = ReceiverVolumeState(
             scope: scope,
-            level: level ?? _volumeState?.level,
-            muted: muted ?? _volumeState?.muted,
+            level: level ?? previous?.level,
+            muted: muted ?? previous?.muted,
           );
           notifyListeners();
         }

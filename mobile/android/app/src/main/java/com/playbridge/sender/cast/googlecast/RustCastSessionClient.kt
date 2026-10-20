@@ -54,6 +54,8 @@ internal data class RustPlaybackStatus(
     val isLive: Boolean = false,
     val hasLiveField: Boolean = false,
     val volumeSupported: Boolean? = null,
+    val volumeLevel: Double? = null,
+    val muted: Boolean? = null,
 )
 
 internal sealed class GoogleCastSessionInvalidException(message: String) :
@@ -106,10 +108,6 @@ internal class RustSessionClient(
 
     @Volatile
     var isReady: Boolean = false
-        private set
-
-    @Volatile
-    var volume: Float = 0.5f
         private set
 
     @Volatile
@@ -246,7 +244,6 @@ internal class RustSessionClient(
     suspend fun setVolume(level: Float) {
         val clamped = level.coerceIn(0f, 1f)
         submit("set_volume", JSONObject().put("level", clamped))
-        volume = clamped
     }
 
     suspend fun adjustVolume(delta: Float) {

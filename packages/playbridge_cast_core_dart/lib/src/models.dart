@@ -185,12 +185,16 @@ final class PlaybackStatus {
     required this.position,
     required this.duration,
     this.volumeSupported,
+    this.volumeLevel,
+    this.muted,
   });
 
   final PlaybackState state;
 
   /// A fresh volume capability, if supplied by the native status response.
   final bool? volumeSupported;
+  final double? volumeLevel;
+  final bool? muted;
   final Duration position;
   final Duration duration;
 
@@ -202,6 +206,12 @@ final class PlaybackStatus {
   factory PlaybackStatus.fromJson(Map<String, Object?> json) => PlaybackStatus(
         state: PlaybackState.fromWire(json['state'] as String?),
         volumeSupported: json['volume_supported'] as bool?,
+        volumeLevel: json['volume_supported'] == false
+            ? null
+            : normalizedVolumeLevel(json['volume_level']),
+        muted: json['volume_supported'] == false
+            ? null
+            : (json['muted'] is bool ? json['muted'] as bool : null),
         position: _secondsToDuration(json['position_seconds']),
         duration: _secondsToDuration(json['duration_seconds']),
       );
@@ -429,3 +439,9 @@ final class DiscoveryFinished extends ReceiverEvent {
   const DiscoveryFinished(this.protocol);
   final ReceiverProtocol protocol;
 }
+
+/// A missing measurement is not a default level, and booleans/strings are not numbers.
+double? normalizedVolumeLevel(Object? value) =>
+    value is num && value.isFinite && value >= 0 && value <= 1
+        ? value.toDouble()
+        : null;

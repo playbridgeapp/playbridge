@@ -56,6 +56,7 @@ data class ReceiverProtocolState(
     val settingsAvailability: ReceiverSettingsAvailability = ReceiverSettingsAvailability(),
     val contextEngine: String? = null,
     val malformedV1: Boolean = false,
+    val volumeRevision: Long = 0L,
 )
 
 /** Validate a bounded v1 object without decoding future versions as v1 or closing identifier sets. */
@@ -212,7 +213,7 @@ internal class ReceiverProtocolSession {
             }
             "volume_state" -> parseVolume(frame)?.let { incoming ->
                 val previous = old.volume?.takeIf { it.scope == incoming.scope }
-                mutableState.value = old.copy(volume = incoming.copy(
+                mutableState.value = old.copy(volumeRevision = old.volumeRevision + 1, volume = incoming.copy(
                     level = incoming.level ?: previous?.level, muted = incoming.muted ?: previous?.muted,
                 ))
             }

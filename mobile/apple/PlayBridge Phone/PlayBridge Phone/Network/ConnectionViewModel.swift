@@ -923,11 +923,17 @@ final class ConnectionViewModel: ObservableObject {
 
     @MainActor func remote(_ key: String) { routeRemoteKey(key) }
 
-    func receiverRemoteKey(_ key: String, onSent: (() -> Void)? = nil) {
+    @MainActor func receiverRemoteKey(_ key: String, onSent: (() -> Void)? = nil) {
         guard isConnected else { return }
         guard isExternalReceiver else {
             guard nativeRemotePolicy.allowsKey(key) else { return }
-            if ws.send(WireProtocol.remoteCommand(key: key)) { onSent?() }
+            if ws.send(WireProtocol.remoteCommand(key: key)) {
+                if nativeRemotePolicy.hasVolume("level_report") {
+                    let step = nativeRemotePolicy.volume?.step ?? (nativeRemotePolicy.volume?.scope == "system" ? 1.0 / 16 : 0.05)
+                    coordinator.beginVolumeIntent(key: key, step: step)
+                }
+                onSent?()
+            }
             return
         }
         switch key {

@@ -336,6 +336,10 @@ struct SessionPlaybackStatus {
     is_live: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume_supported: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volume_level: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    muted: Option<bool>,
 }
 
 pub struct CastSession {
@@ -992,6 +996,8 @@ async fn execute_session_command(
                     duration_seconds: status.duration_seconds,
                     is_live: status.is_live,
                     volume_supported: Some(receiver_mut(receiver)?.supports_volume()),
+                    volume_level: status.volume_level,
+                    muted: status.muted,
                 }))
             }
             SessionCommand::Disconnect { .. } => Ok(None),
@@ -1986,6 +1992,8 @@ mod tests {
                 duration_seconds: 10.0,
                 is_live: false,
                 volume_supported: Some(false),
+                volume_level: None,
+                muted: None,
             },
         };
         let json = serde_json::to_value(event).unwrap();
@@ -1994,6 +2002,24 @@ mod tests {
         assert_eq!(json["request_id"], 42);
         assert_eq!(json["status"]["state"], "playing");
         assert_eq!(json["status"]["position_seconds"], 3.5);
+        assert!(json["status"].get("volume_level").is_none());
+        assert!(json["status"].get("muted").is_none());
+    }
+
+    #[test]
+    fn session_status_volume_fields_are_additive_and_zero_does_not_mean_muted() {
+        let status = SessionPlaybackStatus {
+            state: "playing",
+            position_seconds: 0.0,
+            duration_seconds: 10.0,
+            is_live: false,
+            volume_supported: Some(true),
+            volume_level: Some(0.0),
+            muted: Some(false),
+        };
+        let json = serde_json::to_value(status).unwrap();
+        assert_eq!(json["volume_level"], 0.0);
+        assert_eq!(json["muted"], false);
     }
 
     #[test]

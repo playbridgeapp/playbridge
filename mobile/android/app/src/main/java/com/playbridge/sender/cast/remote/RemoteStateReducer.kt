@@ -6,6 +6,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         private set
     private var optimistic = RemoteOptimisticState(clock)
     private var observation = RemoteObservation()
+    private val volumeOptimism = RemoteVolumeOptimism(clock)
     private var stoppedContextSequence: Long? = null
     var intentVersion = 0L
         private set
@@ -20,11 +21,14 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     fun observe(snapshot: RemoteReceiverSnapshot): RemoteUiState {
         var incoming = snapshot.state
         val old = state
+        if (!incoming.reportsVolume()) volumeOptimism.clear()
+        if (incoming.receiverProtocol.volumeRevision != old.receiverProtocol.volumeRevision ||
+            incoming.nativePolicy == null && snapshot.observation.sequence > observation.sequence) volumeOptimism.clear()
         val identityChanged = incoming.sessionId != old.sessionId || incoming.context != old.context && stoppedContextSequence == null ||
             incoming.playback?.mediaId != old.playback?.mediaId || incoming.playback?.mediaKind != old.playback?.mediaKind || incoming.playback?.title != old.playback?.title || incoming.queue?.currentIndex != old.queue?.currentIndex
         val commandFailed = snapshot.observation.controlFailureVersion > observation.controlFailureVersion
         val reset = identityChanged || !incoming.connection.ready || incoming.playback?.reportedState == RemotePlaybackState.Error
-        if (reset || commandFailed) { optimistic = optimistic.clear(); intentVersion++ }
+        if (reset || commandFailed) { optimistic = optimistic.clear(); volumeOptimism.clear(); intentVersion++ }
         if (incoming.sessionId != old.sessionId || !incoming.connection.ready) stoppedContextSequence = null
         if (stoppedContextSequence != null) {
             if (snapshot.observation.contextSequence > stoppedContextSequence!!) stoppedContextSequence = null
@@ -64,10 +68,14 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
             }
             else -> Unit
         }
+        if (action is RemoteAction.AdjustVolume || action is RemoteAction.SetVolume || action == RemoteAction.Key(RemoteKey.Mute)) {
+            volumeOptimism.begin(action, state.capabilities.volume, state.volumeStep(), state.reportsVolume())
+            intentVersion++
+        }
         return display()
     }
     fun failure(version: Long, message: String): RemoteUiState {
-        if (version == intentVersion) optimistic = optimistic.clear()
+        if (version == intentVersion) { optimistic = optimistic.clear(); volumeOptimism.clear() }
         state = state.copy(notice = RemoteNotice(message))
         return display()
     }
@@ -79,7 +87,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     }
     fun expire(): RemoteUiState { optimistic = optimistic.expire(); return display() }
     fun clear(resetPresentation: Boolean = false): RemoteUiState {
-        optimistic = optimistic.clear(); intentVersion++
+        optimistic = optimistic.clear(); volumeOptimism.clear(); intentVersion++
         state = state.copy(pending = RemotePendingState(), sheet = null, notice = null)
         if (resetPresentation) {
             val mode = if (state.context == RemoteContext.Browser && state.playback?.active != true) RemoteInputMode.Pointer else RemoteInputMode.Context
@@ -98,6 +106,7 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     }
     fun applyChannel(channel: TvRemoteChannelState?): RemoteUiState {
         val old = state
+        if (channel?.connected != channelState?.connected || channel?.matchedEndpoint != channelState?.matchedEndpoint) volumeOptimism.clear()
         channelState = channel
         return displayWithKeyboardRoute(old)
     }
@@ -192,6 +201,10 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
             browser = state.browser?.copy(fullscreen = showFullscreen),
         )
         state = projectFullControl(state, baseCapabilities, channelState)
+        if (!state.fullControlSupports(RemoteAction.AdjustVolume(1))) {
+            state = state.copy(capabilities = state.capabilities.copy(volume = volumeOptimism.display(baseCapabilities.volume)))
+        }
+        state = state.copy(pending = state.pending.copy(volume = volumeOptimism.pending))
         return state
     }
 }

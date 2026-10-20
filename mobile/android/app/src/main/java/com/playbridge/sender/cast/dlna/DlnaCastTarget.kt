@@ -287,6 +287,8 @@ class DlnaCastTarget(
                         isLive = live,
                         loadEpoch = activeLoadEpoch,
                         volumeSupported = volumeSupported,
+                        volumeLevel = status.volumeLevel,
+                        muted = status.muted,
                     )
                     if (state == PlaybackState.STOPPED) {
                         stopPolling()

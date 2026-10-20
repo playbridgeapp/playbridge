@@ -1,5 +1,40 @@
 import Foundation
+import CoreFoundation
 import Combine
+
+/// Optional measurements from the session JSON; never derive mute from a level.
+struct ExternalReceiverVolume: Equatable {
+    let supported: Bool?
+    let level: Double?
+    let muted: Bool?
+
+    init(status: [String: Any] = [:]) {
+        func boolean(_ value: Any?) -> Bool? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+            return number.boolValue
+        }
+        supported = boolean(status["volume_supported"])
+        if supported == false {
+            level = nil
+            muted = nil
+        } else {
+            if let number = status["volume_level"] as? NSNumber,
+               CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite,
+               (0...1).contains(number.doubleValue) { level = number.doubleValue }
+            else { level = nil }
+            muted = boolean(status["muted"])
+        }
+    }
+
+    func label(protocolID: String) -> String? {
+        guard ["google_cast", "dlna"].contains(protocolID), supported != false,
+              level != nil || muted != nil else { return nil }
+        var text = protocolID == "dlna" ? "Renderer volume" : "Receiver volume"
+        if let level { text += " \(Int((level * 100).rounded()))/100" }
+        if let muted { text += muted ? " · Muted" : " · Unmuted" }
+        return text
+    }
+}
 
 /// All access to the native handle, including polling and freeing, is serialized.
 private final class GoogleCastWorker {
@@ -70,6 +105,7 @@ private final class CastRequestCancellation: @unchecked Sendable {
 final class GoogleCastController: ObservableObject {
     @Published private(set) var state: ConnectionState = .disconnected
     @Published private(set) var playback: TvPlaybackStatus?
+    @Published private(set) var volume = ExternalReceiverVolume()
     var onReceiverEnded: (() -> Void)?
     private let worker: GoogleCastWorker
     private var generation = 0
@@ -129,6 +165,7 @@ final class GoogleCastController: ObservableObject {
         failPending("Receiver disconnected.")
         state = .disconnected
         playback = nil
+        volume = ExternalReceiverVolume()
         title = nil
         receiverAppAvailable = nil
         device = nil
@@ -265,6 +302,7 @@ final class GoogleCastController: ObservableObject {
                     let seconds = (status[key] as? NSNumber)?.doubleValue ?? 0
                     return seconds.isFinite ? Int64(max(0, min(seconds * 1000, Double(Int64.max / 2)))) : 0
                 }
+                volume = ExternalReceiverVolume(status: status)
                 playback = .init(state: status["state"] as? String ?? "unknown", positionMs: milliseconds("position_seconds"),
                     durationMs: milliseconds("duration_seconds"), title: title, playbackId: mediaEpoch)
                 complete(id, result: .success(event))

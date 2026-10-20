@@ -163,6 +163,8 @@ pub struct PlaybackStatus {
     pub position_seconds: f64,
     pub duration_seconds: f64,
     pub is_live: bool,
+    pub volume_level: Option<f32>,
+    pub muted: Option<bool>,
 }
 
 pub enum ReceiverSession {
@@ -465,7 +467,10 @@ impl ReceiverSession {
                             .unwrap_or(0.0);
                     }
                 }
+                let volume = renderer.volume_state(false).await;
                 Ok(PlaybackStatus {
+                    volume_level: volume.level,
+                    muted: volume.muted,
                     state: state_from_text(
                         transport
                             .get("CurrentTransportState")
@@ -495,6 +500,7 @@ impl ReceiverSession {
                     position_seconds: status.position_ms as f64 / 1000.0,
                     duration_seconds: status.duration_ms as f64 / 1000.0,
                     is_live: false,
+                    ..PlaybackStatus::default()
                 })
             }
             Self::PlayBridge(socket) => {
@@ -519,6 +525,7 @@ impl ReceiverSession {
                                 position_seconds: position as f64 / 1000.0,
                                 duration_seconds: duration as f64 / 1000.0,
                                 is_live: false,
+                                ..PlaybackStatus::default()
                             });
                         }
                         Some(_) => {}
@@ -707,7 +714,12 @@ impl GoogleCastSession {
         let request_id = self
             .send_media(json!({ "type": "GET_STATUS" }), false)
             .await?;
-        self.wait_for_media_status(request_id).await
+        let mut status = self.wait_for_media_status(request_id).await?;
+        if !self.details.receiver_volume.fixed {
+            status.volume_level = self.details.receiver_volume.level;
+            status.muted = self.details.receiver_volume.muted;
+        }
+        Ok(status)
     }
 
     async fn ensure_receiver_application_active(&mut self) -> Result<Option<f32>> {
@@ -773,7 +785,9 @@ impl GoogleCastSession {
 
     fn update_receiver_volume(&mut self, payload: &serde_json::Value) {
         self.details.receiver_volume.update(payload);
-        if let Some(level) = self.details.receiver_volume.level {
+        if self.details.receiver_volume.fixed {
+            self.volume_level = None;
+        } else if let Some(level) = self.details.receiver_volume.level {
             self.volume_level = Some((level, Instant::now()));
         }
     }
@@ -864,6 +878,7 @@ impl GoogleCastSession {
                         position_seconds: status["currentTime"].as_f64().unwrap_or(0.0),
                         duration_seconds: status["media"]["duration"].as_f64().unwrap_or(0.0),
                         is_live: false,
+                        ..PlaybackStatus::default()
                     });
                 }
             }
@@ -1110,12 +1125,39 @@ mod tests {
                 transport_id: "transport".into(),
                 session_id: "session".into(),
                 media_session_id: None,
-                receiver_volume: castv2::ReceiverVolume { level, fixed },
+                receiver_volume: castv2::ReceiverVolume {
+                    level,
+                    fixed,
+                    muted: None,
+                },
             },
             request_ids: RequestIdGenerator::new(),
             volume_level: None,
             playback_error_reported: false,
         })
+    }
+
+    #[tokio::test]
+    async fn status_reports_explicit_receiver_volume_but_omits_fixed_output() {
+        let (port, task) = castv2::test_support::receiver(|mut receiver| async move {
+            for fixed in [false, true] {
+                let request = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+                receiver.send(NS_RECEIVER, json!({"type":"RECEIVER_STATUS","requestId":request["requestId"],"status":{
+                    "applications":[{"appId":DEFAULT_MEDIA_RECEIVER_APP_ID,"transportId":"transport","sessionId":"session"}],
+                    "volume":{"level":0.25,"muted":false,"controlType":if fixed {"fixed"} else {"attenuation"}}
+                }})).await;
+                let media = receiver.request(NS_MEDIA, "GET_STATUS").await;
+                receiver.send(NS_MEDIA, json!({"type":"MEDIA_STATUS","requestId":media["requestId"],"status":[{"playerState":"PAUSED","currentTime":1,"media":{"duration":10}}]})).await;
+            }
+        }).await;
+        let mut session = test_google_cast_session(port, false, None).await;
+        let first = session.status().await.unwrap();
+        assert_eq!(first.volume_level, Some(0.25));
+        assert_eq!(first.muted, Some(false));
+        let fixed = session.status().await.unwrap();
+        assert_eq!(fixed.volume_level, None);
+        assert_eq!(fixed.muted, None);
+        task.await.unwrap();
     }
 
     #[tokio::test]

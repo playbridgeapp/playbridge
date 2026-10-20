@@ -702,6 +702,7 @@ pub struct CastSessionDetails {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReceiverVolume {
     pub level: Option<f32>,
+    pub muted: Option<bool>,
     pub fixed: bool,
 }
 
@@ -713,6 +714,14 @@ impl ReceiverVolume {
         let volume = &payload["status"]["volume"];
         if let Some(control_type) = volume["controlType"].as_str() {
             self.fixed = control_type.eq_ignore_ascii_case("fixed");
+        }
+        if self.fixed {
+            self.level = None;
+            self.muted = None;
+            return;
+        }
+        if let Some(muted) = volume["muted"].as_bool() {
+            self.muted = Some(muted);
         }
         if let Some(level) = volume["level"].as_f64()
             && level.is_finite()
@@ -1702,20 +1711,21 @@ mod tests {
     }
 
     #[test]
-    fn receiver_volume_preserves_level_when_muted_and_tracks_control_type() {
+    fn receiver_volume_preserves_level_when_muted_and_omits_fixed_state() {
         let mut volume = ReceiverVolume::default();
-        volume.update(&json!({"type": "RECEIVER_STATUS", "status": {"volume": {"level": 0.4, "controlType": "attenuation"}}}));
-        assert_eq!(volume.level, Some(0.4));
-        assert!(!volume.fixed);
-        volume.update(&json!({"type": "RECEIVER_STATUS", "status": {"volume": {"muted": true, "controlType": "fixed"}}}));
-        assert_eq!(volume.level, Some(0.4));
+        volume.update(&json!({"type":"RECEIVER_STATUS","status":{"volume":{"level":0.0,"muted":false,"controlType":"attenuation"}}}));
+        assert_eq!(volume.level, Some(0.0));
+        assert_eq!(volume.muted, Some(false));
+        volume.update(&json!({"type":"RECEIVER_STATUS","status":{"volume":{"muted":true}}}));
+        assert_eq!(volume.level, Some(0.0));
+        assert_eq!(volume.muted, Some(true));
+        volume.update(&json!({"type":"RECEIVER_STATUS","status":{"volume":{"controlType":"fixed","level":0.4,"muted":true}}}));
         assert!(volume.fixed);
-        volume.update(&json!({"type": "RECEIVER_STATUS", "status": {"volume": {"level": 1.5}}}));
-        assert_eq!(volume.level, Some(0.4));
-        assert!(volume.fixed);
-        volume.update(&json!({"type": "RECEIVER_STATUS", "status": {"volume": {"level": 0.2, "controlType": "attenuation"}}}));
-        assert_eq!(volume.level, Some(0.2));
+        assert_eq!(volume.level, None);
+        assert_eq!(volume.muted, None);
+        volume.update(&json!({"type":"RECEIVER_STATUS","status":{"volume":{"controlType":"attenuation","level":1.5}}}));
         assert!(!volume.fixed);
+        assert_eq!(volume.level, None);
     }
 
     #[tokio::test]
@@ -1762,7 +1772,7 @@ mod tests {
             .await
             .unwrap();
         assert!(details.receiver_volume.fixed);
-        assert_eq!(details.receiver_volume.level, Some(0.4));
+        assert_eq!(details.receiver_volume.level, None);
         task.await.unwrap();
     }
 

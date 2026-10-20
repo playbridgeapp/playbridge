@@ -10,6 +10,8 @@ import android.os.Handler
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
+import com.playbridge.sender.cast.remote.RemoteVolumeOptimism
+import com.playbridge.sender.cast.remote.VolumeCapabilities
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteCommandResult
 import com.playbridge.sender.cast.remote.RemoteController
@@ -95,7 +97,12 @@ internal class CastMediaSession(
     private var optimisticExpiry: Job? = null
     private var volumeProvider: VolumeProvider? = null
     private var volumeOwner: Owner? = null
-    private var volumeSupported: Boolean? = null
+    private var volumeControl: CastNotificationVolumeControl? = null
+    private val volumeOptimism = RemoteVolumeOptimism(SystemClock::elapsedRealtime)
+    private var volumeReport: VolumeCapabilities? = null
+    private var volumeReportKey: Pair<Owner, Long>? = null
+    private var volumeStep = .05
+    private var volumeExpiry: Job? = null
     private var closed = false
 
     fun refresh(info: CastSessionManager.SessionInfo, loaded: Boolean, mirroring: Boolean, linked: Boolean): CastMediaNotificationView? {
@@ -180,7 +187,18 @@ internal class CastMediaSession(
             session.setPlaybackState(builder.build())
             published = next.copy(playback = playback.copy(positionMs = next.positionAt(now)), atMs = now)
         }
-        updateVolume(nextOwner, actions.volume, caps?.volume?.reportedPercent)
+        val volumeCaps = if (external != null) com.playbridge.sender.cast.remote.externalRemoteCapabilities(
+            external.kind, external.capabilities, manager.externalStatus.value?.volumeSupported,
+            manager.externalStatus.value?.volumeLevel, manager.externalStatus.value?.muted,
+        ).volume else caps?.volume
+        val nativeFallback = nativeState?.nativePolicy?.reportedVolumeScope == "app" && volumeCaps?.scope == com.playbridge.sender.cast.remote.VolumeScope.SystemWithPlayerFallback
+        val reportKey = nextOwner to (if (external != null) externalReport.sequence else nativeState?.receiverProtocol?.volumeRevision ?: 0L)
+        if (reportKey != volumeReportKey || volumeCaps?.reportedPercent == null || volumeCaps.adjust != com.playbridge.sender.cast.remote.Support.Supported) { volumeOptimism.clear(); volumeReportKey = reportKey }
+        volumeReport = volumeCaps
+        volumeStep = nativeState?.receiverProtocol?.descriptor?.volume?.step ?: if (volumeCaps?.scope in setOf(com.playbridge.sender.cast.remote.VolumeScope.System, com.playbridge.sender.cast.remote.VolumeScope.SystemWithPlayerFallback)) 1.0 / 16 else .05
+        val shownVolume = volumeCaps?.let(volumeOptimism::display)
+        updateVolume(nextOwner, actions.volume && volumeCaps?.adjust == Support.Supported,
+            volumeCaps?.absolute == Support.Supported && !nativeFallback, shownVolume?.reportedPercent)
         session.isActive = true
         return CastMediaNotificationView(ownerToken, title, subtitle, playback.state, actions).also { view = it }
     }
@@ -231,23 +249,48 @@ internal class CastMediaSession(
         if (currentOwner() != null && latest?.actions?.stop == true) manager.endCastSession()
     }
 
-    private fun updateVolume(expected: Owner, supported: Boolean, percent: Int?) {
-        if (volumeOwner != expected || volumeSupported != supported) {
+    private fun updateVolume(expected: Owner, supported: Boolean, absolute: Boolean, percent: Int?) {
+        val configuration = castNotificationVolume(supported, absolute, percent)
+        if (volumeOwner != expected || volumeControl != configuration.control) {
             volumeOwner = expected
-            volumeSupported = supported
-            volumeProvider = object : VolumeProvider(if (supported) VOLUME_CONTROL_RELATIVE else VOLUME_CONTROL_FIXED, 100, percent?.coerceIn(0, 100) ?: 50) {
+            volumeControl = configuration.control
+            val mode = when (configuration.control) {
+                CastNotificationVolumeControl.Fixed -> VolumeProvider.VOLUME_CONTROL_FIXED
+                CastNotificationVolumeControl.Relative -> VolumeProvider.VOLUME_CONTROL_RELATIVE
+                CastNotificationVolumeControl.Absolute -> VolumeProvider.VOLUME_CONTROL_ABSOLUTE
+            }
+            volumeProvider = object : VolumeProvider(mode, 100, configuration.initialPercent) {
+                private fun ownsRoute() = volumeProvider === this && !closed && currentOwner() == expected &&
+                    latest?.actions?.volume == true && expected.external?.capabilities?.contains(Capability.VOLUME) != false
                 override fun onAdjustVolume(direction: Int) {
                     if (direction != AudioManager.ADJUST_RAISE && direction != AudioManager.ADJUST_LOWER) return
                     main.post {
-                        if (closed || !supported || currentOwner() != expected || latest?.actions?.volume != true ||
-                            expected.external?.capabilities?.contains(Capability.VOLUME) == false) return@post
+                        if (!ownsRoute()) return@post
+                        optimisticVolume(RemoteAction.AdjustVolume(if (direction > 0) 1 else -1))
                         if (expected.external != null) manager.adjustVolume(direction == AudioManager.ADJUST_RAISE)
                         else nativeCommand(expected, RemoteAction.AdjustVolume(if (direction > 0) 1 else -1))
+                    }
+                }
+                override fun onSetVolumeTo(volume: Int) {
+                    main.post {
+                        if (!ownsRoute() || this@CastMediaSession.volumeControl != CastNotificationVolumeControl.Absolute) return@post
+                        val target = volume.coerceIn(0, 100)
+                        optimisticVolume(RemoteAction.SetVolume(target))
+                        if (expected.external != null) manager.setVolume(target)
+                        else nativeCommand(expected, RemoteAction.SetVolume(target))
                     }
                 }
             }.also(session::setPlaybackToRemote)
         }
         if (percent != null && volumeProvider?.currentVolume != percent.coerceIn(0, 100)) volumeProvider?.setCurrentVolume(percent.coerceIn(0, 100))
+    }
+
+    private fun optimisticVolume(action: RemoteAction) {
+        val report = volumeReport ?: return
+        volumeOptimism.begin(action, report, volumeStep, report.reportedPercent != null)
+        volumeOptimism.display(report).reportedPercent?.let { volumeProvider?.setCurrentVolume(it) }
+        volumeExpiry?.cancel()
+        volumeExpiry = scope.launch { delay(2_000); onChanged() }
     }
 
     private fun clearOptimism() {
@@ -279,7 +322,12 @@ internal class CastMediaSession(
         metadataKey = null
         volumeProvider = null
         volumeOwner = null
-        volumeSupported = null
+        volumeControl = null
+        volumeOptimism.clear()
+        volumeReport = null
+        volumeReportKey = null
+        volumeExpiry?.cancel()
+        volumeExpiry = null
         clearOptimism()
         if (previous != null) {
             previous.isActive = false

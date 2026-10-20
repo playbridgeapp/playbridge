@@ -163,9 +163,12 @@ class RemoteViewModel(
         val ticket = Ticket(controller, resolved, reducer.intentVersion, playback?.mediaId, (++sequence).toString(), state.value.connection.ready && state.value.capabilities.tracks.addResource == Support.Supported, activation, learnedGesture)
         if (resolved is RemoteAction.AddSubtitle) {
             mutableState.value = reducer.subtitlePending(ticket.token, true)
-            if (resolved.legacyUrlOnly || ticket.subtitleConfirmation) mutableState.value = reducer.local(RemoteAction.CloseSheet)
+            // The Add page returns to Tracks so the new track can be picked; any other sheet closes.
+            if (resolved.legacyUrlOnly || ticket.subtitleConfirmation) mutableState.value = reducer.local(
+                if (state.value.sheet == RemoteSheet.AddSubtitle) RemoteAction.OpenSheet(RemoteSheet.Subtitles) else RemoteAction.CloseSheet,
+            )
         }
-        if (state.value.pending.seek || state.value.pending.playing) startExpiry()
+        if (state.value.pending.seek || state.value.pending.playing || state.value.pending.volume) startExpiry()
         return ticket
     }
 
@@ -180,7 +183,8 @@ class RemoteViewModel(
         // Only the command families tracked by stage 1 can invalidate a playback intent.
         val playbackFailure = when (ticket.action) {
             is RemoteAction.SeekTo, is RemoteAction.SetPlaying, is RemoteAction.SeekBy, RemoteAction.TogglePlayPause, RemoteAction.StopPlayback, is RemoteAction.SetLoop,
-            is RemoteAction.Browser, is RemoteAction.SetBrowserFullscreen -> true
+            is RemoteAction.Browser, is RemoteAction.SetBrowserFullscreen, is RemoteAction.AdjustVolume, is RemoteAction.SetVolume -> true
+            is RemoteAction.Key -> ticket.action.key == RemoteKey.Mute
             else -> false
         }
         val failureVersion = if (playbackFailure) ticket.version else -1L
@@ -192,7 +196,7 @@ class RemoteViewModel(
                 }
                 mutableState.value = reducer.browserCommandAccepted(ticket.action)
                 if (ticket.action == RemoteAction.StopPlayback && state.value.receiver?.profile != RemoteProfile.External) mutableState.value = reducer.stopped()
-                if (subtitle != null && !ticket.subtitleConfirmation && !subtitle.legacyUrlOnly && state.value.sheet == RemoteSheet.AddSubtitle) mutableState.value = reducer.local(RemoteAction.CloseSheet)
+                if (subtitle != null && !ticket.subtitleConfirmation && !subtitle.legacyUrlOnly && state.value.sheet == RemoteSheet.AddSubtitle) mutableState.value = reducer.local(RemoteAction.OpenSheet(RemoteSheet.Subtitles))
             }
             is RemoteCommandResult.Failed -> {
                 mutableState.value = reducer.failure(failureVersion, result.message)
@@ -205,7 +209,7 @@ class RemoteViewModel(
                     // receiver with no subtitle handler. Keep that presentation, while the
                     // typed result remains Unsupported and no unsupported command is sent.
                     if (state.value.connection.ready && subtitle.resource.headers.isEmpty() && !ticket.subtitleConfirmation) {
-                        if (state.value.sheet == RemoteSheet.AddSubtitle) mutableState.value = reducer.local(RemoteAction.CloseSheet)
+                        if (state.value.sheet == RemoteSheet.AddSubtitle) mutableState.value = reducer.local(RemoteAction.OpenSheet(RemoteSheet.Subtitles))
                     } else emit(RemoteEffect.Notice("Could not add subtitle. Check the TV connection or update the receiver.", true))
                 }
             }
@@ -222,7 +226,7 @@ class RemoteViewModel(
     private fun startExpiry() {
         if (expiry?.isActive == true) return
         expiry = scope.launch {
-            while (active && (state.value.pending.seek || state.value.pending.playing)) {
+            while (active && (state.value.pending.seek || state.value.pending.playing || state.value.pending.volume)) {
                 delay(100L)
                 mutableState.value = reducer.expire()
             }

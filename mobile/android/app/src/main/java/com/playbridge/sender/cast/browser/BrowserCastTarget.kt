@@ -7,6 +7,7 @@ import com.playbridge.sender.cast.CastTarget
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
+import com.playbridge.sender.cast.googlecast.optNormalizedVolume
 import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.CastableMedia
@@ -202,12 +203,15 @@ class BrowserCastTarget(
                     val durationMs = statusObj?.optLong("durationMs", _status.value.durationMs)
                         ?: _status.value.durationMs
                     val title = statusObj?.optString("title")?.takeIf { it.isNotEmpty() }
-                    statusObj?.optDouble("volume", volumeFraction)?.let { volumeFraction = it }
+                    val reportedVolume = statusObj?.optNormalizedVolume("volume")
+                    reportedVolume?.let { volumeFraction = it }
                     _status.value = PlaybackStatus(
                         state = mapBrowserState(stateRaw),
                         positionMs = positionMs,
                         durationMs = durationMs,
                         loadEpoch = activeLoadEpoch,
+                        volumeLevel = reportedVolume,
+                        muted = statusObj?.opt("muted") as? Boolean,
                     )
                     if (title != null) {
                         // Title updates flow through CastSessionManager via media title on load;

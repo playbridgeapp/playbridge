@@ -128,9 +128,7 @@ class RemoteRouteTest {
             assertEquals(listOf("pause", "seek_to:20000", "seek_to:30000"), controls)
             assertEquals(10_000L, transport.snapshot.value.state.playback?.reportedPositionMs)
         }
-        compose.onNodeWithText("More").performClick()
-        compose.runOnIdle { assertEquals(RemoteSheet.More, vm.state.value.sheet) }
-        compose.onNodeWithText("Stop playback").performClick()
+        compose.onNodeWithContentDescription("Stop playback").performClick()
         compose.onNodeWithText("Nothing playing on Fixture TV").assertIsDisplayed()
         compose.onNodeWithText("Browse Library").assertDoesNotExist()
         compose.onNodeWithText("Open browser").assertDoesNotExist()
@@ -188,8 +186,7 @@ class RemoteRouteTest {
             assertEquals(listOf(RemoteAction.SetPlaying(false), RemoteAction.SeekTo(20_000L, RemoteLearnedGesture.SEEK), RemoteAction.AdjustVolume(-1)), external.commands)
             assertEquals(RemoteEffect.UnlinkWebsite, effects.last())
         }
-        compose.onNodeWithText("More").performClick()
-        compose.onNodeWithText("Stop playback").performClick()
+        compose.onNodeWithContentDescription("Stop playback").performClick()
         compose.onNodeWithText("Nothing playing on External TV").assertIsDisplayed()
         compose.onNodeWithText("Browse Library").assertDoesNotExist()
         compose.onNodeWithText("Open browser").assertDoesNotExist()

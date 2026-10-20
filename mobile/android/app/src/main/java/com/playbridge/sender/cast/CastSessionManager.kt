@@ -1362,7 +1362,18 @@ class CastSessionManager(
     fun play() = controlExternal("play") { it.play() }
     fun pause() = controlExternal("pause") { it.pause() }
     fun seekTo(positionMs: Long) = controlExternal("seek") { it.seekTo(positionMs) }
-    fun setVolume(percent: Int) = controlExternal("volume") { it.setVolume(percent) }
+    private data class ExternalVolumeRequest(val target: CastTarget, val generation: Long, val percent: Int)
+    private val absoluteVolumeCommands = LatestVolumeCommands<ExternalVolumeRequest>(scope) { request ->
+        if (isCurrentRemoteExternal(request.target, request.generation)) {
+            controlExternalJob("volume") { target ->
+                if (target === request.target && isCurrentRemoteExternal(target, request.generation)) target.setVolume(request.percent)
+            }?.join()
+        }
+    }
+    fun setVolume(percent: Int) {
+        val target = _externalTarget.value ?: return
+        absoluteVolumeCommands.submit(ExternalVolumeRequest(target, externalLoadGeneration, percent.coerceIn(0, 100)))
+    }
 
     fun adjustVolume(up: Boolean) {
         val generation = externalLoadGeneration
@@ -1394,9 +1405,12 @@ class CastSessionManager(
     }
 
     private fun controlExternal(operation: String, reportFailure: Boolean = true, block: suspend (CastTarget) -> Unit) {
-        val target = _externalTarget.value ?: return
+        controlExternalJob(operation, reportFailure, block)
+    }
+    private fun controlExternalJob(operation: String, reportFailure: Boolean = true, block: suspend (CastTarget) -> Unit): Job? {
+        val target = _externalTarget.value ?: return null
         val generation = externalLoadGeneration
-        scope.launch {
+        return scope.launch {
             if (!isCurrentRemoteExternal(target, generation)) return@launch
             suspendRunCatchingLogged(TAG, "${target.kind} $operation failed") {
                 val current = { isCurrentRemoteExternal(target, generation) }
