@@ -59,7 +59,14 @@
               "status",
               "context",
               "tracks",
-              "playlist_status"
+              "playlist_status",
+              "player_settings"
+            ],
+            "settings": [
+              "speed",
+              "loop",
+              "scaling",
+              "subtitle_offset"
             ]
           }
         }

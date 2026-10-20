@@ -134,6 +134,11 @@ avoids changing old required fields or making every existing consumer guess whet
 snapshot replaced or merged previous settings. New player-settings protobuf helper fields are
 optional implementation fields; AsyncAPI still enforces the complete WSS snapshot.
 
+Desktop's `internal_mpv` advertises `speed`, `loop`, `scaling`, and `subtitle_offset`,
+and reports a complete `player_settings` snapshot on authenticated sync, settings changes,
+new items, and `context_query`. It does not advertise quality capping, engine switching,
+or audio boost. Images report speed/scaling unavailable and are not seekable.
+
 ## Common volume route: app versus system
 
 `volume` is independent of a player/browser block. Omission/empty operations is unsupported.

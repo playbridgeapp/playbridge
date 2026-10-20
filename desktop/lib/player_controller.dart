@@ -7,6 +7,7 @@ import 'media_kind.dart';
 import 'playback_speed.dart';
 import 'player_engine.dart';
 import 'subtitle_delay.dart';
+import 'subtitle_delay.dart' as subtitle_delay;
 import 'video_scaling.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
@@ -213,7 +214,7 @@ class PlayerController extends ChangeNotifier {
         await _engine.seek(currentPos);
       }
       await _engine.setPlaybackRate(_playbackRate);
-      await _applyPictureSettings();
+      await _applyItemSettings();
 
       if (!wasPlaying) {
         await _engine.pause();
@@ -310,6 +311,20 @@ class PlayerController extends ChangeNotifier {
       ? _imageDurationMs
       : _engine.durationMs;
   double get volume => _engine.volume;
+  bool get isLive =>
+      currentMediaKind != null &&
+      currentMediaKind != MediaKind.image &&
+      !isOpening &&
+      _engine.isLive;
+  bool get isSeekable =>
+      currentMediaKind != null &&
+      currentMediaKind != MediaKind.image &&
+      !isOpening &&
+      _engine.isSeekable;
+  int get currentVideoHeight =>
+      currentMediaKind == MediaKind.video && !isOpening
+          ? _engine.currentVideoHeight
+          : 0;
   bool get hardwareVideoOutput => store?.hardwareVideoOutput ?? true;
 
   double _playbackRate = 1.0;
@@ -332,6 +347,16 @@ class PlayerController extends ChangeNotifier {
 
   /// New items always start at 1x. Reloads of the same item keep [playbackRate].
   Future<void> _resetPlaybackRateForNewMedia() => setPlaybackRate(1.0);
+
+  bool _looping = false;
+  bool get looping => _looping;
+
+  Future<void> setLooping(bool enabled) async {
+    final changed = enabled != _looping;
+    _looping = enabled;
+    if (changed) notifyListeners();
+    await _engine.setLooping(enabled);
+  }
 
   VideoScalingMode _videoScaling = VideoScalingMode.fit;
   int _subtitleDelayMs = 0;
@@ -362,9 +387,10 @@ class PlayerController extends ChangeNotifier {
   Future<void> _resetVideoScalingForNewMedia() =>
       setVideoScaling(VideoScalingMode.fit);
 
-  Future<void> _applyPictureSettings() async {
+  Future<void> _applyItemSettings() async {
     await _engine.setVideoScaling(videoScalingId(_videoScaling));
     await _engine.setSubtitleDelayMs(_subtitleDelayMs);
+    await _engine.setLooping(_looping);
   }
 
   Future<void> setSubtitleDelayMs(int delayMs) async {
@@ -375,8 +401,8 @@ class PlayerController extends ChangeNotifier {
     await _engine.setSubtitleDelayMs(clamped);
   }
 
-  Future<void> adjustSubtitleDelayMs(int deltaMs) =>
-      setSubtitleDelayMs(_subtitleDelayMs + deltaMs);
+  Future<void> adjustSubtitleDelayMs(int deltaMs) => setSubtitleDelayMs(
+      subtitle_delay.adjustSubtitleDelayMs(_subtitleDelayMs, deltaMs));
 
   Future<void> resetSubtitleDelay() => setSubtitleDelayMs(0);
 
@@ -693,6 +719,8 @@ class PlayerController extends ChangeNotifier {
     _imageTimer = null;
     final item = _queue[_currentIndex];
     resetImageTransform(notify: false);
+    // Repeat-one never carries into a manually selected/auto-advanced item.
+    await setLooping(false);
     if (item.mediaKind == MediaKind.image) {
       await _engine.stop();
       await _resetPlaybackRateForNewMedia();
@@ -714,6 +742,9 @@ class PlayerController extends ChangeNotifier {
       return;
     }
     await _resetPlaybackRateForNewMedia();
+    // Scaling and subtitle timing intentionally keep the desktop's existing
+    // lifetime: scaling resets for a new playlist; delay persists until reset.
+    await _applyItemSettings();
     unawaited(_applyStartPosition());
     var retries = 0;
     while (_engine.durationMs <= 0 && retries < 40 && !_hasTerminalError) {
@@ -843,6 +874,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   void _onCompleted() {
+    if (_looping && currentMediaKind != MediaKind.image) return;
     // media_kit can emit completed=true on demuxer EOF while still opening /
     // buffering a progressive HTTP URL (token CDNs that stall). Tearing down
     // immediately looks like "never waits for buffer". Only stop after real
@@ -980,7 +1012,7 @@ class PlayerController extends ChangeNotifier {
         );
         await _engine.setVolume(currentVolume);
         await _engine.setPlaybackRate(_playbackRate);
-        await _applyPictureSettings();
+        await _applyItemSettings();
 
         var retries = 0;
         while (_engine.durationMs <= 0 && retries < 40) {
@@ -1116,7 +1148,7 @@ class PlayerController extends ChangeNotifier {
       _queue[_currentIndex] = preparedItem;
       await _engine.open(preparedItem);
       await _engine.setPlaybackRate(_playbackRate);
-      await _applyPictureSettings();
+      await _applyItemSettings();
     } catch (e) {
       await _handleTerminalError(e);
     }
@@ -1300,7 +1332,7 @@ class PlayerController extends ChangeNotifier {
         play: wasPlaying,
       );
       await _engine.setPlaybackRate(_playbackRate);
-      await _applyPictureSettings();
+      await _applyItemSettings();
     } catch (error) {
       if (_currentIndex == itemIndex &&
           identical(_queue[itemIndex], replacement)) {
@@ -1313,7 +1345,7 @@ class PlayerController extends ChangeNotifier {
             play: wasPlaying,
           );
           await _engine.setPlaybackRate(_playbackRate);
-          await _applyPictureSettings();
+          await _applyItemSettings();
           if (currentPos > 0) {
             await _engine.seek(Duration(milliseconds: currentPos));
           }

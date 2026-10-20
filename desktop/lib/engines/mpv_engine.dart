@@ -6,6 +6,7 @@ import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
 import '../subtitle_delay.dart';
+import '../video_scaling.dart';
 import 'hls_master_resolver.dart';
 import 'playlist_materializer.dart';
 
@@ -60,6 +61,7 @@ class MpvEngine extends PlayerEngine {
         _emitThrottled();
       }),
       player.stream.duration.listen((_) => notifyListeners()),
+      player.stream.height.listen((_) => notifyListeners()),
       player.stream.buffering.listen((_) => notifyListeners()),
       player.stream.volume.listen((_) => notifyListeners()),
       player.stream.rate.listen((_) => notifyListeners()),
@@ -166,6 +168,34 @@ class MpvEngine extends PlayerEngine {
   int get durationMs => player.state.duration.inMilliseconds;
   @override
   double get volume => player.state.volume / 100.0;
+
+  bool? _seekable;
+  @override
+  bool get isLive => _seekable == false && durationMs <= 0;
+  @override
+  bool get isSeekable => _seekable ?? durationMs > 0;
+  @override
+  int get currentVideoHeight => player.state.height ?? 0;
+
+  @override
+  Future<void> setLooping(bool enabled) async {
+    final native = player.platform;
+    if (native is NativePlayer) {
+      await native.setProperty('loop-file', enabled ? 'inf' : 'no');
+    }
+  }
+
+  @override
+  Future<void> setVideoScaling(String mode) => setScaling(mode);
+
+  Future<void> setScaling(String mode) async {
+    final properties = mpvScalingProperties(mode);
+    final native = player.platform;
+    if (properties == null || native is! NativePlayer) return;
+    for (final entry in properties.entries) {
+      await native.setProperty(entry.key, entry.value);
+    }
+  }
 
   @override
   double get playbackRate => player.state.rate;
@@ -538,6 +568,16 @@ class MpvEngine extends PlayerEngine {
         await native.setProperty('framedrop', 'decoder+vo');
         await native.setProperty('demuxer-readahead-secs', '30');
         await native.setProperty('audio-buffer', '1.0');
+        await native.observeProperty('seekable', (value) async {
+          final next = value == 'yes'
+              ? true
+              : value == 'no'
+                  ? false
+                  : null;
+          if (_seekable == next) return;
+          _seekable = next;
+          notifyListeners();
+        });
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');
       }

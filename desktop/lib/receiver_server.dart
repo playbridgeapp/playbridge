@@ -17,6 +17,8 @@ import 'extension_request_debug_log.dart';
 import 'late_subtitle_loader.dart';
 import 'progress_webhook.dart';
 import 'receiver_capabilities.dart';
+import 'remote_player_settings.dart';
+import 'video_scaling.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
 
@@ -79,6 +81,13 @@ class ReceiverServer extends ChangeNotifier {
 
   @visibleForTesting
   void Function(Map<String, Object?> message)? onBroadcastForTest;
+
+  @visibleForTesting
+  void Function(int connectionId, Map<String, Object?> message)? onSendForTest;
+
+  @visibleForTesting
+  Future<void> handleCommandForTest(Command command, {int connectionId = 1}) =>
+      _handleCommand(command, connectionId, null);
 
   @visibleForTesting
   void attachPlayerListenersForTest() {
@@ -271,6 +280,7 @@ class ReceiverServer extends ChangeNotifier {
         );
         notifyListeners();
       case 'paired':
+        _sendPlayerSettings(event['connection_id']! as int);
         unawaited(_publishVolume(connectionId: event['connection_id']! as int));
         final token = event['token']! as String;
         unawaited(store.addPairedDevice(PairedDeviceRecord(
@@ -283,6 +293,7 @@ class ReceiverServer extends ChangeNotifier {
         _pendingPairingRequest = null;
         notifyListeners();
       case 'authenticated':
+        _sendPlayerSettings(event['connection_id']! as int);
         unawaited(_publishVolume(connectionId: event['connection_id']! as int));
         final digest = event['token_digest']! as String;
         unawaited(store.updateLastConnectedDigest(digest));
@@ -411,6 +422,7 @@ class ReceiverServer extends ChangeNotifier {
         _sendStatus(connectionId);
         _sendPlaylistStatus(connectionId);
         _broadcastTracksIfChanged(force: true);
+        _sendPlayerSettings(connectionId);
         await _publishVolume(connectionId: connectionId);
       case PlaylistCmd(:final items, :final startIndex, :final skipPreplay):
         unawaited(
@@ -673,7 +685,7 @@ class ReceiverServer extends ChangeNotifier {
             }
           }());
         } else {
-          _handleControl(command);
+          await _handleControl(command);
         }
       case RemoteCmd(:final key):
         if (isPlaybackPromptActive?.call() ?? false) {
@@ -762,7 +774,7 @@ class ReceiverServer extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _handleControl(String command) {
+  Future<void> _handleControl(String command) async {
     if (isPlaybackPromptActive?.call() ?? false) {
       if (command == 'play') {
         onPromptContinue?.call();
@@ -774,6 +786,24 @@ class ReceiverServer extends ChangeNotifier {
       return;
     }
     onPlaybackActivity?.call();
+    final setting = parseRemotePlayerSetting(command);
+    if (setting != null) {
+      if (player.currentMediaKind == null ||
+          player.currentMediaKind == MediaKind.image) {
+        return;
+      }
+      switch (setting) {
+        case RemotePlaybackSpeed(:final rate):
+          await player.setPlaybackRate(rate);
+        case RemoteSubtitleOffset(:final deltaMs):
+          await player.adjustSubtitleDelayMs(deltaMs);
+        case RemoteLoop(:final enabled):
+          await player.setLooping(enabled);
+        case RemoteScaling(:final mode):
+          await player.setVideoScaling(mode);
+      }
+      return;
+    }
     if (command.startsWith('seek_to:')) {
       final milliseconds = int.tryParse(command.substring('seek_to:'.length));
       if (milliseconds != null) {
@@ -970,6 +1000,7 @@ class ReceiverServer extends ChangeNotifier {
       });
     }
     _broadcastPlayerContextIfChanged();
+    _broadcastPlayerSettingsIfChanged();
     if (player.hasTerminalError) return;
     if (!player.isOpening) _progressReporter.update(_progressSnapshot());
     _broadcast(_statusMessage());
@@ -998,6 +1029,48 @@ class ReceiverServer extends ChangeNotifier {
         if (player.currentItemId != null) 'currentItemId': player.currentItemId,
         if (player.terminalError != null) 'error': player.terminalError,
       };
+
+  Map<String, Object?> _playerSettingsMessage() {
+    final image = player.currentMediaKind == MediaKind.image;
+    final active = player.currentMediaKind != null;
+    return {
+      'type': 'player_settings',
+      'speed': player.playbackRate,
+      'scaling': videoScalingId(player.videoScaling),
+      'subtitleOffsetMs': player.subtitleDelayMs,
+      'loop': player.looping,
+      'engine': 'mpv',
+      'audioBoost': false,
+      'speedAvailable': active && !image,
+      'scalingAvailable': active && !image,
+      'audioBoostAvailable': false,
+      'qualityAvailable': false,
+      'qualityMaxHeight': 0,
+      'currentVideoHeight': player.currentVideoHeight,
+      'isLive': player.isLive,
+      'isSeekable': player.isSeekable,
+    };
+  }
+
+  Map<String, Object?>? _lastPlayerSettings;
+  (String?, String?)? _lastSettingsItem;
+  void _broadcastPlayerSettingsIfChanged() {
+    if (player.isOpening) return;
+    final message = _playerSettingsMessage();
+    final item = (player.playbackId, player.currentItemId);
+    if (_lastSettingsItem == item && mapEquals(_lastPlayerSettings, message)) {
+      return;
+    }
+    _lastSettingsItem = item;
+    _lastPlayerSettings = message;
+    _broadcast(message);
+  }
+
+  void _sendPlayerSettings(int connectionId) {
+    final message = _playerSettingsMessage();
+    onSendForTest?.call(connectionId, message);
+    _runtime?.sendTo(connectionId, message);
+  }
 
   void _sendStatus(int connectionId) =>
       _runtime?.sendTo(connectionId, _statusMessage());
