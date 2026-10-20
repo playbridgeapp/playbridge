@@ -110,7 +110,7 @@ class RemoteScreenTest {
         english.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(englishLayout) }
         assertTrue(englishLayout.isNotEmpty())
         assertTrue("Short selected name must fit", !englishLayout.single().isLineEllipsized(0))
-        compose.onNodeWithContentDescription("Subtitles: Off").assertTextEquals("Off").performClick()
+        compose.onNodeWithContentDescription("Subtitles off").assertTextEquals("Subtitles off").performClick()
         english.performClick()
         compose.onNodeWithText("French").performClick()
         compose.onNodeWithContentDescription("Audio track: French").assertTextEquals("French")
@@ -120,7 +120,7 @@ class RemoteScreenTest {
             subtitles.value = emptyList()
         }
         compose.onNodeWithContentDescription("Audio track: Audio").assertTextEquals("Audio")
-        compose.onNodeWithContentDescription("Subtitles: Off").assertTextEquals("Off")
+        compose.onNodeWithContentDescription("Subtitles off").assertTextEquals("Subtitles off")
         compose.runOnIdle { subtitles.value = listOf(MediaTrack("en", "English", true)) }
         compose.onNodeWithContentDescription("Subtitles: English").assertTextEquals("English")
 
@@ -139,7 +139,7 @@ class RemoteScreenTest {
             assertEquals(1, layout.single().lineCount)
             assertTrue("Long names must ellipsize", layout.single().isLineEllipsized(0))
         }
-        val more = compose.onNodeWithText("More").assertIsDisplayed()
+        val more = compose.onNodeWithContentDescription("More player settings").assertIsDisplayed()
         val rowBounds = compose.onNodeWithTag("chips bounds").fetchSemanticsNode().boundsInRoot
         val moreBounds = more.fetchSemanticsNode().boundsInRoot
         assertTrue(moreBounds.left >= rowBounds.left && moreBounds.right <= rowBounds.right)
@@ -225,7 +225,7 @@ class RemoteScreenTest {
         hidden("TV Home", "Keys")
         compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithTag("remote.input").assertDoesNotExist()
-        compose.onNodeWithText("More").assertIsDisplayed()
+        compose.onNodeWithContentDescription("More player settings").assertIsDisplayed()
         compose.runOnIdle { context.value = "browser" }
         shown("TV Back", "TV Home", "Keys", "TV volume down", "TV volume up")
         compose.onNodeWithText("Context").assertDoesNotExist()

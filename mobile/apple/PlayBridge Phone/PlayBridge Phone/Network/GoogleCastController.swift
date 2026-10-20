@@ -29,7 +29,7 @@ struct ExternalReceiverVolume: Equatable {
     func label(protocolID: String) -> String? {
         guard ["google_cast", "dlna"].contains(protocolID), supported != false,
               level != nil || muted != nil else { return nil }
-        var text = protocolID == "dlna" ? "Renderer volume" : "Receiver volume"
+        var text = "Volume"
         if let level { text += " \(Int((level * 100).rounded()))/100" }
         if let muted { text += muted ? " · Muted" : " · Unmuted" }
         return text

@@ -160,7 +160,6 @@ internal fun SeekVolumeBar(
     var barOriginY by remember { mutableFloatStateOf(0f) }
     var waveCenterY by remember { mutableFloatStateOf(44f) }
 
-    val hitTolerancePx = with(LocalDensity.current) { 24.dp.toPx() }
     val touchSlopPx = LocalViewConfiguration.current.touchSlop
     val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
     // The wave canvas is inset by the arrow gutters (52dp each side); absolute
@@ -255,7 +254,7 @@ internal fun SeekVolumeBar(
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val policy = RemoteSeekGesturePolicy(widthPx, contentInsetPx, durationMs, currentPosition,
-                        down.position.x, down.position.y, waveCenterY, hitTolerancePx, touchSlopPx)
+                        down.position.x, touchSlopPx)
                     var axis: RemoteSeekAxis? = null
                     var appliedY = 0f
                     var volumeAccum = 0f
@@ -266,7 +265,7 @@ internal fun SeekVolumeBar(
                     var released = false
                     var lastScrubTickMs: Long? = null
                     dragMs = currentPosition.toFloat()
-                    directScrub = policy.direct
+                    directScrub = false
                     try {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -281,7 +280,9 @@ internal fun SeekVolumeBar(
                             val dy = change.position.y - down.position.y
                             if (axis == null) {
                                 axis = policy.lockAxis(dx, dy)
-                                fastVolume = axis == RemoteSeekAxis.Vertical && change.uptimeMillis - down.uptimeMillis >= 400L
+                                val held = change.uptimeMillis - down.uptimeMillis
+                                fastVolume = axis == RemoteSeekAxis.Vertical && held >= RemoteSeekGesturePolicy.HOLD_MS
+                                directScrub = axis == RemoteSeekAxis.Horizontal && policy.scrubs(held)
                             }
                             // An unavailable drag must still cancel the parent's tap action.
                             if (axis != null) change.consume()
@@ -291,7 +292,7 @@ internal fun SeekVolumeBar(
                                 val started = !dragging
                                 dragging = true
                                 val previous = dragMs
-                                dragMs = policy.positionAt(change.position.x).toFloat()
+                                dragMs = policy.positionAt(change.position.x, directScrub).toFloat()
                                 scrubFeedback(previous, dragMs, durationMs, started, change.uptimeMillis, lastScrubTickMs)?.let { feedback ->
                                     haptics.perform(feedback)
                                     lastScrubTickMs = change.uptimeMillis

@@ -37,9 +37,9 @@ final class FakeCastSession: GoogleCastSessionTransport {
     }
     @MainActor static func main() async throws {
         let zero = ExternalReceiverVolume(status: ["volume_level": 0.0, "muted": false, "volume_supported": true])
-        precondition(zero.label(protocolID: "google_cast") == "Receiver volume 0/100 · Unmuted")
+        precondition(zero.label(protocolID: "google_cast") == "Volume 0/100 · Unmuted")
         precondition(zero.label(protocolID: "roku") == nil)
-        precondition(ExternalReceiverVolume(status: ["volume_level": 0.37, "muted": true]).label(protocolID: "dlna") == "Renderer volume 37/100 · Muted")
+        precondition(ExternalReceiverVolume(status: ["volume_level": 0.37, "muted": true]).label(protocolID: "dlna") == "Volume 37/100 · Muted")
         for invalid: Any in [true, "0.3", Double.nan, -1.0, 1.1] {
             precondition(ExternalReceiverVolume(status: ["volume_level": invalid]).level == nil)
         }

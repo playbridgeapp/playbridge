@@ -38,7 +38,7 @@ struct CombinedRemotePolicy {
     var relativeVolume: Bool { allowsKey("volume_up") }
     var mute: Bool { allowsKey("mute") }
     var absoluteVolume: Bool { !fullControlReady && receiverReady && receiver.hasVolume("absolute") }
-    var volumeLabel: String { fullControlReady ? "TV volume" : receiver.volumeLabel }
+    var volumeLabel: String { fullControlReady ? "Volume" : receiver.volumeLabel }
     var badge: String? {
         guard native, fullControl.endpoint == endpoint, endpoint != nil else { return nil }
         if fullControlReady { return "Full control" }
@@ -48,7 +48,7 @@ struct CombinedRemotePolicy {
     var televisionOff: Bool { fullControlReady && fullControl.television?.isOn == false }
     var atvVolumeStatus: String? {
         guard fullControlReady, let tv = fullControl.television, tv.volumeRevision > 0 else { return nil }
-        var label = "TV volume"
+        var label = "Volume"
         if let level = tv.volumeLevel, let maximum = tv.volumeMax, maximum > 0 {
             // Report the actual range. Do not invent /100 for TVs whose maximum differs.
             label += " \(level)/\(maximum)"

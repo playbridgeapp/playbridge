@@ -102,14 +102,15 @@ internal fun TrackChipsRow(
         }
         if (showSubtitles) {
             val selected = subtitleTracks.firstOrNull { it.selected }
-            val selectedName = selected?.let { subtitleOptionLabel(it, subtitleTracks) } ?: "Off"
+            // "Off" alone is ambiguous on a chip; name the category when nothing is on.
+            val selectedName = selected?.let { subtitleOptionLabel(it, subtitleTracks) }?.takeUnless { it == "Off" } ?: "Subtitles off"
             Surface(enabled = LocalRemoteControlsEnabled.current,
                 interactionSource = subtitleInteraction,
                 onClick = onSubtitlesClick,
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = chipWidth.heightIn(min = 48.dp).remotePressFeedback(subtitleInteraction)
-                    .semantics { contentDescription = "Subtitles: $selectedName" }
+                    .semantics { contentDescription = if (selectedName == "Subtitles off") selectedName else "Subtitles: $selectedName" }
             ) {
                 Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Icon(Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -126,11 +127,12 @@ internal fun TrackChipsRow(
             onClick = onMore,
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.heightIn(min = 48.dp).remotePressFeedback(moreInteraction)
+            // Icon-only, like iOS's •••, so the track chips keep room for their names.
+            modifier = Modifier.size(48.dp).remotePressFeedback(moreInteraction)
+                .semantics { contentDescription = "More player settings" }
         ) {
-            Row(modifier = Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Icon(Icons.Default.Tune, contentDescription = "More", modifier = Modifier.size(18.dp))
-                Text("More", style = MaterialTheme.typography.labelLarge)
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(20.dp))
             }
         }
     }
