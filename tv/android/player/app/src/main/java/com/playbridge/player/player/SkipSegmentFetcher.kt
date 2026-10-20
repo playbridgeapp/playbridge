@@ -2,6 +2,7 @@ package com.playbridge.player.player
 
 import android.content.Context
 import android.util.Log
+import com.playbridge.player.BuildConfig
 import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +33,12 @@ object SkipSegmentFetcher {
 
     private const val DEFAULT_INTRODB_URL = "https://api.introdb.app"
     private const val DEFAULT_THEINTRODB_URL = "https://api.theintrodb.org"
+
+    /**
+     * Requests go straight from this device to the providers (no PlayBridge relay), so the app
+     * name, real version and a contact URL are how they can tell PlayBridge clients apart.
+     */
+    internal val USER_AGENT = "PlayBridgeTV/${BuildConfig.VERSION_NAME} (+https://github.com/playbridgeapp/playbridge)"
 
     /**
      * Sentinel end for open-ended segments (TheIntroDB reports `end_ms: null` for
@@ -88,7 +95,7 @@ object SkipSegmentFetcher {
 
         val requestBuilder = Request.Builder()
             .url(url)
-            .header("User-Agent", "PlayBridgeTV/1.0")
+            .header("User-Agent", USER_AGENT)
 
         if (apiKey.isNotBlank()) {
             if (apiKey.startsWith("ey")) {
@@ -181,7 +188,7 @@ object SkipSegmentFetcher {
 
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "PlayBridgeTV/1.0")
+            .header("User-Agent", USER_AGENT)
             .build()
         DebugNetworkLogger.request(TAG, "TheIntroDB", request)
 

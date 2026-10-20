@@ -83,4 +83,12 @@ class SkipSegmentFetcherTest {
             {"tvdb_id":81189,"type":"tv","episodes":[{"season":1,"episode":1}]}
         """.trimIndent())))
     }
+
+    @Test
+    fun userAgentCarriesTheRealVersionAndAContactUrl() {
+        assertEquals(
+            "PlayBridgeTV/${com.playbridge.player.BuildConfig.VERSION_NAME} (+https://github.com/playbridgeapp/playbridge)",
+            SkipSegmentFetcher.USER_AGENT,
+        )
+    }
 }

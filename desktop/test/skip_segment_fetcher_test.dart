@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/skip_segment.dart';
 import 'package:playbridge_desktop/skip_segment_fetcher.dart';
+import 'package:playbridge_desktop/update/app_version.dart';
 
 void main() {
   late HttpServer server;
@@ -204,5 +205,10 @@ void main() {
     } finally {
       debugPrint = originalPrint;
     }
+  });
+
+  test('user agent carries the real app version and a contact URL', () {
+    expect(skipSegmentsUserAgent,
+        'PlayBridgeDesktop/$kAppVersion (+https://github.com/playbridgeapp/playbridge)');
   });
 }
