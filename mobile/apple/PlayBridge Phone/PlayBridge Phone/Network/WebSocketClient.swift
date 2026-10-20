@@ -504,6 +504,9 @@ final class WebSocketClient: NSObject, ObservableObject {
         subscribeToReceiverCapabilities()
         clearPairingSecrets()
         setState(.connected(serverName: serverName, secure: isSecure))
+        // The TV only broadcasts context on its own transitions; ask so a phone that
+        // connects mid-playback does not stay on "Nothing playing".
+        _ = send(WireProtocol.contextQuery())
         startPing()
     }
 
@@ -532,6 +535,8 @@ final class WebSocketClient: NSObject, ObservableObject {
             emitCapabilities(json)
             subscribeToReceiverCapabilities()
             setState(.connected(serverName: serverName, secure: isSecure))
+            // Resync context after every (re)connect, as after pairing.
+            _ = send(WireProtocol.contextQuery())
             // SEC-005: legacy echoed tokens in auth_response are ignored.
             startPing()
         } else {
