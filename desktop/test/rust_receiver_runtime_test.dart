@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -24,9 +25,12 @@ void main() {
         },
       },
     },
+    {'version': 1, 'surfaces': <String, Object?>{}},
   ]) {
+    final replace = descriptor?['surfaces'] is Map &&
+        (descriptor!['surfaces'] as Map).isEmpty;
     test(
-      'native ABI 1 loopback auth ${descriptor == null ? 'omits' : 'carries'} descriptor',
+      'native ABI 1 loopback auth ${replace ? 'replaces' : descriptor == null ? 'omits' : 'carries'} descriptor',
       () async {
         final directory =
             await Directory.systemTemp.createTemp('receiver-descriptor-test-');
@@ -47,6 +51,10 @@ void main() {
           ),
           libraryPath: library.absolute.path,
         );
+        final authenticated = replace
+            ? runtime.events
+                .firstWhere((event) => event['event'] == 'authenticated')
+            : null;
         final http = HttpClient()
           ..badCertificateCallback = (cert, host, port) =>
               host == '127.0.0.1' &&
@@ -57,16 +65,47 @@ void main() {
               await runtime.started.timeout(const Duration(seconds: 5));
           socket = await WebSocket.connect('wss://127.0.0.1:$port/',
               customClient: http);
+          final frames = StreamIterator(socket);
           socket.add(jsonEncode({
             'type': 'auth',
             'token': 'TEST_ONLY_NOT_A_CREDENTIAL',
           }));
-          final response = jsonDecode(
-              await socket.first.timeout(const Duration(seconds: 5))
-                  as String) as Map<String, dynamic>;
+          expect(await frames.moveNext().timeout(const Duration(seconds: 5)),
+              isTrue);
+          final response =
+              jsonDecode(frames.current as String) as Map<String, dynamic>;
           expect(response['success'], isTrue);
           expect(response.containsKey('capabilities'), descriptor != null);
           expect(response['capabilities'], descriptor);
+          if (replace) {
+            final changed = <String, Object?>{
+              'version': 1,
+              'surfaces': <String, Object?>{},
+              'volume': {
+                'scope': 'system',
+                'operations': ['relative_step'],
+                'fallbackScope': 'app'
+              }
+            };
+            runtime.replaceCapabilities(changed);
+            final id = (await authenticated!)['connection_id']! as int;
+            // FIFO host command barrier: no timing assumption about the runtime worker.
+            runtime.sendTo(id, {'type': 'context', 'active': 'idle'});
+            expect(await frames.moveNext().timeout(const Duration(seconds: 5)),
+                isTrue);
+            final next = await WebSocket.connect('wss://127.0.0.1:$port/',
+                customClient: http);
+            try {
+              next.add(jsonEncode(
+                  {'type': 'auth', 'token': 'TEST_ONLY_NOT_A_CREDENTIAL'}));
+              final updated = jsonDecode(await next.first
+                  .timeout(const Duration(seconds: 5)) as String) as Map;
+              expect(updated['capabilities'], changed);
+            } finally {
+              await next.close();
+            }
+          }
+          await frames.cancel();
         } finally {
           await socket?.close();
           http.close(force: true);

@@ -19,6 +19,7 @@ const _legacy = {
     'command_results',
     'subtitle_resource_add_v1',
     'progress_webhook_v1',
+    'receiver_capabilities_v1',
   ],
   'screenMirrorWebRtc': true,
 };
@@ -40,7 +41,14 @@ void main() {
       expect(descriptor['host'], {'osFamily': os, 'deviceClass': 'desktop'});
       expect(descriptor['volume'], {
         'scope': 'system',
-        'operations': ['relative_step'],
+        'operations': [
+          'relative_step',
+          'absolute',
+          'mute_toggle',
+          'level_report',
+          'mute_report'
+        ],
+        if (os == 'macos') 'step': .0625,
         'fallbackScope': 'app',
       });
       expect(descriptor['surfaces'], {
@@ -134,7 +142,7 @@ void main() {
         if (!await frames!.moveNext().timeout(const Duration(seconds: 5))) {
           throw StateError('Loopback receiver closed before response');
         }
-        return jsonDecode(frames!.current as String) as Map<String, dynamic>;
+        return jsonDecode(frames.current as String) as Map<String, dynamic>;
       }
 
       final sender = SasCrypto.generateX25519KeyPair();

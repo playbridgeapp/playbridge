@@ -87,6 +87,7 @@ enum RuntimeCommand {
     SendTo { connection_id: u64, message: Value },
     DenyPairing { connection_id: u64 },
     ReplaceAuthorizedTokens { tokens: Vec<String> },
+    ReplaceCapabilities { capabilities: ReceiverCapabilities },
     DisconnectAll,
     Shutdown,
 }
@@ -185,6 +186,7 @@ async fn worker(
                     Some(RuntimeCommand::ReplaceAuthorizedTokens { tokens }) => {
                         host.replace_authorized_tokens(tokens);
                     }
+                    Some(RuntimeCommand::ReplaceCapabilities { capabilities }) => host.replace_capabilities(capabilities),
                     Some(RuntimeCommand::DisconnectAll) => host.disconnect_all(),
                     Some(RuntimeCommand::Shutdown) | None => break,
                 }

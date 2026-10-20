@@ -80,6 +80,12 @@ class ControlCmd extends Command {
 
 /// A remote key press from the phone (e.g. `volume_up` / `volume_down`). Most keys
 /// are TV-browser navigation and don't apply to the desktop player; volume does.
+class VolumeCmd extends Command {
+  final String scope;
+  final double level;
+  const VolumeCmd(this.scope, this.level);
+}
+
 class RemoteCmd extends Command {
   final String key;
   const RemoteCmd(this.key);
@@ -291,6 +297,17 @@ Command parseCommand(String json) {
         final action = root['action'] as String?;
         final payload = root['payload'];
         switch (action) {
+          case 'volume':
+            if (payload is! Map ||
+                payload['scope'] != 'system' ||
+                payload['level'] is! num) {
+              return const UnknownCmd('invalid_volume');
+            }
+            final level = (payload['level'] as num).toDouble();
+            if (!level.isFinite || level < 0 || level > 1) {
+              return const UnknownCmd('invalid_volume');
+            }
+            return VolumeCmd('system', level);
           case 'control':
             if (payload is! Map<String, dynamic>) {
               return const UnknownCmd('control_parse_error');

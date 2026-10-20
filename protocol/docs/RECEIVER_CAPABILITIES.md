@@ -166,9 +166,15 @@ Absolute app command example (contract only; advertise after implementation):
 The new native volume command/state do not alter the hosted-browser `set_volume` command/status.
 The receiver maps app normalization to `AVPlayer.volume` and deliberately to mpv's units; the
 stored level survives engine changes. Senders label app controls visibly/accessibly **App volume**.
-App attenuation is not tvOS system volume or HDMI-CEC. Until handlers and real audio output are
-verified, current Apple TV descriptors omit volume. Current Desktop declares relative system
-steps with app fallback, and does not claim mute, absolute or reporting; CLI claims none.
+App attenuation is not tvOS system volume or HDMI-CEC. Apple TV and CLI report app scope and
+implement relative stepping, absolute level, independent mute toggle, level reporting and mute
+reporting. Android TV exposes those five operations on adjustable system media output; fixed
+outputs retain only relative stepping and mute toggle, without absolute or reports. Desktop
+implements those five system operations on macOS, Windows and Linux where the output supports them;
+macOS uses CoreAudio listeners and a 1/16 native increment, omitting absolute and reports for
+outputs without settable volume. Desktop retains app attenuation as a
+relative-step fallback. Desktop reports the actual fallback app scope and omits unavailable mute
+state; system read failures omit unavailable values rather than fabricating them.
 
 ## Live native replacement (step 9)
 

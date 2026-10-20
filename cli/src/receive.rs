@@ -8,18 +8,18 @@ use playbridge_cast_receiver::{
 use rcgen::{CertificateParams, KeyPair};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-#[cfg(not(unix))]
+#[cfg(unix)]
+use tokio::net::{UnixStream, unix::OwnedWriteHalf};
+#[cfg(not(any(unix, windows)))]
 use tokio::process::ChildStdin;
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
 };
-#[cfg(unix)]
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    net::{UnixStream, unix::OwnedWriteHalf},
-    time::sleep,
-};
+
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+use tokio::time::sleep;
 
 pub(crate) const DEFAULT_PORT: u16 = 8765;
 
@@ -84,12 +84,15 @@ struct ReceiverState {
 
 struct Mpv {
     child: Option<Child>,
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     stdin: Option<ChildStdin>,
     #[cfg(unix)]
     ipc: Option<OwnedWriteHalf>,
-    #[cfg(unix)]
+    #[cfg(windows)]
+    ipc: Option<NamedPipeClient>,
+    #[cfg(any(unix, windows))]
     ipc_path: Option<PathBuf>,
+    app_volume: std::sync::Mutex<(f32, bool)>,
     state: &'static str,
     title: Option<String>,
     #[cfg(debug_assertions)]
@@ -101,8 +104,8 @@ struct MpvSnapshot {
     position_ms: u64,
     duration_ms: u64,
     title: Option<String>,
-    volume: f32,
-    muted: bool,
+    volume: Option<f32>,
+    muted: Option<bool>,
     looping: bool,
     speed: f32,
 }
@@ -111,12 +114,15 @@ impl Mpv {
     fn new(_quiet: bool) -> Self {
         Self {
             child: None,
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             stdin: None,
             #[cfg(unix)]
             ipc: None,
-            #[cfg(unix)]
+            #[cfg(windows)]
+            ipc: None,
+            #[cfg(any(unix, windows))]
             ipc_path: None,
+            app_volume: std::sync::Mutex::new((100.0, false)),
             state: "idle",
             title: None,
             #[cfg(debug_assertions)]
@@ -141,13 +147,16 @@ impl Mpv {
         }
         let mut command = Command::new("mpv");
         command.args(["--idle=yes", "--fullscreen=yes", "--msg-level=all=warn"]);
-        #[cfg(unix)]
+        let (volume, muted) = *self.app_volume.lock().unwrap();
+        command.arg(format!("--volume={volume}"));
+        command.arg(if muted { "--mute=yes" } else { "--mute=no" });
+        #[cfg(any(unix, windows))]
         {
             let path = mpv_ipc_path()?;
             command.arg(format!("--input-ipc-server={}", path.display()));
             self.ipc_path = Some(path);
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         command.arg("--input-terminal=yes");
 
         #[allow(unused_mut)]
@@ -157,17 +166,22 @@ impl Mpv {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|error| format!("could not launch mpv: {error}"))?;
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             self.stdin = child.stdin.take();
         }
         self.child = Some(child);
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         self.connect_ipc().await?;
         Ok(())
     }
 
     async fn stop_process(&mut self) {
+        #[cfg(windows)]
+        {
+            self.ipc = None;
+            self.ipc_path = None;
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.kill().await;
         }
@@ -210,9 +224,57 @@ impl Mpv {
         ))
     }
 
+    #[cfg(windows)]
+    async fn connect_ipc(&mut self) -> Result<(), String> {
+        let path = self
+            .ipc_path
+            .as_ref()
+            .ok_or("mpv IPC path is unavailable")?;
+        for _ in 0..40 {
+            if let Ok(pipe) = ClientOptions::new().open(path) {
+                self.ipc = Some(pipe);
+                return Ok(());
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        Err("could not connect to mpv IPC".into())
+    }
+
+    async fn set_volume(&mut self, value: f32) -> Result<(), String> {
+        if !value.is_finite() {
+            return Err("Invalid app volume".into());
+        }
+        let value = value.clamp(0.0, 100.0);
+        self.command(
+            vec![json!("set_property"), json!("volume"), json!(value)],
+            format!("set volume {value}"),
+        )
+        .await?;
+        self.app_volume.lock().unwrap().0 = value;
+        Ok(())
+    }
+    async fn adjust_volume(&mut self, delta: f32) -> Result<(), String> {
+        let value = self
+            .snapshot()
+            .await
+            .volume
+            .ok_or("mpv volume unavailable")?;
+        self.set_volume(value + delta).await
+    }
+    async fn toggle_mute(&mut self) -> Result<(), String> {
+        let muted = !self.snapshot().await.muted.ok_or("mpv mute unavailable")?;
+        self.command(
+            vec![json!("set_property"), json!("mute"), json!(muted)],
+            format!("set mute {}", if muted { "yes" } else { "no" }),
+        )
+        .await?;
+        self.app_volume.lock().unwrap().1 = muted;
+        Ok(())
+    }
+
     async fn command(&mut self, arguments: Vec<Value>, _legacy: String) -> Result<(), String> {
         self.ensure_started().await?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let ipc = self.ipc.as_mut().ok_or("mpv IPC is unavailable")?;
             let mut frame =
@@ -222,7 +284,7 @@ impl Mpv {
                 .await
                 .map_err(|error| format!("could not control mpv: {error}"))
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let stdin = self.stdin.as_mut().ok_or("mpv stdin is unavailable")?;
             stdin
@@ -350,34 +412,47 @@ impl Mpv {
     }
 
     async fn snapshot(&self) -> MpvSnapshot {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(path) = self.ipc_path.as_deref()
             && let Ok(snapshot) = query_mpv_status(path, self.title.clone()).await
         {
+            let mut remembered = self.app_volume.lock().unwrap();
+            if let Some(volume) = snapshot.volume {
+                remembered.0 = volume.clamp(0.0, 100.0);
+            }
+            if let Some(muted) = snapshot.muted {
+                remembered.1 = muted;
+            }
             return snapshot;
         }
+        let remembered = *self.app_volume.lock().unwrap();
         MpvSnapshot {
             state: self.state.into(),
             position_ms: 0,
             duration_ms: 0,
             title: self.title.clone(),
-            volume: 100.0,
-            muted: false,
+            volume: self.child.is_none().then_some(remembered.0),
+            muted: self.child.is_none().then_some(remembered.1),
             looping: false,
             speed: 1.0,
         }
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn query_mpv_status(
     path: &std::path::Path,
     title: Option<String>,
 ) -> Result<MpvSnapshot, String> {
+    #[cfg(unix)]
     let stream = UnixStream::connect(path)
         .await
         .map_err(|error| format!("could not query mpv IPC: {error}"))?;
-    let (reader, mut writer) = stream.into_split();
+    #[cfg(windows)]
+    let stream = ClientOptions::new()
+        .open(path)
+        .map_err(|_| "mpv IPC unavailable".to_owned())?;
+    let (reader, mut writer) = tokio::io::split(stream);
     for (request_id, property) in [
         (1, "time-pos"),
         (2, "duration"),
@@ -418,6 +493,9 @@ async fn query_mpv_status(
             .map_err(|error| error.to_string())?
             .ok_or("mpv closed the status connection")?;
         let response: Value = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        if response.get("error").and_then(Value::as_str) != Some("success") {
+            continue;
+        }
         match response.get("request_id").and_then(Value::as_u64) {
             Some(1) => position = response.get("data").and_then(Value::as_f64),
             Some(2) => duration = response.get("data").and_then(Value::as_f64),
@@ -451,8 +529,8 @@ async fn query_mpv_status(
         position_ms: seconds_to_millis(position),
         duration_ms: seconds_to_millis(duration),
         title,
-        volume: volume.unwrap_or(100.0) as f32,
-        muted: muted.unwrap_or(false),
+        volume: volume.filter(|v| v.is_finite()).map(|v| v as f32),
+        muted,
         looping: looping.unwrap_or(false),
         speed: speed.unwrap_or(1.0) as f32,
     })
@@ -568,10 +646,12 @@ async fn run_receiver_mode(
                         }
                     }
                     Ok(ReceiverEvent::Paired {
+                        connection_id,
                         device_name,
                         token,
                         ..
                     }) => {
+                        send_volume_sync(&host, &playback, connection_id).await;
                         state.tokens.insert(token);
                         save_state(&state_path, &state)?;
                         if let Some((_, events)) = dashboard.as_ref() {
@@ -585,8 +665,11 @@ async fn run_receiver_mode(
                             let _ = events.send(ReceiverUiEvent::ClientCount { total, authenticated }).await;
                         }
                     }
-                    Ok(ReceiverEvent::Command { command, .. }) => {
-                        if let Err(error) = handle_command(&host, &mut playback, command, dashboard.is_some()).await {
+                    Ok(ReceiverEvent::Authenticated { connection_id, .. }) => {
+                        send_volume_sync(&host, &playback, connection_id).await;
+                    }
+                    Ok(ReceiverEvent::Command { connection_id, command, .. }) => {
+                        if let Err(error) = handle_command(&host, &mut playback, command, dashboard.is_some(), connection_id).await {
                             if let Some((_, events)) = dashboard.as_ref() {
                                 let _ = events.send(ReceiverUiEvent::Warning(error)).await;
                             } else {
@@ -643,6 +726,7 @@ struct ReceiverPlayback {
     queue: Vec<Value>,
     current_index: usize,
     progress: std::sync::Mutex<ProgressReporter>,
+    last_volume: std::sync::Mutex<Option<Value>>,
 }
 
 impl ReceiverPlayback {
@@ -652,6 +736,7 @@ impl ReceiverPlayback {
             queue: Vec::new(),
             current_index: 0,
             progress: std::sync::Mutex::new(ProgressReporter::new()),
+            last_volume: std::sync::Mutex::new(None),
         }
     }
 }
@@ -669,8 +754,8 @@ async fn emit_receiver_playback(
         title: snapshot.title,
         queue_len: playback.queue.len(),
         current_index: playback.current_index,
-        volume: snapshot.volume,
-        muted: snapshot.muted,
+        volume: snapshot.volume.unwrap_or(100.0),
+        muted: snapshot.muted.unwrap_or(false),
         looping: snapshot.looping,
         speed: snapshot.speed,
     }));
@@ -714,21 +799,9 @@ async fn handle_dashboard_receiver_command(
             broadcast_playlist(host, playback);
         }
         ReceiverDashboardCommand::VolumeDelta(delta) => {
-            let amount = delta * 100.0;
-            playback
-                .mpv
-                .command(
-                    vec![json!("add"), json!("volume"), json!(amount)],
-                    format!("add volume {amount}"),
-                )
-                .await?;
+            playback.mpv.adjust_volume(delta * 100.0).await?
         }
-        ReceiverDashboardCommand::ToggleMute => {
-            playback
-                .mpv
-                .command(vec![json!("cycle"), json!("mute")], "cycle mute".into())
-                .await?;
-        }
+        ReceiverDashboardCommand::ToggleMute => playback.mpv.toggle_mute().await?,
         ReceiverDashboardCommand::ToggleLoop => {
             playback
                 .mpv
@@ -771,6 +844,7 @@ async fn handle_command(
     playback: &mut ReceiverPlayback,
     command: ReceiverCommand,
     quiet: bool,
+    connection_id: u64,
 ) -> Result<(), String> {
     match command {
         ReceiverCommand::ContextQuery => {
@@ -780,6 +854,22 @@ async fn handle_command(
             }));
             broadcast_status(host, playback).await;
             broadcast_playlist(host, playback);
+            send_volume_sync(host, playback, connection_id).await;
+        }
+        ReceiverCommand::Remote(payload) => {
+            match payload.get("key").and_then(Value::as_str) {
+                Some("volume_up") => playback.mpv.adjust_volume(5.0).await?,
+                Some("volume_down") => playback.mpv.adjust_volume(-5.0).await?,
+                Some("mute") => playback.mpv.toggle_mute().await?,
+                _ => return Ok(()),
+            }
+            broadcast_status(host, playback).await;
+        }
+        ReceiverCommand::Unknown { action, payload } if action == "volume" => {
+            if let Some(level) = absolute_app_volume(&payload) {
+                playback.mpv.set_volume(level * 100.0).await?;
+                broadcast_status(host, playback).await;
+            }
         }
         ReceiverCommand::Playlist(payload) => {
             let items = payload
@@ -895,6 +985,13 @@ async fn broadcast_status(host: &ReceiverHost, playback: &ReceiverPlayback) {
             progress.observe(&snapshot.state, snapshot.position_ms, snapshot.duration_ms);
         }
     }
+    if let Some(frame) = volume_frame(snapshot.volume, snapshot.muted) {
+        let mut previous = playback.last_volume.lock().unwrap();
+        if previous.as_ref() != Some(&frame) {
+            host.broadcast(frame.clone());
+            *previous = Some(frame);
+        }
+    }
     host.broadcast(json!({
         "type": "status",
         "state": snapshot.state,
@@ -902,6 +999,39 @@ async fn broadcast_status(host: &ReceiverHost, playback: &ReceiverPlayback) {
         "duration": snapshot.duration_ms,
         "title": snapshot.title
     }));
+}
+
+fn absolute_app_volume(payload: &Value) -> Option<f32> {
+    if payload.get("scope").and_then(Value::as_str) != Some("app") {
+        return None;
+    }
+    payload
+        .get("level")
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        .map(|v| v as f32)
+}
+fn volume_frame(volume: Option<f32>, muted: Option<bool>) -> Option<Value> {
+    let level = volume
+        .filter(|v| v.is_finite())
+        .map(|v| (v / 100.0).clamp(0.0, 1.0));
+    if level.is_none() && muted.is_none() {
+        return None;
+    }
+    let mut frame = json!({"type":"volume_state", "scope":"app"});
+    if let Some(level) = level {
+        frame["level"] = json!(level);
+    }
+    if let Some(muted) = muted {
+        frame["muted"] = json!(muted);
+    }
+    Some(frame)
+}
+async fn send_volume_sync(host: &ReceiverHost, playback: &ReceiverPlayback, connection_id: u64) {
+    let snapshot = playback.mpv.snapshot().await;
+    if let Some(frame) = volume_frame(snapshot.volume, snapshot.muted) {
+        host.send_to(connection_id, frame);
+    }
 }
 
 fn broadcast_playlist(host: &ReceiverHost, playback: &ReceiverPlayback) {
@@ -1021,6 +1151,15 @@ fn mpv_ipc_path() -> Result<PathBuf, String> {
     )))
 }
 
+#[cfg(windows)]
+fn mpv_ipc_path() -> Result<PathBuf, String> {
+    Ok(PathBuf::from(format!(
+        r"\\.\pipe\pb-mpv-{}-{}",
+        std::process::id(),
+        &random_token()?[..16]
+    )))
+}
+
 fn host_name() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
@@ -1028,7 +1167,7 @@ fn host_name() -> String {
 }
 
 /// WSS operations implemented by this CLI host, not the local dashboard or mpv
-/// in general. In particular, remote keys/volume, tracks and mouse are ignored.
+/// in general. Volume is the app's mpv attenuation; tracks and mouse are ignored.
 fn receiver_capabilities() -> Result<playbridge_cast_core::playbridge::ReceiverCapabilities, String>
 {
     playbridge_cast_core::playbridge::ReceiverCapabilities::from_json(json!({
@@ -1038,6 +1177,7 @@ fn receiver_capabilities() -> Result<playbridge_cast_core::playbridge::ReceiverC
             "queue":["replace","append","jump_index"],
             "reporting":["status","context","playlist_status"]
         }}}},
+        "volume":{"scope":"app","operations":["relative_step","absolute","mute_toggle","level_report","mute_report"],"step":0.05},
         "host":{"osFamily":std::env::consts::OS,"deviceClass":"cli"}
     }))
     .map_err(str::to_owned)
@@ -1073,14 +1213,15 @@ mod tests {
         assert_eq!(
             descriptor.as_json(),
             &json!({
-                "version":1,
-                "surfaces":{"player":{"engines":{"internal_mpv":{
-                    "transport":["play","pause","toggle","stop","seek_absolute","seek_relative"],
-                    "queue":["replace","append","jump_index"],
-                    "reporting":["status","context","playlist_status"]
-                }}}},
-                "host":{"osFamily":std::env::consts::OS,"deviceClass":"cli"}
-            })
+                    "version":1,
+                    "surfaces":{"player":{"engines":{"internal_mpv":{
+                        "transport":["play","pause","toggle","stop","seek_absolute","seek_relative"],
+                        "queue":["replace","append","jump_index"],
+                        "reporting":["status","context","playlist_status"]
+                    }}}},
+                    "volume":{"scope":"app","operations":["relative_step","absolute","mute_toggle","level_report","mute_report"],"step":0.05},
+            "host":{"osFamily":std::env::consts::OS,"deviceClass":"cli"}
+                })
         );
     }
 
@@ -1173,6 +1314,52 @@ mod tests {
         })
         .await
         .expect("loopback pairing/auth timed out");
+    }
+
+    #[test]
+    fn volume_frames_normalize_clamp_and_keep_mute_independent() {
+        assert_eq!(
+            volume_frame(Some(0.0), Some(false)),
+            Some(json!({"type":"volume_state","scope":"app","level":0.0,"muted":false}))
+        );
+        assert_eq!(
+            volume_frame(Some(150.0), Some(true)).unwrap()["level"],
+            json!(1.0)
+        );
+        assert_eq!(volume_frame(Some(-5.0), None).unwrap()["level"], json!(0.0));
+        assert!(volume_frame(None, None).is_none());
+        assert!(volume_frame(Some(f32::NAN), None).is_none());
+        assert!(
+            volume_frame(None, Some(true))
+                .unwrap()
+                .get("level")
+                .is_none()
+        );
+    }
+    #[test]
+    fn absolute_volume_requires_normalized_app_scope() {
+        assert_eq!(
+            absolute_app_volume(&json!({"scope":"app","level":0.25})),
+            Some(0.25)
+        );
+        for payload in [
+            json!({"scope":"system","level":0.25}),
+            json!({"scope":"app","level":"0.25"}),
+            json!({"scope":"app","level":25}),
+            json!({"scope":"app","level":-1}),
+        ] {
+            assert!(absolute_app_volume(&payload).is_none());
+        }
+    }
+    #[tokio::test]
+    async fn idle_volume_sync_reports_explicit_launch_configuration_without_starting_mpv() {
+        let playback = ReceiverPlayback::new(true);
+        *playback.mpv.app_volume.lock().unwrap() = (35.0, true);
+        let snapshot = playback.mpv.snapshot().await;
+        let frame = volume_frame(snapshot.volume, snapshot.muted).unwrap();
+        assert!((frame["level"].as_f64().unwrap() - 0.35).abs() < 0.0001);
+        assert_eq!(frame["muted"], json!(true));
+        assert!(playback.mpv.child.is_none());
     }
 
     #[test]
@@ -1269,8 +1456,8 @@ mod tests {
         assert_eq!(snapshot.position_ms, 12_500);
         assert_eq!(snapshot.duration_ms, 100_000);
         assert_eq!(snapshot.title.as_deref(), Some("Video"));
-        assert_eq!(snapshot.volume, 75.0);
-        assert!(snapshot.muted);
+        assert_eq!(snapshot.volume, Some(75.0));
+        assert_eq!(snapshot.muted, Some(true));
         assert!(snapshot.looping);
         assert_eq!(snapshot.speed, 1.25);
     }

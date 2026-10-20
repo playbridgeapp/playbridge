@@ -3,6 +3,7 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   /// Observers for fullscreen enter/exit (menu-bar / Control Center access).
+  private let systemVolume = SystemVolumeChannel()
   private var fullscreenObservers: [NSObjectProtocol] = []
 
   override func awakeFromNib() {
@@ -49,6 +50,7 @@ class MainFlutterWindow: NSWindow {
       ])
     }
 
+    systemVolume.register(with: flutterViewController.engine.binaryMessenger)
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     MemoryDiagnosticsHandler.register(

@@ -337,7 +337,7 @@ class ProtocolJsonTest {
         val volume = root["volume"]?.jsonObject
         assertEquals("system", volume?.get("scope")?.jsonPrimitive?.content)
         assertEquals(
-            listOf("relative_step", "mute_toggle"),
+            listOf("relative_step", "absolute", "mute_toggle", "level_report", "mute_report"),
             volume?.get("operations")?.jsonArray?.map { it.jsonPrimitive.content },
         )
 

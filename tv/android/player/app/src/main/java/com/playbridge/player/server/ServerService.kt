@@ -10,6 +10,9 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.content.Intent
 import android.os.Build
+import android.database.ContentObserver
+import android.media.AudioManager
+import android.provider.Settings
 import android.os.IBinder
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
@@ -57,6 +60,29 @@ private const val MAX_LOGS_REPLY_CHARS = 1_000_000
 private const val KEY_SAVED_UAS = "saved_user_agents"
 
 class ServerService : Service() {
+
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private val volumePublication = TvVolumePublication()
+    private val volumeChanged = Runnable {
+        webSocketServer?.refreshCapabilities()
+        volumePublication.changed(currentVolumeState())?.let { frame ->
+            scope.launch { webSocketServer?.broadcastStatus(frame) }
+        }
+    }
+    private fun scheduleVolumeState() {
+        mainHandler.removeCallbacks(volumeChanged)
+        mainHandler.postDelayed(volumeChanged, 150L)
+    }
+    private val volumeObserver = object : ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) = scheduleVolumeState()
+    }
+    private val volumeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = scheduleVolumeState()
+    }
+    private fun currentVolumeState(): TvVolumeState? = if (audioManager.isVolumeFixed) null else TvVolumeState(
+        normalizedTvVolume(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC), audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)),
+        audioManager.isStreamMute(AudioManager.STREAM_MUSIC),
+    )
 
     private val capabilityPackageReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -246,6 +272,11 @@ class ServerService : Service() {
         super.onCreate()
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
+        contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
+        androidx.core.content.ContextCompat.registerReceiver(this, volumeReceiver, IntentFilter().apply {
+            addAction("android.media.VOLUME_CHANGED_ACTION")
+            addAction("android.media.STREAM_MUTE_CHANGED_ACTION")
+        }, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         androidx.core.content.ContextCompat.registerReceiver(
             this, capabilityPackageReceiver,
             IntentFilter().apply {
@@ -476,6 +507,7 @@ class ServerService : Service() {
                 },
                 // One publication owner refreshes this builder on package changes and auth.
                 capabilities = { TvCapabilityProvider.current(this@ServerService) },
+                initialVolumeState = { volumePublication.sync(currentVolumeState()) },
             ).also { server ->
                 server.start()
 
@@ -757,6 +789,7 @@ class ServerService : Service() {
                         direction,
                         android.media.AudioManager.FLAG_SHOW_UI
                     )
+                    scheduleVolumeState()
                 } else if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
@@ -841,6 +874,7 @@ class ServerService : Service() {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
                     webSocketServer?.sendTo(command.connectionId, createContextJson(wireContext(activeContext), wireEngine(activeContext)))
+                    volumePublication.sync(currentVolumeState())?.let { webSocketServer?.sendTo(command.connectionId, it) }
                 }
                 // Ask the running player to re-broadcast playlist/tracks/status so a
                 // freshly (re)connected phone can repopulate its remote screen — these
@@ -1008,7 +1042,14 @@ class ServerService : Service() {
             is IncomingMessage.UserAgentQuery ->
                 broadcastUserAgents(getSharedPreferences("browser_prefs", Context.MODE_PRIVATE))
             is IncomingMessage.Unknown -> {
-                FileLogger.w(TAG, "Ignoring unknown or malformed command")
+                val level = parseTvVolumeCommand(msg.raw)
+                val index = level?.let { tvVolumeIndex(it, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)) }
+                if (index != null && !audioManager.isVolumeFixed) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, index, AudioManager.FLAG_SHOW_UI)
+                    scheduleVolumeState()
+                } else {
+                    FileLogger.w(TAG, "Ignoring unknown or unsupported command")
+                }
             }
         }
     }
@@ -1367,6 +1408,9 @@ class ServerService : Service() {
         // stops receiving routed calls and doesn't leak as a retained Context. Identity
         // check: a replacement instance may already have registered itself in onCreate.
         if (_staticInstance === this) _staticInstance = null
+        mainHandler.removeCallbacks(volumeChanged)
+        contentResolver.unregisterContentObserver(volumeObserver)
+        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(capabilityPackageReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(externalBrowserContextReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(browserVideoStatusReceiver) } catch (_: Exception) {}
