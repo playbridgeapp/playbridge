@@ -4,6 +4,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'skip_segment.dart';
+import 'update/app_version.dart';
+
+/// Requests go straight from this computer to the providers (no PlayBridge relay), so the
+/// app name, real version and a contact URL are how they can tell PlayBridge clients apart.
+const String skipSegmentsUserAgent =
+    'PlayBridgeDesktop/$kAppVersion (+https://github.com/playbridgeapp/playbridge)';
 
 /// Fetches skip segments from IntroDB and/or TheIntroDB, matching TV
 /// `SkipSegmentFetcher`.
@@ -148,7 +154,7 @@ class SkipSegmentFetcher {
       ..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.getUrl(uri);
-      request.headers.set(HttpHeaders.userAgentHeader, 'PlayBridgeDesktop/1.0');
+      request.headers.set(HttpHeaders.userAgentHeader, skipSegmentsUserAgent);
       if (apiKey.isNotEmpty) {
         if (apiKey.startsWith('ey')) {
           request.headers
