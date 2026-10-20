@@ -10,7 +10,6 @@ struct RemoteControlView: View {
     @State private var padPreferences = RemotePadPreferences()
     @State private var showPairedTVs = false
     @State private var looping = false
-    @State private var volumeDraft = 0.5
     @State private var maximized = false
     @State private var presented: Presented?
     @State private var keyboardTicket: RemoteKeyboardTicket?
@@ -56,19 +55,54 @@ struct RemoteControlView: View {
     private func settingAllowed(_ id: String, legacy: Bool = true) -> Bool { policy.isLegacy ? legacy : policy.settings.contains(id) }
     private func browserAllowed(_ action: String) -> Bool { policy.isLegacy || policy.allowsBrowser(action) }
     private var canToggle: Bool { policy.isLegacy || policy.canToggle }
-    private var anyVolume: Bool { combined.fullControlReady || supportsVolume || !policy.isLegacy && (policy.hasVolume("absolute") || policy.hasVolume("mute_toggle")) }
+    private var externalAbsoluteVolume: Bool {
+        guard vm.isExternalReceiver, vm.isConnected, vm.googleCast.volume.supported != false else { return false }
+        return protocolID == "google_cast" || protocolID == "dlna" && vm.googleCast.volume.supported == true
+    }
+    private var anyVolume: Bool { combined.fullControlReady || supportsVolume || externalAbsoluteVolume || !policy.isLegacy && (policy.hasVolume("absolute") || policy.hasVolume("mute_toggle")) }
     private var canAddSubtitle: Bool { policy.isLegacy || !policy.tracks.isDisjoint(with: ["subtitle_url_add", "subtitle_resource_add"]) }
 
     private var canShowQueue: Bool { policy.isLegacy || policy.state.connected && !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) }
     private var allowedPresentations: Set<String> {
         policy.allowedPresentations.union(canShowQueue ? ["queue"] : []).union(canUseKeyboard ? ["keyboard"] : [])
+            .union(anyVolume ? ["volume"] : []).union(showPlayerMore ? ["settings"] : [])
+            .union(canAdjustSubtitles ? ["subtitles"] : [])
     }
-    private var volumeStatus: String? {
-        if combined.fullControlReady { return combined.atvVolumeStatus }
-        if let protocolID, ["google_cast", "dlna"].contains(protocolID) { return vm.googleCast.volume.label(protocolID: protocolID) }
-        return RemoteControlPresentation.volumeStatus(policy: policy, scope: vm.coordinator.receiverVolumeScope,
-            level: vm.coordinator.receiverVolumeLevel, muted: vm.coordinator.receiverVolumeMuted)
+    private static let stopRed = Color(red: 229 / 255, green: 57 / 255, blue: 53 / 255)
+    private var canStop: Bool { videoActive && (policy.isLegacy || policy.transport.contains("stop")) }
+    private var canLoop: Bool { !vm.isExternalReceiver && !vm.isAirPlay && !isImage && settingAllowed("loop") }
+    private var showPlayerMore: Bool { canLoop || vm.isAirPlay || policy.isLegacy || !policy.settings.isEmpty }
+    private var canAdjustSubtitles: Bool { !vm.isExternalReceiver && !vm.isAirPlay && settingAllowed("subtitle_offset") }
+    private var volumeTitle: String {
+        if combined.fullControlReady { return combined.volumeLabel }
+        if protocolID == "google_cast" { return "Volume" }
+        if protocolID == "dlna" { return "Volume" }
+        return policy.isLegacy ? "Volume" : policy.volumeLabel
     }
+    private var volumePill: RemoteVolumePill {
+        var percent: Int?, muted: Bool?
+        if combined.fullControlReady {
+            // Until the television reports, leave the step-only pill unknown. App volume
+            // belongs to a different channel and must never stand in for whole-TV volume.
+            if let tv = combined.fullControl.television, tv.volumeRevision > 0 {
+                if let level = tv.volumeLevel, let maximum = tv.volumeMax, maximum > 0 {
+                    percent = Int((Double(level) / Double(maximum) * 100).rounded())
+                }
+                muted = tv.volumeMuted
+            }
+        } else if externalAbsoluteVolume {
+            percent = vm.googleCast.volume.level.map { Int(($0 * 100).rounded()) }
+            muted = vm.googleCast.volume.muted
+        } else if RemoteControlPresentation.volumeReportMatches(policy: policy, scope: vm.coordinator.receiverVolumeScope) {
+            if policy.hasVolume("level_report") { percent = vm.coordinator.receiverVolumeLevel.map { Int(($0 * 100).rounded()) } }
+            if policy.hasVolume("mute_report") { muted = vm.coordinator.receiverVolumeMuted }
+        }
+        return RemoteVolumePill(absolute: combined.absoluteVolume || externalAbsoluteVolume,
+            wholeTV: combined.fullControlReady,
+            appFallback: policy.volume?.scope == "system" && vm.coordinator.receiverVolumeScope == "app",
+            percent: percent, muted: muted)
+    }
+    private var canMuteVolume: Bool { !vm.isExternalReceiver && !vm.isAirPlay && combined.mute }
 
     var body: some View {
         RemoteContentBounds { contextBody }
@@ -86,7 +120,7 @@ struct RemoteControlView: View {
                 switch sheet {
                 case .settings: settings
                 case .subtitles: subtitles
-                case .addSubtitle: addSubtitle
+                case .volume: volumeSheet
                 case .more: browserMore
                 case .scripts: scripts
                 case .agents: agents
@@ -139,7 +173,7 @@ struct RemoteControlView: View {
             VStack(spacing: 12) {
                 VStack(spacing: 8) {
                     nowPlaying(title: playback?.title, kind: vm.coordinator.mediaKind)
-                    if !vm.isExternalReceiver && !isImage { tracks }
+                    if !vm.isExternalReceiver && (!isImage || vm.isAirPlay) { tracks }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
@@ -150,7 +184,7 @@ struct RemoteControlView: View {
                 if (!isImage || duration > 0) && (policy.isLegacy || canToggle || canSeek || supportsVolume) {
                     seekBar(playing: playback?.state == nil || playback?.state == "playing" || playback?.state == "buffering", browser: false)
                 }
-                mediaControls
+                relativeSeekFallback
                 playerBottomBar
                 if vm.isAirPlay && vm.airPlay.routeAvailable { AirPlayVolumeControl().frame(height: 30).padding(.horizontal, 12) }
                 if protocolID == "google_cast" {
@@ -164,8 +198,6 @@ struct RemoteControlView: View {
                 padArea
                 if videoActive && (policy.isLegacy || canToggle || canSeek || supportsVolume) {
                     seekBar(playing: playback?.state == "playing" || playback?.state == "buffering", browser: true)
-                } else if anyVolume && !combined.fullControlReady {
-                    volumeRow
                 }
                 if !policy.isLegacy && policy.transport.contains("seek_relative") && !canSeek {
                     HStack {
@@ -173,8 +205,8 @@ struct RemoteControlView: View {
                         action("goforward.10", "+10s") { vm.browserControl("seek_forward") }
                     }
                 }
-                if isBrowser { browserRow } else if inputLayout.hasKeyboard && !combined.fullControlReady { navigationBar }
-                if combined.fullControlReady { playerBottomBar }
+                if isBrowser { browserRow }
+                playerBottomBar
             }
         default:
             VStack(spacing: 12) {
@@ -196,10 +228,12 @@ struct RemoteControlView: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(kind == "audio" ? "Playing music" : kind == "image" ? "Viewing image" : "Playing video")
-                .font(Theme.font(size: 12))
-                .foregroundStyle(Theme.onSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
+            if let detail = RemoteControlPresentation.nowPlayingDetail(title: title, kind: kind, playlist: vm.coordinator.playlist) {
+                Text(detail)
+                    .font(Theme.font(size: 12))
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -208,20 +242,20 @@ struct RemoteControlView: View {
             if !isImage && (policy.isLegacy || policy.tracks.contains("audio_select")) {
                 trackMenu("Audio", icon: "waveform", tracks: vm.coordinator.audioTracks, command: "audio_track:")
             }
-            if !isAudio && !isImage && (policy.isLegacy || policy.tracks.contains("subtitle_select") || canAddSubtitle) {
+            if !isAudio && !isImage && (policy.isLegacy || policy.tracks.contains("subtitle_select") || canAddSubtitle || canAdjustSubtitles) {
                 Button { presented = .subtitles } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "captions.bubble")
-                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: vm.coordinator.subtitleTracks, subtitle: true) } ?? "Off")").lineLimit(1)
+                        Text(vm.coordinator.subtitleTracks.first(where: { $0.selected && !["off", "none", "no", "-1"].contains($0.id.lowercased()) }).map { RemoteControlPresentation.trackLabel($0, in: vm.coordinator.subtitleTracks, subtitle: true) } ?? "Subtitles off").lineLimit(1)
                     }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
                         .background(Theme.surfaceContainerHigh, in: Capsule())
                 }.buttonStyle(.plain)
             }
-            if !vm.isAirPlay && (policy.isLegacy || !policy.settings.isEmpty) {
+            if showPlayerMore {
                 Button { presented = .settings } label: {
                     Image(systemName: "ellipsis").frame(width: 32, height: 32)
                         .background(Theme.surfaceContainerHigh, in: Capsule())
-                }.accessibilityLabel("Player settings")
+                }.accessibilityLabel("More player controls")
             }
         }
     }
@@ -236,9 +270,9 @@ struct RemoteControlView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                Text("\(label): \(tracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: tracks) } ?? "Default")").lineLimit(1)
+                // Icon + chosen track, or just the category when none is chosen (matches Android).
+                Text(tracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: tracks) } ?? label).lineLimit(1)
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.down").font(Theme.font(.caption2))
             }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(height: 32)
                 .background(Theme.surfaceContainerHigh, in: Capsule())
         }.disabled(tracks.isEmpty)
@@ -394,7 +428,7 @@ struct RemoteControlView: View {
             isPlaying: playing,
             enableVolume: supportsVolume && !isImage,
             enablePlayPause: canToggle,
-            volumeLabel: combined.fullControlReady ? "TV volume" : policy.isLegacy ? "Volume" : policy.volumeLabel,
+            volumeLabel: volumeTitle,
             onSeekTo: { playerCommand("seek_to:\($0)") },
             onVolumeUp: { vm.remote("volume_up") },
             onVolumeDown: { vm.remote("volume_down") },
@@ -403,49 +437,37 @@ struct RemoteControlView: View {
         )
     }
 
-    private var mediaControls: some View {
-        HStack {
-            if policy.isLegacy ? (!isImage && !isLive && (vm.isExternalReceiver ? RemoteMode.supportsExternalSeek(externalProtocol: protocolID) : vm.coordinator.playerIsSeekable)) : policy.transport.contains("seek_relative") {
-                action("gobackward.10", "-10s") { playerCommand("seek_back") }
-                action("goforward.10", "+10s") { playerCommand("seek_forward") }
+    @ViewBuilder private var relativeSeekFallback: some View {
+        // The seek surface already handles horizontal relative scrubbing on seekable routes.
+        if !canSeek && (policy.isLegacy ? (!isImage && !isLive && (vm.isExternalReceiver || vm.isAirPlay ? RemoteMode.supportsExternalSeek(externalProtocol: protocolID) : vm.coordinator.playerIsSeekable)) : policy.transport.contains("seek_relative")) {
+            HStack {
+                action("gobackward.10", "Back 10 seconds") { playerCommand("seek_back") }
+                action("goforward.10", "Forward 10 seconds") { playerCommand("seek_forward") }
             }
-            if !vm.isExternalReceiver && !vm.isAirPlay && !isImage && settingAllowed("loop") {
-                action("repeat", "Loop", tint: (policy.isLegacy ? looping : vm.coordinator.receiverLoop ?? looping) ? Theme.primary : Theme.onSurface) {
-                    looping = !(policy.isLegacy ? looping : vm.coordinator.receiverLoop ?? looping)
-                    playerCommand(looping ? "loop_on" : "loop_off")
-                }
-            }
-            if vm.isAirPlay {
-                action("forward.end.fill", "Next") { playerCommand("next") }.disabled(vm.airPlay.upcoming.isEmpty)
-                action("list.bullet", "Queue") { presented = .airPlayQueue }
-            }
-            if policy.isLegacy || policy.transport.contains("stop") {
-                action("stop.fill", "Stop", tint: Theme.danger) { playerCommand("stop") }
-            }
-        }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var playerBottomBar: some View {
-        let navigation = combined.fullControlReady || (policy.isLegacy ? inputLayout.hasNavigation : !policy.keys.isDisjoint(with: ["back", "home"]))
-        return VStack(spacing: 4) {
-            if let volumeStatus { Text(volumeStatus).font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant) }
-            if navigation || inputLayout.hasKeyboard || anyVolume {
-                navigationBar
-            }
-            if combined.absoluteVolume { absoluteVolume }
         }
     }
+
+    private var playerBottomBar: some View { navigationBar }
 
     private var navigationBar: some View {
         HStack(spacing: 0) {
             if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("back")) { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
             if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("home")) { action("house", "Home") { vm.remote("home") } }
             keyboardButton
-            if supportsVolume {
-                action("speaker.minus", "Vol −") { vm.remote("volume_down") }
-                action("speaker.plus", "Vol +") { vm.remote("volume_up") }
+            if anyVolume {
+                Button { presented = .volume } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: volumePill.icon)
+                        if !volumePill.text.isEmpty { Text(volumePill.text).monospacedDigit() }
+                    }.font(Theme.font(size: 14, weight: .semibold)).padding(.horizontal, 12).frame(minHeight: 44)
+                        .background(Theme.primary.opacity(0.14), in: Capsule())
+                }.buttonStyle(.plain).foregroundStyle(Theme.primary).frame(maxWidth: .infinity)
+                    .accessibilityLabel(volumeTitle)
+                    .accessibilityValue(volumePill.muted ? "Muted" : volumePill.percent.map { "\($0) of 100" } ?? "Level unavailable")
+                    .accessibilityHint("Double-tap to adjust")
+                    .accessibilityIdentifier("remote.volumePill")
             }
-            if combined.mute { action("speaker.slash", "Mute") { vm.remote("mute") } }
+            if canStop { action("stop.fill", "Stop", tint: Self.stopRed) { playerCommand("stop") } }
         }.padding(.vertical, 4).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
     }
 
@@ -460,58 +482,28 @@ struct RemoteControlView: View {
         }
     }
 
-    private var absoluteVolume: some View {
-        Slider(value: $volumeDraft, in: 0...1) { editing in
-            if !editing { vm.setReceiverVolume(volumeDraft) }
-        }.accessibilityLabel("Set " + policy.volumeLabel)
-    }
-
-    private var volumeRow: some View {
-        VStack(spacing: 8) {
-            if !policy.isLegacy { Text(policy.volumeLabel).font(Theme.font(.caption)) }
-            HStack(spacing: 18) {
-                if supportsVolume {
-                    Button { vm.remote("volume_down") } label: { Image(systemName: "minus").frame(width: 44, height: 44) }
-                        .accessibilityLabel(policy.isLegacy ? "Volume down" : policy.volumeLabel + " down")
-                    Image(systemName: "speaker.wave.2").foregroundStyle(Theme.onSurfaceVariant)
-                    Button { vm.remote("volume_up") } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
-                        .accessibilityLabel(policy.isLegacy ? "Volume up" : policy.volumeLabel + " up")
-                }
-                if combined.mute {
-                    Button { vm.remote("mute") } label: { Image(systemName: "speaker.slash").frame(width: 44, height: 44) }
-                        .accessibilityLabel(policy.volumeLabel + " mute toggle")
-                }
-            }
-            if combined.absoluteVolume {
-                Slider(value: $volumeDraft, in: 0...1) { editing in
-                    if !editing { vm.setReceiverVolume(volumeDraft) }
-                }.accessibilityLabel("Set " + policy.volumeLabel)
-                Text("Set " + policy.volumeLabel).font(Theme.font(.caption2))
-            }
-            if !policy.isLegacy, let scope = vm.coordinator.receiverVolumeScope,
-               scope == policy.volume?.scope || policy.volume?.scope == "system" && policy.volume?.fallbackScope == "app" && policy.hasVolume("relative_step") {
-                if policy.hasVolume("level_report"), let level = vm.coordinator.receiverVolumeLevel {
-                    Text("\(scope == "app" ? "App volume" : "TV volume"): \(Int((level * 100).rounded()))%")
-                }
-                if policy.hasVolume("mute_report"), let muted = vm.coordinator.receiverVolumeMuted {
-                    Text((scope == "app" ? "App volume" : "TV volume") + (muted ? " muted" : " unmuted"))
-                }
-            }
-        }.padding(.horizontal, 12).frame(maxWidth: .infinity).frame(minHeight: 48)
-            .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    private var volumeSheet: some View {
+        let destination = vm.destinationID
+        let session = vm.ws.capabilitySessionID
+        let exact = volumePill.exact
+        let wholeTV = combined.fullControlReady
+        return RemoteVolumeSheet(title: volumeTitle, pill: volumePill, canStep: supportsVolume, canMute: canMuteVolume,
+            onSet: { percent in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID, volumePill.exact else { return }
+                if externalAbsoluteVolume { vm.setCastVolume(Double(percent) / 100) }
+                else { vm.setReceiverVolume(Double(percent) / 100) }
+            }, onStep: { vm.remote($0 ? "volume_up" : "volume_down") }, onMute: { vm.remote("mute") })
+            .id("\(session)-\(exact)-\(wholeTV)-\(policy.volume?.scope ?? "legacy")")
     }
 
     private var browserRow: some View {
         HStack {
-            if !combined.fullControlReady && keyAllowed("back") { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
             if browserAllowed("forward") { action("arrow.forward", "Forward") { vm.browserControl("forward") } }
             if browserAllowed("refresh") { action("arrow.clockwise", "Refresh") { vm.browserControl("refresh") } }
             if browserAllowed("maximize_video") { action(maximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", maximized ? "Restore" : "Fullscreen") {
                 maximized.toggle()
                 vm.browserControl(maximized ? "maximize_video" : "restore_video")
             } }
-            if !combined.fullControlReady && keyAllowed("home") { action("house", "Home") { vm.remote("home") } }
-            if !combined.fullControlReady { keyboardButton }
             if policy.isLegacy || !policy.browser.isDisjoint(with: ["cycle_source", "unmute", "manage_user_scripts", "manage_user_agent"]) { action("ellipsis", "More") { presented = .more } }
         }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
     }
@@ -602,6 +594,55 @@ struct RemoteControlView: View {
     private var settings: some View {
         NavigationStack {
             Form {
+                let speed = settingAllowed("speed", legacy: vm.coordinator.speedAvailable)
+                let quality = settingAllowed("quality", legacy: vm.coordinator.qualityAvailable) && vm.coordinator.videoTracks.filter({ $0.id != "auto" }).count > 1
+                let scaling = settingAllowed("scaling", legacy: vm.coordinator.scalingAvailable)
+                let boost = settingAllowed("audio_boost", legacy: vm.coordinator.audioBoostAvailable)
+                let engine = settingAllowed("engine")
+                // Same grouping as Android's Player settings: Playback, Picture, Audio, then app preferences.
+                if speed || canLoop {
+                    Section("Playback") {
+                        if speed {
+                            chipRow([0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map { ($0 == 1 ? "1x" : "\($0)x", String($0)) }, selected: speedKey(vm.coordinator.playerSpeed)) { value in
+                                if let speed = Float(value) { playerCommand("speed:\(speed)") }
+                            }
+                        }
+                        if canLoop {
+                            Toggle("Loop", isOn: Binding(get: { policy.isLegacy ? looping : vm.coordinator.receiverLoop ?? looping }, set: { value in
+                                looping = value; playerCommand(value ? "loop_on" : "loop_off")
+                            }))
+                        }
+                    }
+                }
+                if quality || scaling {
+                    Section("Picture") {
+                        if quality {
+                            chipRow(vm.coordinator.videoTracks.map { ($0.name, $0.id) }, selected: vm.coordinator.qualityMaxHeight == 0 ? "auto" : "max:\(vm.coordinator.qualityMaxHeight)") { id in
+                                let value = id == "auto" ? "auto" : id.replacingOccurrences(of: "max:", with: "")
+                                playerCommand("video_quality:\(value)")
+                            }
+                        }
+                        if scaling {
+                            chipRow([("Fit", "Fit"), ("Crop to fill", "Zoom"), ("Stretch", "Fill")], selected: vm.coordinator.playerScaling) { playerCommand("scaling:\($0)") }
+                        }
+                    }
+                }
+                if boost || engine {
+                    Section("Audio") {
+                        if boost {
+                            Toggle("Audio boost", isOn: Binding(get: { vm.coordinator.audioBoost }, set: { _ in playerCommand("audio_boost") }))
+                        }
+                        if engine {
+                            chipRow(policy.isLegacy ? [("ExoPlayer", "exo"), ("MPV", "mpv")] : policy.playerEngines.map { (ReceiverRemotePolicy.playerLabels[$0]!, $0) }, selected: vm.coordinator.playerEngine) { playerCommand("switch_player:\($0)") }
+                        }
+                    }
+                }
+                if vm.isAirPlay {
+                    Section("AirPlay") {
+                        Button("Next", systemImage: "forward.end.fill") { playerCommand("next") }.disabled(vm.airPlay.upcoming.isEmpty)
+                        Button("Queue", systemImage: "list.bullet") { presented = .airPlayQueue }
+                    }
+                }
                 Section("Remote feedback") {
                     Toggle("Haptic feedback", isOn: $hapticsEnabled)
                     Picker("Haptic level", selection: $hapticsLevel) {
@@ -610,48 +651,12 @@ struct RemoteControlView: View {
                         }
                     }.disabled(!hapticsEnabled)
                 }
-                Section("Receiver") {
-                    Button("Paired TVs") { showPairedTVs = true }
-                        .accessibilityLabel("Manage paired TVs")
-                        .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
-                }
-                if settingAllowed("quality", legacy: vm.coordinator.qualityAvailable) && vm.coordinator.videoTracks.filter({ $0.id != "auto" }).count > 1 {
-                    Section("Quality") {
-                        chipRow(vm.coordinator.videoTracks.map { ($0.name, $0.id) }, selected: vm.coordinator.qualityMaxHeight == 0 ? "auto" : "max:\(vm.coordinator.qualityMaxHeight)") { id in
-                            let value = id == "auto" ? "auto" : id.replacingOccurrences(of: "max:", with: "")
-                            playerCommand("video_quality:\(value)")
-                        }
-                    }
-                }
-                if settingAllowed("speed", legacy: vm.coordinator.speedAvailable) {
-                    Section("Speed") {
-                        chipRow([0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map { ($0 == 1 ? "1x" : "\($0)x", String($0)) }, selected: speedKey(vm.coordinator.playerSpeed)) { value in
-                            if let speed = Float(value) { playerCommand("speed:\(speed)") }
-                        }
-                    }
-                }
-                if settingAllowed("scaling", legacy: vm.coordinator.scalingAvailable) {
-                    Section("Scaling") {
-                        chipRow([("Fit", "Fit"), ("Crop to fill", "Zoom"), ("Stretch", "Fill")], selected: vm.coordinator.playerScaling) { playerCommand("scaling:\($0)") }
-                    }
-                }
-                if settingAllowed("subtitle_offset") {
-                    Section("Subtitle offset") {
-                        HStack {
-                            Button("−250ms") { playerCommand("sub_offset:-250") }
-                            Spacer()
-                            Text("\(vm.coordinator.subtitleOffsetMs) ms")
-                            Spacer()
-                            Button("+250ms") { playerCommand("sub_offset:250") }
-                        }
-                    }
-                }
-                if settingAllowed("audio_boost", legacy: vm.coordinator.audioBoostAvailable) {
-                    Toggle("Audio boost", isOn: Binding(get: { vm.coordinator.audioBoost }, set: { _ in playerCommand("audio_boost") }))
-                }
-                if settingAllowed("engine") {
-                    Section("Player engine") {
-                        chipRow(policy.isLegacy ? [("ExoPlayer", "exo"), ("MPV", "mpv")] : policy.playerEngines.map { (ReceiverRemotePolicy.playerLabels[$0]!, $0) }, selected: vm.coordinator.playerEngine) { playerCommand("switch_player:\($0)") }
+                // Paired TVs manages Android TV full-control pairings; irrelevant on a desktop or Apple TV.
+                if !vm.isExternalReceiver && (policy.isLegacy || policy.hostOS == "android") {
+                    Section("Receiver") {
+                        Button("Paired TVs") { showPairedTVs = true }
+                            .accessibilityLabel("Manage paired TVs")
+                            .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
                     }
                 }
             }
@@ -661,60 +666,37 @@ struct RemoteControlView: View {
     }
 
     private var subtitles: some View {
-        NavigationStack {
-            List {
-                if policy.isLegacy || policy.tracks.contains("subtitle_select") {
-                    Button("Off") { playerCommand("sub_track:\(subtitleOffID)"); presented = nil }
-                    ForEach(groupedSubtitles, id: \.key) { group in
-                        Section(group.label) {
-                            ForEach(group.tracks) { track in
-                                Button { playerCommand("sub_track:\(track.id)"); presented = nil } label: {
-                                    HStack {
-                                        Text(RemoteControlPresentation.trackLabel(track, in: vm.coordinator.subtitleTracks, subtitle: true))
-                                        Spacer()
-                                        if track.selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Subtitles").navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) {
-                if vm.isAirPlay {
-                    Text("Added SRT or WebVTT subtitles require a compatible HLS stream and Wi-Fi. Adding a track may briefly reload the video at its current position.")
-                        .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
-                        .padding().frame(maxWidth: .infinity).background(Theme.surface)
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if !vm.isExternalReceiver && !isAudio && !isImage && canAddSubtitle {
-                        Button { presented = .addSubtitle } label: { Label("Add", systemImage: "plus") }
-                            .disabled(vm.isAirPlay && vm.airPlay.preparing)
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } }
-            }
-        }
-    }
-
-    private var addSubtitle: some View {
         let detector = browserStore.activeTab?.detector
-        return SubtitleSourcePickerView(detector: detector,
-            detected: detector?.videos.filter {
+        let destination = vm.destinationID
+        let session = vm.ws.capabilitySessionID
+        return RemoteSubtitlesSheet(tracks: vm.coordinator.subtitleTracks,
+            canSelect: policy.isLegacy || policy.tracks.contains("subtitle_select"),
+            canAdjust: canAdjustSubtitles,
+            canAdd: !vm.isExternalReceiver && !isAudio && !isImage && canAddSubtitle,
+            offset: vm.coordinator.subtitleOffsetMs, airPlay: vm.isAirPlay, preparing: vm.isAirPlay && vm.airPlay.preparing,
+            detector: detector, detected: detector?.videos.filter {
                 $0.isSubtitle && (policy.isLegacy || policy.tracks.contains("subtitle_resource_add") || VideoDetector.subtitleHeaders(for: $0).isEmpty)
-            } ?? [], title: "Add subtitle",
-            onDetected: { item in
-                vm.addSubtitle(url: item.url, headers: VideoDetector.subtitleHeaders(for: item), label: item.displayTitle)
+            } ?? [], destinationID: vm.destinationID,
+            select: { id in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return }
+                playerCommand("sub_track:\(id)")
+            }, adjust: { offset in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return }
+                playerCommand("sub_offset:\(offset)")
             },
-            onLocal: { file in
-                let destination = vm.destinationID
-                guard let served = await vm.serveLocalSubtitle(file), destination == vm.destinationID else { return false }
+            addDetected: { item in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return false }
+                return vm.addSubtitle(url: item.url, headers: VideoDetector.subtitleHeaders(for: item), label: item.displayTitle)
+            },
+            addLocal: { file in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return false }
+                guard let served = await vm.serveLocalSubtitle(file), destination == vm.destinationID,
+                      session == vm.ws.capabilitySessionID else { return false }
                 return vm.addSubtitle(url: served, label: file.lastPathComponent)
-            },
-            onURL: { vm.addSubtitle(url: $0) })
+            }, addLink: { link in
+                guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return false }
+                return vm.addSubtitle(url: link)
+            }, done: { presented = nil })
     }
 
     private var browserMore: some View {
@@ -825,26 +807,6 @@ struct RemoteControlView: View {
         }
     }
 
-    private var groupedSubtitles: [SubtitleGroup] {
-        let tracks = vm.coordinator.subtitleTracks.filter { !["off", "none", "no", "-1"].contains($0.id.lowercased()) }
-        let embedded = tracks.filter { !isExternalSubtitle($0) }
-        let remote = tracks.filter { isExternalSubtitle($0) && !$0.name.contains("OpenSubtitles #") }
-        let external = tracks.filter { isExternalSubtitle($0) && $0.name.contains("OpenSubtitles #") }
-        return [
-            SubtitleGroup(key: "embedded", label: vm.isAirPlay ? "Available tracks" : "Embedded", tracks: embedded),
-            SubtitleGroup(key: "remote", label: "Phone Remote", tracks: remote),
-            SubtitleGroup(key: "external", label: "External", tracks: external),
-        ].filter { !$0.tracks.isEmpty }
-    }
-
-    private var subtitleOffID: String {
-        vm.coordinator.subtitleTracks.first { ["off", "none", "no", "-1"].contains($0.id.lowercased()) }?.id ?? "none"
-    }
-
-    private func isExternalSubtitle(_ track: MediaTrack) -> Bool {
-        track.type == "external_sub" || track.id.hasPrefix("external_") || track.id.contains("://")
-    }
-
     private func speedKey(_ value: Float) -> String {
         let speeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
         let nearest = speeds.min { abs($0 - value) < abs($1 - value) } ?? 1
@@ -860,11 +822,9 @@ struct RemoteControlView: View {
 
     private func action(_ icon: String, _ label: String, tint: Color = Theme.onSurface, perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(Theme.font(size: 20))
-                Text(label).font(Theme.font(.caption2)).lineLimit(1).minimumScaleFactor(0.7)
-            }.frame(maxWidth: .infinity).frame(minHeight: 48).foregroundStyle(tint)
-        }.buttonStyle(.plain)
+            Image(systemName: icon).font(Theme.font(size: 20))
+                .frame(maxWidth: .infinity).frame(minHeight: 48).contentShape(Rectangle()).foregroundStyle(tint)
+        }.buttonStyle(.plain).accessibilityLabel(label)
     }
 
     private func playerCommand(_ command: String) {
@@ -874,16 +834,10 @@ struct RemoteControlView: View {
     }
 
     private enum Presented: String, Identifiable {
-        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue, queue, keyboard
+        case settings, subtitles, volume, more, scripts, agents, airPlayQueue, queue, keyboard
         var id: String { rawValue }
-        var preservesDraft: Bool { self == .addSubtitle || self == .agents || self == .keyboard }
+        var preservesDraft: Bool { self == .subtitles || self == .agents || self == .keyboard }
     }
-}
-
-private struct SubtitleGroup {
-    let key: String
-    let label: String
-    let tracks: [MediaTrack]
 }
 
 enum RemoteUserAgents {

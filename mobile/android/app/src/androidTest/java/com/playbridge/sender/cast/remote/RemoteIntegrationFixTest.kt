@@ -40,7 +40,7 @@ class RemoteIntegrationFixTest {
         compose.onNodeWithContentDescription("Pad settings").assertDoesNotExist()
         compose.onNodeWithContentDescription("Switch to button pad").performClick()
         compose.onNodeWithTag("remote.buttonPad").assertIsDisplayed()
-        compose.onNodeWithText("More").performClick()
+        compose.onNodeWithContentDescription("More player settings").performClick()
         compose.onNodeWithContentDescription("Button D-pad").assertDoesNotExist()
         compose.onNodeWithContentDescription("Button pad").assertDoesNotExist()
         compose.runOnIdle { dispatch(RemoteAction.CloseSheet) }

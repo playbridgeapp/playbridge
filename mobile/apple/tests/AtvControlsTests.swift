@@ -57,11 +57,11 @@ private func projection(_ receiver: ReceiverRemotePolicy = base(), connected: Bo
     }
     check(volume(tv).atvVolumeStatus == nil && volume(tv).televisionOff, "no volume before first report; truthful Off")
     tv = .init(isOn: true, volumeLevel: 32, volumeMax: 100, volumeMuted: false, volumeRevision: 1, currentApp: nil, model: nil, vendor: nil)
-    check(volume(tv).atvVolumeStatus == "TV volume 32/100 · Unmuted", "actual report label")
+    check(volume(tv).atvVolumeStatus == "Volume 32/100 · Unmuted", "actual report label")
     tv = .init(isOn: true, volumeLevel: 3, volumeMax: 12, volumeMuted: true, volumeRevision: 2, currentApp: nil, model: nil, vendor: nil)
-    check(volume(tv).atvVolumeStatus == "TV volume 3/12 · Muted", "actual range never fabricated")
+    check(volume(tv).atvVolumeStatus == "Volume 3/12 · Muted", "actual range never fabricated")
     tv = .init(isOn: true, volumeLevel: nil, volumeMax: nil, volumeMuted: true, volumeRevision: 3, currentApp: nil, model: nil, vendor: nil)
-    check(volume(tv).atvVolumeStatus == "TV volume · Muted", "mute-only report")
+    check(volume(tv).atvVolumeStatus == "Volume · Muted", "mute-only report")
 }
 @MainActor private func routeChecks() async {
     var policy = projection(), session = UUID(), generation = UUID(), revision: UInt64 = 1

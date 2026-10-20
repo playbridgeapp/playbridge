@@ -114,7 +114,7 @@ class RemoteAdaptiveScreenTest {
         compose.setContent { MaterialTheme { RemoteScreen(player().copy(connection = RemoteConnection.Disconnected), actions::add) } }
         compose.onNodeWithText("Reconnecting…").assertIsDisplayed()
         compose.onNodeWithText("Retry").performClick()
-        compose.onNodeWithText("More").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("More player settings").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Playback seek and volume").assertIsNotEnabled()
         compose.onNodeWithContentDescription("TV volume up", substring = true).assertDoesNotExist()
         compose.onNodeWithTag("remote.nav").assertDoesNotExist()
@@ -166,7 +166,7 @@ class RemoteAdaptiveScreenTest {
                 } }
             }
         }
-        compose.onNodeWithText("More").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("More player settings").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("remote.nav").assertIsDisplayed()
     }
     @Test fun defaultPlayerHasNoInputAndSeekSitsDirectlyAboveNav() {

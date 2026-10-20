@@ -925,7 +925,7 @@ struct SubtitleSourcePickerView: View {
     }
 }
 
-private struct DetectedSubtitlePreview: View {
+struct DetectedSubtitlePreview: View {
     @ObservedObject var detector: VideoDetector
     let subtitle: DetectedVideo
 

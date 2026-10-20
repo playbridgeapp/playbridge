@@ -12,6 +12,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$app/Network/RemoteAvailability.swift" "$repo_root/mobile/apple/tests/RemoteAvailabilityTests.swift" \
   "$app/UI/RemoteHaptics.swift" "$repo_root/mobile/apple/tests/RemoteHapticsTests.swift" \
   "$app/UI/RemoteControlPresentation.swift" "$repo_root/mobile/apple/tests/RemoteControlPresentationTests.swift" \
+  "$repo_root/mobile/apple/tests/RemoteParityTests.swift" \
   "$repo_root/mobile/apple/tests/ReceiverPlaybackFailureTests.swift" \
   "$repo_root/mobile/apple/tests/RemoteControlTests.swift" -o "$test_dir/check"
 "$test_dir/check" "$repo_root"

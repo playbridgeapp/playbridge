@@ -40,12 +40,15 @@ desktop = (repo / "desktop/lib/receiver_capabilities.dart").read_text()
 desktop = re.sub(r"//[^\n]*", "", desktop)
 body = desktop.split("'internal_mpv': {", 1)[1].split("},", 1)[0]
 desktop_player = {field: strings(values) for field, values in re.findall(r"'(\w+)':\s*\[([^]]*)\]", body)}
-assert desktop_player.keys() == {"transport", "imageTransforms", "tracks", "queue", "reporting"}
-volume = desktop.split("'volume': const {", 1)[1].split("}", 1)[0]
-volume_ops = re.search(r"'operations':\s*\[([^]]*)\]", volume)
-assert volume_ops and "'scope': 'system'" in volume and "'fallbackScope': 'app'" in volume
+assert {"transport", "imageTransforms", "tracks", "queue", "reporting"} <= desktop_player.keys() <= {
+    "transport", "imageTransforms", "tracks", "queue", "reporting", "settings"}
+# The volume block is built per OS; project macOS with native volume, the shipped default.
+volume = desktop.split("'volume': {", 1)[1]
+operations = volume.split("'operations':", 1)[1].split("],\n", 2)
+volume_ops = [op for op in re.findall(r"'(\w+)'", operations[0] + operations[1]) if op != "macos"]
+assert "relative_step" in volume_ops and "'scope': 'system'" in volume and "'fallbackScope': 'app'" in volume
 (output / "desktop.json").write_text(json.dumps({"version": 1, "surfaces": {"player": {"engines": {"internal_mpv": desktop_player}}},
-    "volume": {"scope": "system", "operations": strings(volume_ops[1]), "fallbackScope": "app"},
+    "volume": {"scope": "system", "operations": volume_ops, "step": 0.0625, "fallbackScope": "app"},
     "host": {"osFamily": "macos", "deviceClass": "desktop"}}))
 
 cli = (repo / "cli/src/receive.rs").read_text().split("fn receiver_capabilities()", 1)[1]

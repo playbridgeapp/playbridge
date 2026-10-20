@@ -32,6 +32,16 @@ struct RemoteSeekBar: View {
     @State private var axis: Axis?
     @State private var scrubMode: RemoteSeekBehavior.Mode = .relative
     @State private var volumeDirection: String?
+    // Same as Android: teach the gestures until each one has been used once, then show time left.
+    @AppStorage("remote.seekHint.learnedSeek") private var learnedSeek = false
+    @AppStorage("remote.seekHint.learnedVolume") private var learnedVolume = false
+    @AppStorage("remote.seekHint.learnedTap") private var learnedTap = false
+    private var hintLearned: Bool {
+        (!enablePlayPause || learnedTap) && (!hasDuration || learnedSeek) && (!enableVolume || learnedVolume)
+    }
+    private var timeLeftHint: String? {
+        isLive ? "Live" : durationMs > 0 ? RemoteMode.time(Int64(max(0, durationMs - positionMs))) + " left" : nil
+    }
 
     private var hasDuration: Bool { durationMs > 0 && !isLive && isSeekable }
     private var displayMs: Double { dragging && hasDuration ? dragMs : positionMs }
@@ -44,6 +54,14 @@ struct RemoteSeekBar: View {
     var body: some View {
         ZStack {
             VStack(spacing: 8) {
+                // Like Android, the line doesn't change mid-drag; the HUD and arrows show the active gesture.
+                if hintLearned {
+                    HStack(spacing: 6) {
+                        if enablePlayPause { Image(systemName: isPlaying ? "pause.fill" : "play.fill").font(.system(size: 11, weight: .bold)) }
+                        if let timeLeftHint { Text(timeLeftHint).monospacedDigit() }
+                    }
+                    .font(Theme.font(size: 11)).foregroundStyle(Theme.onSurfaceVariant)
+                } else {
                 HStack(spacing: 6) {
                     Text(axis == .horizontal ? (scrubMode == .absolute ? "SCRUB ◄►" : "SEEK ◄►") : (!enablePlayPause ? "SEEK" : isPlaying ? "SEEK · TAP PAUSE" : "SEEK · TAP PLAY"))
                         .lineLimit(1).minimumScaleFactor(0.75)
@@ -54,6 +72,7 @@ struct RemoteSeekBar: View {
                     }
                 }
                 .font(Theme.font(size: 10, weight: .bold)).tracking(1).foregroundStyle(axis == nil ? Theme.onSurfaceVariant : activeColor)
+                }
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.white.opacity(0.16))
@@ -71,22 +90,24 @@ struct RemoteSeekBar: View {
                 Image(systemName: "chevron.left")
                 Spacer()
                 Image(systemName: "chevron.right")
-            }.font(Theme.font(size: 16, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant.opacity(0.45)).padding(.horizontal, 12)
+            }.font(Theme.font(size: 16, weight: .semibold)).foregroundStyle(axis == .horizontal ? activeColor : Theme.onSurfaceVariant.opacity(0.45)).padding(.horizontal, 12)
             if enableVolume {
                 VStack {
                     Image(systemName: "chevron.up")
                     Spacer()
                     Image(systemName: "chevron.down")
-                }.font(Theme.font(size: 12, weight: .semibold)).foregroundStyle(Theme.onSurfaceVariant.opacity(0.45)).padding(.vertical, 4)
+                }.font(Theme.font(size: 12, weight: .semibold)).foregroundStyle(axis == .vertical ? activeColor : Theme.onSurfaceVariant.opacity(0.45)).padding(.vertical, 4)
             }
             SeekGesture(hasDuration: hasDuration, durationMs: durationMs, positionMs: positionMs, enableVolume: enableVolume) { event in
                 switch event {
                 case .haptic(let feedback): RemoteHaptics.shared.perform(feedback, actionAllowed: hasDuration)
-                case .playPause: if enablePlayPause { onPlayPause() }
+                case .playPause: if enablePlayPause { learnedTap = true; onPlayPause() }
                 case .volumeUp:
+                    learnedVolume = true
                     volumeDirection = "up"
                     onVolumeUp()
                 case .volumeDown:
+                    learnedVolume = true
                     volumeDirection = "down"
                     onVolumeDown()
                 case .drag(let ms, let nextAxis, let mode):
@@ -104,7 +125,7 @@ struct RemoteSeekBar: View {
                         volumeLabel: volumeLabel
                     )
                 case .end(let ms):
-                    if let ms, hasDuration { onSeekTo(ms) }
+                    if let ms, hasDuration { learnedSeek = true; onSeekTo(ms) }
                     dragging = false
                     axis = nil
                     scrubMode = .relative

@@ -36,6 +36,7 @@ struct ReceiverRemotePolicy {
     var playerEngines: [String] = []
     var launchEngines: [String] = []
     var volume: ReceiverVolume?
+    var hostOS: String?
 
     static let playerLabels = ["exo": "ExoPlayer", "mpv": "MPV", "avplayer": "AVPlayer", "internal_mpv": "MPV"]
     static let browserLabels = ["webview": "System WebView", "gecko": "GeckoView"]
@@ -98,10 +99,12 @@ struct ReceiverRemotePolicy {
         if policy.settings.contains("engine") { policy.playerEngines = (descriptor.surfaces["player"] ?? [:]).keys.filter { playerLabels[$0] != nil }.sorted() }
         policy.launchEngines = (descriptor.surfaces["browser"] ?? [:]).filter { browserLabels[$0.key] != nil && ($0.value["browser"] ?? []).contains("launch") }.keys.sorted()
         policy.volume = descriptor.volume.flatMap { ["system", "app"].contains($0.scope) ? $0 : nil }
+        policy.hostOS = descriptor.host["osFamily"]
         return policy
     }
 
-    var volumeLabel: String { volume?.scope == "app" ? "App volume" : "TV volume" }
+    // Plain "Volume" for the device's own volume; "App volume" only when just the player is controlled.
+    var volumeLabel: String { volume?.scope == "app" ? "App volume" : "Volume" }
     var canToggle: Bool { transport.contains("toggle") || transport.contains(state.playing ? "pause" : "play") }
     var toggleCommand: String { transport.contains("toggle") ? "toggle" : state.playing ? "pause" : "play" }
     var hasPointer: Bool { !pointer.isEmpty }

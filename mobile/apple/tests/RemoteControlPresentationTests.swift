@@ -2,6 +2,7 @@ import Foundation
 
 enum RemoteControlPresentationTests {
     static func run() {
+        RemoteParityTests.run()
         headerAndInputSelection()
         queueSelection()
         let off = MediaTrack(id: "none", name: "0", selected: false)
@@ -11,8 +12,8 @@ enum RemoteControlPresentationTests {
         let named = MediaTrack(id: "4", name: "English (SDH)", selected: false)
         let tracks = [off, numeric, hex, language, named]
         precondition(RemoteControlPresentation.trackLabel(off, in: tracks, subtitle: true) == "Off")
-        precondition(RemoteControlPresentation.trackLabel(numeric, in: tracks, subtitle: true) == "Track 1")
-        precondition(RemoteControlPresentation.trackLabel(hex, in: tracks, subtitle: true) == "Track 2")
+        precondition(RemoteControlPresentation.trackLabel(numeric, in: tracks, subtitle: true) == "Subtitle 1")
+        precondition(RemoteControlPresentation.trackLabel(hex, in: tracks, subtitle: true) == "Subtitle 2")
         precondition(RemoteControlPresentation.trackLabel(language, in: tracks, subtitle: true) == "English")
         precondition(RemoteControlPresentation.trackLabel(named, in: tracks, subtitle: true) == "English (SDH)")
         precondition(RemoteControlPresentation.trackLabel(numeric, in: [numeric]) == "Track 1")
@@ -57,14 +58,14 @@ enum RemoteControlPresentationTests {
         var policy = ReceiverRemotePolicy(isLegacy: false, state: ReceiverRemoteState(connected: true, context: "player"))
         precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: nil) == "Limited control")
         policy.transport = ["toggle"]
-        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: nil) == "Media control")
+        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: nil) == nil)
         policy.keys = ["dpad_center", "home"]
-        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: nil) == "App control", "App keys cannot prove Android OS Full control")
+        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: nil) == nil, "App keys cannot prove Android OS Full control")
         precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: false, externalProtocol: nil) == nil)
-        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: "roku") == "Device control")
-        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: "google_cast") == "Media control")
+        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: "roku") == nil)
+        precondition(RemoteControlPresentation.controlLevel(policy: policy, connected: true, externalProtocol: "google_cast") == nil)
         policy.volume = ReceiverVolume(scope: "system", operations: ["relative_step", "level_report", "mute_report"], step: nil, fallbackScope: "app")
-        precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "system", level: 0.19, muted: false) == "TV volume 19/100 · Unmuted")
+        precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "system", level: 0.19, muted: false) == "Volume 19/100 · Unmuted")
         precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "app", level: 0.4, muted: true) == "App volume 40/100 · Muted")
         precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "other", level: 0.4, muted: true) == nil)
         precondition(RemoteControlPresentation.volumeStatus(policy: policy, scope: "system", level: .nan, muted: nil) == nil)

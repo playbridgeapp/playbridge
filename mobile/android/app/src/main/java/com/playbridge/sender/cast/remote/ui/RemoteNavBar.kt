@@ -51,7 +51,7 @@ import com.playbridge.sender.cast.remote.RemoteVolumePill
 import com.playbridge.sender.cast.remote.remoteVolumePill
 
 @Composable
-internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "TV volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null, volumePill: RemoteVolumePill? = null, onVolumePill: () -> Unit = {}, onStop: (() -> Unit)? = null) {
+internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "Volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null, volumePill: RemoteVolumePill? = null, onVolumePill: () -> Unit = {}, onStop: (() -> Unit)? = null) {
     if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && onStop == null) return
     val haptics = rememberRemoteHaptics()
     Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f), shape = CircleShape) {
