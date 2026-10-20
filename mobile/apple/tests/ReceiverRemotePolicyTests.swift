@@ -35,7 +35,7 @@ struct ReceiverRemotePolicyTests {
         precondition(!applePlayer.allowsControl("speed:1.5") && !applePlayer.hasPointer)
         precondition(applePlayer.allowsControl("audio_track:audio-1") && !applePlayer.allowsControl("audio_track:stale"))
         let desktopPlayer = resolve(desktop)
-        precondition(desktopPlayer.keys.isEmpty && desktopPlayer.settings.isEmpty && !desktopPlayer.hasPointer)
+        precondition(desktopPlayer.keys.isEmpty && desktopPlayer.settings == ["speed", "loop", "scaling", "subtitle_offset"] && !desktopPlayer.hasPointer)
         precondition(desktopPlayer.volumeLabel == "TV volume" && desktopPlayer.volume?.fallbackScope == "app")
         precondition(desktopPlayer.hasVolume("relative_step") && !desktopPlayer.allowsKey("mute"))
         precondition(!desktopPlayer.allowsAbsoluteVolume(scope: "app", level: 0.5))

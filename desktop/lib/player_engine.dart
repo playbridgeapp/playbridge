@@ -202,6 +202,12 @@ abstract class PlayerEngine extends ChangeNotifier {
   int get positionMs;
   int get durationMs;
   double get volume => 1.0;
+  bool get isLive => false;
+  bool get isSeekable => durationMs > 0;
+  int get currentVideoHeight => 0;
+
+  /// Repeat the current file, never the queue.
+  Future<void> setLooping(bool enabled) async {}
 
   // Track management (optional, implementations can return empty/no-op)
   dynamic get tracks;

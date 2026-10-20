@@ -71,6 +71,7 @@ void main() {
                 'anchor',
                 'reset'
               ],
+              'settings': ['speed', 'loop', 'scaling', 'subtitle_offset'],
               'tracks': [
                 'audio_select',
                 'subtitle_select',
@@ -86,13 +87,33 @@ void main() {
                 'move',
                 'clear'
               ],
-              'reporting': ['status', 'context', 'tracks', 'playlist_status'],
+              'reporting': [
+                'status',
+                'context',
+                'tracks',
+                'playlist_status',
+                'player_settings'
+              ],
             },
           },
         },
       });
     });
   }
+
+  test(
+      'desktop auth and protected bundle fixtures match production capabilities',
+      () {
+    final auth = jsonDecode(File(
+            '../protocol/tests/fixtures/receiver-capabilities/desktop-auth-v1.json')
+        .readAsStringSync()) as Map<String, dynamic>;
+    final bundle = jsonDecode(File(
+            '../protocol/tests/fixtures/receiver-capabilities/desktop-bundle-v1.json')
+        .readAsStringSync()) as Map<String, dynamic>;
+    expect(auth['capabilities'], bundle['capabilities']);
+    expect(auth['capabilities'],
+        buildDesktopReceiverCapabilities(operatingSystem: 'macos'));
+  });
 
   test('unverified OS does not promise system volume', () {
     final descriptor =

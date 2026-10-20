@@ -53,3 +53,13 @@ BoxFit videoScalingBoxFit(VideoScalingMode mode) => switch (mode) {
       VideoScalingMode.zoom => BoxFit.cover,
       VideoScalingMode.fill => BoxFit.fill,
     };
+
+/// Apply both properties on every transition, so leaving Zoom clears panscan
+/// and leaving Fill restores aspect preservation. Flutter's Video fit remains
+/// in sync for media_kit texture outputs, where mpv does not size the widget.
+Map<String, String>? mpvScalingProperties(String mode) => switch (mode) {
+      'Fit' => const {'keepaspect': 'yes', 'panscan': '0'},
+      'Zoom' => const {'keepaspect': 'yes', 'panscan': '1.0'},
+      'Fill' => const {'keepaspect': 'no', 'panscan': '0'},
+      _ => null,
+    };

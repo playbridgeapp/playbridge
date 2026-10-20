@@ -29,6 +29,7 @@ Map<String, Object?> buildDesktopReceiverCapabilities(
               'anchor',
               'reset'
             ],
+            'settings': ['speed', 'loop', 'scaling', 'subtitle_offset'],
             'tracks': [
               'audio_select',
               'subtitle_select',
@@ -44,7 +45,13 @@ Map<String, Object?> buildDesktopReceiverCapabilities(
               'move',
               'clear'
             ],
-            'reporting': ['status', 'context', 'tracks', 'playlist_status'],
+            'reporting': [
+              'status',
+              'context',
+              'tracks',
+              'playlist_status',
+              'player_settings'
+            ],
           },
         },
       },

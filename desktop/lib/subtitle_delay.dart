@@ -11,8 +11,13 @@ int clampSubtitleDelayMs(int ms) {
   return ms;
 }
 
-int adjustSubtitleDelayMs(int currentMs, int deltaMs) =>
-    clampSubtitleDelayMs(currentMs + deltaMs);
+int adjustSubtitleDelayMs(int currentMs, int deltaMs) {
+  final current = clampSubtitleDelayMs(currentMs);
+  // Bound before adding: a valid signed wire integer must not wrap at int64.
+  if (deltaMs > subtitleDelayMaxMs - current) return subtitleDelayMaxMs;
+  if (deltaMs < subtitleDelayMinMs - current) return subtitleDelayMinMs;
+  return current + deltaMs;
+}
 
 /// OSD / menu label. `Synced` at 0; otherwise `+100 ms` / `-1000 ms`.
 String subtitleDelayLabel(int ms) {
