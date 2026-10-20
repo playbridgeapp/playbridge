@@ -195,7 +195,7 @@ internal fun RemoteMediaInfo(state: RemoteUiState, layout: RemoteLayoutSpec, dis
             onSelectAudio = { dispatch(RemoteAction.SelectAudio(it)) },
             onSubtitlesClick = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Subtitles)) },
             onMore = { dispatch(RemoteAction.OpenSheet(RemoteSheet.More)) },
-            showMore = layout.tracks.more,
+            showMore = layout.tracks.more && playerSettingsHaveContent(state),
         )
     }
 }

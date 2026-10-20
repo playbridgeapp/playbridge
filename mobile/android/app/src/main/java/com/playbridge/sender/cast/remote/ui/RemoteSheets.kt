@@ -152,7 +152,7 @@ private fun PlayerSettingsSheet(
 
             // 1. Playback group: Speed, Loop, Stop
             val showSpeed = showSettings && settings.speedAvailable
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (showSpeed || showLoop) Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     "Playback",
                     style = MaterialTheme.typography.titleSmall,
@@ -467,6 +467,21 @@ private fun audioOrdinal(tracks: List<MediaTrack>, track: MediaTrack): Int {
     return index + 1
 }
 
+/**
+ * Whether More would show anything. Stop and Add subtitle moved out of More, so a receiver with no
+ * player settings (e.g. desktop) must not get an empty sheet. Mirrors [PlayerSettingsSheet]'s rows.
+ */
+internal fun playerSettingsHaveContent(state: RemoteUiState): Boolean {
+    val external = state.receiver?.profile == RemoteProfile.External
+    val image = state.playback?.mediaKind == RemoteMediaKind.Image
+    val show = !external && !image
+    val settings = state.screenSettings()
+    val loop = show && state.playback?.isLive != true && (state.nativePolicy == null || PlayerSetting.Loop in state.capabilities.settings)
+    val quality = settings.qualityAvailable && state.tracks.video.count { it.id != "auto" } > 1
+    val engine = state.nativePolicy?.let { PlayerSetting.Engine in state.capabilities.settings } ?: (settings.engine != null)
+    return loop || show && (settings.speedAvailable || quality || settings.scalingAvailable || settings.audioBoostAvailable || engine)
+}
+
 /** A reported loop boolean draws the switch. A missing field keeps Enable and Disable. */
 internal fun loopEditorUsesSwitch(loopEnabled: Boolean?): Boolean = loopEnabled != null
 
@@ -489,7 +504,7 @@ internal fun RemoteSheets(
         state.sheet == RemoteSheet.OpenTvApp && state.fullControlReady
     CompositionLocalProvider(LocalRemoteControlsEnabled provides enabled) {
         when (state.sheet) {
-            RemoteSheet.More -> if (layout.tracks.more) PlayerSettingsSheet(
+            RemoteSheet.More -> if (layout.tracks.more && playerSettingsHaveContent(state)) PlayerSettingsSheet(
                 settings = state.screenSettings(), videoTracks = state.tracks.video.map { it.screenTrack() },
                 onSetVideoQuality = { dispatch(RemoteAction.SetVideoQuality(it.takeIf { value -> value > 0 })) },
                 onSetSpeed = { dispatch(RemoteAction.SetSpeed(it)) },
