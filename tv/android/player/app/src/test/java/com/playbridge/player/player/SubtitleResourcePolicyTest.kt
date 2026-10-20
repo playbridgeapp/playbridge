@@ -46,4 +46,24 @@ class SubtitleResourcePolicyTest {
 
         assertEquals(payload.headers, payload.headersForSubtitle(payload.subtitles.single()))
     }
+
+    @Test
+    fun `item subtitle resources name their tracks by label, else language`() {
+        val payload = PlayPayload(
+            url = "https://video.example/master.m3u8",
+            subtitle_resources = listOf(
+                SubtitleResource(url = "https://subs5.strem.io/en/download/1001", label = "English · BLURAY 1080p", language = "en"),
+                SubtitleResource(url = "https://subs5.strem.io/fr/download/1002", label = " ", language = "French"),
+                SubtitleResource(url = "https://subs5.strem.io/xx/download/1003"),
+            ),
+        )
+
+        assertEquals(
+            mapOf(
+                "https://subs5.strem.io/en/download/1001" to "English · BLURAY 1080p",
+                "https://subs5.strem.io/fr/download/1002" to "French",
+            ),
+            payload.subtitleLabelsByUrl(),
+        )
+    }
 }

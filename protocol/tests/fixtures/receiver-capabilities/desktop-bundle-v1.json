@@ -15,7 +15,8 @@
     "stable_item_ids",
     "command_results",
     "subtitle_resource_add_v1",
-    "progress_webhook_v1"
+    "progress_webhook_v1",
+    "receiver_capabilities_v1"
   ],
   "capabilities": {
     "version": 1,
@@ -72,8 +73,13 @@
       "scope": "system",
       "fallbackScope": "app",
       "operations": [
-        "relative_step"
-      ]
+        "relative_step",
+        "absolute",
+        "mute_toggle",
+        "level_report",
+        "mute_report"
+      ],
+      "step": 0.0625
     }
   }
 }

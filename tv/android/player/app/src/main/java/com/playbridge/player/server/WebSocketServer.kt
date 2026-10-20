@@ -68,6 +68,7 @@ class WebSocketServer(
     private val onWssReady: ((wssPort: Int) -> Unit)? = null,
     // Resolve availability through the shared publication owner on auth, pairing,
     // subscription and package changes, so every advertisement uses one snapshot.
+    private val initialVolumeState: () -> String? = { null },
     private val capabilities: () -> TvCapabilities = {
         TvCapabilities(emptyList(), emptyList(), screenMirrorWebRtc = false)
     },
@@ -668,6 +669,7 @@ class WebSocketServer(
         private fun registerAuthed(conn: org.java_websocket.WebSocket) {
             authed.add(conn)
             wssClients.add(conn)
+            initialVolumeState()?.let(conn::send)
             refreshCount()
             _connectionState.value = ConnectionState.Connected(conn.remoteSocketAddress?.toString() ?: "wss")
         }

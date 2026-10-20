@@ -120,6 +120,9 @@ final class ReceiverRuntime implements Finalizable {
   Future<int> get started => _started.future;
   bool get isDisposed => _disposed;
 
+  void replaceCapabilities(Map<String, Object?> capabilities) => _submit(
+      {'command': 'replace_capabilities', 'capabilities': capabilities});
+
   void broadcast(Map<String, Object?> message) {
     _submit({'command': 'broadcast', 'message': message});
   }

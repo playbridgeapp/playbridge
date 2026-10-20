@@ -249,7 +249,7 @@ struct Shared {
     media_kinds: Vec<String>,
     features: Vec<String>,
     screen_mirror_web_rtc: bool,
-    capabilities: Option<ReceiverCapabilities>,
+    capabilities: Mutex<Option<ReceiverCapabilities>>,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
     authenticated: Mutex<HashMap<u64, String>>,
@@ -265,7 +265,10 @@ impl Shared {
             "players":self.players, "browsers":self.browsers, "mediaKinds":self.media_kinds,
             "features":self.features, "screenMirrorWebRtc":self.screen_mirror_web_rtc,
         });
-        if success && let Some(capabilities) = &self.capabilities {
+        if success
+            && let Ok(current) = self.capabilities.lock()
+            && let Some(capabilities) = &*current
+        {
             response["capabilities"] = capabilities.as_json().clone();
         }
         response
@@ -352,7 +355,7 @@ impl ReceiverHost {
             media_kinds: config.media_kinds.clone(),
             features: config.features.clone(),
             screen_mirror_web_rtc: config.screen_mirror_web_rtc,
-            capabilities: config.capabilities.clone(),
+            capabilities: Mutex::new(config.capabilities.clone()),
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
             authenticated: Mutex::new(HashMap::new()),
@@ -459,6 +462,13 @@ impl ReceiverHost {
 
     pub fn subscribe(&self) -> broadcast::Receiver<ReceiverEvent> {
         self.events.subscribe()
+    }
+
+    /// Update future protected pairing/auth snapshots without restarting sockets.
+    pub fn replace_capabilities(&self, capabilities: ReceiverCapabilities) {
+        if let Ok(mut current) = self.shared.capabilities.lock() {
+            *current = Some(capabilities);
+        }
     }
 
     pub fn broadcast(&self, value: Value) {
@@ -802,7 +812,7 @@ where
                                     media_kinds: shared.media_kinds.clone(),
                                     screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
                                     features: shared.features.clone(),
-                                    capabilities: shared.capabilities.clone(),
+                                    capabilities: shared.capabilities.lock().map_err(|_| "capability registry failed")?.clone(),
                                 },
                             )
                             .map_err(|_| "pairing confirmation was invalid".to_owned())?;
@@ -1135,6 +1145,23 @@ mod tests {
             .unwrap();
         assert!(host.shared.authenticated.lock().unwrap().is_empty());
         assert!(host.shared.connections.lock().unwrap().is_empty());
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn output_change_updates_future_auth_capabilities() {
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        let host = ReceiverHost::start(config).await.unwrap();
+        let descriptor = json!({"version":1,"surfaces":{},"volume":{"scope":"system","operations":["relative_step"],"fallbackScope":"app"}});
+        host.replace_capabilities(ReceiverCapabilities::from_json(descriptor.clone()).unwrap());
+        assert_eq!(host.shared.auth_response(true)["capabilities"], descriptor);
+        assert!(
+            host.shared
+                .auth_response(false)
+                .get("capabilities")
+                .is_none()
+        );
         host.shutdown().await;
     }
 

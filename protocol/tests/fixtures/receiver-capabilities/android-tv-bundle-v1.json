@@ -244,7 +244,10 @@
       "scope": "system",
       "operations": [
         "relative_step",
-        "mute_toggle"
+        "absolute",
+        "mute_toggle",
+        "level_report",
+        "mute_report"
       ]
     },
     "companionHints": [

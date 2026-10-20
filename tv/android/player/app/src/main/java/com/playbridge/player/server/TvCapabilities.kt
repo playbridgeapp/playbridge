@@ -2,6 +2,7 @@ package com.playbridge.player.server
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioManager
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -49,6 +50,8 @@ object TvCapabilityProvider {
             browsers = browsers,
             mediaKinds = listOf("video", "audio", "image"),
             screenMirrorWebRtc = true,
+            capabilities = buildReceiverCapabilities(PLAYERS, browsers,
+                volumeFixed = (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).isVolumeFixed),
         )
     }
 
@@ -103,6 +106,7 @@ private fun buildBrowserEngineDescriptor(pointer: List<String>): JsonObject = bu
 fun buildReceiverCapabilities(
     players: List<String>,
     browsers: List<String>,
+    volumeFixed: Boolean = false,
 ): JsonObject = buildJsonObject {
     put("version", 1)
     put("surfaces", buildJsonObject {
@@ -138,7 +142,9 @@ fun buildReceiverCapabilities(
     put("volume", buildJsonObject {
         put("scope", "system")
         put("operations", buildJsonArray {
-            listOf("relative_step", "mute_toggle").forEach { add(it) }
+            val operations = if (volumeFixed) listOf("relative_step", "mute_toggle")
+                else listOf("relative_step", "absolute", "mute_toggle", "level_report", "mute_report")
+            operations.forEach { add(it) }
         })
     })
     put("companionHints", buildJsonArray {

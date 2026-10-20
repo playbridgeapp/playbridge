@@ -424,6 +424,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       onPlaybackActivity: _stillWatching.recordUserActivity,
       onNewMedia: _stillWatching.resetForNewMedia,
       onScreenMirrorStarted: _handleScreenMirrorStarted,
+      onRemoteVolumeFeedback: (message) =>
+          _showOsd(message, duration: const Duration(milliseconds: 1500)),
     );
     _discovery = DiscoveryPublisher(
       serviceName: widget.store.deviceName,
@@ -921,11 +923,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
-  void _showOsd(String message) {
+  void _showOsd(String message,
+      {Duration duration = const Duration(milliseconds: 1100)}) {
     _osdTimer?.cancel();
     if (!mounted) return;
     setState(() => _osdMessage = message);
-    _osdTimer = Timer(const Duration(milliseconds: 1100), () {
+    _osdTimer = Timer(duration, () {
       if (mounted) setState(() => _osdMessage = null);
     });
   }
@@ -1624,9 +1627,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     onStart: _dismissPrePlay,
                                                   ),
                                                 ),
-                                              if (_osdMessage != null)
-                                                PlaybackOsd(
-                                                    message: _osdMessage!),
                                               if (_mainDragging)
                                                 Positioned.fill(
                                                   child: _MainDropOverlay(
@@ -1668,6 +1668,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                           ),
                           // Self-update dialogs/banners; renders nothing while idle.
                           UpdateGate(checker: _updateChecker),
+                          if (_osdMessage != null)
+                            Positioned.fill(
+                                child: PlaybackOsd(message: _osdMessage!)),
                         ],
                       );
                     },

@@ -12,6 +12,7 @@ import 'player_engine.dart';
 import 'protocol.dart';
 import 'screen_mirror_receiver.dart';
 import 'system_volume.dart';
+import 'remote_volume_commands.dart';
 import 'extension_request_debug_log.dart';
 import 'late_subtitle_loader.dart';
 import 'progress_webhook.dart';
@@ -69,6 +70,7 @@ class ReceiverServer extends ChangeNotifier {
     this.onPlaybackActivity,
     this.onNewMedia,
     this.onScreenMirrorStarted,
+    this.onRemoteVolumeFeedback,
   }) {
     player.onTerminalError = _handlePlaybackError;
     screenMirror = ScreenMirrorReceiver(send: _sendScreenMirrorMessage);
@@ -98,11 +100,40 @@ class ReceiverServer extends ChangeNotifier {
   final VoidCallback? onPlaybackActivity;
   final VoidCallback? onNewMedia;
   final VoidCallback? onScreenMirrorStarted;
+  final void Function(String)? onRemoteVolumeFeedback;
+  late final _volumeCommands = RemoteVolumeCommands(_applyVolumeChange);
+  StreamSubscription<SystemVolumeState?>? _volumeEvents;
   late final ScreenMirrorReceiver screenMirror;
 
   rust.ReceiverRuntime? _runtime;
   StreamSubscription<Map<String, Object?>>? _eventsSubscription;
   Timer? _statusTimer;
+  Timer? _volumeTimer;
+  Future<SystemVolumeState?>? _volumeRead;
+  final _volumePublication = VolumeStatePublication();
+  int _volumeEpoch = 0;
+  bool _usingAppVolume = false;
+  bool _macVolumeAvailable = false;
+  int _capabilitiesRevision = 1;
+  final _capabilitySubscribers = <int>{};
+  Map<String, Object?> get _currentCapabilities =>
+      buildDesktopReceiverCapabilities(macNativeVolume: _macVolumeAvailable);
+  void _sendCapabilities(int connectionId) => _runtime?.sendTo(connectionId, {
+        'type': 'receiver_capabilities',
+        'revision': _capabilitiesRevision,
+        'capabilities': _currentCapabilities,
+      });
+  void _updateVolumeCapabilities() {
+    if (_macVolumeAvailable == SystemVolume.macNativeAvailable) return;
+    _macVolumeAvailable = SystemVolume.macNativeAvailable;
+    if (_macVolumeAvailable) _usingAppVolume = false;
+    _capabilitiesRevision++;
+    _runtime?.replaceCapabilities(_currentCapabilities);
+    for (final id in _capabilitySubscribers) {
+      _sendCapabilities(id);
+    }
+  }
+
   final _progressReporter = ProgressWebhookReporter();
   StreamSubscription<PlaybackBoundary>? _playbackBoundaries;
   bool _disposed = false;
@@ -133,9 +164,12 @@ class ReceiverServer extends ChangeNotifier {
 
   Future<int> start({int? port}) async {
     if (_runtime != null) return _wssPort ?? kDefaultPort;
+    if (SystemVolume.usesEvents) await SystemVolume.read();
+    _macVolumeAvailable = SystemVolume.macNativeAvailable;
     final cert = await CertManager.loadOrCreate(commonName: store.deviceName);
     final runtime = rust.ReceiverRuntime.start(
       buildDesktopReceiverRuntimeConfig(
+        macNativeVolume: SystemVolume.macNativeAvailable,
         name: store.deviceName,
         uuid: store.deviceId,
         certificateDer: cert.certificateDer,
@@ -148,6 +182,14 @@ class ReceiverServer extends ChangeNotifier {
       ),
     );
     _runtime = runtime;
+    if (SystemVolume.usesEvents) {
+      _volumeEvents = SystemVolume.changes.listen((state) {
+        _volumeEpoch++;
+        _volumeRead = null;
+        _updateVolumeCapabilities();
+        if (!_usingAppVolume && state != null) _sendVolumeFrame(state.frame());
+      }, onError: (Object _) {});
+    }
     _eventsSubscription = runtime.events.listen(
       _handleRuntimeEvent,
       onError: (Object error, StackTrace stackTrace) {
@@ -188,6 +230,19 @@ class ReceiverServer extends ChangeNotifier {
       case 'client_count':
         _connectedClientCount = event['total']! as int;
         _authedClientCount = event['authenticated']! as int;
+        if (_authedClientCount > 0) {
+          if (!SystemVolume.usesEvents) {
+            _volumeTimer ??= Timer.periodic(
+                const Duration(seconds: 2), (_) => unawaited(_publishVolume()));
+          }
+        } else {
+          _volumeTimer?.cancel();
+          _volumeTimer = null;
+          _volumePublication.reset();
+          _capabilitySubscribers.clear();
+          _volumeEpoch++;
+          _volumeRead = null;
+        }
         if (_connectedClientCount == 0) {
           _pairingInProgress = false;
           _pendingPairingRequest = null;
@@ -201,6 +256,7 @@ class ReceiverServer extends ChangeNotifier {
         final connectionId = event['connection_id'];
         if (connectionId is int) {
           screenMirror.connectionClosed(connectionId);
+          _capabilitySubscribers.remove(connectionId);
         }
       case 'pairing_started':
         _pairingInProgress = true;
@@ -215,6 +271,7 @@ class ReceiverServer extends ChangeNotifier {
         );
         notifyListeners();
       case 'paired':
+        unawaited(_publishVolume(connectionId: event['connection_id']! as int));
         final token = event['token']! as String;
         unawaited(store.addPairedDevice(PairedDeviceRecord(
           deviceUUID: event['device_uuid']! as String,
@@ -226,6 +283,7 @@ class ReceiverServer extends ChangeNotifier {
         _pendingPairingRequest = null;
         notifyListeners();
       case 'authenticated':
+        unawaited(_publishVolume(connectionId: event['connection_id']! as int));
         final digest = event['token_digest']! as String;
         unawaited(store.updateLastConnectedDigest(digest));
       case 'command':
@@ -233,6 +291,18 @@ class ReceiverServer extends ChangeNotifier {
         final connectionId = event['connection_id'];
         if (raw is String && connectionId is int) {
           final requestId = event['request_id'] as String?;
+          final command = parseCommand(raw);
+          if (command is VolumeCmd ||
+              command is RemoteCmd &&
+                  const {'volume_up', 'volume_down', 'mute'}
+                      .contains(command.key)) {
+            unawaited(_handleCommand(command, connectionId, requestId)
+                .catchError((Object _) {
+              _completeCommand(connectionId, requestId,
+                  ok: false, error: 'invalid_command');
+            }));
+            return;
+          }
           _commandSerial = _commandSerial.then((_) async {
             try {
               await _handleCommand(parseCommand(raw), connectionId, requestId);
@@ -248,6 +318,10 @@ class ReceiverServer extends ChangeNotifier {
       case 'error':
         debugPrint('[server] Rust receiver: ${event['message']}');
       case 'finished':
+        _volumeTimer?.cancel();
+        _volumeTimer = null;
+        _volumeEpoch++;
+        _volumeRead = null;
         _connectedClientCount = 0;
         _authedClientCount = 0;
         _pairingInProgress = false;
@@ -267,6 +341,9 @@ class ReceiverServer extends ChangeNotifier {
         sessionEnded: true, snapshot: _progressSnapshot());
     await _playbackBoundaries?.cancel();
     _statusTimer?.cancel();
+    _volumeTimer?.cancel();
+    await _volumeEvents?.cancel();
+    _volumeCommands.close();
     if (player.onTerminalError == _handlePlaybackError) {
       player.onTerminalError = null;
     }
@@ -334,6 +411,7 @@ class ReceiverServer extends ChangeNotifier {
         _sendStatus(connectionId);
         _sendPlaylistStatus(connectionId);
         _broadcastTracksIfChanged(force: true);
+        await _publishVolume(connectionId: connectionId);
       case PlaylistCmd(:final items, :final startIndex, :final skipPreplay):
         unawaited(
           screenMirror.stopForReplacement(reason: 'media_started'),
@@ -603,7 +681,11 @@ class ReceiverServer extends ChangeNotifier {
         } else {
           onPlaybackActivity?.call();
         }
-        _handleRemoteKey(key);
+        await _handleRemoteKey(key);
+      case VolumeCmd(:final scope, :final level):
+        if (scope == 'system') {
+          await _volumeCommands.add(RemoteVolumeChange(level: level));
+        }
       case MouseCmd(:final event, :final dx, :final dy):
         if (player.currentMediaKind == MediaKind.image) {
           switch (event) {
@@ -619,7 +701,12 @@ class ReceiverServer extends ChangeNotifier {
               player.rotateImage(dx);
           }
         }
-      case UnknownCmd():
+      case UnknownCmd(:final type):
+        if (type == 'receiver_capabilities_subscribe') {
+          _capabilitySubscribers.add(connectionId);
+          _sendCapabilities(connectionId);
+          return;
+        }
         _completeCommand(connectionId, requestId,
             ok: false, error: 'invalid_command');
       default:
@@ -742,32 +829,102 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  void _handleRemoteKey(String key) {
+  Future<void> _handleRemoteKey(String key) async {
     switch (key) {
       case 'volume_up':
-        unawaited(_adjustVolume(up: true));
+        await _adjustVolume(up: true);
       case 'volume_down':
-        unawaited(_adjustVolume(up: false));
+        await _adjustVolume(up: false);
+      case 'mute':
+        await _volumeCommands.add(const RemoteVolumeChange(mute: true));
       default:
         debugPrint('[server] ignoring unsupported remote key');
     }
   }
 
-  bool _volumeBusy = false;
+  Future<void> _adjustVolume({required bool up}) =>
+      _volumeCommands.add(RemoteVolumeChange(steps: up ? 1 : -1));
 
-  Future<void> _adjustVolume({required bool up}) async {
-    if (_volumeBusy) return;
-    _volumeBusy = true;
-    try {
-      final handled = await SystemVolume.step(up: up);
-      if (!handled) {
-        const step = 0.05;
-        final next =
-            (player.volume + (up ? step : -step)).clamp(0.0, 1.0).toDouble();
-        await player.setVolume(next);
+  Future<void> _applyVolumeChange(RemoteVolumeChange change) async {
+    if (_disposed) return;
+    _volumeEpoch++;
+    _volumeRead = null;
+    Map<String, Object?>? frame;
+    if (SystemVolume.usesEvents) {
+      final state = await SystemVolume.applyMac(
+          steps: change.steps, level: change.level, mute: change.mute);
+      if (state != null) {
+        _usingAppVolume = false;
+        frame = state.frame();
       }
-    } finally {
-      _volumeBusy = false;
+    } else {
+      var handled = false;
+      if (change.mute) {
+        handled = await SystemVolume.toggleMute();
+      } else if (change.level != null) {
+        handled = await SystemVolume.setLevel(change.level!);
+      } else {
+        handled = true;
+        for (var i = 0; i < change.steps.abs(); i++) {
+          if (!await SystemVolume.step(up: change.steps > 0)) {
+            handled = false;
+            break;
+          }
+        }
+      }
+      if (handled) {
+        _usingAppVolume = false;
+        frame = (await SystemVolume.read())?.frame();
+      }
+    }
+    if (frame == null && !change.mute && change.level == null) {
+      _usingAppVolume = true;
+      final next =
+          (player.volume + change.steps * .05).clamp(0.0, 1.0).toDouble();
+      await player.setVolume(next);
+      frame = {'type': 'volume_state', 'scope': 'app', 'level': next};
+    }
+    if (frame != null && !_disposed) {
+      _sendVolumeFrame(frame);
+      final feedback = remoteVolumeFeedback(frame);
+      if (feedback != null) onRemoteVolumeFeedback?.call(feedback);
+    }
+  }
+
+  void _sendVolumeFrame(Map<String, Object?> frame) {
+    if (_disposed || _authedClientCount == 0) return;
+    final changed = _volumePublication.changed(frame);
+    if (changed != null) _broadcast(changed);
+  }
+
+  Future<void> _publishVolume({int? connectionId}) async {
+    if (_disposed || (connectionId == null && _authedClientCount == 0)) return;
+    final epoch = _volumeEpoch;
+    Map<String, Object?>? frame;
+    if (_usingAppVolume) {
+      frame = {
+        'type': 'volume_state',
+        'scope': 'app',
+        'level': player.volume.clamp(0.0, 1.0)
+      };
+    } else {
+      final read = _volumeRead ??= SystemVolume.read();
+      final state = await read;
+      if (SystemVolume.usesEvents) _updateVolumeCapabilities();
+      if (identical(_volumeRead, read)) _volumeRead = null;
+      frame = state?.frame();
+    }
+    if (_disposed ||
+        epoch != _volumeEpoch ||
+        frame == null ||
+        (connectionId == null && _authedClientCount == 0)) {
+      return;
+    }
+    if (connectionId != null) {
+      _runtime?.sendTo(connectionId, _volumePublication.sync(frame));
+    } else {
+      final changed = _volumePublication.changed(frame);
+      if (changed != null) _broadcast(changed);
     }
   }
 
@@ -805,6 +962,13 @@ class ReceiverServer extends ChangeNotifier {
   }
 
   void _broadcastStatus() {
+    if (_usingAppVolume) {
+      _sendVolumeFrame({
+        'type': 'volume_state',
+        'scope': 'app',
+        'level': player.volume.clamp(0.0, 1.0)
+      });
+    }
     _broadcastPlayerContextIfChanged();
     if (player.hasTerminalError) return;
     if (!player.isOpening) _progressReporter.update(_progressSnapshot());

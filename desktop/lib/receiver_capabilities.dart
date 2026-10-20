@@ -5,7 +5,7 @@ import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 /// Static native advertisement for ReceiverServer's implemented dispatch only.
 /// Local player controls and the hosted-browser protocol are separate surfaces.
 Map<String, Object?> buildDesktopReceiverCapabilities(
-    {String? operatingSystem}) {
+    {String? operatingSystem, bool macNativeVolume = true}) {
   final os = operatingSystem ?? Platform.operatingSystem;
   return {
     'version': 1,
@@ -49,12 +49,21 @@ Map<String, Object?> buildDesktopReceiverCapabilities(
         },
       },
     },
-    // SystemVolume.step supports these OSes; _adjustVolume falls back to app
-    // attenuation. No stable cross-platform system increment, mute or reports.
+    // Implemented by SystemVolume (Core Audio on Windows). Relative stepping
+    // can fall back to player attenuation; reports always name the actual scope.
     if (const {'macos', 'windows', 'linux'}.contains(os))
-      'volume': const {
+      'volume': {
         'scope': 'system',
-        'operations': ['relative_step'],
+        'operations': [
+          'relative_step',
+          if (os != 'macos' || macNativeVolume) ...[
+            'absolute',
+            'mute_toggle',
+            'level_report',
+            'mute_report'
+          ],
+        ],
+        if (os == 'macos') 'step': 0.0625,
         'fallbackScope': 'app',
       },
     'host': {'osFamily': os, 'deviceClass': 'desktop'},
@@ -71,6 +80,7 @@ ReceiverRuntimeConfig buildDesktopReceiverRuntimeConfig({
   required String privateKeyKind,
   required int preferredPort,
   required List<String> authorizedTokens,
+  bool macNativeVolume = true,
 }) =>
     ReceiverRuntimeConfig(
       name: name,
@@ -88,7 +98,9 @@ ReceiverRuntimeConfig buildDesktopReceiverRuntimeConfig({
         'command_results',
         'subtitle_resource_add_v1',
         'progress_webhook_v1',
+        'receiver_capabilities_v1',
       ],
       screenMirrorWebRtc: true,
-      capabilities: buildDesktopReceiverCapabilities(),
+      capabilities:
+          buildDesktopReceiverCapabilities(macNativeVolume: macNativeVolume),
     );
