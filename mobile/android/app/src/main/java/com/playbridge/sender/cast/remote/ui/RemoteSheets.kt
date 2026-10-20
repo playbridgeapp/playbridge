@@ -126,15 +126,11 @@ private fun PlayerSettingsSheet(
     onSetSpeed: (Float) -> Unit,
     onSetScaling: (String) -> Unit,
     onToggleAudioBoost: () -> Unit,
-    onAdjustSubtitleOffset: (Long) -> Unit,
     onSwitchEngine: (String) -> Unit,
     showSettings: Boolean,
     showLoop: Boolean,
     loopEnabled: Boolean?,
     onLoop: (Boolean) -> Unit,
-    onStop: () -> Unit,
-    showAddSubtitle: Boolean,
-    onAddSubtitle: () -> Unit,
     onDismiss: () -> Unit,
     capabilities: RemoteCapabilities? = null,
 ) {
@@ -215,13 +211,6 @@ private fun PlayerSettingsSheet(
                         }
                     }
                 }
-                if (capabilities == null || capabilities.transport.stop == Support.Supported) Button(
-                    enabled = LocalRemoteControlsEnabled.current,
-                    onClick = onStop,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Stop playback")
-                }
             }
 
             // 2. Picture group: Quality, Scaling
@@ -295,50 +284,6 @@ private fun PlayerSettingsSheet(
                     }
                 }
             }
-
-            // 4. Subtitles group: Offset / Delay, Add Subtitle
-            val showOffset = showSettings && (capabilities == null || PlayerSetting.SubtitleOffset in capabilities.settings)
-            if (showOffset || showAddSubtitle) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "Subtitles",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    if (showOffset) {
-                        SettingRow("Subtitle offset") {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                FilledTonalButton(
-                                    enabled = LocalRemoteControlsEnabled.current,
-                                    onClick = { onAdjustSubtitleOffset(-250L) },
-                                ) {
-                                    Text("−250ms")
-                                }
-                                Text("${settings.subtitleOffsetMs} ms", style = MaterialTheme.typography.bodyMedium)
-                                FilledTonalButton(
-                                    enabled = LocalRemoteControlsEnabled.current,
-                                    onClick = { onAdjustSubtitleOffset(250L) },
-                                ) {
-                                    Text("+250ms")
-                                }
-                            }
-                        }
-                    }
-                    if (showAddSubtitle) {
-                        OutlinedButton(
-                            enabled = LocalRemoteControlsEnabled.current,
-                            onClick = onAddSubtitle,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Add subtitle")
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -359,130 +304,6 @@ private fun ChipGroup(options: List<Pair<String, String>>, selectedKey: String, 
         }
     }
 }
-
-@Composable
-private fun AddSubtitleDialog(
-    detectedSubtitles: List<DetectedVideo>,
-    onSubmitResource: ((playbridge.SubtitleResource) -> Unit)? = null,
-    onAddResource: (playbridge.SubtitleResource) -> Boolean,
-    onAddLocalUrl: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var url by remember { mutableStateOf("") }
-    val context = LocalContext.current
-    val sources = remember(detectedSubtitles.isNotEmpty()) {
-        if (detectedSubtitles.isNotEmpty()) SubtitleSource.entries.toList()
-        else SubtitleSource.entries.filterNot { it == SubtitleSource.DETECTED }
-    }
-    var source by remember(sources) { mutableStateOf(sources.first()) }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) {
-            publishLocalSubtitle(context, uri)?.let { (localUrl, _) -> onAddLocalUrl(localUrl) }
-        }
-    }
-
-    fun addResource(resource: playbridge.SubtitleResource) {
-        if (onSubmitResource != null) { onSubmitResource(resource); return }
-        if (!onAddResource(resource)) {
-            android.widget.Toast.makeText(
-                context, "Could not add subtitle. Check the TV connection or update the receiver.",
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
-
-    val detected = remember(detectedSubtitles) { newestSubtitlesFirst(detectedSubtitles) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { RemoteDialogVolumeKeys(); Text("Add subtitle") },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
-                SubtitleSourceTabs(sources = sources, selected = source, onSelect = { source = it })
-                Spacer(Modifier.height(16.dp))
-                when (source) {
-                    SubtitleSource.DETECTED -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 390.dp)) {
-                        items(detected, key = { it.url }) { subtitle ->
-                            var preview by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
-                            var language by remember(subtitle.url) { mutableStateOf(subtitle.subtitleLanguage) }
-                            LaunchedEffect(subtitle.url) {
-                                preview = VideoDetector.fetchSubtitlePreview(subtitle)
-                                language = subtitle.subtitleLanguage
-                            }
-                            Column(
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable(enabled = LocalRemoteControlsEnabled.current) { addResource(subtitleResourceForDetected(subtitle)) }
-                                    .padding(vertical = 9.dp),
-                            ) {
-                                Text(
-                                    subtitle.title ?: subtitle.url.substringBefore('?').substringAfterLast('/'),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    buildString {
-                                        append("Detected ")
-                                        append(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
-                                            .format(java.util.Date(subtitle.timestamp)))
-                                        language?.let { append(" · Likely ").append(it) }
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                preview?.takeIf(String::isNotBlank)?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                    SubtitleSource.LOCAL -> Column {
-                        Text("Choose a subtitle file from this phone. The TV will load it through the phone.")
-                        Spacer(Modifier.height(12.dp))
-                        FilledTonalButton(enabled = LocalRemoteControlsEnabled.current,
-                            onClick = { filePickerLauncher.launch("*/*") },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Choose local file") }
-                    }
-                    SubtitleSource.URL -> OutlinedTextField(enabled = LocalRemoteControlsEnabled.current,
-                        value = url,
-                        onValueChange = { url = it },
-                        label = { Text("Subtitle URL (.srt / .vtt)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            if (source == SubtitleSource.URL) {
-                TextButton(
-                    onClick = {
-                        val entered = url.trim()
-                        if (entered.startsWith("https://", true) || entered.startsWith("http://", true)) {
-                            addResource(playbridge.SubtitleResource(url = entered))
-                        } else {
-                            android.widget.Toast.makeText(context, "Enter an HTTP or HTTPS subtitle URL",
-                                android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    enabled = url.isNotBlank(),
-                ) { Text("Add URL") }
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-internal const val OFF_KEY = "__off__"
-internal const val EMBEDDED_KEY = "__embedded__"
-internal const val REMOTE_KEY = "__remote__"
-internal const val EXTERNAL_KEY = "__external__"
-
-internal data class SubGroup(val key: String, val label: String, val tracks: List<MediaTrack>, val hasSelected: Boolean)
-private data class SubInfo(val langKey: String, val langDisplay: String, val optionLabel: String)
 
 private val LANG_TOKENS: Map<String, String> = buildMap {
     fun add(display: String, vararg tokens: String) { tokens.forEach { put(it, display) } }
@@ -522,12 +343,71 @@ private val LANG_TOKENS: Map<String, String> = buildMap {
     add("Persian", "persian", "farsi", "fa", "per", "fas")
 }
 
-internal fun languageOf(segment: String): String? = LANG_TOKENS[segment.trim().lowercase()]
+internal fun languageOf(segment: String): String? = segment.trim().lowercase().let { LANG_TOKENS[it] ?: LOCALE_LANGUAGE_NAMES[it] }
+
+// Full English language names Java knows ("catalan", "tamil", …) for tracks the table above misses.
+// Names only, not codes: short codes collide with ordinary words.
+private val LOCALE_LANGUAGE_NAMES: Map<String, String> by lazy {
+    java.util.Locale.getISOLanguages().mapNotNull { code ->
+        java.util.Locale(code).getDisplayLanguage(java.util.Locale.ENGLISH).takeIf { it.length >= 4 && it != code }
+    }.associateBy { it.lowercase() }
+}
 
 /** Chip and sheet label. A numeric or hex id from the TV is not shown; the track id itself is unchanged. */
-internal fun subtitleOptionLabel(track: MediaTrack, tracks: List<MediaTrack>): String {
+internal fun subtitleOptionLabel(track: MediaTrack, tracks: List<MediaTrack>): String =
+    if (track.id.lowercase() in subtitleOffIds) "Off" else subtitleOptionLabels(tracks)[track.id] ?: baseSubtitleLabel(track, tracks)
+
+/** Labels for every real track by id, in one pass. Same words on several tracks get numbered in list order. */
+internal fun subtitleOptionLabels(tracks: List<MediaTrack>): Map<String, String> {
+    val real = tracks.filter { it.id.lowercase() !in subtitleOffIds }
+    val bases = real.map { it.id to baseSubtitleLabel(it, tracks) }
+    val totals = bases.groupingBy { it.second }.eachCount()
+    val seen = HashMap<String, Int>()
+    return bases.associate { (id, base) ->
+        id to if (totals.getValue(base) > 1) "$base ${seen.merge(base, 1, Int::plus)}" else base
+    }
+}
+
+private fun baseSubtitleLabel(track: MediaTrack, tracks: List<MediaTrack>): String {
     if (track.id.lowercase() in subtitleOffIds) return "Off"
-    return readableSubtitleName(track.name) ?: "Subtitle ${subtitleOrdinal(tracks, track)}"
+    readableSubtitleName(track.name)?.let { return it }
+    if (subtitleOrigin(track) == SubtitleOrigin.BuiltIn) return "Subtitle ${subtitleOrdinal(tracks, track)}"
+    // An added track named only by an id: describe its link instead, else number it among added tracks.
+    // Duplicate "Added" labels are numbered by subtitleOptionLabels.
+    return addedSubtitleLinkLabel(track.id) ?: "Added"
+}
+
+// Two-letter tokens that are usually ordinary path words rather than language codes.
+private val ambiguousPathTokens = setOf("id", "it", "no", "he", "hi", "do", "is", "to")
+
+/** Language named in a subtitle link's path, e.g. `/subs/eng/…` or `movie.en.srt`. */
+internal fun subtitleLinkLanguage(url: String): String? {
+    val path = runCatching { java.net.URI(url.substringBefore('#')).path }.getOrNull() ?: return null
+    return path.split('/', '.', '_', '-').firstNotNullOfOrNull { token ->
+        token.takeIf { it.isNotBlank() && it.lowercase() !in ambiguousPathTokens }?.let(::languageOf)
+    }
+}
+
+/** "subs5.strem.io" → "strem.io"; keeps three labels for hosts like "subs.example.co.uk". */
+internal fun shortHost(host: String): String {
+    val labels = host.lowercase().split('.').filter { it.isNotEmpty() }
+    val keep = if (labels.size >= 3 && labels.last().length == 2 && labels[labels.size - 2].length <= 3) 3 else 2
+    return labels.takeLast(keep).joinToString(".")
+}
+
+/** "movie.en" / "English · subs.example.com" / "subs.example.com", from a link; null when it says nothing readable. */
+internal fun addedSubtitleLinkLabel(url: String): String? {
+    url.substringAfter('#', "").takeIf { it.isNotBlank() }
+        ?.let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+        ?.let(::readableSubtitleName)?.let { return it }
+    val uri = runCatching { java.net.URI(url.substringBefore('#')) }.getOrNull() ?: return null
+    val file = uri.path.orEmpty().substringAfterLast('/')
+        .let { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+        .substringBeforeLast('.')
+        .takeIf { name -> name.length >= 3 && name.any(Char::isLetter) && !name.isOpaqueTrackId() }
+    if (file != null) return file
+    val host = uri.host?.takeUnless { it == "localhost" || it.all { c -> c.isDigit() || c == '.' } || it.contains(':') }?.let(::shortHost)
+    return listOfNotNull(subtitleLinkLanguage(url), host).joinToString(" · ").ifBlank { null }
 }
 
 internal fun readableSubtitleName(name: String): String? {
@@ -539,8 +419,15 @@ internal fun readableSubtitleName(name: String): String? {
     val rest = parts.filter { languageOf(it) == null }
     if (rest.isNotEmpty() && rest.all { it.isOpaqueTrackId() }) return languages.firstOrNull()
     if (rest.isEmpty() && languages.isNotEmpty()) return languages.joinToString(" • ")
+    // A segment that is only a language code reads as its name: "eng · OpenSubtitles v3" → "English · OpenSubtitles v3".
+    val segments = trimmed.split(labelSeparators)
+    if (segments.size > 1 && segments.any { it.length <= 3 && languageOf(it) != null }) {
+        return segments.joinToString(" · ") { segment -> if (segment.length <= 3) languageOf(segment) ?: segment else segment }
+    }
     return trimmed
 }
+
+private val labelSeparators = Regex("\\s*[·•|]\\s*")
 
 private fun String.isOpaqueTrackId(): Boolean {
     if (all { it.isDigit() }) return true
@@ -580,155 +467,6 @@ private fun audioOrdinal(tracks: List<MediaTrack>, track: MediaTrack): Int {
     return index + 1
 }
 
-private fun classifySub(t: MediaTrack): SubInfo {
-    if (t.id.lowercase() in subtitleOffIds) return SubInfo(OFF_KEY, "Off", "Off")
-    val isExternal = t.type == "external_sub" || t.id.startsWith("external_") || t.id.contains("://")
-    if (!isExternal) return SubInfo(EMBEDDED_KEY, "Embedded", t.name)
-
-    if (!t.name.contains("OpenSubtitles #")) return SubInfo(REMOTE_KEY, "Phone Remote", t.name.ifBlank { "Remote Subtitle" })
-
-    val segs = t.name.split(" · ", " • ").map { it.trim() }.filter { it.isNotEmpty() }
-    val lang = segs.firstNotNullOfOrNull { languageOf(it) }
-    return if (lang != null) {
-        val rest = segs.filter { languageOf(it) == null }.joinToString(" • ")
-        val opt = rest.ifBlank { "Add-on" }
-        SubInfo(lang.lowercase(), lang, opt)
-    } else {
-        SubInfo(EXTERNAL_KEY, "External", t.name.ifBlank { "Subtitle" })
-    }
-}
-
-internal fun groupSubtitleTracks(tracks: List<MediaTrack>): List<SubGroup> {
-    val off = subtitleOffTrack(tracks)
-    val byLang = LinkedHashMap<String, Pair<String, MutableList<MediaTrack>>>()
-
-    tracks.filterNot { it.id.lowercase() in subtitleOffIds }.forEach { t ->
-        val info = classifySub(t)
-        byLang.getOrPut(info.langKey) { info.langDisplay to mutableListOf() }.second.add(t)
-    }
-
-    val groups = mutableListOf<SubGroup>()
-    groups.add(SubGroup(OFF_KEY, "Off", listOf(off), off.selected))
-    byLang[EMBEDDED_KEY]?.let { (display, list) -> groups.add(SubGroup(EMBEDDED_KEY, display, list, list.any { it.selected })) }
-    byLang[REMOTE_KEY]?.let { (display, list) -> groups.add(SubGroup(REMOTE_KEY, display, list, list.any { it.selected })) }
-    byLang.filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }.forEach { (k, v) -> groups.add(SubGroup(k, v.first, v.second, v.second.any { it.selected })) }
-    byLang[EXTERNAL_KEY]?.let { (display, list) -> groups.add(SubGroup(EXTERNAL_KEY, display, list, list.any { it.selected })) }
-
-    return groups
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SubtitlesBottomSheet(
-    tracks: List<MediaTrack>,
-    onSelect: (String) -> Unit,
-    onAdd: () -> Unit,
-    onDismiss: () -> Unit,
-    showAdd: Boolean = true,
-    showSelection: Boolean = true,
-) {
-    val groups = remember(tracks, showSelection) { if (showSelection) groupSubtitleTracks(tracks) else emptyList() }
-    val initialGroupKey = remember(groups) {
-        groups.firstOrNull { g -> g.tracks.any { it.selected } && g.key != OFF_KEY }?.key
-            ?: groups.firstOrNull { it.key != OFF_KEY }?.key
-            ?: groups.firstOrNull()?.key
-    }
-    var selectedGroupKey by remember(groups) { mutableStateOf(initialGroupKey) }
-    val currentGroup = groups.firstOrNull { it.key == selectedGroupKey }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
-    ) {
-        RemoteDialogVolumeKeys()
-        Column(
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 24.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Subtitles", style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                if (showAdd) TextButton(enabled = LocalRemoteControlsEnabled.current, onClick = onAdd) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Add")
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                groups.forEach { group ->
-                    val isSelected = selectedGroupKey == group.key
-                    FilterChip(enabled = LocalRemoteControlsEnabled.current,
-                        selected = isSelected,
-                        onClick = {
-                            if (group.key == OFF_KEY) {
-                                onSelect(group.tracks.first().id)
-                                onDismiss()
-                            } else {
-                                selectedGroupKey = group.key
-                            }
-                        },
-                        label = {
-                            val countSuffix = if (group.key != OFF_KEY && group.tracks.isNotEmpty()) " (${group.tracks.size})" else ""
-                            Text(group.label + countSuffix)
-                        },
-                        leadingIcon = if (group.hasSelected) { { Icon(Icons.Default.Check, "Active", Modifier.size(16.dp)) } } else null,
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (currentGroup != null) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(currentGroup.tracks, key = { it.id }) { track ->
-                        val isSelected = track.selected
-                        val displayLabel = if (currentGroup.key == OFF_KEY) "Off" else subtitleOptionLabel(track, tracks)
-                        Surface(enabled = LocalRemoteControlsEnabled.current,
-                            onClick = { onSelect(track.id); onDismiss() },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                            border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(displayLabel, style = MaterialTheme.typography.bodyLarge, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
-                                if (isSelected) {
-                                    Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                Text(
-                    "No subtitle tracks yet. Use Add to attach one without restarting playback.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-            }
-        }
-    }
-}
-
 /** A reported loop boolean draws the switch. A missing field keeps Enable and Disable. */
 internal fun loopEditorUsesSwitch(loopEnabled: Boolean?): Boolean = loopEnabled != null
 
@@ -745,6 +483,7 @@ internal fun RemoteSheets(
     val image = state.playback?.mediaKind == RemoteMediaKind.Image
     val audio = state.playback?.mediaKind == RemoteMediaKind.Audio
     val close = { dispatch(RemoteAction.CloseSheet) }
+    val canAddSubtitle = (state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported)
     val layout = resolveRemoteLayout(state, RemoteViewport())
     val enabled = state.connection.ready || state.sheet == RemoteSheet.Keyboard && layout.nav.keys.enabled ||
         state.sheet == RemoteSheet.OpenTvApp && state.fullControlReady
@@ -756,14 +495,11 @@ internal fun RemoteSheets(
                 onSetSpeed = { dispatch(RemoteAction.SetSpeed(it)) },
                 onSetScaling = { dispatch(RemoteAction.SetScaling(ScalingMode.entries.firstOrNull { mode -> mode.wireValue == it } ?: ScalingMode.Fit)) },
                 onToggleAudioBoost = { dispatch(RemoteAction.ToggleAudioBoost) },
-                onAdjustSubtitleOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
                 onSwitchEngine = { dispatch(RemoteAction.SwitchEngine(it)) },
                 showSettings = !external && !image, showLoop = !external && !image && state.playback?.isLive != true && (state.nativePolicy == null || PlayerSetting.Loop in state.capabilities.settings),
                 loopEnabled = state.settings.loopEnabled,
                 onLoop = { dispatch(RemoteAction.SetLoop(it)) },
-                onStop = { dispatch(RemoteAction.StopPlayback); close() },
-                showAddSubtitle = !external && !image && !audio && (state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported),
-                onAddSubtitle = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
+                onDismiss = close,
                 capabilities = state.capabilities.takeIf { state.nativePolicy != null },
             )
             RemoteSheet.Keyboard -> if (layout.nav.keys.enabled || state.nativePolicy != null && state.connection.ready) {
@@ -783,19 +519,22 @@ internal fun RemoteSheets(
             RemoteSheet.WholeTvControl -> AtvPairingRoute(close)
             RemoteSheet.OpenTvApp -> AtvOpenAppSheet(dispatch, close)
             RemoteSheet.BrowserMore -> BrowserMoreSheet({ dispatch(RemoteCallbackActions.browser(it)) }, close, state::receiverActionSupported)
-            RemoteSheet.Subtitles -> if (!image && !audio && layout.tracks.subtitles) SubtitlesBottomSheet(
+            // One call site for both states keeps the same sheet open when switching to the Add page.
+            RemoteSheet.Subtitles, RemoteSheet.AddSubtitle -> if (!image && !audio && (layout.tracks.subtitles || state.sheet == RemoteSheet.AddSubtitle && canAddSubtitle)) SubtitlesSheet(
                 tracks = if (state.nativePolicy == null || state.capabilities.tracks.subtitle == Support.Supported) state.tracks.subtitles.map { it.screenTrack() } else emptyList(),
+                addPage = state.sheet == RemoteSheet.AddSubtitle,
+                onShowAdd = { dispatch(RemoteAction.OpenSheet(if (it) RemoteSheet.AddSubtitle else RemoteSheet.Subtitles)) },
                 onSelect = { dispatch(RemoteAction.SelectSubtitle(it)) },
-                onAdd = { dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle)) }, onDismiss = close,
-                showAdd = state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported,
-                showSelection = state.nativePolicy == null || state.capabilities.tracks.subtitle == Support.Supported,
-            )
-            RemoteSheet.AddSubtitle -> if (!image && !audio && (state.nativePolicy == null || state.capabilities.tracks.addUrl == Support.Supported || state.capabilities.tracks.addResource == Support.Supported)) AddSubtitleDialog(
-                detectedSubtitles = if (state.nativePolicy == null || state.capabilities.tracks.addResource == Support.Supported) detectedSubtitles else detectedSubtitles.filter { subtitleResourceForDetected(it).headers.isEmpty() },
-                onSubmitResource = { dispatch(RemoteAction.AddSubtitle(it)) },
-                onAddResource = { dispatch(RemoteAction.AddSubtitle(it)); true },
-                onAddLocalUrl = { dispatch(RemoteAction.AddSubtitle(playbridge.SubtitleResource(url = it), legacyUrlOnly = state.nativePolicy == null || state.capabilities.tracks.addResource != Support.Supported)) },
                 onDismiss = close,
+                showSelection = state.nativePolicy == null || state.capabilities.tracks.subtitle == Support.Supported,
+                canAdd = canAddSubtitle,
+                detectedSubtitles = if (state.nativePolicy == null || state.capabilities.tracks.addResource == Support.Supported) detectedSubtitles else detectedSubtitles.filter { subtitleResourceForDetected(it).headers.isEmpty() },
+                onAddResource = { dispatch(RemoteAction.AddSubtitle(it)) },
+                onAddLocalUrl = { dispatch(RemoteAction.AddSubtitle(playbridge.SubtitleResource(url = it), legacyUrlOnly = state.nativePolicy == null || state.capabilities.tracks.addResource != Support.Supported)) },
+                offsetMs = state.screenSettings().subtitleOffsetMs.takeIf {
+                    !external && (state.nativePolicy == null || PlayerSetting.SubtitleOffset in state.capabilities.settings)
+                },
+                onAdjustOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
             )
             RemoteSheet.Queue -> if (layout.showQueue) RemoteQueueSheet(state, dispatch)
             else -> Unit

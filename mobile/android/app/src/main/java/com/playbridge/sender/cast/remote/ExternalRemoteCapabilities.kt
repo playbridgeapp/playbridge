@@ -2,9 +2,11 @@ package com.playbridge.sender.cast.remote
 
 import com.playbridge.sender.cast.Capability
 import com.playbridge.sender.cast.TargetKind
+import kotlin.math.roundToInt
 
 /** Broad external flags are constrained by the verified adapter surface. */
-fun externalRemoteCapabilities(kind: TargetKind, advertised: Set<Capability>, volumeReported: Boolean? = null): RemoteCapabilities {
+fun externalRemoteCapabilities(kind: TargetKind, advertised: Set<Capability>, volumeReported: Boolean? = null,
+    volumeLevel: Double? = null, muted: Boolean? = null): RemoteCapabilities {
     val yes = Support.Supported
     val no = Support.Unsupported
     val known = kind in setOf(TargetKind.GOOGLE_CAST, TargetKind.ROKU, TargetKind.DLNA, TargetKind.WEB_BROWSER)
@@ -12,11 +14,14 @@ fun externalRemoteCapabilities(kind: TargetKind, advertised: Set<Capability>, vo
     val seek = if (kind == TargetKind.ROKU) no else flag(Capability.SEEK)
     val volume = when {
         !known -> Support.Unknown
+        kind == TargetKind.ROKU -> flag(Capability.VOLUME)
         volumeReported == false -> no
         Capability.VOLUME in advertised -> yes
         kind == TargetKind.DLNA && volumeReported == null -> Support.Unknown
         else -> no
     }
+    val reports = known && kind != TargetKind.ROKU && volumeReported != false
+    val percent = volumeLevel?.takeIf { reports && it.isFinite() && it in 0.0..1.0 }?.let { (it * 100).roundToInt() }
     val keys = if (kind == TargetKind.ROKU && Capability.REMOTE in advertised) setOf(
         RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok, RemoteKey.Back, RemoteKey.Home, RemoteKey.Enter,
     ) else emptySet()
@@ -34,6 +39,7 @@ fun externalRemoteCapabilities(kind: TargetKind, advertised: Set<Capability>, vo
             TargetKind.ROKU -> VolumeScope.ReceiverDevice
             TargetKind.WEB_BROWSER -> VolumeScope.Player
             else -> VolumeScope.None
-        }),
+        }, reportedPercent = percent, level = percent, maximum = if (percent != null) 100 else null,
+            muted = muted.takeIf { reports }),
     )
 }

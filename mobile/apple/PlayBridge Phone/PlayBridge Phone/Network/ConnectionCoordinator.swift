@@ -29,6 +29,35 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var receiverVolumeScope: String?
     @Published var receiverVolumeLevel: Double?
     @Published var receiverVolumeMuted: Bool?
+    private var volumeIntentTask: Task<Void, Never>?
+    private var volumeBaseline: (Double?, Bool?)?
+    private var volumeIntentID = UUID()
+
+    /// A successful send is intent only. The next report or a short deadline restores truth.
+    @MainActor func beginVolumeIntent(key: String, step: Double) {
+        guard ["volume_up", "volume_down", "mute"].contains(key) else { return }
+        if key == "mute" && receiverVolumeMuted == nil || key != "mute" && receiverVolumeLevel == nil { return }
+        if volumeBaseline == nil { volumeBaseline = (receiverVolumeLevel, receiverVolumeMuted) }
+        if key == "mute" { receiverVolumeMuted = receiverVolumeMuted.map { !$0 } }
+        else if let level = receiverVolumeLevel {
+            receiverVolumeLevel = min(1, max(0, level + (key == "volume_up" ? step : -step)))
+        }
+        volumeIntentTask?.cancel()
+        let id = UUID(); volumeIntentID = id
+        volumeIntentTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled, let self, self.volumeIntentID == id else { return }
+            self.endVolumeIntent()
+        }
+    }
+    func endVolumeIntent() {
+        volumeIntentTask?.cancel(); volumeIntentTask = nil
+        volumeIntentID = UUID()
+        if let baseline = volumeBaseline {
+            receiverVolumeLevel = baseline.0; receiverVolumeMuted = baseline.1
+        }
+        volumeBaseline = nil
+    }
     @Published var qualityMaxHeight = 0
     @Published var currentVideoHeight = 0
     @Published var playerIsLive = false
@@ -172,6 +201,7 @@ final class ConnectionCoordinator: ObservableObject {
                 guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return }
                 muted = number.boolValue
             }
+            endVolumeIntent()
             if receiverVolumeScope != scope { receiverVolumeLevel = nil; receiverVolumeMuted = nil }
             receiverVolumeScope = scope
             if let level { receiverVolumeLevel = level }
@@ -275,6 +305,7 @@ final class ConnectionCoordinator: ObservableObject {
         receiverSettingsAvailability = [:]
         receiverLoop = nil
         if !keepingVolume {
+            endVolumeIntent()
             receiverVolumeScope = nil
             receiverVolumeLevel = nil
             receiverVolumeMuted = nil

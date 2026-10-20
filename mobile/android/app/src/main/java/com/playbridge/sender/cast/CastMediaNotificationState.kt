@@ -66,3 +66,13 @@ internal fun castPlaybackNeedsPublication(previous: CastPlaybackPublication?, ne
     val after = next.positionAt(nowMs)
     return if (before < 0 || after < 0) before != after else abs(before.toDouble() - after.toDouble()) > 2_000
 }
+
+internal enum class CastNotificationVolumeControl { Fixed, Relative, Absolute }
+internal data class CastNotificationVolume(val control: CastNotificationVolumeControl, val initialPercent: Int)
+/** Android requires an integer even on relative routes with no measured level. */
+internal fun castNotificationVolume(supported: Boolean, absolute: Boolean, reportedPercent: Int?): CastNotificationVolume =
+    CastNotificationVolume(when {
+        !supported -> CastNotificationVolumeControl.Fixed
+        absolute && reportedPercent != null -> CastNotificationVolumeControl.Absolute
+        else -> CastNotificationVolumeControl.Relative
+    }, reportedPercent?.coerceIn(0, 100) ?: 0)

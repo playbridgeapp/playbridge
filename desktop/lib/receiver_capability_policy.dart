@@ -1025,3 +1025,13 @@ ResolvedReceiverPolicy resolveReceiverCapabilityPolicy({
     canImageReset: canImageReset,
   );
 }
+
+/// Text for measured native/external volume; never synthesizes mute or a default level.
+String senderVolumeStatus(String label, double? level, bool? muted) {
+  var text = label;
+  if (level != null && level.isFinite && level >= 0 && level <= 1) {
+    text += ' ${(level * 100).round()}/100';
+  }
+  if (muted != null) text += muted ? ' · Muted' : ' · Unmuted';
+  return text;
+}

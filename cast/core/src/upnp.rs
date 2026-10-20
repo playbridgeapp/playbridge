@@ -96,10 +96,64 @@ pub(crate) struct MediaFacts {
     pub media_info_attempts: u8,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RendererVolume {
+    pub level: Option<f32>,
+    pub muted: Option<bool>,
+}
+#[derive(Debug)]
+struct VolumeMonitor {
+    maximum: u32,
+    range_probed: bool,
+    last_read: Option<std::time::Instant>,
+    level_fault: bool,
+    mute_fault: bool,
+    values: RendererVolume,
+}
+impl Default for VolumeMonitor {
+    fn default() -> Self {
+        Self {
+            maximum: 100,
+            range_probed: false,
+            last_read: None,
+            level_fault: false,
+            mute_fault: false,
+            values: RendererVolume::default(),
+        }
+    }
+}
+impl VolumeMonitor {
+    fn should_read(&self, now: std::time::Instant, force: bool) -> bool {
+        !(self.level_fault && self.mute_fault)
+            && (force
+                || self.last_read.is_none_or(|last| {
+                    now.saturating_duration_since(last) >= std::time::Duration::from_secs(3)
+                }))
+    }
+}
+fn soap_fault(error: &CastError) -> bool {
+    matches!(error, CastError::UpnpAction(failure) if !failure.transport_failure)
+}
+fn volume_range_maximum(xml: &str) -> Option<u32> {
+    let document = Document::parse(xml).ok()?;
+    let variable = document.descendants().find(|node| {
+        node.has_tag_name("stateVariable") && child_text(*node, "name") == Some("Volume")
+    })?;
+    variable
+        .descendants()
+        .find(|node| node.has_tag_name("maximum"))?
+        .text()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|max| *max > 0)
+}
+
 #[derive(Debug)]
 struct Service {
     service_type: String,
     control_url: Url,
+    scpd_url: Option<Url>,
 }
 
 #[derive(Debug)]
@@ -111,6 +165,7 @@ pub struct Renderer {
     av_transport: Box<Service>,
     connection_manager: Option<Box<Service>>,
     rendering_control: Option<Box<Service>>,
+    volume_monitor: tokio::sync::Mutex<VolumeMonitor>,
 }
 
 impl Renderer {
@@ -174,6 +229,9 @@ impl Renderer {
                     return Ok(Some(Box::new(Service {
                         service_type: service_type.into(),
                         control_url,
+                        scpd_url: child_text(node, "SCPDURL")
+                            .and_then(|path| base.join(path.trim()).ok())
+                            .filter(|url| same_renderer_host(url, &location_url)),
                     })));
                 }
             }
@@ -194,6 +252,7 @@ impl Renderer {
             // Optional services must not block playback if their description is malformed.
             connection_manager: find_service("ConnectionManager").ok().flatten(),
             rendering_control: find_service("RenderingControl").ok().flatten(),
+            volume_monitor: tokio::sync::Mutex::new(VolumeMonitor::default()),
         })
     }
 
@@ -331,7 +390,34 @@ impl Renderer {
         })
     }
 
-    pub async fn volume(&self) -> Result<f32> {
+    async fn volume_maximum(&self, monitor: &mut VolumeMonitor) -> u32 {
+        if !monitor.range_probed {
+            monitor.range_probed = true;
+            if let Some(url) = self
+                .rendering_control
+                .as_ref()
+                .and_then(|service| service.scpd_url.as_ref())
+                && let Ok(Ok((status, bytes))) = tokio::time::timeout(
+                    PREFLIGHT_TIMEOUT,
+                    self.client.request(
+                        Method::GET,
+                        url,
+                        &[],
+                        String::new(),
+                        MAX_DESCRIPTION_BYTES,
+                    ),
+                )
+                .await
+                && status.is_success()
+            {
+                monitor.maximum =
+                    volume_range_maximum(&String::from_utf8_lossy(&bytes)).unwrap_or(100);
+            }
+        }
+        monitor.maximum
+    }
+
+    async fn read_volume_level(&self, maximum: u32) -> Result<f32> {
         let values = self
             .service_action(
                 self.rendering_control()?,
@@ -339,24 +425,99 @@ impl Renderer {
                 "<InstanceID>0</InstanceID><Channel>Master</Channel>",
             )
             .await?;
-        let value = values
+        values
             .get("CurrentVolume")
-            .and_then(|value| value.trim().parse::<u8>().ok())
-            .filter(|value| *value <= 100)
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|value| *value <= maximum)
+            .map(|value| value as f32 / maximum as f32)
             .ok_or_else(|| {
                 CastError::Protocol("DLNA renderer did not report a valid volume".into())
-            })?;
-        Ok(f32::from(value) / 100.0)
+            })
+    }
+
+    pub async fn muted(&self) -> Result<bool> {
+        let values = self
+            .service_action(
+                self.rendering_control()?,
+                "GetMute",
+                "<InstanceID>0</InstanceID><Channel>Master</Channel>",
+            )
+            .await?;
+        match values
+            .get("CurrentMute")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("1" | "true") => Ok(true),
+            Some("0" | "false") => Ok(false),
+            _ => Err(CastError::Protocol(
+                "DLNA renderer did not report mute state".into(),
+            )),
+        }
+    }
+
+    /// Optional reads must never turn a successful playback STATUS into an error.
+    pub async fn volume_state(&self, force: bool) -> RendererVolume {
+        if !self.supports_volume() {
+            return RendererVolume::default();
+        }
+        let mut monitor = self.volume_monitor.lock().await;
+        if !monitor.should_read(std::time::Instant::now(), force) {
+            return monitor.values;
+        }
+        monitor.last_read = Some(std::time::Instant::now());
+        monitor.values = RendererVolume::default();
+        let _ = tokio::time::timeout(PREFLIGHT_TIMEOUT, async {
+            let maximum = self.volume_maximum(&mut monitor).await;
+            if !monitor.level_fault {
+                match self.read_volume_level(maximum).await {
+                    Ok(level) => monitor.values.level = Some(level),
+                    Err(error) => monitor.level_fault = soap_fault(&error),
+                }
+            }
+            if !monitor.mute_fault {
+                match self.muted().await {
+                    Ok(muted) => monitor.values.muted = Some(muted),
+                    Err(error) => monitor.mute_fault = soap_fault(&error),
+                }
+            }
+        })
+        .await;
+        monitor.values
+    }
+
+    pub async fn volume(&self) -> Result<f32> {
+        let mut monitor = self.volume_monitor.lock().await;
+        if monitor.level_fault {
+            return Err(CastError::Protocol(
+                "DLNA volume query is unsupported".into(),
+            ));
+        }
+        let maximum = self.volume_maximum(&mut monitor).await;
+        let result = self.read_volume_level(maximum).await;
+        match &result {
+            Ok(level) => monitor.values.level = Some(*level),
+            Err(error) => {
+                monitor.level_fault = soap_fault(error);
+                monitor.values.level = None;
+            }
+        }
+        result
     }
 
     pub async fn set_volume(&self, level: f32) -> Result<()> {
         if !level.is_finite() {
             return Err(CastError::Protocol("volume level must be finite".into()));
         }
-        let value = (level.clamp(0.0, 1.0) * 100.0).round() as u8;
+        let maximum = {
+            let mut monitor = self.volume_monitor.lock().await;
+            self.volume_maximum(&mut monitor).await
+        };
+        let value = (level.clamp(0.0, 1.0) * maximum as f32).round() as u32;
         self.service_action(self.rendering_control()?, "SetVolume", &format!(
             "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{value}</DesiredVolume>"
         )).await?;
+        self.volume_state(true).await;
         Ok(())
     }
 
@@ -370,6 +531,7 @@ impl Renderer {
             ),
         )
         .await?;
+        self.volume_state(true).await;
         Ok(())
     }
 
@@ -1164,6 +1326,107 @@ pub(crate) mod tests {
             .set_media_uri("http://example.test/movie", "<DIDL-Lite/>")
             .await
             .unwrap();
+        server.verify().await;
+    }
+
+    #[test]
+    fn volume_poll_gate_has_three_second_window_and_faults_are_per_action() {
+        let now = std::time::Instant::now();
+        let mut monitor = VolumeMonitor {
+            last_read: Some(now),
+            ..Default::default()
+        };
+        assert!(!monitor.should_read(now + std::time::Duration::from_millis(2999), false));
+        assert!(monitor.should_read(now + std::time::Duration::from_secs(3), false));
+        assert!(monitor.should_read(now, true));
+        monitor.level_fault = true;
+        assert!(monitor.should_read(now, true)); // GetMute can still work.
+        monitor.mute_fault = true;
+        assert!(!monitor.should_read(now, true));
+    }
+    #[test]
+    fn scpd_range_selects_volume_and_rejects_invalid_maximum() {
+        let xml = "<scpd><serviceStateTable><stateVariable><name>Brightness</name><allowedValueRange><maximum>10</maximum></allowedValueRange></stateVariable><stateVariable><name>Volume</name><allowedValueRange><minimum>0</minimum><maximum>255</maximum></allowedValueRange></stateVariable></serviceStateTable></scpd>";
+        assert_eq!(volume_range_maximum(xml), Some(255));
+        assert_eq!(volume_range_maximum(&xml.replace("255", "0")), None);
+    }
+    #[tokio::test]
+    async fn volume_status_uses_scpd_range_caches_reads_and_refreshes_after_set() {
+        let server = MockServer::start().await;
+        let mut renderer = test_renderer(&server, true).await;
+        renderer.rendering_control.as_mut().unwrap().scpd_url =
+            Some(Url::parse(&format!("{}/rendering.xml", server.uri())).unwrap());
+        Mock::given(method("GET")).and(path("/rendering.xml"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<scpd><stateVariable><name>Volume</name><allowedValueRange><maximum>200</maximum></allowedValueRange></stateVariable></scpd>"))
+            .expect(1).mount(&server).await;
+        Mock::given(header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:RenderingControl:1#GetVolume\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(soap_response(
+            "GetVolume",
+            "<CurrentVolume>50</CurrentVolume>",
+        )))
+        .expect(2)
+        .mount(&server)
+        .await;
+        Mock::given(header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:RenderingControl:1#GetMute\"",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(soap_response("GetMute", "<CurrentMute>0</CurrentMute>")),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+        Mock::given(header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:RenderingControl:1#SetVolume\"",
+        ))
+        .and(body_string_contains("<DesiredVolume>100</DesiredVolume>"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(soap_response("SetVolume", "")))
+        .expect(1)
+        .mount(&server)
+        .await;
+        let first = renderer.volume_state(false).await;
+        assert_eq!(first.level, Some(0.25));
+        assert_eq!(first.muted, Some(false));
+        assert_eq!(renderer.volume_state(false).await.level, first.level);
+        renderer.set_volume(0.5).await.unwrap();
+        server.verify().await;
+    }
+    #[tokio::test]
+    async fn volume_fault_stops_that_query_without_losing_mute_or_playback() {
+        let server = MockServer::start().await;
+        let renderer = test_renderer(&server, true).await;
+        Mock::given(header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:RenderingControl:1#GetVolume\"",
+        ))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string(soap_fault("401", "Invalid Action")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+        Mock::given(header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:RenderingControl:1#GetMute\"",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(soap_response("GetMute", "<CurrentMute>1</CurrentMute>")),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+        let first = renderer.volume_state(false).await;
+        assert_eq!(first.level, None);
+        assert_eq!(first.muted, Some(true));
+        assert_eq!(renderer.volume_state(true).await.muted, Some(true));
+        assert!(renderer.volume().await.is_err()); // No further SOAP after the fault.
         server.verify().await;
     }
 

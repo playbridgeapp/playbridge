@@ -3,6 +3,19 @@ import Foundation
 @main
 struct RemoteControlTests {
     @MainActor static func main() async throws {
+        let volume = ConnectionCoordinator()
+        volume.handle(#"{"type":"volume_state","scope":"system","level":0.5,"muted":false}"#)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        volume.beginVolumeIntent(key: "volume_up", step: 1.0/16)
+        precondition(volume.receiverVolumeLevel == 0.5625)
+        volume.beginVolumeIntent(key: "mute", step: 1.0/16)
+        precondition(volume.receiverVolumeMuted == true)
+        volume.handle(#"{"type":"volume_state","scope":"system","level":0.6,"muted":false}"#)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        precondition(volume.receiverVolumeLevel == 0.6 && volume.receiverVolumeMuted == false)
+        volume.beginVolumeIntent(key: "volume_down", step: 1.0/16)
+        volume.endVolumeIntent()
+        precondition(volume.receiverVolumeLevel == 0.6)
         RemoteAvailabilityTests.run()
         RemoteControlPresentationTests.run()
         RemoteNavigationGestureTests.run()

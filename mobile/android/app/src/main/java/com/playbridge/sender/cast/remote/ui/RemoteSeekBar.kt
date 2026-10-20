@@ -102,6 +102,15 @@ import com.playbridge.sender.cast.remote.scrubFeedback
 import com.playbridge.sender.cast.remote.remotePressFeedback
 import com.playbridge.sender.cast.remote.relativeRemoteSeek
 import com.playbridge.sender.cast.remote.rememberRemoteHaptics
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.DisposableEffect
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import android.os.SystemClock
+import com.playbridge.sender.cast.remote.RemoteVolumeDragThrottle
+import com.playbridge.sender.cast.remote.volumeDragTarget
+import com.playbridge.sender.cast.remote.volumeStep
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.abs
@@ -124,6 +133,11 @@ internal fun SeekVolumeBar(
     onTimeDisplay: (RemoteTimeDisplay) -> Unit = {},
     enablePlayPause: Boolean = true,
     volumeTitle: String = "Volume",
+    volumePercent: Int? = null,
+    volumeIncrement: Double = .05,
+    absoluteVolume: Boolean = false,
+    volumeRouteKey: Any? = null,
+    onVolumeSet: (Int) -> Unit = {},
 ) {
     val enabled = LocalRemoteControlsEnabled.current
     val hasDuration = durationMs > 0L && !isLive && isSeekable
@@ -160,6 +174,30 @@ internal fun SeekVolumeBar(
     val latestPlayPause by rememberUpdatedState(onPlayPauseToggle)
     val latestVolumeUp by rememberUpdatedState(onVolumeUp)
     val latestVolumeDown by rememberUpdatedState(onVolumeDown)
+    val latestVolumeSet by rememberUpdatedState(onVolumeSet)
+    val currentVolume by rememberUpdatedState(volumePercent)
+    val currentIncrement by rememberUpdatedState(volumeIncrement)
+    val currentAbsolute by rememberUpdatedState(absoluteVolume)
+    var dragVolume by remember { mutableStateOf<Int?>(null) }
+    val volumeScope = rememberCoroutineScope()
+    val volumeThrottle = remember(volumeRouteKey) { RemoteVolumeDragThrottle() }
+    var volumeJob by remember(volumeRouteKey) { mutableStateOf<Job?>(null) }
+    fun drainVolume() {
+        if (volumeJob?.isActive == true) return
+        volumeJob = volumeScope.launch {
+            while (volumeThrottle.pending) {
+                when (val action = volumeThrottle.next(SystemClock.uptimeMillis())) {
+                    is RemoteAction.SetVolume -> latestVolumeSet(action.percent)
+                    is RemoteAction.AdjustVolume -> if (action.steps > 0) latestVolumeUp() else latestVolumeDown()
+                    else -> Unit
+                }
+                delay(16)
+            }
+        }
+    }
+    DisposableEffect(volumeRouteKey, enabled, enableVolume, motion.resumed) {
+        onDispose { volumeJob?.cancel(); volumeThrottle.clear() }
+    }
 
     // Remove the infinite transition from composition entirely while inactive.
     val waveActive = motion.waveRuns(isPlaying)
@@ -212,7 +250,7 @@ internal fun SeekVolumeBar(
             }
             .onSizeChanged { widthPx = it.width.toFloat(); barHeightPx = it.height.toFloat() }
             .onGloballyPositioned { barOriginY = it.positionInRoot().y }
-            .pointerInput(enabled, hasDuration, enableVolume, durationMs, motion.resumed) {
+            .pointerInput(enabled, hasDuration, enableVolume, durationMs, motion.resumed, volumeRouteKey) {
                 if (!enabled || !motion.resumed) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -221,6 +259,10 @@ internal fun SeekVolumeBar(
                     var axis: RemoteSeekAxis? = null
                     var appliedY = 0f
                     var volumeAccum = 0f
+                    val volumeStart = currentVolume?.div(100.0)
+                    val volumeStep = currentIncrement
+                    val useAbsolute = currentAbsolute && volumeStart != null
+                    var volumeSteps = 0.0
                     var released = false
                     var lastScrubTickMs: Long? = null
                     dragMs = currentPosition.toFloat()
@@ -257,20 +299,30 @@ internal fun SeekVolumeBar(
                             } else if (axis == RemoteSeekAxis.Vertical && enableVolume) {
                                 change.consume()
                                 activeAxis = axis
-                                volumeAccum -= dy - appliedY
-                                appliedY = dy
                                 val stepPx = if (fastVolume) volumeStepPx / 2.5f else volumeStepPx
+                                val movement = -(dy - appliedY)
+                                volumeAccum += movement
+                                volumeSteps += movement / stepPx
+                                appliedY = dy
+                                dragVolume = volumeStart?.let { volumeDragTarget(it, volumeSteps, volumeStep) }
+                                var steps = 0
                                 while (volumeAccum >= stepPx) {
-                                    latestVolumeUp(); haptics.perform(RemoteFeedback.VOLUME); volumeAccum -= stepPx; volumeDirection = "up"
+                                    haptics.perform(RemoteFeedback.VOLUME); volumeAccum -= stepPx; volumeDirection = "up"; steps++
                                 }
                                 while (volumeAccum <= -stepPx) {
-                                    latestVolumeDown(); haptics.perform(RemoteFeedback.VOLUME); volumeAccum += stepPx; volumeDirection = "down"
+                                    haptics.perform(RemoteFeedback.VOLUME); volumeAccum += stepPx; volumeDirection = "down"; steps--
                                 }
+                                if (useAbsolute) volumeThrottle.absolute(dragVolume!!)
+                                else volumeThrottle.relative(steps)
+                                drainVolume()
                             }
+                        }
+                        if (released && activeAxis == RemoteSeekAxis.Vertical && useAbsolute && dragVolume != null) {
+                            volumeThrottle.absolute(dragVolume!!); drainVolume()
                         }
                         if (released && dragging && hasDuration) latestSeek(dragMs.toLong())
                     } finally {
-                        dragging = false; activeAxis = null; volumeDirection = null; directScrub = false; fastVolume = false
+                        dragging = false; activeAxis = null; volumeDirection = null; directScrub = false; fastVolume = false; dragVolume = null
                     }
                 }
             },
@@ -502,7 +554,7 @@ internal fun SeekVolumeBar(
                         "down" -> if (fastVolume) "$volumeTitle Down (Fast)" else "$volumeTitle Down"
                         else -> volumeTitle
                     }
-                    Text(volumeLabel, color = ink, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
+                    Text(dragVolume?.let { "$volumeTitle $it/100" } ?: volumeLabel, color = ink, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                 }
             }
         }
@@ -550,6 +602,13 @@ internal fun RemoteSeekBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispa
         enableVolume = layout.nav.volume.enabled && playback.mediaKind != com.playbridge.sender.cast.remote.RemoteMediaKind.Image,
         volumeTitle = if (state.nativePolicy == null) "Volume" else state.volumeLabel(),
         onSeekTo = { dispatch(RemoteAction.SeekTo(it, RemoteLearnedGesture.SEEK)) },
+        volumePercent = state.capabilities.volume.reportedPercent,
+        volumeIncrement = state.volumeStep(),
+        absoluteVolume = state.capabilities.volume.absolute == com.playbridge.sender.cast.remote.Support.Supported &&
+            state.capabilities.volume.reportedPercent != null && state.fullControl?.connected != true &&
+            !(state.nativePolicy?.reportedVolumeScope == "app" && state.receiverProtocol.descriptor?.volume?.scope == "system"),
+        volumeRouteKey = listOf(state.sessionId, state.fullControl?.connected, state.nativePolicy?.reportedVolumeScope, state.capabilities.volume.absolute),
+        onVolumeSet = { dispatch(RemoteAction.SetVolume(it)) },
         onVolumeUp = { dispatch(RemoteAction.AdjustVolume(1, RemoteLearnedGesture.VOLUME)) },
         onVolumeDown = { dispatch(RemoteAction.AdjustVolume(-1, RemoteLearnedGesture.VOLUME)) },
         onPlayPauseToggle = {

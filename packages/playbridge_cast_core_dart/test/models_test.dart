@@ -2,6 +2,28 @@ import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+      'external volume status is optional, normalized, and mute is independent',
+      () {
+    final zero = PlaybackStatus.fromJson({
+      'state': 'playing',
+      'volume_supported': true,
+      'volume_level': 0.0,
+      'muted': false
+    });
+    expect(zero.volumeLevel, 0.0);
+    expect(zero.muted, false);
+    expect(PlaybackStatus.fromJson({'state': 'paused'}).volumeLevel, isNull);
+    expect(
+        PlaybackStatus.fromJson(
+                {'volume_supported': false, 'volume_level': .4, 'muted': true})
+            .muted,
+        isNull);
+    for (final value in [double.nan, -1, 101, '0.5', true]) {
+      expect(
+          PlaybackStatus.fromJson({'volume_level': value}).volumeLevel, isNull);
+    }
+  });
   test('decodes a discovered receiver', () {
     final event = ReceiverEvent.fromJsonString('''
       {

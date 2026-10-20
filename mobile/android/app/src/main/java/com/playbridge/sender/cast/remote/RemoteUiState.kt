@@ -91,7 +91,7 @@ data class RemotePreferences(
         RemoteContext.Player to RemoteInputMode.Context, RemoteContext.Browser to RemoteInputMode.Pointer,
     ),
 )
-data class RemotePendingState(val seek: Boolean = false, val playing: Boolean = false, val subtitleRequests: Set<String> = emptySet())
+data class RemotePendingState(val seek: Boolean = false, val playing: Boolean = false, val subtitleRequests: Set<String> = emptySet(), val volume: Boolean = false)
 data class RemoteNotice(val message: String)
 
 /** Observation sequence advances even when the legacy StateFlow deduplicates identical status ticks. */

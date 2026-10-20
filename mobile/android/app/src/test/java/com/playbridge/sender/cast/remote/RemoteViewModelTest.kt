@@ -166,7 +166,7 @@ class RemoteViewModelTest {
         f.transport.confirmation = { response.await() }
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle))
         val operation = async { f.vm.execute(RemoteAction.AddSubtitle(SubtitleResource(url = "https://example.test/sub.srt"))) }
-        runCurrent(); assertNull(f.vm.state.value.sheet); assertEquals(1, f.vm.state.value.pending.subtitleRequests.size)
+        runCurrent(); assertEquals(RemoteSheet.Subtitles, f.vm.state.value.sheet); assertEquals(1, f.vm.state.value.pending.subtitleRequests.size)
         f.target.value = RemoteNativeTarget(testConfiguration(features = setOf("subtitle_resource_add_v1")), "connection-2"); runCurrent()
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.More))
         response.complete(QueueCommandResult(false, "invalid_command")); operation.await(); runCurrent()
@@ -182,12 +182,12 @@ class RemoteViewModelTest {
         response.complete(QueueCommandResult(false, "subtitle_unavailable")); operation.await(); runCurrent()
         assertEquals(RemoteSheet.More, f.vm.state.value.sheet); assertTrue(f.effects.isEmpty())
     }
-    @Test fun acceptedSubtitleClosesImmediatelyAndCurrentFailureEmitsExactNotice() = runTest {
+    @Test fun acceptedSubtitleReturnsToTracksImmediatelyAndCurrentFailureEmitsExactNotice() = runTest {
         val f = Fixture(this, setOf("subtitle_resource_add_v1")); runCurrent()
         val response = CompletableDeferred<QueueCommandResult?>(); f.transport.confirmation = { response.await() }
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle))
         f.vm.dispatch(RemoteAction.AddSubtitle(SubtitleResource(url = "https://example.test/sub.srt")))
-        assertNull(f.vm.state.value.sheet)
+        assertEquals(RemoteSheet.Subtitles, f.vm.state.value.sheet)
         runCurrent(); response.complete(QueueCommandResult(false, "invalid_command")); runCurrent()
         assertEquals(listOf(RemoteEffect.Notice("The TV rejected this subtitle", true)), f.effects)
         assertTrue(f.vm.state.value.pending.subtitleRequests.isEmpty())
@@ -262,7 +262,7 @@ class RemoteViewModelTest {
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle))
         assertTrue(f.vm.execute(RemoteAction.AddSubtitle(SubtitleResource(url = "https://example.test/sub.srt"))) is RemoteCommandResult.Unsupported)
         runCurrent()
-        assertNull(f.vm.state.value.sheet)
+        assertEquals(RemoteSheet.Subtitles, f.vm.state.value.sheet)
         assertTrue(f.vm.state.value.pending.seek)
         assertTrue(f.effects.isEmpty())
         assertEquals(1, f.transport.commands.size)
@@ -309,7 +309,7 @@ class RemoteViewModelTest {
         val response = CompletableDeferred<QueueCommandResult?>(); f.transport.confirmation = { response.await() }
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.AddSubtitle))
         val operation = async { f.vm.execute(RemoteAction.AddSubtitle(SubtitleResource(url = "https://example.test/sub.srt"))) }
-        runCurrent(); assertNull(f.vm.state.value.sheet)
+        runCurrent(); assertEquals(RemoteSheet.Subtitles, f.vm.state.value.sheet)
         f.vm.dispatch(RemoteAction.OpenSheet(RemoteSheet.More))
         response.complete(QueueCommandResult(true, null))
         assertEquals(RemoteCommandResult.Confirmed, operation.await()); runCurrent()

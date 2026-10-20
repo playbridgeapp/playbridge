@@ -359,8 +359,7 @@ class GoogleCastTarget(
     suspend fun adjustVolume(delta: Float) {
         if (volumeSupported == false) return
         val connectedClient = ensureConnected() ?: return
-        val level = (connectedClient.volume + delta).coerceIn(0f, 1f)
-        withContext(Dispatchers.IO) { connectedClient.setVolume(level) }
+        withContext(Dispatchers.IO) { connectedClient.adjustVolume(delta) }
     }
 
     override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
@@ -450,6 +449,8 @@ class GoogleCastTarget(
                     durationMs = durationMs,
                     failure = failure,
                     volumeSupported = volumeSupported,
+                    volumeLevel = status.volumeLevel,
+                    muted = status.muted,
                     loadEpoch = observedLoadEpoch,
                 )
                 if (_status.value.state != lastLoggedState) {

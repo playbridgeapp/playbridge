@@ -373,7 +373,7 @@ class _NowCastingCardState extends State<NowCastingCard> {
                     onPressed: c.toggleMute,
                   ),
                 Text(
-                  c.volumeLabel ?? 'Volume',
+                  c.volumeStatus,
                   style: const TextStyle(
                     fontSize: 12,
                     color: Colors.white70,
@@ -381,7 +381,7 @@ class _NowCastingCardState extends State<NowCastingCard> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (c.canSetVolume)
+                if (c.showVolumeSlider)
                   Expanded(
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(

@@ -15,10 +15,15 @@ import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Backspace
@@ -39,24 +44,32 @@ import com.playbridge.sender.cast.remote.volumeLabel
 import com.playbridge.sender.cast.remote.volumeReportLabel
 import com.playbridge.sender.cast.remote.RemoteKey
 import com.playbridge.sender.cast.remote.VolumeCapabilities
+import com.playbridge.sender.cast.remote.VolumeScope
 import com.playbridge.sender.cast.remote.Support
+import com.playbridge.sender.cast.remote.RemoteVolumePill
+import com.playbridge.sender.cast.remote.remoteVolumePill
 
 @Composable
-internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "TV volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null) {
-    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete) return
+internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "TV volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null, volumePill: RemoteVolumePill? = null, onVolumePill: () -> Unit = {}, onStop: (() -> Unit)? = null) {
+    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && onStop == null) return
     val haptics = rememberRemoteHaptics()
     Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f), shape = CircleShape) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             if (nav.back) RemoteButton(Icons.AutoMirrored.Filled.Undo, "TV Back", true) { onRemoteKey("back") }
             if (nav.home) RemoteButton(Icons.Default.Home, "TV Home", true) { onRemoteKey("home") }
             if (nav.keys) RemoteButton(Icons.Default.Keyboard, "Keys", true, onKeys)
             if (enter) RemoteButton(Icons.AutoMirrored.Filled.KeyboardReturn, "TV Enter", true) { onRemoteKey("key_enter") }
             if (delete) RemoteButton(Icons.AutoMirrored.Filled.Backspace, "TV Delete", true) { onRemoteKey("key_delete") }
-            if (nav.volume) {
+            // −, +, and mute collapse into one pill; its sheet holds them.
+            if (nav.volume && volumePill != null) {
+                RemoteVolumePillButton(volumePill, volumeTitle, onVolumePill)
+            } else if (nav.volume) {
                 RemoteButton(Icons.AutoMirrored.Filled.VolumeDown, "$volumeTitle down", true) { onRemoteKey("volume_down"); haptics.perform(RemoteFeedback.VOLUME) }
                 RemoteButton(Icons.AutoMirrored.Filled.VolumeUp, "$volumeTitle up", true) { onRemoteKey("volume_up"); haptics.perform(RemoteFeedback.VOLUME) }
             }
-            if (mute) RemoteButton(Icons.Default.VolumeOff, volumeTitle + when (muted) { true -> " unmute"; false -> " mute"; null -> " toggle mute" }, true) { onRemoteKey("mute") }
+            if (mute && volumePill == null) RemoteButton(Icons.Default.VolumeOff, volumeTitle + when (muted) { true -> " unmute"; false -> " mute"; null -> " toggle mute" }, true) { onRemoteKey("mute") }
+            // Last, beside volume and away from Back, so a hurried Back tap can't end playback.
+            if (onStop != null) RemoteButton(Icons.Default.Stop, "Stop playback", true, MaterialTheme.colorScheme.error, onStop)
         }
     }
 }
@@ -77,7 +90,8 @@ internal fun remoteVolumeLabel(
         volume.muted?.let { if (it) "Muted" else "Unmuted" }
     } else null
     if (levelText == null && muteText == null) return null
-    val base = if (nativeVolume) title + (levelText?.let { " $it" } ?: "") else levelText.orEmpty()
+    val scoped = nativeVolume || volume.scope in setOf(VolumeScope.Player, VolumeScope.Renderer, VolumeScope.ReceiverDevice)
+    val base = if (scoped) title + (levelText?.let { " $it" } ?: "") else levelText.orEmpty()
     val text = base + (muteText?.let { " · $it" } ?: "")
     val description = title + (if (hasLevel) " ${volume.level} of ${volume.maximum}" else "") +
         (volume.muted?.let { if (it) ", muted" else ", unmuted" } ?: "")
@@ -94,8 +108,33 @@ internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispat
     val enter = nativeVolume && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Enter in state.capabilities.keys && !nav.keys
     val delete = state.nativePolicy?.operations?.text?.contains("delete") == true && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && state.capabilities.text.delete == Support.Supported && !nav.keys
     val volumeTitle = state.volumeLabel()
-    val label = remoteVolumeLabel(state.volumeReportLabel(), state.capabilities.volume, nativeVolume, nav.volume)
-    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && label == null) return
+    val volume = state.capabilities.volume
+    val pill = if (!nav.volume) null else remoteVolumePill(
+        absolute = volume.absolute == Support.Supported,
+        wholeTvControl = state.fullControl?.connected == true,
+        appFallbackOnSystemRoute = state.nativePolicy?.reportedVolumeScope == "app" &&
+            state.receiverProtocol.descriptor?.volume?.scope == "system",
+        percent = volume.reportedPercent,
+        muted = volume.muted,
+    )
+    // The pill replaces the text level whenever the bar has volume controls.
+    val label = if (pill != null) null else remoteVolumeLabel(state.volumeReportLabel(), volume, nativeVolume, nav.volume)
+    var showVolumeSheet by rememberSaveable { mutableStateOf(false) }
+    if (showVolumeSheet && pill != null) {
+        RemoteVolumeSheet(
+            title = state.volumeReportLabel(),
+            pill = pill,
+            canMute = mute,
+            onSet = { dispatch(RemoteAction.SetVolume(it)) },
+            onStep = { up -> dispatch(RemoteAction.AdjustVolume(if (up) 1 else -1)) },
+            onMute = { dispatch(RemoteCallbackActions.key("mute")) },
+            onDismiss = { showVolumeSheet = false },
+        )
+    }
+    // Stop lives here (not in More) while something is playing.
+    val stop = state.playback != null && state.context == com.playbridge.sender.cast.remote.RemoteContext.Player &&
+        (state.nativePolicy == null || state.capabilities.transport.stop == Support.Supported)
+    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && label == null && !stop) return
     Column(Modifier.testTag("remote.nav"), horizontalAlignment = Alignment.CenterHorizontally) {
         if (label != null) {
             Text(
@@ -112,6 +151,8 @@ internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispat
             onRemoteKey = { dispatch(RemoteCallbackActions.key(it)) },
             onKeys = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Keyboard)) },
             volumeTitle = volumeTitle, mute = mute, enter = enter, delete = delete, muted = state.capabilities.volume.muted,
+            volumePill = pill, onVolumePill = { showVolumeSheet = true },
+            onStop = if (stop) ({ dispatch(RemoteAction.StopPlayback) }) else null,
         )
     }
 }

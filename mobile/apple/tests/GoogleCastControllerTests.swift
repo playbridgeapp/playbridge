@@ -36,6 +36,15 @@ final class FakeCastSession: GoogleCastSessionTransport {
         fatalError("Timed out waiting for Cast fixture")
     }
     @MainActor static func main() async throws {
+        let zero = ExternalReceiverVolume(status: ["volume_level": 0.0, "muted": false, "volume_supported": true])
+        precondition(zero.label(protocolID: "google_cast") == "Receiver volume 0/100 · Unmuted")
+        precondition(zero.label(protocolID: "roku") == nil)
+        precondition(ExternalReceiverVolume(status: ["volume_level": 0.37, "muted": true]).label(protocolID: "dlna") == "Renderer volume 37/100 · Muted")
+        for invalid: Any in [true, "0.3", Double.nan, -1.0, 1.1] {
+            precondition(ExternalReceiverVolume(status: ["volume_level": invalid]).level == nil)
+        }
+        precondition(ExternalReceiverVolume(status: ["volume_level": 0.0]).muted == nil)
+        precondition(ExternalReceiverVolume(status: ["volume_level": 0.5, "volume_supported": false]).label(protocolID: "google_cast") == nil)
         let device = ExternalReceiverDevice.parse(serviceName: "service", addresses: ["192.0.2.1", "192.0.2.1"], port: 8009,
             txt: ["id": "receiver", "fn": "Living room", "md": "Chromecast"])!
         precondition(device.name == "Living room" && device.addresses.count == 1)
@@ -82,9 +91,10 @@ final class FakeCastSession: GoogleCastSessionTransport {
         precondition(controller.playback?.title == "Fixture")
         await wait { native.last("status") != nil }
         native.emit(["event": "status", "request_id": native.last("status")!["request_id"]!,
-            "status": ["state": "playing", "position_seconds": 1.25, "duration_seconds": 60]])
+            "status": ["state": "playing", "position_seconds": 1.25, "duration_seconds": 60, "volume_supported": true, "volume_level": 0.37, "muted": false]])
         await wait { controller.playback?.positionMs == 1250 }
         precondition(controller.playback?.durationMs == 60000)
+        precondition(controller.volume.level == 0.37 && controller.volume.muted == false)
         let initialStatusID = native.last("status")!["request_id"] as! String
         let initialMediaID = controller.playback?.playbackId
         await wait { native.last("status")?["request_id"] as? String != initialStatusID }

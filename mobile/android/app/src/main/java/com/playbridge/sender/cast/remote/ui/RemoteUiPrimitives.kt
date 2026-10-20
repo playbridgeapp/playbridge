@@ -20,6 +20,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.disabled
@@ -29,12 +30,17 @@ import androidx.compose.ui.unit.dp
 import com.playbridge.sender.cast.remote.remotePressFeedback
 
 @Composable
-internal fun RemoteButton(icon: ImageVector, label: String, enabled: Boolean, action: () -> Unit) {
+internal fun RemoteButton(icon: ImageVector, label: String, enabled: Boolean, action: () -> Unit) =
+    RemoteButton(icon, label, enabled, Color.Unspecified, action)
+
+/** [tint] Unspecified keeps the default content colour. */
+@Composable
+internal fun RemoteButton(icon: ImageVector, label: String, enabled: Boolean, tint: Color, action: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     IconButton(
         onClick = action, enabled = enabled, interactionSource = source,
         modifier = Modifier.size(48.dp).remotePressFeedback(source),
-    ) { Icon(icon, contentDescription = label) }
+    ) { if (tint == Color.Unspecified) Icon(icon, contentDescription = label) else Icon(icon, contentDescription = label, tint = tint) }
 }
 
 /** Theme-aware solid remote card. */
