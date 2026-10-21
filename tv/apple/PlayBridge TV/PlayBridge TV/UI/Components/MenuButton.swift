@@ -15,7 +15,11 @@ struct MenuButton: View {
                 Image(systemName: icon).font(.system(size: 28)).frame(width: 40)
                 Text(title).font(
                     .system(size: 26, weight: isSelected || isFocused ? .bold : .medium))
-                Spacer()
+                    // Bold + the selection dot can push two-word titles onto a second line.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
                 if isSelected { Circle().fill(Theme.accent).frame(width: 8, height: 8) }
             }
             .padding(.vertical, 20)
