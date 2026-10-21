@@ -86,14 +86,14 @@ Lock the marketing tokens already in `src/app.css`. Do not silently switch back 
 | `--surface-solid` | `#0a1530` | Solid cards |
 | `--text` | `#dce8f8` | Primary text — never `#FFFFFF` |
 | `--text-dim` | `#94afd0` | Body |
-| `--text-faint` | `#556e8f` | Eyebrows, meta |
+| `--text-faint` | `#738bad` | Eyebrows, meta — ≥4.5:1 on `--bg` (5.65) and `--surface-solid` (5.18) |
 | `--accent` | `#4a90e2` | CTA, current step, one highlight |
 | `--accent-strong` | `#0d3a8a` | Gradient end / deep accent |
 | `--line` | `rgba(200, 220, 255, 0.07)` | Hairlines |
 | `--line-strong` | `rgba(200, 220, 255, 0.16)` | Control borders |
 | `--on-accent` | `#06091e` | Text on accent fills (dark theme) |
 
-Light theme (`html[data-theme=light]`): paper `#f6f3ec`, ink `#1b1914`, accent `#1f4e8c`, `--on-accent` `#f6f3ec`. No grain, no color washes, flat buttons (no candy-blue hover).
+Light theme (`html[data-theme=light]`): paper `#f6f3ec`, ink `#1b1914`, dim `#524c43`, faint `#6d665c` (5.11:1 on paper, 5.58:1 on `--surface-solid` `#fffdf8`), accent `#1f4e8c`, `--on-accent` `#f6f3ec`. No grain, no color washes, flat buttons (no candy-blue hover).
 Theme toggle cycles **Auto → Dark → Light**. Auto follows `prefers-color-scheme` and updates live. Preference is `pb-theme` in `localStorage` (`auto` | `dark` | `light`).
 Hero phone/TV mocks are a **fixed dark device kit** in both themes (charcoal shell, black screen, `#4a90e2` on-device accent). Do not theme the hardware.
 
@@ -174,6 +174,7 @@ Subtle. One hero moment. Supporting motion only.
 - Feature visuals: real product UI in phone/TV chrome. No stock living rooms. No generated people.
 - No model-authored decorative SVG illustrations.
 - Alt text required. Missing-media fallbacks required.
+- Social card `static/og.png` (1200×630) and the raster icons (`apple-touch-icon.png`, `favicon-32.png`, `icon-192.png`, `icon-512.png`, used by `site.webmanifest`) are generated from `static/favicon.svg` and `docs/screenshots/tv-pairing.png` by `node scripts/generate-og.mjs`. Edit the script, not the PNGs.
 
 ---
 

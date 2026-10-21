@@ -6,7 +6,7 @@ export const SITE = {
   description:
     'Open-source PlayBridge app: browse on your phone, watch on Android TV, Apple TV, Desktop, or a DLNA TV. Local network, no account.',
   url: 'https://playbridge.app',
-  ogImage: '/favicon.svg',
+  ogImage: '/og.png',
   twitter: '@playbridge',
   email: 'playbridgeapp@gmail.com',
   github: 'https://github.com/playbridgeapp/PlayBridge',
