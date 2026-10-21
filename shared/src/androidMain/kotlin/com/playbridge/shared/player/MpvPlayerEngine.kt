@@ -80,8 +80,13 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val _videoBitrate = MutableStateFlow(0L)
     val videoBitrate: StateFlow<Long> = _videoBitrate.asStateFlow()
 
+    /** Absolute position (ms) the demuxer has cached up to (`demuxer-cache-time`). */
     private val _bufferAhead = MutableStateFlow(0L)
     val bufferAhead: StateFlow<Long> = _bufferAhead.asStateFlow()
+
+    private val _chapters = MutableStateFlow<List<PlayerChapter>>(emptyList())
+    /** Chapter markers of the open file (`chapter-list`), empty until it loads. */
+    val chapters: StateFlow<List<PlayerChapter>> = _chapters.asStateFlow()
 
     private var mpvInitialized = false
     private var mpvCreated = false
@@ -244,6 +249,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
         MPVLib.observeProperty("demuxer-cache-time",  5) // Double
         MPVLib.observeProperty("track-list",          1) // String (JSON)
+        MPVLib.observeProperty("chapter-list",        1) // String (JSON)
 
         mpvInitialized = true
         logger.i(TAG, "MPV initialized successfully")
@@ -433,8 +439,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     }
 
     override fun eventProperty(property: String, value: String) {
-        if (property == "track-list") {
-            updateTracks(value)
+        when (property) {
+            "track-list" -> updateTracks(value)
+            "chapter-list" -> _chapters.value = parseMpvChapterList(value)
         }
     }
 

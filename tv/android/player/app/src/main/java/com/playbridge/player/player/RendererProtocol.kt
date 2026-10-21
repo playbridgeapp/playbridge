@@ -1,5 +1,13 @@
 package com.playbridge.player.player
 
+/** One sampled renderer state update; buffered is an absolute position in ms. */
+internal data class RendererStateSample(
+    val state: com.playbridge.shared.player.PlaybackState,
+    val positionMs: Long,
+    val durationMs: Long,
+    val bufferedMs: Long,
+)
+
 internal object RendererProtocol {
     const val KEY_SESSION_ID = "renderer_session_id"
     const val KEY_RENDERER = "renderer"
@@ -20,6 +28,11 @@ internal object RendererProtocol {
     const val KEY_STATE = "state"
     const val KEY_POSITION_MS = "position_ms"
     const val KEY_DURATION_MS = "duration_ms"
+    /** Absolute position (ms) buffered up to. */
+    const val KEY_BUFFERED_MS = "buffered_ms"
+    const val KEY_CHAPTERS = "chapters"
+    const val KEY_CHAPTER_START_MS = "chapter_start_ms"
+    const val KEY_CHAPTER_TITLE = "chapter_title"
     const val KEY_VIDEO_WIDTH = "video_width"
     const val KEY_VIDEO_HEIGHT = "video_height"
     const val KEY_VIDEO_FPS = "video_fps"
@@ -51,6 +64,8 @@ internal object RendererProtocol {
     const val EVENT_VIDEO_SIZE = "video_size"
     const val EVENT_VIDEO_RATE = "video_rate"
     const val EVENT_TRACKS = "tracks"
+    /** Chapter markers of the open file ([KEY_CHAPTERS]); mpv only. */
+    const val EVENT_CHAPTERS = "chapters"
     const val EVENT_CUES = "cues"
     const val EVENT_EXTERNAL_SUBTITLE_RESULT = "external_subtitle_result"
     const val EVENT_CAPABILITIES = "capabilities"

@@ -69,7 +69,7 @@ private val PLAYER_SETTINGS = listOf("loop", "engine", "speed", "scaling", "qual
 private val PLAYER_IMAGE_TRANSFORMS = listOf("pan", "scroll", "zoom", "rotate", "anchor", "reset")
 private val PLAYER_TRACKS = listOf("audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add")
 private val PLAYER_QUEUE = listOf("replace", "append", "jump_index", "jump_item", "remove", "move", "clear")
-private val PLAYER_REPORTING = listOf("status", "context", "tracks", "playlist_status", "player_settings")
+private val PLAYER_REPORTING = listOf("status", "context", "tracks", "playlist_status", "player_settings", "timeline", "buffered")
 
 private val BROWSER_TRANSPORT = listOf("toggle", "seek_absolute", "seek_relative")
 private val BROWSER_KEYS = listOf("dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home", "key_enter")

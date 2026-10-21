@@ -9,6 +9,7 @@ import android.os.Looper
 import android.os.RemoteException
 import android.view.Surface
 import com.playbridge.shared.player.MpvPlayerEngine
+import com.playbridge.shared.player.PlayerChapter
 import com.playbridge.shared.player.PlaybackState
 import com.playbridge.shared.protocol.decodePlayPayloadListJson
 import kotlinx.coroutines.CoroutineScope
@@ -289,6 +290,9 @@ class MpvRendererService : Service() {
                             sendEvent(RendererProtocol.EVENT_READY)
                             applyDesiredSettings(renderer)
                             sendCapabilities(renderer)
+                            // The host clears chapters per session; resend in case the new
+                            // file's list equals the previous one and never changes.
+                            sendChapters(renderer.chapters.value)
                         }
                         PlaybackState.Playing -> {
                             if (fileReadySessionId == sessionId && firstFrameSession != sessionId) {
@@ -311,11 +315,20 @@ class MpvRendererService : Service() {
                 }
             }
 
+            launch {
+                renderer.chapters.collectLatest(::sendChapters)
+            }
+
             // Position/duration updates are high-frequency and remain sampled for Binder health.
             launch {
-                combine(renderer.state, renderer.position, renderer.duration) { state, position, duration ->
-                    Triple(state, position, duration)
-                }.distinctUntilChanged().sample(250).collectLatest { (state, position, duration) ->
+                combine(
+                    renderer.state,
+                    renderer.position,
+                    renderer.duration,
+                    renderer.bufferAhead,
+                ) { state, position, duration, buffered ->
+                    RendererStateSample(state, position, duration, buffered)
+                }.distinctUntilChanged().sample(250).collectLatest { (state, position, duration, buffered) ->
                     val isLive = duration <= 0L
                     if (lastCapabilitiesLive != isLive) {
                         lastCapabilitiesLive = isLive
@@ -334,11 +347,26 @@ class MpvRendererService : Service() {
                         putString(RendererProtocol.KEY_STATE, stateName)
                         putLong(RendererProtocol.KEY_POSITION_MS, position.coerceAtLeast(0L))
                         putLong(RendererProtocol.KEY_DURATION_MS, duration.coerceAtLeast(0L))
+                        putLong(RendererProtocol.KEY_BUFFERED_MS, buffered.coerceAtLeast(0L))
                         putString(RendererProtocol.KEY_TITLE, currentTitle)
                     })
                 }
             }
         }
+    }
+
+    private fun sendChapters(chapters: List<PlayerChapter>) {
+        sendEvent(RendererProtocol.EVENT_CHAPTERS, Bundle().apply {
+            putParcelableArrayList(
+                RendererProtocol.KEY_CHAPTERS,
+                chapters.mapTo(ArrayList()) { chapter ->
+                    Bundle().apply {
+                        putLong(RendererProtocol.KEY_CHAPTER_START_MS, chapter.startMs)
+                        putString(RendererProtocol.KEY_CHAPTER_TITLE, chapter.title)
+                    }
+                },
+            )
+        })
     }
 
     private fun observeTracks(renderer: MpvPlayerEngine) {

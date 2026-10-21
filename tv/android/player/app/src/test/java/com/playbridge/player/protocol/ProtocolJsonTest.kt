@@ -357,7 +357,7 @@ class ProtocolJsonTest {
         val expectedPlayerImageTransforms = listOf("pan", "scroll", "zoom", "rotate", "anchor", "reset")
         val expectedPlayerTracks = listOf("audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add")
         val expectedPlayerQueue = listOf("replace", "append", "jump_index", "jump_item", "remove", "move", "clear")
-        val expectedPlayerReporting = listOf("status", "context", "tracks", "playlist_status", "player_settings")
+        val expectedPlayerReporting = listOf("status", "context", "tracks", "playlist_status", "player_settings", "timeline", "buffered")
 
         for (engineName in listOf("exo", "mpv")) {
             val engine = playerEngines?.get(engineName)?.jsonObject
