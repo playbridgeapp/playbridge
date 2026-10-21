@@ -92,7 +92,7 @@ struct PairingIdleView: View {
                     .foregroundColor(.white)
             }
 
-            Text(server.wssPort.map { "\(server.localIP):\($0)" } ?? "\(server.localIP) · port pending")
+            Text(verbatim: server.wssPort.map { "\(server.localIP):\($0)" } ?? "\(server.localIP) · port pending")
                 .font(.system(size: 32, design: .monospaced))
                 .foregroundColor(.white.opacity(0.6))
 
@@ -138,6 +138,7 @@ private struct DevicesSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var removeAllFocused: Bool
     @FocusState private var doneFocused: Bool
+    @State private var confirmRemoveAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -147,7 +148,7 @@ private struct DevicesSheetView: View {
                     .foregroundColor(.white)
                 Spacer()
                 if !server.pairedDevicesList.isEmpty {
-                    Button(action: { server.forgetAllDevices() }) {
+                    Button(action: { confirmRemoveAll = true }) {
                         Text("Remove All")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundColor(removeAllFocused ? .white : .red)
@@ -158,6 +159,15 @@ private struct DevicesSheetView: View {
                     }
                     .buttonStyle(.plain)
                     .focused($removeAllFocused)
+                    .confirmationDialog(
+                        "Remove all paired devices?", isPresented: $confirmRemoveAll,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Remove All", role: .destructive) { server.forgetAllDevices() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Each phone will need a new pairing code to connect again.")
+                    }
                 }
                 Button(action: { dismiss() }) {
                     Text("Done")
@@ -199,6 +209,8 @@ private struct DevicesSheetView: View {
                 }
             }
         }
+        // Land on Done, not the destructive Remove All, when the sheet opens.
+        .defaultFocus($doneFocused, true)
     }
 }
 
