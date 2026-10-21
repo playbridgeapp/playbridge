@@ -54,6 +54,8 @@ enum Theme {
     static let outlineVariant = Color(hex: 0x3D3770)
 
     static let danger = Color(hex: 0xFF6B6B)
+    /// Accent for timeline marks (skip segments, scrub captions); same as Android's tertiary.
+    static let tertiary = Color(hex: 0x8AB4F8)
 
     /// CTA gradient (primary_dim → primary).
     static let ctaGradient = LinearGradient(

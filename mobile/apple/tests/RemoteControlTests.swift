@@ -20,6 +20,7 @@ struct RemoteControlTests {
         RemoteControlPresentationTests.run()
         RemoteNavigationGestureTests.run()
         try await RemoteHapticsTests.run()
+        try await RemoteSeekTimelineTests.run()
         try await ReceiverPlaybackFailureTests.run(root: URL(fileURLWithPath: CommandLine.arguments[1]))
         precondition(RemoteMode.supportsRemote(externalProtocol: nil) && RemoteMode.supportsRemote(externalProtocol: "roku"))
         precondition(!RemoteMode.supportsRemote(externalProtocol: "google_cast") && !RemoteMode.supportsVolume(externalProtocol: "dlna"))
