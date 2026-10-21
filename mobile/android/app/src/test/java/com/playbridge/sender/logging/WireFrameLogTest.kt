@@ -238,4 +238,18 @@ class WireFrameLogTest {
         assertFalse(WireFrameLog.redact(frame).contains("https://"))
     }
 
+
+    @Test
+    fun `timeline and buffered status keep only times and segment types`() {
+        val timeline = WireFrameLog.format("""{"type":"timeline","playbackId":"PRIVATE_PLAYBACK","currentItemId":"PRIVATE_ITEM","chapters":[{"startMs":0,"title":"PRIVATE_TITLE"},{"startMs":600000}],"segments":[{"type":"outro","startMs":5400000,"endMs":null}]}""", true)
+        assertTrue(timeline.startsWith("type=timeline "))
+        assertTrue(timeline.contains("\"startMs\":600000"))
+        assertTrue(timeline.contains("\"type\":\"outro\""))
+        assertFalse(timeline.contains("PRIVATE_"))
+
+        val status = WireFrameLog.format("""{"type":"status","state":"playing","position":5000,"duration":9000,"buffered":42000}""", true)
+        assertTrue(status.contains("\"buffered\":42000"))
+        // Release builds keep only the summary, now with the real type.
+        assertEquals("type=timeline bytes=19", WireFrameLog.format("""{"type":"timeline"}""", false))
+    }
 }

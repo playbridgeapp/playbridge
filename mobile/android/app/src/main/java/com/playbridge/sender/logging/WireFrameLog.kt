@@ -20,7 +20,7 @@ internal object WireFrameLog {
         "pairing_approved", "pairing_denied", "command", "command_result", "status", "context", "context_query",
         "tracks", "playlist_status", "player_settings", "volume_state", "ping", "pong", "screen_mirror_status",
         "screen_mirror_answer", "screen_mirror_candidate", "user_scripts", "user_scripts_query", "user_script",
-        "user_agent", "user_agent_query", "tv_logs", "tv_logs_query",
+        "user_agent", "user_agent_query", "tv_logs", "tv_logs_query", "timeline",
     )
 
     fun summary(frame: String): String {
@@ -145,7 +145,7 @@ internal object WireFrameLog {
     private fun debugStructure(obj: JsonObject, type: String): JsonObject? {
         val rules = when (type) {
             "status" -> fields("state" to enum(setOf("idle", "buffering", "playing", "paused", "stopped", "ended", "error")),
-                "position duration" to number, "title" to redactValue, "mediaKind" to enum(mediaKinds),
+                "position duration buffered" to number, "title" to redactValue, "mediaKind" to enum(mediaKinds),
                 "playbackId currentItemId" to id, "fullscreen muted" to flag)
             "context" -> fields("active surface" to enum(setOf("idle", "player", "browser", "screen_mirror")), "engine" to enum(engines))
             "player_settings" -> fields("speed subtitleOffsetMs qualityMaxHeight currentVideoHeight" to number,
@@ -155,6 +155,10 @@ internal object WireFrameLog {
             "playlist_status" -> fields("items" to array { structure(it, itemRules) },
                 "currentIndex totalCount queueRevision" to number, "playbackId currentItemId" to id)
             "tracks" -> fields("audio subtitle video" to array { structure(it, trackRules) })
+            "timeline" -> fields("playbackId currentItemId" to id,
+                "chapters" to array { structure(it, fields("startMs" to number, "title" to redactValue)) },
+                "segments" to array { structure(it, fields("type" to enum(setOf("intro", "recap", "outro", "preview")),
+                    "startMs endMs" to number)) })
             "command_result" -> fields("requestId playbackId" to id, "ok success" to flag,
                 "queueRevision" to number, "error" to enum(errors), "message" to redactValue)
             "auth_response" -> fields("success screenMirrorWebRtc" to flag,
