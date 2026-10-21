@@ -46,12 +46,6 @@ export const SHOTS = {
     aspect: PHONE,
     alt: 'PlayBridge remote on Android in Touchpad mode, with Context, D-Pad and Keyboard tabs and skip, loop and stop controls.'
   },
-  resume: {
-    name: 'phone-title-resume',
-    widths: [360, 720],
-    aspect: PHONE,
-    alt: 'Big Buck Bunny details on the PlayBridge phone app: watching on Master bedroom TV with ExoPlayer, a “Resume · 0:52” button, and a now-playing bar.'
-  },
   engines: {
     name: 'tv-appletv-engines',
     widths: [480, 960],

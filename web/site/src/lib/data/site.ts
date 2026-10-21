@@ -151,7 +151,7 @@ export type FeatureItem = {
   tag: string;
   title: string;
   desc: string;
-  visual: 'allow' | 'remote' | 'queue' | 'engine' | 'library' | 'browser';
+  visual: 'allow' | 'remote' | 'queue' | 'engine' | 'files' | 'browser';
 };
 
 export const FEATURES: FeatureItem[] = [
@@ -174,10 +174,10 @@ export const FEATURES: FeatureItem[] = [
     visual: 'browser'
   },
   {
-    tag: 'LIBRARY',
-    title: 'Your library. Your files.',
-    desc: 'A library on the phone with a watchlist and collections. Send a title to the receiver, or cast a video stored on the phone.',
-    visual: 'library'
+    tag: 'PHONE FILES',
+    title: 'Videos on the phone, played on the TV.',
+    desc: 'Phone Files lists the videos and audio stored on the phone. Pick one and it plays on the receiver, or open any file with the system picker.',
+    visual: 'files'
   },
   {
     tag: 'PLAYBACK',

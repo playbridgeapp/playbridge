@@ -29,14 +29,14 @@
     </ul>
 
     <h3 id="android">Android phone (sender)</h3>
-    <p><strong>On the phone.</strong> Browsing history, bookmarks, open tabs, downloads, cast history, library and watchlist entries, watch progress and resume positions, installed add-ons, settings, saved receivers, and any keys you enter (for example TMDB, OMDb, debrid, or backup credentials). Receiver tokens are encrypted with a key held in the Android Keystore. Clear history from the History screen and remove receivers from the Connection screen. Android's own backup can include this app data, depending on your device settings.</p>
+    <p><strong>On the phone.</strong> Browsing history, bookmarks, open tabs, downloads, cast history, legacy library and watchlist entries, watch progress and resume positions, installed add-ons, settings, saved receivers, and any keys you enter (for example TMDB, OMDb, debrid, or backup credentials). Receiver tokens are encrypted with a key held in the Android Keystore. Clear history from the History screen and remove receivers from the Connection screen. Android's own backup can include this app data, depending on your device settings.</p>
     <p><strong>What leaves the phone.</strong></p>
     <ul>
       <li>Websites you open in the built-in GeckoView browser. Searches typed in the address bar go to Google Search.</li>
       <li>Tab icons come from Google's favicon service, which receives the domain of the site in each tab.</li>
       <li>If you install uBlock Origin during setup or from Extensions, it downloads from addons.mozilla.org and the app checks for updates once a day. uBlock Origin downloads its own filter lists.</li>
       <li>On launch, the app asks playbridge.app whether a newer version exists (see <a href="#updates">Update checks</a>).</li>
-      <li>The library uses the Cinemeta add-on (installed by default) and any add-ons you add. It also uses TMDB and OMDb when you enter an API key for them, OpenSubtitles (through its Stremio add-on) for subtitles, and Kitsu to match anime titles. Those services receive the titles and IDs you look up.</li>
+      <li>The legacy library (deprecated in the app and due to be removed) uses the Cinemeta add-on (installed by default) and any add-ons you add. It also uses TMDB and OMDb when you enter an API key for them, OpenSubtitles (through its Stremio add-on) for subtitles, and Kitsu to match anime titles. Those services receive the titles and IDs you look up.</li>
       <li>The <strong>Library</strong> tile on the dashboard opens streams.playbridge.app, a website that runs in the in-app browser.</li>
       <li>GitHub builds only: debrid services (Real-Debrid, AllDebrid, Premiumize, TorBox) when you add an account, and device plugins, which are off until you turn them on.</li>
       <li>If you turn on automatic backup, the app uploads its export file to the S3-compatible storage you configure.</li>

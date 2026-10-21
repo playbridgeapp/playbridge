@@ -73,13 +73,6 @@ SCREENS: list[dict] = [
         "widths": [240, 480],
     },
     {
-        # Playback band: title details with Resume and the now-playing bar.
-        "name": "phone-title-resume",
-        "src": "phone-library-details.jpg",
-        "crop": (0, 110, 1080, 2270),
-        "widths": [360, 720],
-    },
-    {
         # Screens companion: Apple TV playback engine picker (AVPlayer / VLC / MPV).
         "name": "tv-appletv-engines",
         "src": "apple-tv-settings.jpg",

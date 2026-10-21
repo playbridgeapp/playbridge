@@ -5,12 +5,11 @@
 
   type Capture = { shot: Shot; kind: 'tv' | 'phone' };
 
-  /** Real captures per feature. LIBRARY has no clean capture yet, so its band shows the browser alone. */
+  /** Real captures per feature. FILES and QUEUE have no clean capture yet, so their bands show their partner's capture alone. */
   const CAPTURES: Partial<Record<FeatureItem['visual'], Capture>> = {
     browser: { shot: SHOTS.browser, kind: 'phone' },
     allow: { shot: SHOTS.pairing, kind: 'tv' },
     remote: { shot: SHOTS.remote, kind: 'phone' },
-    queue: { shot: SHOTS.resume, kind: 'phone' },
     engine: { shot: SHOTS.engines, kind: 'tv' }
   };
 
