@@ -26,6 +26,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Diagnostics**: Serve logs only over the paired encrypted connection.
 - **Re-pairing**: Rotate credentials for an existing sender and revoke its previous token.
 
+## GeckoView Plugin [0.15.0] — 2026-10-11 (versionCode 213)
+
+> **Requires TV Player 0.16.0 or later.** This plugin only accepts commands from a player that holds the new browser-control permission. With an older player, GeckoView mode can't be opened or controlled.
+
+### Added
+- **Video controls**: Play/pause, seek, switch video source, unmute and forward from the phone remote, D-pad control of the active video (including fullscreen), on-screen feedback, automatic unmute of muted autoplay, and the title and scrubber on the phone. Works for videos in the page and in cross-origin player frames, using the same controller as the built-in WebView browser.
+- **Fullscreen typing**: Text and Enter from the phone reach the focused field while the browser is in native fullscreen, including search fields inside embedded frames.
+- **Page zoom**: Pinch on the phone touchpad zooms pages smoothly around the TV cursor, between half and three times the page size. Zoom resets when the page changes.
+
+### Changed
+- **Release train**: Align TV Browser's version with the other PlayBridge products.
+- **Player connection**: Keep a direct, protected connection to the TV player while the browser is open, so remote and touchpad input stay responsive and the player isn't killed first on low-memory TVs.
+- **Fullscreen reporting**: The browser reports fullscreen on enter and exit, including exits with the TV's Back button, so the phone's fullscreen control follows.
+- **Fullscreen video in frames**: Fullscreen video inside embedded frames keeps the site's own player controls.
+
+### Fixed
+- **Browser continuity**: Pause media when the browser goes into the background and resume the browser session when returning.
+- **Navigation state**: Track the current URL, close cleanly with Back/Home, and preserve the replacement player's active state when switching out of browser mode.
+- **Phone keyboard and maximize**: Typing from the phone keyboard and the maximize button work again; the page bridge never connected before.
+- **Home in fullscreen**: Home from the phone remote now exits fullscreen and closes the browser.
+- **Fullscreen from the phone**: Fullscreen and restore work repeatedly without first clicking the video on the TV. If a site blocks real fullscreen, the video fills the screen instead.
+- **Scrolling**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open the plugin or send it remote, touchpad, text, navigation or user-agent commands. Any app on the TV could previously control it.
+- **Browser engine upgrade**: Updated GeckoView to version 157 and Android Components to 157.0.1, incorporating upstream security patches.
+- **Browser logs**: URLs are redacted in browser logs, and header values are no longer logged.
+
 ## Player [0.13.1] — 2026-08-29 (versionCode 229)
 
 ### Fixed
