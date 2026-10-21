@@ -2,7 +2,6 @@
   import Seo from '$lib/seo/Seo.svelte';
   import Hero from '$lib/components/Hero.svelte';
   import HowItWorks from '$lib/components/HowItWorks.svelte';
-  import Platforms from '$lib/components/Platforms.svelte';
   import Features from '$lib/components/Features.svelte';
   import InstallCta from '$lib/components/InstallCta.svelte';
   import { SITE } from '$lib/data/site';
@@ -32,5 +31,4 @@
 <Hero />
 <HowItWorks />
 <InstallCta />
-<Platforms />
 <Features />
