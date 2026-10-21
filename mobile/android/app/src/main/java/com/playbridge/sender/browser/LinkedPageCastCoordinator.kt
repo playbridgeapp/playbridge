@@ -144,6 +144,22 @@ internal fun linkedSessionExpired(
 ): Boolean = nowMillis - lastActivityAtMillis > LINKED_SESSION_IDLE_TIMEOUT_MILLIS ||
     nowMillis - createdAtMillis > LINKED_SESSION_MAX_LIFETIME_MILLIS
 
+/** Fast receiver re-query while a newly opened queue waits for its first playlist echo. */
+internal const val LINKED_ECHO_RESYNC_MILLIS = 2_000L
+/**
+ * Safety re-query once the queue is confirmed. Receivers push every change to every
+ * sender and reconnects resync in full, so this only covers a failed send to a live socket.
+ */
+internal const val LINKED_SAFETY_RESYNC_MILLIS = 30_000L
+
+/**
+ * Whether the linked session should re-query the receiver on this tick. Every tick while
+ * the queue awaits its echo (the tick is [LINKED_ECHO_RESYNC_MILLIS]); otherwise once per
+ * [LINKED_SAFETY_RESYNC_MILLIS].
+ */
+internal fun linkedResyncDue(awaitingPlaylistEcho: Boolean, nowMillis: Long, lastResyncAtMillis: Long): Boolean =
+    awaitingPlaylistEcho || nowMillis - lastResyncAtMillis >= LINKED_SAFETY_RESYNC_MILLIS
+
 /** Owns the single page-linked playlist authority while Android owns the TV session. */
 class LinkedPageCastCoordinator(
     private val webSocketClient: WebSocketClient,
@@ -177,6 +193,7 @@ class LinkedPageCastCoordinator(
         var hasSeenPlayer: Boolean = false,
         var lastStateStructure: Int? = null,
         var lastStateEmittedAtMillis: Long = 0,
+        var lastResyncAtMillis: Long = System.currentTimeMillis(),
     )
 
     @Volatile
@@ -211,7 +228,9 @@ class LinkedPageCastCoordinator(
         }
         scope.launch {
             webSocketClient.connectionState.collect { state ->
-                if (state is WebSocketClient.ConnectionState.Connected && active != null) {
+                val session = active
+                if (state is WebSocketClient.ConnectionState.Connected && session != null) {
+                    session.lastResyncAtMillis = System.currentTimeMillis()
                     webSocketClient.send(createContextQueryJson())
                 }
             }
@@ -226,15 +245,18 @@ class LinkedPageCastCoordinator(
         }
         scope.launch {
             while (true) {
-                delay(LINKED_STATUS_RESYNC_MILLIS)
+                delay(LINKED_ECHO_RESYNC_MILLIS)
                 val session = active
+                val now = System.currentTimeMillis()
                 if (session != null && sessionExpired(session)) {
                     finish("session_expired")
                 } else if (session != null &&
-                    webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected
+                    webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected &&
+                    linkedResyncDue(session.awaitingPlaylistEcho, now, session.lastResyncAtMillis)
                 ) {
-                    // Receiver broadcasts are best-effort. Re-querying while a page owns the
-                    // queue recovers a dropped playlist index update without polling the page.
+                    // Each query makes the receiver resend its whole snapshot (~4 KB), so ask
+                    // quickly only until the new queue is confirmed, then rarely as a safety net.
+                    session.lastResyncAtMillis = now
                     webSocketClient.send(createContextQueryJson())
                 }
             }
@@ -660,7 +682,6 @@ class LinkedPageCastCoordinator(
         private const val MAX_METADATA_BYTES = 16 * 1024
         private const val MAX_REQUEST_BYTES = 64 * 1024
         private const val MAX_CANCELLED_OPEN_REQUESTS = 64
-        private const val LINKED_STATUS_RESYNC_MILLIS = 2_000L
         private const val NEED_ITEMS_RETRY_MILLIS = 5_000L
         private const val STATE_EVENT_INTERVAL_MILLIS = 1_000L
         private val ALLOWED_HEADERS = setOf(
