@@ -43,6 +43,15 @@ String chapterLabel(ChapterTarget target) {
       : 'Chapter ${target.number} · $title';
 }
 
+/// Hover caption for [positionMs]: "Chapter 2 · The Heist", "Chapter 3", or
+/// just the title of a file's only chapter. Null when there is nothing to say.
+String? chapterCaptionAt(List<ChapterInfo> chapters, int positionMs) {
+  final index = chapters.lastIndexWhere((c) => c.startMs <= positionMs);
+  if (index < 0) return null;
+  if (chapters.length < 2) return chapters[index].title;
+  return chapterLabel((number: index + 1, chapter: chapters[index]));
+}
+
 /// Chapter starts as 0..1 track fractions, skipping the first chapter at 0.
 /// Empty with fewer than two chapters or no duration.
 List<double> chapterFractions(List<ChapterInfo> chapters, int durationMs) {

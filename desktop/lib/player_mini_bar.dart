@@ -6,6 +6,8 @@ import 'chapter_navigation.dart';
 import 'media_kind.dart';
 import 'playback_clock.dart';
 import 'player_control_visibility.dart';
+import 'player_engine.dart';
+import 'seek_hover_preview.dart';
 
 /// One thin row shown while the desktop player is playing: play/pause, stop,
 /// seek (when the title has a duration), audio, subtitles, and fullscreen.
@@ -32,7 +34,7 @@ class PlayerMiniBar extends StatelessWidget {
     this.onSeekEnd,
     this.audioMenu,
     this.subtitleMenu,
-    this.chapterFractions = const [],
+    this.chapters = const [],
   });
 
   final MediaKind mediaKind;
@@ -51,8 +53,8 @@ class PlayerMiniBar extends StatelessWidget {
   final Widget? audioMenu;
   final Widget? subtitleMenu;
 
-  /// Chapter starts (0..1) drawn as gaps on the seek track.
-  final List<double> chapterFractions;
+  /// Chapters of the current item: gaps on the seek track and hover captions.
+  final List<ChapterInfo> chapters;
 
   bool get _playEnabled => mediaKind != MediaKind.image || hasDuration;
 
@@ -121,26 +123,33 @@ class PlayerMiniBar extends StatelessWidget {
                     ),
                   ),
                   Expanded(
-                    child: ExcludeFocus(
-                      child: SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 2,
-                          trackShape: ChapterSliderTrackShape(
-                            fractions: chapterFractions,
+                    child: SeekHoverPreview(
+                      durationMs: durationMs,
+                      chapters: chapters,
+                      // Overlay radius 10 is wider than the thumb.
+                      trackInset: 10,
+                      enabled: seekEnabled,
+                      child: ExcludeFocus(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 2,
+                            trackShape: ChapterSliderTrackShape(
+                              fractions: chapterFractions(chapters, durationMs),
+                            ),
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 5,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 10,
+                            ),
                           ),
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 5,
+                          child: Slider(
+                            min: 0,
+                            max: max,
+                            value: pos,
+                            onChanged: seekEnabled ? onSeekChanged : null,
+                            onChangeEnd: seekEnabled ? onSeekEnd : null,
                           ),
-                          overlayShape: const RoundSliderOverlayShape(
-                            overlayRadius: 10,
-                          ),
-                        ),
-                        child: Slider(
-                          min: 0,
-                          max: max,
-                          value: pos,
-                          onChanged: seekEnabled ? onSeekChanged : null,
-                          onChangeEnd: seekEnabled ? onSeekEnd : null,
                         ),
                       ),
                     ),

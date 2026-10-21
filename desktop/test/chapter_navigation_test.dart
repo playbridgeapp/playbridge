@@ -46,4 +46,13 @@ void main() {
     expect(chapterFractions(chapters, 0), isEmpty);
     expect(chapterFractions(const [ChapterInfo(startMs: 0)], 1000), isEmpty);
   });
+
+  test('hover caption names the chapter, or the only title', () {
+    expect(chapterCaptionAt(chapters, 700000), 'Chapter 2 · The Heist');
+    expect(chapterCaptionAt(chapters, 1900000), 'Chapter 3');
+    expect(
+        chapterCaptionAt(const [ChapterInfo(startMs: 0, title: 'Movie')], 10),
+        'Movie');
+    expect(chapterCaptionAt(const [], 10), isNull);
+  });
 }

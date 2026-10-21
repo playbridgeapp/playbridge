@@ -47,6 +47,7 @@ import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
 import 'screen_mirror_surface.dart';
+import 'seek_hover_preview.dart';
 import 'settings_screen.dart';
 import 'skip_segment.dart';
 import 'skip_segment_fetcher.dart';
@@ -2355,7 +2356,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
             onToggleFullScreen: widget.onToggleFullScreen,
             onSeekChanged: _beginSeek,
             onSeekEnd: _endSeek,
-            chapterFractions: chapterFractions(p.chapters, p.durationMs),
+            chapters: p.chapters,
             audioMenu: trackMenus
                 ? _AudioMenuButton(
                     player: p,
@@ -2412,27 +2413,35 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           ),
                         ),
                         Expanded(
-                          child: ExcludeFocus(
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                trackHeight: 3,
-                                trackShape: ChapterSliderTrackShape(
-                                  fractions: chapterFractions(
-                                      p.chapters, p.durationMs),
+                          child: SeekHoverPreview(
+                            durationMs: p.durationMs,
+                            chapters: p.chapters,
+                            // Overlay radius 12 is wider than the thumb.
+                            trackInset: 12,
+                            enabled: hasDuration && !isImage,
+                            child: ExcludeFocus(
+                              child: SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  trackHeight: 3,
+                                  trackShape: ChapterSliderTrackShape(
+                                    fractions: chapterFractions(
+                                        p.chapters, p.durationMs),
+                                  ),
+                                  thumbShape: const RoundSliderThumbShape(
+                                      enabledThumbRadius: 6),
+                                  overlayShape: const RoundSliderOverlayShape(
+                                      overlayRadius: 12),
                                 ),
-                                thumbShape: const RoundSliderThumbShape(
-                                    enabledThumbRadius: 6),
-                                overlayShape: const RoundSliderOverlayShape(
-                                    overlayRadius: 12),
-                              ),
-                              child: Slider(
-                                min: 0,
-                                max: hasDuration ? dur : 1,
-                                value: pos,
-                                onChanged:
-                                    hasDuration && !isImage ? _beginSeek : null,
-                                onChangeEnd:
-                                    hasDuration && !isImage ? _endSeek : null,
+                                child: Slider(
+                                  min: 0,
+                                  max: hasDuration ? dur : 1,
+                                  value: pos,
+                                  onChanged: hasDuration && !isImage
+                                      ? _beginSeek
+                                      : null,
+                                  onChangeEnd:
+                                      hasDuration && !isImage ? _endSeek : null,
+                                ),
                               ),
                             ),
                           ),
