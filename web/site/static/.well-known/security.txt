@@ -1,0 +1,5 @@
+Contact: mailto:playbridgeapp@gmail.com
+Expires: 2027-10-21T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://playbridge.app/.well-known/security.txt
+Policy: https://playbridge.app/security

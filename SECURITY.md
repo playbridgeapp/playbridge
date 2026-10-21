@@ -23,6 +23,24 @@ We take the security of PlayBridge seriously. If you have discovered a security 
 2.  **Response**: We will acknowledge your report within 48 hours.
 3.  **Resolution**: We will work to resolve the issue as quickly as possible and will keep you updated on the progress.
 
+The same contact is published at <https://playbridge.app/.well-known/security.txt>,
+and the public policy is at <https://playbridge.app/security>.
+
+## Scope
+
+- Android phone app (sender) and Android TV / Fire TV receiver, including the
+  GeckoView browser plugin
+- PlayBridge Desktop (macOS, Windows, Linux)
+- PlayBridge Video Detector browser extension (Chrome, Firefox)
+- The `playbridge` CLI and its installers
+- iPhone and Apple TV apps (pre-release, built from source)
+- Shared Rust components (`cast/`, `browser-receiver-rust/`, `stream-proxy-rust/`)
+  and the protocol
+- playbridge.app, including its download and update endpoints
+
+Issues in third-party websites, add-ons, debrid services, or a TV's own DLNA
+software belong with their operators.
+
 ## Security Considerations
 
 The normative sender/receiver requirements are defined in
