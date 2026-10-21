@@ -194,6 +194,20 @@ class TrackInfo {
   final bool selected;
 }
 
+/// One chapter marker of the open media file (`chapter-list` on mpv).
+class ChapterInfo {
+  const ChapterInfo({required this.startMs, this.title});
+  final int startMs;
+  final String? title;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ChapterInfo && other.startMs == startMs && other.title == title;
+
+  @override
+  int get hashCode => Object.hash(startMs, title);
+}
+
 abstract class PlayerEngine extends ChangeNotifier {
   VoidCallback? onCompleted;
   void Function(String)? onError;
@@ -205,6 +219,12 @@ abstract class PlayerEngine extends ChangeNotifier {
   bool get isLive => false;
   bool get isSeekable => durationMs > 0;
   int get currentVideoHeight => 0;
+
+  /// Chapter markers of the currently open file, empty until it has loaded.
+  List<ChapterInfo> get chapters => const [];
+
+  /// Absolute media position (ms) up to which data is buffered; null if unknown.
+  int? get bufferedMs => null;
 
   /// Repeat the current file, never the queue.
   Future<void> setLooping(bool enabled) async {}

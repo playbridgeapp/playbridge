@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/media_kind.dart';
+import 'package:flutter/gestures.dart';
+import 'package:playbridge_desktop/player_engine.dart';
 import 'package:playbridge_desktop/player_mini_bar.dart';
 
 void main() {
@@ -13,6 +15,7 @@ void main() {
     bool playing = true,
     int positionMs = 1000,
     int durationMs = 90000,
+    List<ChapterInfo> chapters = const [],
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -33,6 +36,7 @@ void main() {
             onSeekEnd: (_) {},
             audioMenu: const Icon(Icons.audiotrack, key: Key('audio')),
             subtitleMenu: const Icon(Icons.subtitles, key: Key('subs')),
+            chapters: chapters,
           ),
         ),
       ),
@@ -122,5 +126,29 @@ void main() {
     );
     expect(find.byTooltip('Stop'), findsOneWidget);
     expect(find.byTooltip('Fullscreen'), findsOneWidget);
+  });
+
+  testWidgets('hovering the seek bar shows the time and chapter',
+      (tester) async {
+    await pump(
+      tester,
+      audio: 0,
+      subs: 0,
+      chapters: const [
+        ChapterInfo(startMs: 0, title: 'Opening'),
+        ChapterInfo(startMs: 30000, title: 'The Heist'),
+      ],
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.byType(Slider)));
+    await tester.pump();
+    expect(find.text('00:45'), findsOneWidget);
+    expect(find.text('Chapter 2 · The Heist'), findsOneWidget);
+
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+    expect(find.text('Chapter 2 · The Heist'), findsNothing);
   });
 }

@@ -46,6 +46,34 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
   return out.isEmpty ? null : out;
 }
 
+/// mpv's placeholder for a chapter without a title (Matroska).
+const _mpvUnnamedChapter = '(unnamed)';
+
+/// Parses mpv's string form of `chapter-list` (JSON `[{"title","time"}]`, time
+/// in seconds). Malformed entries are skipped; ordering is left to the reporter.
+@visibleForTesting
+List<ChapterInfo> parseMpvChapterList(String raw) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } on FormatException {
+    return const [];
+  }
+  if (decoded is! List) return const [];
+  final chapters = <ChapterInfo>[];
+  for (final entry in decoded) {
+    if (entry is! Map) continue;
+    final time = entry['time'];
+    if (time is! num || !time.isFinite) continue;
+    final title = entry['title'];
+    chapters.add(ChapterInfo(
+      startMs: (time * 1000).round(),
+      title: title is String && title != _mpvUnnamedChapter ? title : null,
+    ));
+  }
+  return chapters;
+}
+
 class MpvEngine extends PlayerEngine {
   StreamProxyLease? _proxyLease;
   int _proxyLeaseGeneration = 0;
@@ -176,6 +204,24 @@ class MpvEngine extends PlayerEngine {
   bool get isSeekable => _seekable ?? durationMs > 0;
   @override
   int get currentVideoHeight => player.state.height ?? 0;
+
+  List<ChapterInfo> _chapters = const [];
+  @override
+  List<ChapterInfo> get chapters => _chapters;
+
+  void _setChapters(List<ChapterInfo> next) {
+    if (listEquals(next, _chapters)) return;
+    _chapters = next;
+    notifyListeners();
+  }
+
+  /// media_kit's `buffer` is mpv `demuxer-cache-time`: the absolute timestamp
+  /// of the last demuxed data, not the amount ahead of the playhead.
+  @override
+  int? get bufferedMs {
+    final ms = player.state.buffer.inMilliseconds;
+    return ms > 0 ? ms : null;
+  }
 
   @override
   Future<void> setLooping(bool enabled) async {
@@ -443,6 +489,9 @@ class MpvEngine extends PlayerEngine {
     final medias = plans.map((p) => p.media).toList();
     final playlist = Playlist(medias, index: startIndex);
     final leaseGeneration = ++_proxyLeaseGeneration;
+    // The outgoing file's markers must not outlive it; mpv re-reports the new
+    // file's chapter-list once it has loaded.
+    _setChapters(const []);
     final incomingLease = await StreamProxyServer.instance.retainUrls([
       ...medias.map((media) => media.uri),
       ...items.map((item) => item.url),
@@ -530,6 +579,7 @@ class MpvEngine extends PlayerEngine {
     _proxyLease?.close();
     _proxyLease = null;
     await player.stop();
+    _setChapters(const []);
     _clearLateSubtitleFiles();
   }
 
@@ -577,6 +627,9 @@ class MpvEngine extends PlayerEngine {
           if (_seekable == next) return;
           _seekable = next;
           notifyListeners();
+        });
+        await native.observeProperty('chapter-list', (value) async {
+          _setChapters(parseMpvChapterList(value));
         });
       } catch (e) {
         debugPrint('[mpv] failed to tune: $e');

@@ -50,7 +50,9 @@ Map<String, Object?> buildDesktopReceiverCapabilities(
               'context',
               'tracks',
               'playlist_status',
-              'player_settings'
+              'player_settings',
+              'timeline',
+              'buffered'
             ],
           },
         },

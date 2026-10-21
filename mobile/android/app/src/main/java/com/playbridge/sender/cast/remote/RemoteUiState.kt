@@ -45,11 +45,20 @@ data class RemotePlayback(
     val isLive: Boolean = false,
     val seekable: Support = Support.Unknown,
     val observedAtMs: Long = 0L,
+    /** Absolute buffered position, only when the receiver reports `status.buffered`. */
+    val bufferedMs: Long? = null,
+    val chapters: List<RemoteChapter> = emptyList(),
+    val segments: List<RemoteSegment> = emptyList(),
 ) {
     val reportedPlaying: Boolean get() = reportedState in setOf(RemotePlaybackState.Playing, RemotePlaybackState.Buffering)
     val displayedPlaying: Boolean get() = displayedState in setOf(RemotePlaybackState.Playing, RemotePlaybackState.Buffering)
     val active: Boolean get() = reportedState in setOf(RemotePlaybackState.Playing, RemotePlaybackState.Paused, RemotePlaybackState.Buffering)
 }
+
+data class RemoteChapter(val startMs: Long, val title: String? = null)
+
+/** Intro, recap, outro or preview; a null [endMs] runs to the end of the media. */
+data class RemoteSegment(val type: String, val startMs: Long, val endMs: Long?)
 
 data class RemoteQueueItem(
     val index: Int, val title: String, val itemId: String? = null,

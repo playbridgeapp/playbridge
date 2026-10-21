@@ -9,7 +9,53 @@ data class TvPlaybackStatus(
     val durationMs: Long,
     val title: String?,
     val mediaKind: String = "video",
+    /** Absolute position the receiver has buffered up to (`status.buffered`), when reported. */
+    val bufferedMs: Long? = null,
 )
+
+/** A chapter start from the media file, synced via `timeline` messages. */
+data class TvChapter(val startMs: Long, val title: String? = null)
+
+/** An intro/recap/outro/preview span; a null [endMs] runs to the end of the media. */
+data class TvSkipSegment(val type: String, val startMs: Long, val endMs: Long?)
+
+/** Chapters and skip segments for one receiver item, synced via `timeline` messages. */
+data class TvTimeline(
+    val playbackId: String? = null,
+    val currentItemId: String? = null,
+    val chapters: List<TvChapter> = emptyList(),
+    val segments: List<TvSkipSegment> = emptyList(),
+)
+
+private val skipSegmentTypes = setOf("intro", "recap", "outro", "preview")
+
+/** Bounded, sorted parse of a `timeline` frame; malformed entries are dropped, never fatal. */
+internal fun parseTvTimeline(json: org.json.JSONObject): TvTimeline {
+    fun id(key: String) = (json.opt(key) as? String)?.takeIf(String::isNotEmpty)
+    fun ms(o: org.json.JSONObject, key: String): Long? =
+        (o.opt(key) as? Number)?.toLong()?.takeIf { it >= 0L }
+    val chapters = buildList {
+        val arr = json.optJSONArray("chapters") ?: return@buildList
+        for (i in 0 until minOf(arr.length(), 256)) {
+            val o = arr.optJSONObject(i) ?: continue
+            val start = ms(o, "startMs") ?: continue
+            val title = (o.opt("title") as? String)?.trim()?.take(200)?.takeIf(String::isNotEmpty)
+            add(TvChapter(start, title))
+        }
+    }.sortedBy { it.startMs }.distinctBy { it.startMs }
+    val segments = buildList {
+        val arr = json.optJSONArray("segments") ?: return@buildList
+        for (i in 0 until minOf(arr.length(), 16)) {
+            val o = arr.optJSONObject(i) ?: continue
+            val type = o.optString("type").takeIf { it in skipSegmentTypes } ?: continue
+            val start = ms(o, "startMs") ?: continue
+            val end = if (o.isNull("endMs")) null else ms(o, "endMs") ?: continue
+            if (end != null && end <= start) continue
+            add(TvSkipSegment(type, start, end))
+        }
+    }.sortedBy { it.startMs }
+    return TvTimeline(id("playbackId"), id("currentItemId"), chapters, segments)
+}
 
 /** An available audio or subtitle track on the TV, synced via `tracks` messages. */
 data class MediaTrack(

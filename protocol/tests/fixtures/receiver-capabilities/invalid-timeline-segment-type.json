@@ -1,0 +1,7 @@
+{
+  "type": "timeline",
+  "chapters": [],
+  "segments": [
+    { "type": "credits", "startMs": 0, "endMs": 1000 }
+  ]
+}

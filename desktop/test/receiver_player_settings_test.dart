@@ -175,7 +175,7 @@ void main() {
       };
       server.onSendForTest = (id, frame) {
         expect(id, 7);
-        direct.add(frame);
+        if (frame['type'] == 'player_settings') direct.add(frame);
       };
       server.attachPlayerListenersForTest();
       await player.playPlaylist([item(1), item(2)], 0);

@@ -41,7 +41,10 @@ def check_invariants(document, old):
     status['properties'] = dict(status['properties'])
     error = status['properties'].pop('error')
     assert error['type'] == ['string', 'null'] and error['maxLength'] == 512
-    assert status == retained['Status'], 'Only optional error may extend Status (loop stays in player_settings)'
+    buffered = status['properties'].pop('buffered')
+    assert buffered['type'] == 'integer' and buffered['minimum'] == 0
+    assert 'buffered' not in status['required']
+    assert status == retained['Status'], 'Only optional error/buffered may extend Status (loop stays in player_settings)'
     for name in ('BrowserCapabilitiesFrame', 'BrowserCapabilities'):
         assert schemas[name] == retained[name], f'{name} changed'
     assert schemas['PlayerSettings']['required'] == retained['PlayerSettings']['required']

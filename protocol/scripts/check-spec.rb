@@ -21,6 +21,7 @@ required_schemas = %w[
   ReceiverCapabilities ReceiverCapabilitiesV1 ReceiverCapabilitiesFuture
   ReceiverSurfaceCapabilities ReceiverEngineCapabilities ReceiverVolumeCapabilities
   VolumeCommand VolumePayload VolumeState ReceiverCapabilitiesFrame ReceiverCapabilitiesSubscribeCommand
+  Timeline TimelineChapter TimelineSegment
 ]
 missing_schemas = required_schemas.reject { |name| schemas.key?(name) }
 abort "missing required schemas: #{missing_schemas.join(', ')}" unless missing_schemas.empty?

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,7 @@ import 'late_subtitle_loader.dart';
 import 'progress_webhook.dart';
 import 'receiver_capabilities.dart';
 import 'remote_player_settings.dart';
+import 'remote_timeline.dart';
 import 'video_scaling.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
@@ -423,6 +425,7 @@ class ReceiverServer extends ChangeNotifier {
         _sendPlaylistStatus(connectionId);
         _broadcastTracksIfChanged(force: true);
         _sendPlayerSettings(connectionId);
+        _sendTimeline(connectionId);
         await _publishVolume(connectionId: connectionId);
       case PlaylistCmd(:final items, :final startIndex, :final skipPreplay):
         unawaited(
@@ -1001,6 +1004,7 @@ class ReceiverServer extends ChangeNotifier {
     }
     _broadcastPlayerContextIfChanged();
     _broadcastPlayerSettingsIfChanged();
+    _broadcastTimelineIfChanged();
     if (player.hasTerminalError) return;
     if (!player.isOpening) _progressReporter.update(_progressSnapshot());
     _broadcast(_statusMessage());
@@ -1028,6 +1032,7 @@ class ReceiverServer extends ChangeNotifier {
         if (player.playbackId != null) 'playbackId': player.playbackId,
         if (player.currentItemId != null) 'currentItemId': player.currentItemId,
         if (player.terminalError != null) 'error': player.terminalError,
+        if (player.bufferedMs case final buffered?) 'buffered': buffered,
       };
 
   Map<String, Object?> _playerSettingsMessage() {
@@ -1068,6 +1073,32 @@ class ReceiverServer extends ChangeNotifier {
 
   void _sendPlayerSettings(int connectionId) {
     final message = _playerSettingsMessage();
+    onSendForTest?.call(connectionId, message);
+    _runtime?.sendTo(connectionId, message);
+  }
+
+  // The controller already withholds chapters while an item opens and binds
+  // skip segments to their item, so every frame describes the current item.
+  Map<String, Object?> _timelineMessage() => buildTimelineMessage(
+        playbackId: player.playbackId,
+        currentItemId: player.currentItemId,
+        chapters: player.chapters,
+        segments: player.skipSegments,
+      );
+
+  String? _lastTimelineJson;
+  void _broadcastTimelineIfChanged() {
+    final message = _timelineMessage();
+    // The encoding carries playbackId/currentItemId, so a new item with the
+    // same (often empty) timeline is still announced.
+    final encoded = jsonEncode(message);
+    if (encoded == _lastTimelineJson) return;
+    _lastTimelineJson = encoded;
+    _broadcast(message);
+  }
+
+  void _sendTimeline(int connectionId) {
+    final message = _timelineMessage();
     onSendForTest?.call(connectionId, message);
     _runtime?.sendTo(connectionId, message);
   }

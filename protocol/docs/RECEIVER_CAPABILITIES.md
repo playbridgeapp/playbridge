@@ -101,7 +101,7 @@ Commands remain subject to context, media, readiness and existing authorization 
 | `tracks` | `audio_select`, `subtitle_select`, `subtitle_url_add`, `subtitle_resource_add` | Control `audio_track:<id>`, `sub_track:<id>`, legacy `add_subtitle:<url>`, or `add_subtitle` with resource-scoped headers. Reporting tracks is a separate operation. |
 | `queue` | `replace`, `append`, `jump_index`, `jump_item`, `remove`, `move`, `clear` | `playlist`, `queue_add`, index/itemId `playlist_jump`, `queue_remove`, `queue_move`, `queue_clear`. Preserve queue feature/guard/acknowledgement rules. Local CLI dashboards are not wire implementations. |
 | `browser` | `launch`, `forward`, `reload`, `cycle_source`, `unmute`, `fullscreen`, `manage_user_scripts`, `manage_user_agent` | `browser` with selected engine; browser_control `forward`, `refresh`, `video_target_cycle`, `video_unmute`, `maximize_video` / `restore_video`; existing script/agent administration frames. Navigation keys remain solely in `keys`. |
-| `reporting` | `status`, `context`, `tracks`, `playlist_status`, `player_settings`, `fullscreen` | Receiver frames of the same name; `fullscreen` means optional browser `status.fullscreen`. None is a transient value or a promise that a media item is active. |
+| `reporting` | `status`, `context`, `tracks`, `playlist_status`, `player_settings`, `fullscreen`, `timeline`, `buffered` | Receiver frames of the same name; `timeline` is the `timeline` frame (chapters and skip segments). `fullscreen` means optional browser `status.fullscreen` and `buffered` means optional `status.buffered`. None is a transient value or a promise that a media item is active. |
 
 Sleep/screen operations have no invented v1 wire mapping; future operation identifiers remain
 extensible, but must not be advertised without a defined, implemented command. The old narrow
@@ -138,6 +138,10 @@ Desktop's `internal_mpv` advertises `speed`, `loop`, `scaling`, and `subtitle_of
 and reports a complete `player_settings` snapshot on authenticated sync, settings changes,
 new items, and `context_query`. It does not advertise quality capping, engine switching,
 or audio boost. Images report speed/scaling unavailable and are not seekable.
+It also advertises `timeline` and `buffered`: a `timeline` frame (media chapters and
+TheIntroDB/IntroDB skip segments) on item change, on change of either list and on
+`context_query`, and `status.buffered` while the buffered end is known. Images report an
+empty timeline and no `buffered`.
 
 ## Common volume route: app versus system
 

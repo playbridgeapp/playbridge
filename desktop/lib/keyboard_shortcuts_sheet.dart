@@ -16,6 +16,7 @@ class _KeyboardShortcutsDialog extends StatelessWidget {
     ('Space', 'Play / pause'),
     ('← / →', 'Seek −10s / +10s (hold: −50s / +50s)'),
     ('↑ / ↓', 'Volume up / down'),
+    ('PgUp / PgDn', 'Previous / next chapter'),
     ('[ / ]', 'Playback speed down / up'),
     ('Z', 'Cycle Fit / Zoom / Fill'),
     ('G / H', 'Subtitle delay −100ms / +100ms'),
