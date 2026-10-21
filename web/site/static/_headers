@@ -17,6 +17,13 @@
 /*.webp
   Cache-Control: public, max-age=86400
 
+/*.jpg
+  Cache-Control: public, max-age=86400
+
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=86400
+
 /cast/*
   Access-Control-Allow-Origin: *
 

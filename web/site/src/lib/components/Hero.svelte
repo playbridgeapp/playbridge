@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from '$lib/icons/Icon.svelte';
   import CastScene from './visuals/CastScene.svelte';
+  import GithubStars from './GithubStars.svelte';
   import { SITE } from '$lib/data/site';
 </script>
 
@@ -20,7 +21,7 @@
           ><Icon name="download" size={14} /> Get a receiver</a
         >
         <a class="hero__source" href={SITE.github} rel="noopener noreferrer" target="_blank"
-          >GitHub</a
+          >GitHub<GithubStars /></a
         >
       </div>
     </div>
