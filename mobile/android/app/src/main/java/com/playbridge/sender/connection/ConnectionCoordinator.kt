@@ -4,6 +4,8 @@ import android.util.Log
 import com.playbridge.sender.cast.MediaTrack
 import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.sender.cast.TvPlayerSettings
+import com.playbridge.sender.cast.TvTimeline
+import com.playbridge.sender.cast.parseTvTimeline
 import com.playbridge.sender.cast.remote.RemoteObservation
 import android.os.SystemClock
 import com.playbridge.sender.library.PlaylistEpisode
@@ -85,6 +87,7 @@ class ConnectionCoordinator internal constructor(
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
+    val tvTimeline = MutableStateFlow<TvTimeline?>(null)
     private val mutableRemoteObservation = MutableStateFlow(RemoteObservation())
     val remoteObservation = mutableRemoteObservation.asStateFlow()
     private val pendingQueueCommands = ConcurrentHashMap<String, CompletableDeferred<QueueCommandResult>>()
@@ -201,6 +204,7 @@ class ConnectionCoordinator internal constructor(
                                 mediaKind = json.optString("mediaKind", "video")
                                     .takeIf { it in setOf("video", "audio", "image") }
                                     ?: "video",
+                                bufferedMs = (json.opt("buffered") as? Number)?.toLong()?.takeIf { it > 0L },
                             )
                             // Player status carries mediaKind, playbackId, or currentItemId
                             // (createStatusJson). Browser status never does: active frames add
@@ -284,6 +288,15 @@ class ConnectionCoordinator internal constructor(
                                 logd("TV Audio/Subtitle tracks updated")
                             }
                         }
+                        "timeline" -> {
+                            val timeline = parseTvTimeline(json)
+                            if (holdingPlayerSnapshots) {
+                                heldPlayerSnapshots.timeline = timeline
+                            } else {
+                                tvTimeline.value = timeline
+                                logd("TV timeline chapters=${timeline.chapters.size} segments=${timeline.segments.size}")
+                            }
+                        }
                         "user_scripts" -> {
                             val arr = json.optJSONArray("names")
                             installedUserScripts.value = buildList {
@@ -336,8 +349,8 @@ class ConnectionCoordinator internal constructor(
                     }
                     val type = json.optString("type")
                     val heldPlayerStatus = type == "status" && isBrowserSurface(tvActiveContext.value) && isPlayerOwnedStatus(json)
-                    val heldPlayerSnapshot = holdingPlayerSnapshots && type in setOf("playlist_status", "tracks", "player_settings")
-                    if (!heldPlayerStatus && !heldPlayerSnapshot && type in setOf("context", "playlist_status", "status", "tracks", "player_settings")) {
+                    val heldPlayerSnapshot = holdingPlayerSnapshots && type in setOf("playlist_status", "tracks", "player_settings", "timeline")
+                    if (!heldPlayerStatus && !heldPlayerSnapshot && type in setOf("context", "playlist_status", "status", "tracks", "player_settings", "timeline")) {
                         mutableRemoteObservation.update { it.copy(sequence = it.sequence + 1L, atMs = clock()) }
                     }
                 } catch (_: Exception) {
@@ -415,6 +428,7 @@ class ConnectionCoordinator internal constructor(
         playbackFailures.reset()
         tvPlayback.value = null
         tvPlaylistState.value = null
+        tvTimeline.value = null
         mutableRemoteObservation.update { it.copy(mediaGeneration = it.mediaGeneration + 1L) }
     }
 
@@ -454,13 +468,14 @@ class ConnectionCoordinator internal constructor(
         val held = heldPlayerSnapshots
         heldPlayerSnapshots = HeldPlayerSnapshots()
         if (held.playlist == null && held.playback == null && held.videoTracks == null &&
-            held.audioTracks == null && held.subtitleTracks == null && held.settings == null) return
+            held.audioTracks == null && held.subtitleTracks == null && held.settings == null && held.timeline == null) return
         held.playlist?.let { tvPlaylistState.value = it }
         held.playback?.let { tvPlayback.value = it }
         held.videoTracks?.let { tvVideoTracks.value = it }
         held.audioTracks?.let { tvAudioTracks.value = it }
         held.subtitleTracks?.let { tvSubtitleTracks.value = it }
         held.settings?.let { tvPlayerSettings.value = it }
+        held.timeline?.let { tvTimeline.value = it }
         mutableRemoteObservation.update { previous ->
             previous.copy(
                 playbackSequence = previous.playbackSequence + if (held.playback != null) 1L else 0L,
@@ -479,6 +494,7 @@ class ConnectionCoordinator internal constructor(
         tvAudioTracks.value = emptyList()
         tvSubtitleTracks.value = emptyList()
         tvPlayerSettings.value = TvPlayerSettings()
+        tvTimeline.value = null
         mutableRemoteObservation.update {
             it.copy(
                 mediaGeneration = it.mediaGeneration + 1L,
@@ -515,5 +531,6 @@ class ConnectionCoordinator internal constructor(
         var subtitleTracks: List<MediaTrack>? = null,
         var settings: TvPlayerSettings? = null,
         var settingsFields: Set<String>? = null,
+        var timeline: TvTimeline? = null,
     )
 }

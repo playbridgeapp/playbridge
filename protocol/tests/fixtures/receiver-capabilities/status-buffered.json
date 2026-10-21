@@ -1,0 +1,10 @@
+{
+  "type": "status",
+  "state": "playing",
+  "position": 120000,
+  "duration": 5700000,
+  "mediaKind": "video",
+  "playbackId": "playback-1",
+  "currentItemId": "item-1",
+  "buffered": 165000
+}

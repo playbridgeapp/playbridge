@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
 import 'playback_speed.dart';
 import 'player_engine.dart';
+import 'skip_segment.dart';
 import 'subtitle_delay.dart';
 import 'subtitle_delay.dart' as subtitle_delay;
 import 'video_scaling.dart';
@@ -325,6 +326,49 @@ class PlayerController extends ChangeNotifier {
       currentMediaKind == MediaKind.video && !isOpening
           ? _engine.currentVideoHeight
           : 0;
+
+  bool get _timedMediaReady =>
+      currentMediaKind != null &&
+      currentMediaKind != MediaKind.image &&
+      !isOpening;
+
+  /// Chapter markers of the current item. Empty while it opens, when the
+  /// engine may still hold the previous file's list, and for images.
+  List<ChapterInfo> get chapters =>
+      _timedMediaReady ? _engine.chapters : const [];
+
+  /// Absolute position (ms) buffered up to, within [positionMs, durationMs].
+  /// Null when unknown, live, or for images.
+  int? get bufferedMs {
+    if (!_timedMediaReady || isLive) return null;
+    final duration = durationMs;
+    final buffered = _engine.bufferedMs;
+    if (duration <= 0 || buffered == null || buffered <= 0) return null;
+    return buffered.clamp(math.min(positionMs, duration), duration).toInt();
+  }
+
+  List<SkipSegment> _skipSegments = const [];
+  (String?, String?)? _skipSegmentsItem;
+
+  /// Skip segments the UI resolved for the current item. They are bound to the
+  /// item that was current when published, so they never describe its successor.
+  List<SkipSegment> get skipSegments => currentMediaKind != null &&
+          currentMediaKind != MediaKind.image &&
+          _skipSegmentsItem == (_playbackId, currentItemId)
+      ? _skipSegments
+      : const [];
+
+  /// Publish [segments] for the item that is current now.
+  void publishSkipSegments(List<SkipSegment> segments) {
+    final item = (_playbackId, currentItemId);
+    if (_skipSegmentsItem == item && listEquals(_skipSegments, segments)) {
+      return;
+    }
+    _skipSegmentsItem = item;
+    _skipSegments = List.unmodifiable(segments);
+    notifyListeners();
+  }
+
   bool get hardwareVideoOutput => store?.hardwareVideoOutput ?? true;
 
   double _playbackRate = 1.0;

@@ -12,6 +12,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 
 import 'logging/log_store.dart';
 import 'logging/memory_diagnostics.dart';
+import 'chapter_navigation.dart';
 import 'context_menu_installer.dart';
 import 'discovery.dart';
 import 'engines/mpv_engine.dart';
@@ -171,6 +172,14 @@ class SubtitleDelayMinusIntent extends Intent {
 
 class SubtitleDelayPlusIntent extends Intent {
   const SubtitleDelayPlusIntent();
+}
+
+class PreviousChapterIntent extends Intent {
+  const PreviousChapterIntent();
+}
+
+class NextChapterIntent extends Intent {
+  const NextChapterIntent();
 }
 
 class StatsToggleIntent extends Intent {
@@ -353,10 +362,17 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     final key = item == null
         ? null
         : '${item.imdbId}|${item.tmdbId}|${item.season}|${item.episode}|${item.url}';
-    if (key == _skipItemKey) return;
+    if (key == _skipItemKey) {
+      // The same content under a new playback/item identity keeps its segments.
+      _player.publishSkipSegments(_skipSegments);
+      return;
+    }
     _skipItemKey = key;
     _lastSkipped = null;
     _skipSegments = const [];
+    _player.publishSkipSegments(const []);
+    // Bumped on every item change so a pending fetch never lands on another item.
+    final gen = ++_skipFetchGen;
     if (item == null ||
         !skipFetchAllowed(
           imdbId: item.imdbId,
@@ -366,7 +382,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         )) {
       return;
     }
-    final gen = ++_skipFetchGen;
     unawaited(_skipFetcher
         .fetch(
       provider: widget.store.skipSegmentsProvider,
@@ -379,6 +394,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         .then((segments) {
       if (!mounted || gen != _skipFetchGen) return;
       setState(() => _skipSegments = segments);
+      _player.publishSkipSegments(segments);
     }));
   }
 
@@ -980,6 +996,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd(osd);
   }
 
+  void _jumpChapter({required bool forward}) {
+    final target = chapterJumpTarget(
+      _player.chapters,
+      _player.positionMs,
+      forward: forward,
+    );
+    if (target == null) {
+      if (forward && _player.chapters.length >= 2) _showOsd('Last chapter');
+      return;
+    }
+    unawaited(_player.seek(Duration(milliseconds: target.chapter.startMs)));
+    _showOsd(chapterLabel(target));
+  }
+
   void _nudgeVolume(double delta) {
     final next = (_player.volume + delta).clamp(0.0, 1.0);
     unawaited(_player.setVolume(next));
@@ -1172,6 +1202,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const SubtitleDelayMinusIntent(),
             const SingleActivator(LogicalKeyboardKey.keyH):
                 const SubtitleDelayPlusIntent(),
+            // mpv convention: PageUp / PageDown jump between chapters.
+            const SingleActivator(LogicalKeyboardKey.pageUp):
+                const PreviousChapterIntent(),
+            const SingleActivator(LogicalKeyboardKey.pageDown):
+                const NextChapterIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -1199,6 +1234,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
                 onInvoke: (_) {
                   _seekBy(-10000, osd: '≪ 10s');
+                  return null;
+                },
+              ),
+              PreviousChapterIntent: CallbackAction<PreviousChapterIntent>(
+                onInvoke: (_) {
+                  _jumpChapter(forward: false);
+                  return null;
+                },
+              ),
+              NextChapterIntent: CallbackAction<NextChapterIntent>(
+                onInvoke: (_) {
+                  _jumpChapter(forward: true);
                   return null;
                 },
               ),
@@ -2308,6 +2355,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
             onToggleFullScreen: widget.onToggleFullScreen,
             onSeekChanged: _beginSeek,
             onSeekEnd: _endSeek,
+            chapterFractions: chapterFractions(p.chapters, p.durationMs),
             audioMenu: trackMenus
                 ? _AudioMenuButton(
                     player: p,
@@ -2368,6 +2416,10 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                             child: SliderTheme(
                               data: SliderTheme.of(context).copyWith(
                                 trackHeight: 3,
+                                trackShape: ChapterSliderTrackShape(
+                                  fractions: chapterFractions(
+                                      p.chapters, p.durationMs),
+                                ),
                                 thumbShape: const RoundSliderThumbShape(
                                     enabledThumbRadius: 6),
                                 overlayShape: const RoundSliderOverlayShape(

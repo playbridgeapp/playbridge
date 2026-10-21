@@ -2,6 +2,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+import 'chapter_navigation.dart';
 import 'media_kind.dart';
 import 'playback_clock.dart';
 import 'player_control_visibility.dart';
@@ -31,6 +32,7 @@ class PlayerMiniBar extends StatelessWidget {
     this.onSeekEnd,
     this.audioMenu,
     this.subtitleMenu,
+    this.chapterFractions = const [],
   });
 
   final MediaKind mediaKind;
@@ -48,6 +50,9 @@ class PlayerMiniBar extends StatelessWidget {
   final ValueChanged<double>? onSeekEnd;
   final Widget? audioMenu;
   final Widget? subtitleMenu;
+
+  /// Chapter starts (0..1) drawn as gaps on the seek track.
+  final List<double> chapterFractions;
 
   bool get _playEnabled => mediaKind != MediaKind.image || hasDuration;
 
@@ -120,6 +125,9 @@ class PlayerMiniBar extends StatelessWidget {
                       child: SliderTheme(
                         data: SliderTheme.of(context).copyWith(
                           trackHeight: 2,
+                          trackShape: ChapterSliderTrackShape(
+                            fractions: chapterFractions,
+                          ),
                           thumbShape: const RoundSliderThumbShape(
                             enabledThumbRadius: 5,
                           ),

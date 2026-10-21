@@ -166,8 +166,9 @@ connection, and requires explicit re-pairing. A sender must not fall back from a
 un-pinned trust.
 
 After pairing or authentication the sender sends `context_query`. The receiver answers `context`
-and replays current `status`, `tracks`, `player_settings`, and `playlist_status` where available,
-so a sender reconnecting during playback can reconstruct its UI and episode queue.
+and replays current `status`, `tracks`, `player_settings`, `timeline`, `volume_state`, and
+`playlist_status` where available, so a sender reconnecting during playback can reconstruct its
+UI and episode queue.
 
 ## Authenticated message families
 
@@ -225,12 +226,13 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 | Type | When used |
 |---|---|
 | `context` | Active surface changes or a `context_query` arrives |
-| `status` | Playback state/position changes; duration is `0` when unknown/live. Browser status may include optional `fullscreen` |
+| `status` | Playback state/position changes; duration is `0` when unknown/live. Browser status may include optional `fullscreen`; player status may include optional absolute `buffered` milliseconds |
 | `playlist_status` | Queue replacement, append, index change, reconnect, or clear |
 | `command_result` | Targeted acknowledgement or structured rejection of a command carrying `requestId` |
 | `tracks` | Audio/subtitle track list or selection changes |
 | `player_settings` | Complete settings snapshot, honest availability, active engine and optional `loop` |
 | `volume_state` | Scoped normalized volume/mute after native reporting support is implemented |
+| `timeline` | Chapters and skip segments (`intro`/`recap`/`outro`/`preview`, `endMs: null` = to the end) for the current item: on item change (empty lists until known), when either list changes, and on `context_query`. Tagged with the same `playbackId`/`currentItemId` as `status`; senders must drop a frame whose item is not current |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
 | `pong` | Response to application-level `ping` |
 | `screen_mirror_ready` | Peer + renderer/pipe created; sent before the phone offers |
@@ -292,6 +294,7 @@ advertised capabilities.
 | `context`, `status`, `playlist_status` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `tracks` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `player_settings` | Receives | Receives | Receives | Sends | Not currently sent | Not currently sent |
+| `timeline`, `status.buffered` | Receives | No | No | No | No | Sends |
 | WebRTC screen mirror (`screenMirrorWebRtc` + v1 `protocolVersion`) | Sends | No | No | Handles | No | Handles |
 
 The Firefox/Chromium extension is not a WSS endpoint. It sends a restricted native-messaging
@@ -321,7 +324,7 @@ or replacement by a new connection.
 - `proto/messages.proto` still describes plaintext `token` / `certFingerprint` fields on
   `PairingApprovedMessage`. The live protocol uses only protected `nonce` + `ciphertext`; new code
   must follow AsyncAPI and must not reintroduce plaintext credentials.
-- Protobuf does not model `tracks` or all browser administration. It now includes native capability
+- Protobuf does not model `tracks`, `timeline`, `status.buffered`, or all browser administration. It now includes native capability
   descriptors/protected credential bundles and complete player-settings helper fields; AsyncAPI
   remains authoritative for required JSON snapshot fields. Generated protobuf JSON adapters may
   need to normalize integer/default/presence representation before emitting canonical WSS frames.

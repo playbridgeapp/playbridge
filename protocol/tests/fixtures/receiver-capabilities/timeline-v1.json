@@ -1,0 +1,13 @@
+{
+  "type": "timeline",
+  "playbackId": "playback-1",
+  "currentItemId": "item-1",
+  "chapters": [
+    { "startMs": 0, "title": "Opening" },
+    { "startMs": 312000 }
+  ],
+  "segments": [
+    { "type": "intro", "startMs": 30000, "endMs": 95000 },
+    { "type": "outro", "startMs": 5400000, "endMs": null }
+  ]
+}

@@ -323,6 +323,7 @@ components:
         - $ref: '#/components/schemas/Tracks'
         - $ref: '#/components/schemas/PlayerSettings'
         - $ref: '#/components/schemas/VolumeState'
+        - $ref: '#/components/schemas/Timeline'
         - $ref: '#/components/schemas/ReceiverCapabilitiesFrame'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
@@ -901,6 +902,50 @@ components:
         fullscreen:
           type: boolean
           description: Native browser fullscreen. Omitted by the player and by receivers that do not report it.
+        buffered:
+          type: integer
+          minimum: 0
+          description: Absolute media position in milliseconds up to which data is buffered, between position and
+            duration. Omitted when unknown, live, for images, and by receivers that do not report `buffered`.
+      additionalProperties: false
+    Timeline:
+      description: Chapter markers and skip segments of the current item, for a sender seek bar. Sent on item
+        change (empty lists until data arrives), whenever either list changes, and on context_query resync.
+        Hand-written JSON; not modelled in protobuf.
+      type: object
+      required: [type, chapters, segments]
+      properties:
+        type: { const: timeline }
+        playbackId: { type: string, description: Same value as status.playbackId; omitted when absent there. }
+        currentItemId: { type: string, description: Same value as status.currentItemId; omitted when absent there. }
+        chapters:
+          type: array
+          maxItems: 256
+          description: Media-file chapters sorted by startMs. Empty when none, while opening, and for images.
+          items: { $ref: '#/components/schemas/TimelineChapter' }
+        segments:
+          type: array
+          maxItems: 16
+          description: Skip segments (for example from TheIntroDB) sorted by startMs. Empty when none.
+          items: { $ref: '#/components/schemas/TimelineSegment' }
+      additionalProperties: false
+    TimelineChapter:
+      type: object
+      required: [startMs]
+      properties:
+        startMs: { type: integer, minimum: 0, description: Milliseconds. }
+        title: { type: string, minLength: 1, maxLength: 200, description: Trimmed; omitted when empty. }
+      additionalProperties: false
+    TimelineSegment:
+      type: object
+      required: [type, startMs, endMs]
+      properties:
+        type: { enum: [intro, recap, outro, preview] }
+        startMs: { type: integer, minimum: 0, description: Milliseconds. }
+        endMs:
+          type: [integer, 'null']
+          minimum: 0
+          description: Milliseconds, greater than startMs; null when the segment runs to the end of the media.
       additionalProperties: false
     Context:
       type: object
@@ -1263,8 +1308,9 @@ components:
             manage_user_agent. Navigation keys are in keys.'
         reporting:
           $ref: '#/components/schemas/CapabilityIdentifiers'
-          description: 'Known: status, context, tracks, playlist_status, player_settings, fullscreen. Not a promise
-            of a currently active media item.'
+          description: 'Known: status, context, tracks, playlist_status, player_settings, fullscreen, timeline,
+            buffered. timeline is the timeline frame; buffered and fullscreen are optional status fields. Not
+            a promise of a currently active media item.'
       additionalProperties: false
     ReceiverVolumeCapabilities:
       description: Common native volume route, independent of player/browser. Known scopes system and app; unknown

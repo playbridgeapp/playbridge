@@ -373,5 +373,35 @@
     "file": "invalid-status-error-too-long.json",
     "schema": "Status",
     "valid": false
+  },
+  {
+    "file": "status-buffered.json",
+    "schema": "Status",
+    "valid": true
+  },
+  {
+    "file": "invalid-status-buffered-negative.json",
+    "schema": "Status",
+    "valid": false
+  },
+  {
+    "file": "timeline-v1.json",
+    "schema": "Timeline",
+    "valid": true
+  },
+  {
+    "file": "timeline-empty.json",
+    "schema": "Timeline",
+    "valid": true
+  },
+  {
+    "file": "invalid-timeline-segment-type.json",
+    "schema": "Timeline",
+    "valid": false
+  },
+  {
+    "file": "invalid-timeline-empty-title.json",
+    "schema": "Timeline",
+    "valid": false
   }
 ]

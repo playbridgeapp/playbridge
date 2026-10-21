@@ -1,7 +1,6 @@
 package com.playbridge.sender.cast.remote.ui
 
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -28,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -60,7 +60,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -89,6 +95,13 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
 import com.playbridge.sender.cast.remote.RemoteAction
+import com.playbridge.sender.cast.remote.RemoteChapter
+import com.playbridge.sender.cast.remote.RemoteSeekStyle
+import com.playbridge.sender.cast.remote.RemoteSegment
+import com.playbridge.sender.cast.remote.remoteWaveEnvelope
+import com.playbridge.sender.cast.remote.snapToTimeline
+import com.playbridge.sender.cast.remote.snapToleranceMs
+import com.playbridge.sender.cast.remote.timelineCaption
 import com.playbridge.sender.cast.remote.volumeLabel
 import com.playbridge.sender.cast.remote.RemoteFeedback
 import com.playbridge.sender.cast.remote.RemoteLayoutSpec
@@ -138,6 +151,10 @@ internal fun SeekVolumeBar(
     absoluteVolume: Boolean = false,
     volumeRouteKey: Any? = null,
     onVolumeSet: (Int) -> Unit = {},
+    isBuffering: Boolean = false,
+    bufferedMs: Long? = null,
+    chapters: List<RemoteChapter> = emptyList(),
+    segments: List<RemoteSegment> = emptyList(),
 ) {
     val enabled = LocalRemoteControlsEnabled.current
     val hasDuration = durationMs > 0L && !isLive && isSeekable
@@ -198,14 +215,19 @@ internal fun SeekVolumeBar(
         onDispose { volumeJob?.cancel(); volumeThrottle.clear() }
     }
 
-    // Remove the infinite transition from composition entirely while inactive.
+    // Remove the infinite transition from composition entirely while inactive. The clock
+    // drifts the wave while playing and runs the shimmer while buffering.
     val waveActive = motion.waveRuns(isPlaying)
-    val clocks = if (waveActive) remoteWaveClocks() else 0f to 1f
-    val phase = clocks.first
-    val breathValue = clocks.second
+    val phase = if (waveActive) remoteWaveClock() else 0f
 
-    val targetAmplitude = if (isPlaying && !dragging) 7.dp else 0.dp
-    val amplitude by animateDpAsState(targetValue = targetAmplitude, animationSpec = tween(durationMillis = if (motion.animate) 180 else 0), label = "amplitude")
+    // Playing grows the wave (800 ms); pause, buffering and scrubbing flatten it (550 ms).
+    val waving = isPlaying && !isBuffering && !dragging
+    val amplitude by animateDpAsState(
+        targetValue = if (waving) RemoteSeekStyle.AMPLITUDE_DP.dp else 0.dp,
+        animationSpec = tween(durationMillis = motion.duration(if (waving) RemoteSeekStyle.GROW_MS else RemoteSeekStyle.FLATTEN_MS)),
+        label = "amplitude")
+    val latestChapters by rememberUpdatedState(chapters)
+    val latestSegments by rememberUpdatedState(segments)
 
     val lift by animateDpAsState(targetValue = if (activeAxis != null) 12.dp else 0.dp, animationSpec = tween(durationMillis = if (motion.animate) 160 else 0), label = "seekBarLift")
 
@@ -216,7 +238,9 @@ internal fun SeekVolumeBar(
     val activeColor = primary
     val learned = RemoteLearnedGesture.hintLearned(learnedGestures, hasDuration, enableVolume, enablePlayPause)
     val hintAlpha by animateFloatAsState(if (learned) 0f else 1f, tween(if (motion.animate) 150 else 0), label = "learnedHint")
-    val thumbScale by animateFloatAsState(targetValue = if (dragging) 1.5f else 1.0f, animationSpec = tween(if (motion.animate) 120 else 0), label = "thumbScale")
+    val thumbRadius by animateDpAsState(
+        targetValue = if (dragging) RemoteSeekStyle.THUMB_HELD_RADIUS_DP.dp else RemoteSeekStyle.THUMB_RADIUS_DP.dp,
+        animationSpec = tween(if (motion.animate) 140 else 0), label = "thumbRadius")
 
     val popupOffset = with(LocalDensity.current) { IntOffset(0, -180.dp.roundToPx()) }
 
@@ -292,8 +316,14 @@ internal fun SeekVolumeBar(
                                 val started = !dragging
                                 dragging = true
                                 val previous = dragMs
-                                dragMs = policy.positionAt(change.position.x, directScrub).toFloat()
-                                scrubFeedback(previous, dragMs, durationMs, started, change.uptimeMillis, lastScrubTickMs)?.let { feedback ->
+                                val raw = policy.positionAt(change.position.x, directScrub)
+                                val snapped = snapToTimeline(raw, durationMs, latestChapters, latestSegments, snapToleranceMs(durationMs))
+                                dragMs = snapped.toFloat()
+                                if (snapped != raw && previous.toLong() != snapped) {
+                                    // Landing on a chapter or a segment end is felt, not just seen.
+                                    haptics.perform(RemoteFeedback.SEEK_BOUND)
+                                    lastScrubTickMs = change.uptimeMillis
+                                } else scrubFeedback(previous, dragMs, durationMs, started, change.uptimeMillis, lastScrubTickMs)?.let { feedback ->
                                     haptics.perform(feedback)
                                     lastScrubTickMs = change.uptimeMillis
                                 }
@@ -390,94 +420,20 @@ internal fun SeekVolumeBar(
 
                 if (hasDuration) {
                     val ampPx = with(LocalDensity.current) { amplitude.toPx() }
-                    val wavelength = with(LocalDensity.current) { 50.dp.toPx() }
-                    val tickHeight = with(LocalDensity.current) { 4.dp.toPx() }
-                    val strokeActiveWidth = with(LocalDensity.current) { 4.dp.toPx() }
-                    val strokeInactiveWidth = with(LocalDensity.current) { 2.dp.toPx() }
-
-                    // Slow "breathing" of the wave height so the motion feels organic rather
-                    // than a fixed-height ripple; layered with the phase scroll below.
-                    // Perf: static (breathValue) when the wave is idle.
-                    val breath = breathValue
-
-                    Canvas(modifier = Modifier.fillMaxWidth().padding(horizontal = 52.dp).height(24.dp).testTag("remote.waveCanvas")) {
-                        val width = size.width
-                        val height = size.height
-                        val centerY = height / 2f
-                        val amp = ampPx * breath
-                        val activeWidth = width * fraction
-
-                        val tickCount = 30
-                        val tickSpacing = width / tickCount
-                        for (i in 0..tickCount) {
-                            val x = i * tickSpacing
-                            drawLine(color = ink.copy(alpha = 0.1f), start = Offset(x, centerY - tickHeight), end = Offset(x, centerY + tickHeight), strokeWidth = 1f)
-                        }
-
-                        fun waveY(x: Float, p: Float, a: Float, wl: Float): Float {
-                            val safeX = x.coerceIn(0f, width)
-                            val envelope = if (width > 0f) sin(Math.PI * (safeX / width)).toFloat() else 0f
-                            val angle = (2 * Math.PI * x / wl).toFloat() + p
-                            return centerY + a * envelope * sin(angle)
-                        }
-
-                        fun buildWave(fromX: Float, toX: Float, p: Float, a: Float, wl: Float) = Path().apply {
-                            moveTo(fromX, waveY(fromX, p, a, wl))
-                            var x = fromX + 1f
-                            while (x <= toX) { lineTo(x, waveY(x, p, a, wl)); x += 2f }
-                        }
-
-                        // Unplayed side: nearly flat — the energy lives behind the playhead.
-                        if (activeWidth < width) {
-                            drawPath(
-                                path = buildWave(activeWidth, width, phase, amp * 0.15f, wavelength),
-                                color = ink.copy(alpha = 0.15f),
-                                style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
-                            )
-                        }
-
-                        if (activeWidth > 0f) {
-                            val activeBrush = Brush.horizontalGradient(
-                                colors = listOf(activeColor.copy(alpha = 0.8f), ink),
-                                startX = 0f, endX = activeWidth
-                            )
-                            val mainWave = buildWave(0f, activeWidth, phase, amp, wavelength)
-
-                            // Soft glow under the main wave.
-                            drawPath(
-                                path = mainWave,
-                                color = activeColor.copy(alpha = 0.25f),
-                                style = Stroke(width = strokeActiveWidth * 2.8f, cap = StrokeCap.Round)
-                            )
-                            // Faint counter-scrolling harmonic behind the main wave — the two
-                            // layers interfere visually and read as liquid. Phase multiplier
-                            // must be an integer so the infinite loop's 2π restart is seamless.
-                            drawPath(
-                                path = buildWave(0f, activeWidth, -phase * 2f, amp * 0.45f, wavelength * 0.55f),
-                                color = activeColor.copy(alpha = 0.35f),
-                                style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
-                            )
-                            drawPath(path = mainWave, brush = activeBrush, style = Stroke(width = strokeActiveWidth, cap = StrokeCap.Round))
-
-                            if (fraction > 0f && fraction < 1f) {
-                                val thumbX = activeWidth
-                                val barWidth = 3.dp.toPx() * thumbScale
-                                val barHeight = 18.dp.toPx() * thumbScale
-                                // Halo behind the playhead (grows with the drag thumb scale).
-                                drawCircle(
-                                    color = activeColor.copy(alpha = 0.30f),
-                                    radius = 9.dp.toPx() * thumbScale,
-                                    center = Offset(thumbX, centerY)
-                                )
-                                drawLine(
-                                    color = ink,
-                                    start = Offset(thumbX, centerY - barHeight / 2),
-                                    end = Offset(thumbX, centerY + barHeight / 2),
-                                    strokeWidth = barWidth,
-                                    cap = StrokeCap.Round
-                                )
-                            }
-                        }
+                    val segmentColor = MaterialTheme.colorScheme.tertiary
+                    // The offscreen layer clips to its bounds, so the canvas extends past the
+                    // 52 dp track inset and the 24 dp row by the held thumb's halo; the track
+                    // itself still spans exactly the inset the scrub gesture maps.
+                    Canvas(modifier = Modifier.fillMaxWidth().padding(horizontal = 52.dp - TIMELINE_BLEED).requiredHeight(24.dp + TIMELINE_BLEED * 2)
+                        // Offscreen so chapter gaps can be cut through everything drawn below them.
+                        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                        .testTag("remote.waveCanvas")) {
+                        drawRemoteTimeline(
+                            fraction = fraction, durationMs = durationMs, bufferedMs = bufferedMs.takeIf { !isLive },
+                            chapters = chapters, segments = segments, amplitudePx = ampPx, phase = phase,
+                            shimmer = isBuffering && waveActive, thumbRadiusPx = thumbRadius.toPx(), held = dragging,
+                            played = activeColor, ink = ink, segmentColor = segmentColor,
+                        )
                     }
                 } else {
                     Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 52.dp).height(2.dp).background(ink.copy(alpha = 0.2f)).testTag("remote.waveCanvas"))
@@ -539,6 +495,12 @@ internal fun SeekVolumeBar(
                     Text("${formatTime(dragMs.toLong())} / ${formatTime(durationMs)}", color = ink, style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
                     val sign = if (deltaMs >= 0) "+" else "-"
                     Text("$sign${formatTime(abs(deltaMs))}", color = ink.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"))
+                    timelineCaption(chapters, segments, dragMs.toLong(), durationMs)?.let { caption ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(caption, color = MaterialTheme.colorScheme.tertiary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 220.dp).testTag("remote.scrubCaption"),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                    }
                 }
             }
         }
@@ -612,6 +574,10 @@ internal fun RemoteSeekBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispa
         onVolumeSet = { dispatch(RemoteAction.SetVolume(it)) },
         onVolumeUp = { dispatch(RemoteAction.AdjustVolume(1, RemoteLearnedGesture.VOLUME)) },
         onVolumeDown = { dispatch(RemoteAction.AdjustVolume(-1, RemoteLearnedGesture.VOLUME)) },
+        isBuffering = playback.displayedState == com.playbridge.sender.cast.remote.RemotePlaybackState.Buffering,
+        bufferedMs = playback.bufferedMs,
+        chapters = playback.chapters,
+        segments = playback.segments,
         onPlayPauseToggle = {
             if (enabled) { haptics.perform(RemoteFeedback.PLAY_PAUSE); dispatch(RemoteAction.TogglePlayPause) }
         },
@@ -622,9 +588,82 @@ internal fun RemoteSeekBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispa
 
 /** Called only while motion is enabled and playback is active, so no inactive infinite clock remains. */
 @Composable
-internal fun remoteWaveClocks(): Pair<Float, Float> {
+internal fun remoteWaveClock(): Float {
     val transition = rememberInfiniteTransition(label = "remoteWave")
-    val phase by transition.animateFloat(0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(1500, easing = LinearEasing)), label = "phase")
-    val breath by transition.animateFloat(0.8f, 1.2f, infiniteRepeatable(tween(2600), RepeatMode.Reverse), label = "breath")
-    return phase to breath
+    val phase by transition.animateFloat(0f, (2 * Math.PI).toFloat(),
+        infiniteRepeatable(tween(RemoteSeekStyle.DRIFT_MS, easing = LinearEasing)), label = "phase")
+    return phase
+}
+
+/**
+ * The timeline track: segments as soft bands, the buffered line, the unplayed line, the
+ * played wave easing into a round thumb, then chapter gaps cut through all of it.
+ */
+/** Room around the track for the held thumb's halo (10 dp × 1.8). */
+private val TIMELINE_BLEED = 18.dp
+
+private fun DrawScope.drawRemoteTimeline(
+    fraction: Float, durationMs: Long, bufferedMs: Long?, chapters: List<RemoteChapter>, segments: List<RemoteSegment>,
+    amplitudePx: Float, phase: Float, shimmer: Boolean, thumbRadiusPx: Float, held: Boolean,
+    played: Color, ink: Color, segmentColor: Color,
+) {
+    val bleed = TIMELINE_BLEED.toPx()
+    val width = size.width - bleed * 2f
+    val centerY = size.height / 2f
+    translate(left = bleed) { drawTimelineTrack(width, centerY, fraction, durationMs, bufferedMs, chapters, segments,
+        amplitudePx, phase, shimmer, thumbRadiusPx, held, played, ink, segmentColor) }
+}
+
+private fun DrawScope.drawTimelineTrack(
+    width: Float, centerY: Float, fraction: Float, durationMs: Long, bufferedMs: Long?, chapters: List<RemoteChapter>,
+    segments: List<RemoteSegment>, amplitudePx: Float, phase: Float, shimmer: Boolean, thumbRadiusPx: Float, held: Boolean,
+    played: Color, ink: Color, segmentColor: Color,
+) {
+    val thumbX = width * fraction
+    val track = RemoteSeekStyle.TRACK_DP.dp.toPx()
+    val stroke = RemoteSeekStyle.STROKE_DP.dp.toPx()
+    val wavelength = RemoteSeekStyle.WAVELENGTH_DP.dp.toPx()
+    fun xOf(ms: Long) = (ms.toFloat() / durationMs).coerceIn(0f, 1f) * width
+
+    segments.forEach { segment ->
+        val from = xOf(segment.startMs)
+        val to = xOf(segment.endMs ?: durationMs)
+        if (to > from) drawLine(segmentColor.copy(alpha = 0.32f), Offset(from, centerY), Offset(to, centerY),
+            strokeWidth = RemoteSeekStyle.SEGMENT_DP.dp.toPx(), cap = StrokeCap.Round)
+    }
+    if (thumbX < width) {
+        drawLine(ink.copy(alpha = 0.18f), Offset(thumbX, centerY), Offset(width, centerY), strokeWidth = track, cap = StrokeCap.Round)
+        bufferedMs?.let { xOf(it) }?.takeIf { it > thumbX }?.let { bufferedX ->
+            drawLine(ink.copy(alpha = 0.36f), Offset(thumbX, centerY), Offset(bufferedX, centerY), strokeWidth = track, cap = StrokeCap.Round)
+        }
+    }
+    if (thumbX > 0f) {
+        val wave = Path().apply {
+            moveTo(0f, centerY)
+            var x = 2f
+            while (x < thumbX) {
+                val y = centerY + amplitudePx * remoteWaveEnvelope(x, thumbX, wavelength) * sin(2f * PI.toFloat() * x / wavelength - phase)
+                lineTo(x, y)
+                x += 2f
+            }
+            lineTo(thumbX, centerY)
+        }
+        val brush = if (shimmer) {
+            // A soft highlight sweeps the played line while the receiver buffers.
+            val sweep = (phase / (2f * PI.toFloat())) * (thumbX + 2f * wavelength) - wavelength
+            Brush.horizontalGradient(listOf(played.copy(alpha = 0.55f), played, Color.White.copy(alpha = 0.9f), played, played.copy(alpha = 0.55f)),
+                startX = sweep - wavelength, endX = sweep + wavelength, tileMode = TileMode.Clamp)
+        } else androidx.compose.ui.graphics.SolidColor(played)
+        drawPath(wave, brush, style = Stroke(width = stroke, cap = StrokeCap.Round))
+    }
+    if (held) drawCircle(played.copy(alpha = 0.22f), radius = thumbRadiusPx * 1.8f, center = Offset(thumbX, centerY))
+    drawCircle(played, radius = thumbRadiusPx, center = Offset(thumbX, centerY))
+
+    val gap = RemoteSeekStyle.CHAPTER_GAP_DP.dp.toPx()
+    chapters.forEach { chapter ->
+        val x = xOf(chapter.startMs)
+        // Gaps never cut the thumb, and the first chapter at 0 has nothing to separate.
+        if (chapter.startMs > 0L && abs(x - thumbX) > thumbRadiusPx + gap && x < width - gap)
+            drawLine(Color.Black, Offset(x, 0f), Offset(x, centerY * 2f), strokeWidth = gap, blendMode = BlendMode.Clear)
+    }
 }

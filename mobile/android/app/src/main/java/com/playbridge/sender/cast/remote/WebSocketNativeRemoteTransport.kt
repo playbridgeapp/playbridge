@@ -7,6 +7,7 @@ import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaTrack
 import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.sender.cast.TvPlayerSettings
+import com.playbridge.sender.cast.TvTimeline
 import com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator
 import com.playbridge.sender.cast.resolveRemoteTimeline
 import com.playbridge.sender.connection.ConnectionCoordinator
@@ -31,7 +32,7 @@ class WebSocketNativeRemoteTransport(
         client.connectionState, coordinator.tvActiveContext, coordinator.tvPlayback, coordinator.tvPlaylistState,
         coordinator.tvVideoTracks, coordinator.tvAudioTracks, coordinator.tvSubtitleTracks,
         coordinator.tvPlayerSettings, coordinator.remoteObservation, sessions.screenMirrorState, linkedWebsite.uiState,
-        client.receiverProtocolState,
+        client.receiverProtocolState, coordinator.tvTimeline,
     )
     override val snapshot = combine<Any?, RemoteReceiverSnapshot>(sources) { read(it.toList()) }
         .stateIn(scope, SharingStarted.Eagerly, read(sources.map { it.value }))
@@ -48,6 +49,10 @@ class WebSocketNativeRemoteTransport(
         val mirror = values[9] as ScreenMirrorCoordinator.State
         val linked = values[10] as LinkedPageCastUiState
         val timeline = resolveRemoteTimeline(wireContext, playback, settings)
+        // A timeline names its item; never paint the previous item's chapters on the next one.
+        val marks = (values[12] as TvTimeline?)?.takeIf { marks ->
+            marks.currentItemId == null || queue?.currentItemId == null || marks.currentItemId == queue.currentItemId
+        }
         fun tracks(index: Int) = (values[index] as List<MediaTrack>).map { RemoteTrack(it.id, it.name, it.selected, it.type) }
         fun reported(field: String) = field in observation.settingsFields
         val playerSettings = if (observation.settingsReported) RemotePlayerSettings(
@@ -69,6 +74,9 @@ class WebSocketNativeRemoteTransport(
                         title = it.title?.takeIf { title -> title.isNotEmpty() }, mediaKind = remoteMediaKind(it.mediaKind), reportedState = remotePlaybackState(it.state),
                         reportedPositionMs = it.positionMs, durationMs = it.durationMs, isLive = timeline.isLive,
                         seekable = support(timeline.isSeekable), observedAtMs = observation.playbackAtMs,
+                        bufferedMs = it.bufferedMs,
+                        chapters = marks?.chapters.orEmpty().map { chapter -> RemoteChapter(chapter.startMs, chapter.title) },
+                        segments = marks?.segments.orEmpty().map { segment -> RemoteSegment(segment.type, segment.startMs, segment.endMs) },
                     )
                 },
                 queue = queue?.let {

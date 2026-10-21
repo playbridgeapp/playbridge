@@ -92,7 +92,9 @@ void main() {
                 'context',
                 'tracks',
                 'playlist_status',
-                'player_settings'
+                'player_settings',
+                'timeline',
+                'buffered'
               ],
             },
           },
