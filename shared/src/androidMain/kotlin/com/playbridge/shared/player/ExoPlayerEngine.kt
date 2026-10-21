@@ -105,6 +105,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     private val _duration = MutableStateFlow(-1L)
     override val duration: StateFlow<Long> = _duration.asStateFlow()
 
+    /** Absolute position (ms) buffered up to, sampled with the position. */
+    private val _bufferedPosition = MutableStateFlow(0L)
+    val bufferedPosition: StateFlow<Long> = _bufferedPosition.asStateFlow()
+
     private val _audioTracks = MutableStateFlow<List<Track>>(emptyList())
     override val audioTracks: StateFlow<List<Track>> = _audioTracks.asStateFlow()
 
@@ -695,6 +699,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             while (true) {
                 player?.let {
                     _position.value = it.currentPosition
+                    _bufferedPosition.value = it.bufferedPosition
                 }
                 delay(500)
             }

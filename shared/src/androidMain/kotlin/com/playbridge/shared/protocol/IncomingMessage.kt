@@ -461,11 +461,13 @@ fun createStatusJson(
     playbackId: String? = null,
     currentItemId: String? = null,
     error: String? = null,
+    buffered: Long? = null,
 ): String = buildJsonObject {
         put("type", "status")
         put("state", state)
         put("position", position)
         put("duration", duration)
+        if (buffered != null) put("buffered", buffered)
         if (title != null) put("title", title)
     if (mediaKind != null) put("mediaKind", mediaKind)
     if (playbackId != null) put("playbackId", playbackId)

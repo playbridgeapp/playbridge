@@ -685,9 +685,14 @@ class ExoRendererService : Service() {
     private fun observeState(renderer: ExoPlayerEngine) {
         stateJob?.cancel()
         stateJob = scope.launch {
-            combine(renderer.state, renderer.position, renderer.duration) { state, position, duration ->
-                Triple(state, position, duration)
-            }.distinctUntilChanged().sample(250).collect { (state, position, duration) ->
+            combine(
+                renderer.state,
+                renderer.position,
+                renderer.duration,
+                renderer.bufferedPosition,
+            ) { state, position, duration, buffered ->
+                RendererStateSample(state, position, duration, buffered)
+            }.distinctUntilChanged().sample(250).collect { (state, position, duration, buffered) ->
                 val stateName = when (state) {
                     com.playbridge.shared.player.PlaybackState.Buffering -> "buffering"
                     com.playbridge.shared.player.PlaybackState.Playing -> "playing"
@@ -697,6 +702,7 @@ class ExoRendererService : Service() {
                     putString(RendererProtocol.KEY_STATE, stateName)
                     putLong(RendererProtocol.KEY_POSITION_MS, position.coerceAtLeast(0L))
                     putLong(RendererProtocol.KEY_DURATION_MS, duration.coerceAtLeast(0L))
+                    putLong(RendererProtocol.KEY_BUFFERED_MS, buffered.coerceAtLeast(0L))
                     putString(RendererProtocol.KEY_TITLE, currentTitle)
                 })
             }

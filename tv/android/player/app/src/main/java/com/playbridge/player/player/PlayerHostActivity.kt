@@ -61,6 +61,7 @@ import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.shared.logging.runCatchingLogged
 import com.playbridge.shared.logging.suspendRunCatchingLogged
+import com.playbridge.shared.player.PlayerChapter
 import com.playbridge.shared.protocol.MediaKind
 import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
@@ -70,6 +71,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import playbridge.PlayPayload
@@ -137,6 +140,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var isHostStarted = false
     private var lastPositionMs = 0L
     private var lastDurationMs = 0L
+    // Buffered position and chapters are tagged with the renderer session that reported
+    // them, so a new item or engine never shows the previous one's values.
+    private var lastBufferedMs = 0L
+    private var bufferedSessionId = 0L
+    private var currentChapters: List<PlayerChapter> = emptyList()
+    private var chaptersSessionId = 0L
+    private var lastTimelineJson: String? = null
     private var videoWidth = 0
     private var videoHeight = 0
     private var finishingSession = false
@@ -226,7 +236,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         override val isPlaying: Boolean get() = hostPlaying
         override val currentPosition: Long get() = lastPositionMs
         override val duration: Long get() = lastDurationMs
-        override val bufferedPosition: Long get() = lastPositionMs
+        override val bufferedPosition: Long get() = currentBufferedMs() ?: lastPositionMs
         override val streamInfo: String? get() = null
         override val frameRate: Float get() = videoFrameRate
         override val hdrFormat: String? get() = null
@@ -388,6 +398,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         ServerService.notifyContextPlayer(this, rendererKind.engineId)
         bindRenderer()
+        lifecycleScope.launch {
+            controlsViewModel.controlsState
+                .map { it.skipSegments }
+                .distinctUntilChanged()
+                .collect { broadcastTimelineIfChanged() }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1840,6 +1856,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 if (hasPrePlay) {
                     startPrePlayCountdown(currentSession.sessionId)
                 }
+                broadcastTimelineIfChanged()
             }
             RendererProtocol.EVENT_FIRST_FRAME -> {
                 controlsViewModel.clearPlaybackTransition()
@@ -1867,6 +1884,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     nowMs = SystemClock.elapsedRealtime(),
                 )
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
+                if (event.containsKey(RendererProtocol.KEY_BUFFERED_MS)) {
+                    lastBufferedMs = event.getLong(RendererProtocol.KEY_BUFFERED_MS)
+                    bufferedSessionId = currentSession.sessionId
+                }
                 if (state == "playing" &&
                     !pendingSeekTracker.isPending(currentSession.sessionId) &&
                     abs(lastPositionMs - lastSavedPositionMs) >= PROGRESS_SAVE_INTERVAL_MS
@@ -1883,6 +1904,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     mediaKind = currentMediaKind.wireValue,
                     playbackId = playbackCoordinator.playbackId,
                     currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
+                    buffered = currentBufferedMs(),
                 )
                 ServerService.broadcastStatus(this, status)
             }
@@ -1911,6 +1933,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 applyFrameRateMatching()
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
+            RendererProtocol.EVENT_CHAPTERS -> {
+                currentChapters = decodeChapters(event)
+                chaptersSessionId = currentSession.sessionId
+                broadcastTimelineIfChanged()
+            }
             RendererProtocol.EVENT_CAPABILITIES -> handleCapabilities(event)
             RendererProtocol.EVENT_CUES -> handleSubtitleCues(event)
             RendererProtocol.EVENT_EXTERNAL_SUBTITLE_RESULT -> {
@@ -2159,6 +2186,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 mediaKind = currentMediaKind.wireValue,
                 playbackId = playbackCoordinator.playbackId,
                 currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
+                buffered = currentBufferedMs(),
             ),
         )
     }
@@ -2168,7 +2196,49 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         broadcastPlaylistStatus(playbackCoordinator.playlist, playbackCoordinator.index)
         broadcastTracks()
         broadcastPlayerSettings()
+        broadcastTimeline(force = true)
     }
+
+    /** Buffered position for the current session, or null when unknown or live. */
+    private fun currentBufferedMs(): Long? {
+        val currentSession = session ?: return null
+        if (bufferedSessionId != currentSession.sessionId || currentMediaKind == MediaKind.IMAGE) return null
+        return reportedBufferedMs(lastBufferedMs, lastPositionMs, lastDurationMs)
+    }
+
+    private fun broadcastTimelineIfChanged() = broadcastTimeline(force = false)
+
+    /**
+     * Sends the `timeline` frame (chapters + skip segments) when it differs from the last
+     * one sent, or always with [force] (a phone asked to resync).
+     */
+    private fun broadcastTimeline(force: Boolean) {
+        val currentSession = session ?: return
+        val chapters = currentChapters.takeIf { chaptersSessionId == currentSession.sessionId }.orEmpty()
+        val segments = if (currentMediaKind == MediaKind.VIDEO) {
+            controlsViewModel.controlsState.value.skipSegments
+        } else {
+            emptyList()
+        }
+        val json = buildTimelineJson(
+            playbackId = playbackCoordinator.playbackId,
+            currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
+            chapters = chapters,
+            segments = segments,
+        )
+        if (!force && json == lastTimelineJson) return
+        lastTimelineJson = json
+        ServerService.broadcastStatus(this, json)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun decodeChapters(event: Bundle): List<PlayerChapter> =
+        event.getParcelableArrayList<Bundle>(RendererProtocol.KEY_CHAPTERS).orEmpty().map { chapter ->
+            PlayerChapter(
+                startMs = chapter.getLong(RendererProtocol.KEY_CHAPTER_START_MS),
+                title = chapter.getString(RendererProtocol.KEY_CHAPTER_TITLE),
+            )
+        }
 
     private fun broadcastPlayerSettings() {
         val state = controlsViewModel.controlsState.value
