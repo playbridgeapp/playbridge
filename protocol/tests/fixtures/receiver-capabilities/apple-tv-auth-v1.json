@@ -54,7 +54,9 @@
               "status",
               "context",
               "tracks",
-              "playlist_status"
+              "playlist_status",
+              "timeline",
+              "buffered"
             ]
           },
           "mpv": {
@@ -94,7 +96,9 @@
               "status",
               "context",
               "tracks",
-              "playlist_status"
+              "playlist_status",
+              "timeline",
+              "buffered"
             ]
           }
         }

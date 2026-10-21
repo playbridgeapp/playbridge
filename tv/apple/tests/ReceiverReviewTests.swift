@@ -292,6 +292,7 @@ struct ReceiverReviewTests {
         runRemoteNavigationTests()
         runPlayerSettingsTests()
         runAppVolumeTests()
+        runTimelineReportTests()
     }
 }
 
@@ -743,7 +744,7 @@ private func runPlayerSettingsTests() {
     let expectedSettings = ["loop", "engine"]
     let expectedTracks = ["audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add"]
     let expectedQueue = ["replace", "append", "jump_index", "jump_item", "remove", "move", "clear"]
-    let expectedReporting = ["status", "context", "tracks", "playlist_status", "player_settings"]
+    let expectedReporting = ["status", "context", "tracks", "playlist_status", "player_settings", "timeline", "buffered"]
 
     for engineName in ["avplayer", "mpv"] {
         guard let engineCaps = engines[engineName] as? [String: Any] else {
@@ -960,3 +961,36 @@ private func runAppVolumeTests() {
 
     print("PASS: app volume step, absolute, mute, clamp, engine switch, and stale volume_state")
 }
+
+private func runTimelineReportTests() {
+    // mpv chapter-list: seconds to ms, placeholder titles dropped, malformed entries skipped.
+    let parsed = TimelineReport.parseMpvChapterList(
+        #"[{"title":"Opening","time":0},{"title":"(unnamed)","time":312.5},{"time":"12"},{"title":"x"},{"time":true},{"time":600}]"#)
+    assert(parsed == [TimelineChapter(startMs: 0, title: "Opening"), TimelineChapter(startMs: 312_500),
+                      TimelineChapter(startMs: 600_000)])
+    assert(TimelineReport.parseMpvChapterList("not json").isEmpty)
+
+    // The frame sorts, trims and bounds chapters, and never invents segments.
+    let long = String(repeating: "x", count: TimelineReport.maxTitleLength + 20)
+    let frame = TimelineReport.frame(chapters: [TimelineChapter(startMs: 600_000, title: "  The Heist  "),
+        TimelineChapter(startMs: 0, title: long), TimelineChapter(startMs: -5), TimelineChapter(startMs: 1_200_000, title: " ")])
+    assert(frame["type"] as? String == "timeline")
+    let chapters = frame["chapters"] as! [[String: Any]]
+    assert(chapters.map { $0["startMs"] as! Int } == [0, 600_000, 1_200_000])
+    assert((chapters[0]["title"] as! String).count == TimelineReport.maxTitleLength)
+    assert(chapters[1]["title"] as? String == "The Heist" && chapters[2]["title"] == nil)
+    assert((frame["segments"] as! [Any]).isEmpty)
+    let many = TimelineReport.frame(chapters: (0..<300).map { TimelineChapter(startMs: $0 * 1000) })
+    assert((many["chapters"] as! [Any]).count == TimelineReport.maxChapters)
+    assert(JSONSerialization.isValidJSONObject(frame))
+
+    // Buffered stays between position and duration and is absent when unknown or live.
+    assert(TimelineReport.buffered(bufferedSeconds: 40, positionSeconds: 10, durationSeconds: 100) == 40_000)
+    assert(TimelineReport.buffered(bufferedSeconds: 2, positionSeconds: 10, durationSeconds: 100) == 10_000)
+    assert(TimelineReport.buffered(bufferedSeconds: 150, positionSeconds: 10, durationSeconds: 100) == 100_000)
+    assert(TimelineReport.buffered(bufferedSeconds: 40, positionSeconds: 10, durationSeconds: 0) == nil)
+    assert(TimelineReport.buffered(bufferedSeconds: 0, positionSeconds: 10, durationSeconds: 100) == nil)
+
+    print("PASS: timeline chapters from mpv, bounded frame without segments, and buffered clamping")
+}
+

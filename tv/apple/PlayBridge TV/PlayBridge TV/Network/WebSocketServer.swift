@@ -865,8 +865,10 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    /// Status and timeline frames name the item they describe, so a phone never
+    /// applies one item's chapters or position to the next.
     private func enriched(_ json: [String: Any]) -> [String: Any] {
-        guard json["type"] as? String == "status", let store = playlistStore else { return json }
+        guard ["status", "timeline"].contains(json["type"] as? String), let store = playlistStore else { return json }
         var result = json
         if let playbackID = store.playbackID { result["playbackId"] = playbackID }
         if let currentItemID = store.currentItemID { result["currentItemId"] = currentItemID }

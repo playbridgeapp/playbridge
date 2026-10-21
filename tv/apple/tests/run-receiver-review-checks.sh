@@ -9,6 +9,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Models/PairingCredentialState.swift" \
   "$source_root/Data/HistoryStore.swift" \
   "$source_root/Player/PlaybackTime.swift" \
+  "$source_root/Player/TimelineReport.swift" \
   "$source_root/Player/PlaybackUIUpdateGate.swift" \
   "$source_root/Player/PlaybackPauseCommand.swift" \
   "$source_root/Player/PlaybackEngine.swift" \
