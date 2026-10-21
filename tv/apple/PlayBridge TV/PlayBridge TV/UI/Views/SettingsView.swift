@@ -5,6 +5,7 @@ struct SettingsView: View {
 
     @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage("skip_segments_provider") var skipProvider: String = "both"
     @AppStorage("enable_history") var enableHistory: Bool = true
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
     @AppStorage("still_watching_threshold_min") var stillWatchingThreshold: Int = StillWatchingController.defaultThreshold
@@ -33,6 +34,11 @@ struct SettingsView: View {
                             if preferredPlayer == "mpv" {
                                 Image(systemName: "checkmark").foregroundColor(Theme.accent)
                             }
+                        }
+                    }
+                    Picker("Skip Segments Provider", selection: $skipProvider) {
+                        ForEach(SkipSegmentProvider.allCases, id: \.rawValue) { provider in
+                            Text(provider.title).tag(provider.rawValue)
                         }
                     }
                     Toggle("Save Cast History", isOn: $enableHistory)

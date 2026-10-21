@@ -293,6 +293,8 @@ struct ReceiverReviewTests {
         runPlayerSettingsTests()
         runAppVolumeTests()
         runTimelineReportTests()
+        runSkipSegmentTests()
+        runSkipSegmentFetchTests()
     }
 }
 
@@ -994,3 +996,166 @@ private func runTimelineReportTests() {
     print("PASS: timeline chapters from mpv, bounded frame without segments, and buffered clamping")
 }
 
+
+private func runSkipSegmentTests() {
+    func data(_ json: String) -> Data { Data(json.utf8) }
+    let episode = SkipSegmentMetadata(imdbID: " tt0903747 ", tmdbID: "1396", season: 1, episode: 2)
+    let movie = SkipSegmentMetadata(imdbID: "tt0137523", tmdbID: "550")
+    func query(_ url: URL?) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: URLComponents(url: url!, resolvingAgainstBaseURL: false)!
+            .queryItems!.map { ($0.name, $0.value!) })
+    }
+    assert(SkipSegmentFetcher.introDBURL(movie) == nil)
+    assert(query(SkipSegmentFetcher.introDBURL(episode)) == ["imdb_id": "tt0903747", "season": "1", "episode": "2"])
+    assert(query(SkipSegmentFetcher.theIntroDBURL(movie)) == ["tmdb_id": "550"])
+    var coordinates = episode
+    coordinates.tmdbID = nil
+    assert(query(SkipSegmentFetcher.theIntroDBURL(coordinates)) == ["imdb_id": "tt0903747", "season": "1", "episode": "2"])
+    coordinates.episode = nil
+    assert(SkipSegmentFetcher.theIntroDBURL(coordinates) == nil)
+    coordinates.season = nil
+    coordinates.episode = 1
+    assert(SkipSegmentFetcher.theIntroDBURL(coordinates) == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(SkipSegmentMetadata()) == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: "not a URL") == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: "file:///tmp") == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: " ")!.absoluteString == "https://api.theintrodb.org/v4/media?tmdb_id=550")
+    for suffix in ["", "/", "/v1", "/v2/", "/v3", "/v3///", "/v4/"] {
+        let url = SkipSegmentFetcher.theIntroDBURL(movie, baseURL: " https://example.test/proxy\(suffix) ")!
+        assert(url.path == "/proxy/v4/media")
+    }
+    let custom = SkipSegmentFetcher.theIntroDBURL(movie,
+        baseURL: "https://example.test/proxy%2Froute/v3/?key=a%26b&tvdb_id=123&season=8&episode=9#fragment")!
+    assert(URLComponents(url: custom, resolvingAgainstBaseURL: false)!.percentEncodedPath == "/proxy%2Froute/v4/media")
+    assert(query(custom) == ["key": "a&b", "tmdb_id": "550"] && custom.fragment == nil)
+    let injected = SkipSegmentMetadata(imdbID: "tt1&mapping=dvd", season: 0, episode: 0)
+    assert(query(SkipSegmentFetcher.theIntroDBURL(injected)) == ["imdb_id": "tt1&mapping=dvd", "season": "0", "episode": "0"])
+    assert(query(SkipSegmentFetcher.introDBURL(injected))["imdb_id"] == "tt1&mapping=dvd")
+    print("PASS: skip provider movie/episode URLs, ID preference, query encoding and partial-coordinate guards")
+
+    let intro = SkipSegmentFetcher.parseIntroDB(data(#"{"intro":{"start_ms":1000,"end_ms":23000},"recap":{"start_sec":0.5,"end_sec":2.75},"outro":{"start_ms":-2,"end_ms":300}}"#))
+    assert(intro == [SkipSegment(type: "intro", startMs: 1000, endMs: 23000),
+                     SkipSegment(type: "recap", startMs: 500, endMs: 2750)])
+    assert(SkipSegmentFetcher.parseIntroDB(data(#"{"intro":{"start_ms":0,"end_ms":null},"recap":{"start_ms":2,"end_ms":2},"outro":{"start_sec":true,"end_sec":3}}"#)).isEmpty)
+    let secondary = SkipSegmentFetcher.parseTheIntroDB(data(#"{"tvdb_id":81189,"type":"tv","intro":[{"start_ms":null,"end_ms":23000},{"start_ms":30000,"end_ms":90000}],"recap":[{"start_ms":null,"end_ms":12000}],"credits":[{"start_ms":5801777,"end_ms":6371111},{"start_ms":6408000,"end_ms":null}],"preview":[{"start_ms":1680000,"end_ms":1740000}]}"#))
+    assert(secondary == [SkipSegment(type: "intro", startMs: 0, endMs: 23000),
+                         SkipSegment(type: "intro", startMs: 30000, endMs: 90000),
+                         SkipSegment(type: "recap", startMs: 0, endMs: 12000),
+                         SkipSegment(type: "outro", startMs: 5801777, endMs: 6371111),
+                         SkipSegment(type: "outro", startMs: 6408000, endMs: nil),
+                         SkipSegment(type: "preview", startMs: 1680000, endMs: 1740000)])
+    assert(SkipSegmentFetcher.parseTheIntroDB(data(#"{"intro":[{"start_ms":null,"end_ms":0},{"start_ms":0},{"end_ms":2},{"start_ms":-1,"end_ms":2},{"start_ms":2,"end_ms":1},{"start_ms":true,"end_ms":5},{"start_ms":0,"end_ms":"bad"},{"start_ms":1e30,"end_ms":null}],"outro":{},"credits":[{"start_ms":null,"end_ms":5},{"start_ms":90000,"end_ms":null}]}"#)) == [SkipSegment(type: "outro", startMs: 90000, endMs: nil)])
+    // Android gives an existing outro array precedence over the credits alias, even if empty.
+    assert(SkipSegmentFetcher.parseTheIntroDB(data(#"{"outro":[],"credits":[{"start_ms":9,"end_ms":null}]}"#)).isEmpty)
+    for malformed in ["not json", "[]", "null", #"{"episodes":[]}"#] {
+        assert(SkipSegmentFetcher.parseIntroDB(data(malformed)).isEmpty)
+        assert(SkipSegmentFetcher.parseTheIntroDB(data(malformed)).isEmpty)
+    }
+    let merged = SkipSegmentFetcher.merge(intro, secondary)
+    assert(merged.filter { $0.type == "intro" } == [intro[0]])
+    assert(merged.filter { $0.type == "recap" } == [intro[1]])
+    assert(merged.map(\.startMs) == merged.map(\.startMs).sorted())
+    assert(merged.contains { $0.type == "outro" && $0.endMs == nil })
+    print("PASS: IntroDB milliseconds/seconds, TheIntroDB arrays/nulls/credits, malformed ranges and provider precedence")
+
+    let invalid = [SkipSegment(type: "unknown", startMs: 0, endMs: 100),
+                   SkipSegment(type: "intro", startMs: -1, endMs: 100),
+                   SkipSegment(type: "intro", startMs: 20, endMs: 20),
+                   SkipSegment(type: "intro", startMs: 20, endMs: 10)]
+    let many = (0..<30).reversed().map { SkipSegment(type: "intro", startMs: $0 * 1000, endMs: $0 * 1000 + 500) }
+    let bounded = TimelineReport.frame(chapters: [], segments: invalid + many)["segments"] as! [[String: Any]]
+    assert(bounded.count == TimelineReport.maxSegments)
+    assert(bounded.map { $0["startMs"] as! Int } == (0..<16).map { $0 * 1000 })
+    let open = SkipSegment(type: "outro", startMs: 90_000, endMs: nil)
+    let frame = TimelineReport.frame(chapters: [], segments: [open])
+    assert((frame["segments"] as! [[String: Any]])[0]["endMs"] is NSNull)
+    assert(JSONSerialization.isValidJSONObject(frame))
+    assert(open.buttonTitle == "Skip Credits" && intro[0].buttonTitle == "Skip Intro")
+    assert(!open.contains(seconds: 89) && open.contains(seconds: 90) && open.contains(seconds: 100))
+    assert(!open.contains(seconds: .nan) && !open.contains(seconds: .infinity))
+    assert(open.targetSeconds(duration: 100) == 100)
+    assert(open.targetSeconds(duration: 0) == nil && open.targetSeconds(duration: .nan) == nil)
+    assert(intro[0].contains(seconds: 1) && !intro[0].contains(seconds: 23))
+    assert(intro[0].targetSeconds(duration: 20) == 20 && intro[0].targetSeconds(duration: 0) == 23)
+    // Open-ended or within a second of the end advances to the next item (Android TV parity).
+    assert(open.endsPlayback(duration: 100) && open.endsPlayback(duration: 0))
+    let nearEnd = SkipSegment(type: "outro", startMs: 90_000, endMs: 99_500)
+    assert(nearEnd.endsPlayback(duration: 100) && !nearEnd.endsPlayback(duration: 120))
+    assert(!intro[0].endsPlayback(duration: 1_000) && !nearEnd.endsPlayback(duration: 0))
+    print("PASS: timeline segment types, sorting, max 16, null ends, containment, duration-clamped skip targets and end-of-item skips")
+
+    var state = SkipSegmentResultState()
+    let firstA = state.reset()
+    assert(state.accept(intro, token: firstA) && state.segments == intro.sorted { $0.startMs < $1.startMs })
+    let itemB = state.reset()
+    assert(state.segments.isEmpty)
+    assert(!state.accept(secondary, token: firstA) && state.segments.isEmpty)
+    let nextA = state.reset()
+    assert(!state.accept(secondary, token: firstA) && !state.accept(secondary, token: itemB))
+    assert(state.accept([open], token: nextA) && state.segments == [open])
+    _ = state.reset() // teardown/cancel also revokes queued completions
+    assert(!state.accept(intro, token: nextA) && state.segments.isEmpty)
+    print("PASS: skip fetch stale-result fencing across item changes, A/B/A reuse and teardown")
+}
+
+/// No real provider requests: exercise HTTP/transport errors and provider selection
+/// through URLSession, rather than testing only the parsers in isolation.
+private final class SkipSegmentTestProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        assert(!Thread.isMainThread)
+        let url = request.url!
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+        let id = query.first { ["imdb_id", "tmdb_id"].contains($0.name) }!.value!
+        let ua = request.value(forHTTPHeaderField: "User-Agent") ?? ""
+        assert(ua.hasPrefix("PlayBridgeTV/") && ua.hasSuffix(" (+https://github.com/playbridgeapp/playbridge)"))
+        if id == "transport-fail" {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
+        let primary = url.host == "api.introdb.app"
+        let body = id == "malformed" ? "not JSON" : primary
+            ? #"{"intro":{"start_ms":1000,"end_ms":23000}}"#
+            : #"{"intro":[{"start_ms":0,"end_ms":5000}],"credits":[{"start_ms":90000,"end_ms":null}]}"#
+        let response = HTTPURLResponse(url: url, statusCode: id == "http-fail" ? 503 : 200,
+                                       httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private func runSkipSegmentFetchTests() {
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+        func fetch(_ metadata: SkipSegmentMetadata, _ provider: SkipSegmentProvider) async -> [SkipSegment] {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [SkipSegmentTestProtocol.self]
+            return await SkipSegmentFetcher.fetch(metadata, provider: provider, configuration: config)
+        }
+        let metadata = SkipSegmentMetadata(imdbID: "valid", tmdbID: "valid", season: 1, episode: 2)
+        let primary = SkipSegment(type: "intro", startMs: 1000, endMs: 23000)
+        let secondary = SkipSegment(type: "intro", startMs: 0, endMs: 5000)
+        let credits = SkipSegment(type: "outro", startMs: 90000, endMs: nil)
+        let both = await fetch(metadata, .both)
+        assert(both == [primary, credits])
+        let introDBOnly = await fetch(metadata, .introdb)
+        assert(introDBOnly == [primary])
+        let theIntroDBOnly = await fetch(metadata, .theintrodb)
+        assert(theIntroDBOnly == [secondary, credits])
+        let disabled = await fetch(metadata, .disabled)
+        assert(disabled.isEmpty)
+        for failure in ["http-fail", "transport-fail", "malformed"] {
+            let failing = SkipSegmentMetadata(imdbID: failure, tmdbID: failure, season: 1, episode: 2)
+            let empty = await fetch(failing, .both)
+            assert(empty.isEmpty)
+            let fallback = await fetch(SkipSegmentMetadata(imdbID: failure, tmdbID: "valid", season: 1, episode: 2), .both)
+            assert(fallback == [secondary, credits], "One provider failing must not suppress the other")
+        }
+        done.signal()
+    }
+    assert(done.wait(timeout: .now() + 30) == .success)
+    print("PASS: skip fetching off main, provider modes, User-Agent, HTTP/transport/JSON failures and fallback")
+}
