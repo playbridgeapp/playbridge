@@ -58,6 +58,8 @@ enum TvCapabilities {
         "tracks",
         "playlist_status",
         "player_settings",
+        "timeline",
+        "buffered",
     ]
 
     /// Common app-volume route. Independent of the player surface. No system

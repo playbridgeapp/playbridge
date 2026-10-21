@@ -178,6 +178,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var subtitleRequestID: UUID?
         private var lateSubtitleDownload: ScopedSubtitleDownload?
         private var didBroadcastTracks = false
+        /// Chapter markers of the current item, loaded once it is ready to play.
+        private var chapters: [TimelineChapter] = []
         /// Network Back hides the system transport. Later SwiftUI updates keep it hidden
         /// until this player view is recreated for the next item.
         private var remoteControlsHidden = false
@@ -499,6 +501,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 "duration": PlaybackTime.milliseconds(dur),
             ]
             if let t = title, !t.isEmpty { json["title"] = t }
+            if let buffered = bufferedEnd(player: player, position: pos),
+               let ms = TimelineReport.buffered(bufferedSeconds: buffered, positionSeconds: pos, durationSeconds: dur) {
+                json["buffered"] = ms
+            }
             onBroadcast(json)
             NotificationCenter.default.post(
                 name: .playBridgePlaybackActivity, object: nil,
@@ -512,17 +518,47 @@ struct NativePlayerView: UIViewControllerRepresentable {
             }
         }
 
+        /// End of the loaded range that contains the play head (AVPlayer buffers ahead in one range).
+        private func bufferedEnd(player: AVPlayer, position: Double) -> Double? {
+            guard let ranges = player.currentItem?.loadedTimeRanges else { return nil }
+            return ranges.lazy.map(\.timeRangeValue)
+                .first { $0.start.seconds <= position + 0.5 && $0.end.seconds >= position }?
+                .end.seconds
+        }
+
+        /// Chapters from MP4/MOV chapter tracks. HLS rarely carries them; AVPlayer has no MKV.
+        private func loadChapters(asset: AVAsset) async -> [TimelineChapter] {
+            let languages = Locale.preferredLanguages
+            guard let groups = try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: languages) else { return [] }
+            var chapters: [TimelineChapter] = []
+            for group in groups.prefix(TimelineReport.maxChapters) {
+                let start = group.timeRange.start.seconds
+                guard start.isFinite, start >= 0 else { continue }
+                let titleItem = AVMetadataItem.metadataItems(from: group.items, filteredByIdentifier: .commonIdentifierTitle).first
+                let title = try? await titleItem?.load(.stringValue)
+                chapters.append(TimelineChapter(startMs: PlaybackTime.milliseconds(start), title: title ?? nil))
+            }
+            return chapters
+        }
+
+        private func broadcastTimeline() {
+            onBroadcast(TimelineReport.frame(chapters: chapters))
+        }
+
         private func loadSelectionGroupsAndBroadcast(asset: AVAsset) {
             if #available(tvOS 16, *) {
                 Task { [weak self] in
                     guard let self else { return }
                     let audio = (try? await asset.loadMediaSelectionGroup(for: .audible)) ?? nil
                     let sub = (try? await asset.loadMediaSelectionGroup(for: .legible)) ?? nil
+                    let chapters = await self.loadChapters(asset: asset)
                     await MainActor.run {
                         self.audioGroup = audio
                         self.subtitleGroup = sub
                         self.applyPreferredTracks()
                         self.broadcastTracks()
+                        self.chapters = chapters
+                        self.broadcastTimeline()
                     }
                 }
             } else {
@@ -553,6 +589,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         @objc private func onResync() {
             broadcastStatus()
             broadcastTracks()
+            broadcastTimeline()
         }
 
         @objc private func onControl(_ note: Notification) {

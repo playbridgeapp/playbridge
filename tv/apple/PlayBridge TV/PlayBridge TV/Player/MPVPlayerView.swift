@@ -159,6 +159,8 @@ class MPVViewController: UIViewController {
     private var timelineUpdateGate = PlaybackUIUpdateGate()
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
+    /// Chapter markers of the open file (mpv `chapter-list`). Main-thread only.
+    private var chapters: [TimelineChapter] = []
     /// When the current file started loading — used to log time-to-audio for diagnosing delays.
     private var loadStartTime = Date()
 
@@ -365,6 +367,8 @@ class MPVViewController: UIViewController {
         // Decoded colorimetry only exists once the first frame is out, well after
         // FILE_LOADED, so HDR display switching waits for this instead.
         mpv_observe_property(handle, 0, "video-params/gamma", MPV_FORMAT_STRING)
+        // JSON `[{"title","time"}]`; fires again when the next file loads.
+        mpv_observe_property(handle, 0, "chapter-list", MPV_FORMAT_STRING)
 
         // Retain self for the callback's lifetime (released in teardown()). The callback fires
         // on mpv's own thread, so self must outlive the installed callback.
@@ -620,6 +624,16 @@ class MPVViewController: UIViewController {
                 // UI progress does not need a SwiftUI redraw for every decoded frame.
                 self.playbackState.currentTime = val
                 self.playbackState.bufferedTime = val + self.cacheAheadSec
+            }
+
+        case "chapter-list":
+            guard prop.format == MPV_FORMAT_STRING,
+                  let cString = prop.data?.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { break }
+            let parsed = TimelineReport.parseMpvChapterList(String(cString: cString))
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isMpvStopped, parsed != self.chapters else { return }
+                self.chapters = parsed
+                self.broadcastTimeline()
             }
 
         case "video-params/gamma":
@@ -1222,7 +1236,16 @@ class MPVViewController: UIViewController {
             "duration": PlaybackTime.milliseconds(playbackState.duration),
         ]
         if let t = mediaTitle, !t.isEmpty { json["title"] = t }
+        if let buffered = TimelineReport.buffered(bufferedSeconds: playbackState.bufferedTime,
+            positionSeconds: playbackState.currentTime, durationSeconds: playbackState.duration) {
+            json["buffered"] = buffered
+        }
         onBroadcast?(json)
+    }
+
+    /// Sent when the chapters change and on resync; the server adds the item ids.
+    private func broadcastTimeline() {
+        onBroadcast?(TimelineReport.frame(chapters: chapters))
     }
 
     private func broadcastTracks() {
@@ -1239,6 +1262,7 @@ class MPVViewController: UIViewController {
     @objc private func onResyncRequest() {
         broadcastStatus()
         broadcastTracks()
+        broadcastTimeline()
     }
 
     @objc private func onStillWatchingPause() { setPropertyAsync("pause", value: "yes") }
