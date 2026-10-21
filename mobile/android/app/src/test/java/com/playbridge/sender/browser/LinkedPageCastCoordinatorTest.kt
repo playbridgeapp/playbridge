@@ -213,4 +213,16 @@ class LinkedPageCastCoordinatorTest {
             ),
         )
     }
+
+    @Test
+    fun `linked resync is fast until the queue echo, then a slow safety net`() {
+        val now = 10 * 60 * 1_000L
+
+        // A new queue re-queries on every tick until the receiver confirms it.
+        assertEquals(true, linkedResyncDue(awaitingPlaylistEcho = true, nowMillis = now, lastResyncAtMillis = now))
+        // Confirmed: no full-snapshot query on the old 2 s cadence.
+        assertEquals(false, linkedResyncDue(awaitingPlaylistEcho = false, nowMillis = now, lastResyncAtMillis = now - 2_000L))
+        assertEquals(false, linkedResyncDue(awaitingPlaylistEcho = false, nowMillis = now, lastResyncAtMillis = now - LINKED_SAFETY_RESYNC_MILLIS + 1L))
+        assertEquals(true, linkedResyncDue(awaitingPlaylistEcho = false, nowMillis = now, lastResyncAtMillis = now - LINKED_SAFETY_RESYNC_MILLIS))
+    }
 }
