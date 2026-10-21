@@ -14,6 +14,8 @@ class PlayerControlsData: ObservableObject {
     @Published var bufferedTime: Double = 0
     @Published var showUI: Bool = true
     @Published var isLooping: Bool = false
+    @Published var activeSkipSegment: SkipSegment?
+    @Published var skipControlsEnabled = true
     
     // Virtual Scrubbing Ghost HUD
     @Published var isVirtualScrubbing: Bool = false
@@ -144,6 +146,7 @@ struct PlayerControlsOverlay: View {
     let onSwitchEngine: (PlaybackEngine) -> Void
     let onTogglePlaylist: () -> Void
     let onLoopToggle: () -> Void
+    let onSkipSegment: () -> Void
     /// Active playback engine, also shown in the controls badge.
     let engine: PlaybackEngine
 
@@ -348,6 +351,21 @@ struct PlayerControlsOverlay: View {
                 .transition(.opacity)
             }
 
+            if data.skipControlsEnabled, let segment = data.activeSkipSegment,
+               !data.isVirtualScrubbing, !data.showSubtitleMenu, !data.showAudioMenu, !data.showEngineMenu {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        SkipSegmentButton(
+                            title: segment.buttonTitle, claimsFocus: !data.userPaused,
+                            action: onSkipSegment)
+                    }
+                    .padding(.horizontal, 80)
+                    .padding(.bottom, data.showUI ? (data.userPaused ? 300 : 140) : 80)
+                }
+            }
+
             // MARK: - Track Picker Popups
             if data.showSubtitleMenu {
                 Color.black.opacity(0.6).ignoresSafeArea()
@@ -462,5 +480,48 @@ struct PlayerControlsOverlay: View {
         } else {
             return String(format: "%d:%02d", m, s)
         }
+    }
+}
+
+/// Skip Intro / Credits pill. Bright when focused so Select's target is obvious; while
+/// playing it takes focus as it appears (the overlay has no other focusable control).
+private struct SkipSegmentButton: View {
+    let title: String
+    let claimsFocus: Bool
+    let action: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 24, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 26, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        // A custom style replaces tvOS's plain-button focus platter, which would
+        // otherwise draw a second rounded outline around the pill.
+        .buttonStyle(SkipPillStyle(focused: focused))
+        .focused($focused)
+        .onAppear { if claimsFocus { focused = true } }
+    }
+}
+
+private struct SkipPillStyle: ButtonStyle {
+    let focused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(focused ? .black : .white)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 18)
+            .background(Capsule().fill(focused ? Color.white : Color.black.opacity(0.55)))
+            .overlay(Capsule().stroke(Color.white.opacity(focused ? 0 : 0.35), lineWidth: 2))
+            .scaleEffect(configuration.isPressed ? 0.97 : (focused ? 1.08 : 1.0))
+            .shadow(color: .black.opacity(0.4), radius: focused ? 16 : 6, y: 6)
+            .animation(.easeOut(duration: 0.15), value: focused)
     }
 }

@@ -140,8 +140,17 @@ struct PlayerView: View {
         mediaGeneration == generation && effectiveEngine(for: playlistStore.currentItem ?? payload) == engine
     }
 
-    /// Initial seek for `item` (seconds): an engine-switch resume wins; otherwise honor
-    /// the phone's `start_position_ms` resume point seeded from its resume store.
+    /// Preserve protobuf presence: season/episode zero can identify specials.
+    private func skipMetadata(for item: Playbridge_PlayPayload) -> SkipSegmentMetadata {
+        let metadata = item.visualMetadata
+        return SkipSegmentMetadata(
+            imdbID: metadata.hasImdbID ? metadata.imdbID : nil,
+            tmdbID: metadata.hasTmdbID ? metadata.tmdbID : nil,
+            season: metadata.hasSeason ? Int(metadata.season) : nil,
+            episode: metadata.hasEpisode ? Int(metadata.episode) : nil)
+    }
+
+    /// Initial seek: an engine-switch resume wins over the sender's start position.
     private func initialSeekTime(for item: Playbridge_PlayPayload) -> Double {
         if resumeTime > 0 { return resumeTime }
         if item.hasStartPositionMs, item.startPositionMs > 0 {
@@ -324,6 +333,7 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
+                        skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         mediaIdentity: mediaGeneration,
                         isPreBuffering: isPreBuffering,
@@ -351,6 +361,7 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
+                        skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,

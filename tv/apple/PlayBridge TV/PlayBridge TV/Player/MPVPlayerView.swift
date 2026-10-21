@@ -10,6 +10,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let subtitles: [String]?
+    let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let mediaIdentity: Int
     let isPreBuffering: Bool
@@ -32,6 +33,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.url = url
         vc.headers = headers
         vc.subtitles = subtitles
+        vc.skipMetadata = skipMetadata
         vc.initialTime = initialTime
         vc.mediaIdentity = mediaIdentity
         vc.isPreBuffering = isPreBuffering
@@ -66,6 +68,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         // media. This is what makes back-to-back episodes start fast and gapless
         // instead of paying a full mpv re-init per item.
         if uiViewController.url != url || uiViewController.mediaIdentity != mediaIdentity {
+            uiViewController.skipLoader.cancel()
+            uiViewController.skipMetadata = skipMetadata
             uiViewController.mediaIdentity = mediaIdentity
             uiViewController.url = url
             // Mark the request synchronously, but publish the per-item HUD reset only
@@ -103,6 +107,8 @@ class MPVViewController: UIViewController {
     var subtitles: [String]?
     var initialTime: Double = 0.0
     var mediaIdentity = 0
+    var skipMetadata = SkipSegmentMetadata()
+    fileprivate let skipLoader = SkipSegmentLoader()
     var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
@@ -171,7 +177,7 @@ class MPVViewController: UIViewController {
     private let videoView = FocusableView()
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if playbackState.userPaused, let hv = hostingController?.view { return [hv] }
+        if (playbackState.userPaused || playbackState.activeSkipSegment != nil), let hv = hostingController?.view { return [hv] }
         return [videoView]
     }
 
@@ -196,6 +202,7 @@ class MPVViewController: UIViewController {
         externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
+        startSkipSegments()
         startRemoteSync()
         showUI(autoHide: true)
     }
@@ -451,6 +458,10 @@ class MPVViewController: UIViewController {
         self.initialTime = initialTime
         self.mediaTitle = title
 
+        chapters = []
+        playbackState.activeSkipSegment = nil
+        startSkipSegments()
+
         // Per-item resets (mirrors what a fresh controller would start with).
         didApplyTrackPreferences = false
         ignoreTimeUpdatesUntil = .distantPast
@@ -624,6 +635,7 @@ class MPVViewController: UIViewController {
                 // UI progress does not need a SwiftUI redraw for every decoded frame.
                 self.playbackState.currentTime = val
                 self.playbackState.bufferedTime = val + self.cacheAheadSec
+                self.updateActiveSkipSegment()
             }
 
         case "chapter-list":
@@ -676,7 +688,10 @@ class MPVViewController: UIViewController {
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee,
                   val > 0 else { break }
-            DispatchQueue.main.async { [weak self] in self?.playbackState.duration = val }
+            DispatchQueue.main.async { [weak self] in
+                self?.playbackState.duration = val
+                self?.updateActiveSkipSegment()
+            }
 
         case "pause":
             guard prop.format == MPV_FORMAT_FLAG,
@@ -925,6 +940,7 @@ class MPVViewController: UIViewController {
                 guard let self else { return }
                 self.setLooping(!self.playbackState.isLooping)
             },
+            onSkipSegment: { [weak self] in self?.skipActiveSegment() },
             engine: .mpv
         )
         let hosting = UIHostingController(rootView: overlay)
@@ -939,6 +955,7 @@ class MPVViewController: UIViewController {
 
     private func applyPreBufferingState() {
         applyAudibleMute()
+        playbackState.skipControlsEnabled = !isPreBuffering
         if isPreBuffering {
             playbackState.showUI = false
             hideControlsTimer?.invalidate()
@@ -1103,6 +1120,8 @@ class MPVViewController: UIViewController {
         }
 
         switch type {
+        case .select where playbackState.activeSkipSegment != nil && !playbackState.isVirtualScrubbing:
+            super.pressesBegan(presses, with: event)
         case .playPause, .select:
             if playbackState.isVirtualScrubbing {
                 commitVirtualScrub()
@@ -1245,7 +1264,48 @@ class MPVViewController: UIViewController {
 
     /// Sent when the chapters change and on resync; the server adds the item ids.
     private func broadcastTimeline() {
-        onBroadcast?(TimelineReport.frame(chapters: chapters))
+        onBroadcast?(TimelineReport.frame(chapters: chapters, segments: skipLoader.segments))
+    }
+
+    private func startSkipSegments() {
+        let identity = mediaIdentity
+        skipLoader.start(skipMetadata) { [weak self] in
+            guard let self, !self.isMpvStopped, self.mediaIdentity == identity else { return }
+            self.updateActiveSkipSegment()
+            self.broadcastTimeline()
+        }
+        broadcastTimeline()
+    }
+
+    private func updateActiveSkipSegment() {
+        let active = skipLoader.segments.first {
+            $0.contains(seconds: playbackState.currentTime)
+                && $0.targetSeconds(duration: playbackState.duration) != nil
+        }
+        if playbackState.activeSkipSegment != active {
+            playbackState.activeSkipSegment = active
+            setNeedsFocusUpdate()
+        }
+    }
+
+    private func skipActiveSegment() {
+        guard !isPreBuffering, !StillWatchingGate.isPrompting,
+              let segment = playbackState.activeSkipSegment,
+              skipLoader.segments.contains(segment), segment.contains(seconds: playbackState.currentTime),
+              let target = segment.targetSeconds(duration: playbackState.duration) else { return }
+        NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+        playbackState.activeSkipSegment = nil
+        if segment.endsPlayback(duration: playbackState.duration) {
+            playbackState.currentTime = target
+            broadcastStatus()
+            onDismiss?()
+            return
+        }
+        playbackState.currentTime = target
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        seekAsync(to: target)
+        broadcastStatus()
+        setNeedsFocusUpdate()
     }
 
     private func broadcastTracks() {
@@ -1602,6 +1662,7 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
+        skipLoader.cancel()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil

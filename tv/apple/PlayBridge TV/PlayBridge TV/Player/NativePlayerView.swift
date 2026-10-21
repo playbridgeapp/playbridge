@@ -17,6 +17,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let subtitles: [String]?
+    let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let isPreBuffering: Bool
     let title: String?
@@ -122,6 +123,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         context.coordinator.attach(player: player)
         context.coordinator.bindEngineChrome(
             engineChrome, controller: controller, isPreBuffering: isPreBuffering)
+        context.coordinator.startSkipSegments(skipMetadata)
         player.play()
         return controller
     }
@@ -180,6 +182,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var didBroadcastTracks = false
         /// Chapter markers of the current item, loaded once it is ready to play.
         private var chapters: [TimelineChapter] = []
+        private let skipLoader = SkipSegmentLoader()
+        private var activeSkipSegment: SkipSegment?
         /// Network Back hides the system transport. Later SwiftUI updates keep it hidden
         /// until this player view is recreated for the next item.
         private var remoteControlsHidden = false
@@ -242,6 +246,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            skipLoader.cancel()
+            playerController?.contextualActions = []
             lateSubtitleDownload?.cancel()
             lateSubtitleDownload = nil
             subtitleDownloadTask?.cancel()
@@ -485,6 +491,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         private func broadcastStatus() {
             guard let player else { return }
+            updateSkipAction()
             let pos = player.currentTime().seconds
             let durRaw = player.currentItem?.duration.seconds ?? 0
             let dur = durRaw.isFinite ? durRaw : 0
@@ -542,17 +549,57 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func broadcastTimeline() {
-            onBroadcast(TimelineReport.frame(chapters: chapters))
+            onBroadcast(TimelineReport.frame(chapters: chapters, segments: skipLoader.segments))
+        }
+
+        func startSkipSegments(_ metadata: SkipSegmentMetadata) {
+            let identity = mediaIdentity
+            skipLoader.start(metadata) { [weak self] in
+                guard let self, self.player != nil, self.mediaIdentity == identity else { return }
+                self.updateSkipAction()
+                self.broadcastTimeline()
+            }
+            broadcastTimeline()
+        }
+
+        private func updateSkipAction() {
+            guard let player, let controller = playerController else { return }
+            let duration = player.currentItem?.duration.seconds ?? 0
+            let segment = controlsSuppressedByPreplay || StillWatchingGate.isPrompting ? nil : skipLoader.segments.first {
+                $0.contains(seconds: player.currentTime().seconds) && $0.targetSeconds(duration: duration) != nil
+            }
+            guard segment != activeSkipSegment else { return }
+            activeSkipSegment = segment
+            guard let segment else { controller.contextualActions = []; return }
+            let identity = mediaIdentity
+            controller.contextualActions = [UIAction(title: segment.buttonTitle) { [weak self] _ in
+                guard let self, self.mediaIdentity == identity, !self.controlsSuppressedByPreplay,
+                      !StillWatchingGate.isPrompting, let player = self.player,
+                      self.skipLoader.segments.contains(segment),
+                      segment.contains(seconds: player.currentTime().seconds),
+                      let target = segment.targetSeconds(duration: player.currentItem?.duration.seconds ?? 0) else { return }
+                NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+                self.activeSkipSegment = nil
+                self.playerController?.contextualActions = []
+                if segment.endsPlayback(duration: player.currentItem?.duration.seconds ?? 0) {
+                    self.broadcastStatus()
+                    self.onDismiss()
+                    return
+                }
+                self.seek(to: target)
+            }]
         }
 
         private func loadSelectionGroupsAndBroadcast(asset: AVAsset) {
             if #available(tvOS 16, *) {
                 Task { [weak self] in
                     guard let self else { return }
+                    let identity = self.mediaIdentity
                     let audio = (try? await asset.loadMediaSelectionGroup(for: .audible)) ?? nil
                     let sub = (try? await asset.loadMediaSelectionGroup(for: .legible)) ?? nil
                     let chapters = await self.loadChapters(asset: asset)
                     await MainActor.run {
+                        guard self.mediaIdentity == identity, self.player?.currentItem?.asset === asset else { return }
                         self.audioGroup = audio
                         self.subtitleGroup = sub
                         self.applyPreferredTracks()
