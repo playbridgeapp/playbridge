@@ -17,6 +17,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let title: String?
     let onDismiss: () -> Void
     let onExit: () -> Void
+    let onBack: () -> Void
     let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
@@ -40,6 +41,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.mediaTitle = title
         vc.onDismiss = onDismiss
         vc.onExit = onExit
+        vc.onBack = onBack
         vc.onSwitch = onSwitch
         vc.onBroadcast = onBroadcast
         vc.onLoopChanged = onLoopChanged
@@ -56,6 +58,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         // Keep callbacks current (they're cheap value assignments).
         uiViewController.onDismiss = onDismiss
         uiViewController.onExit = onExit
+        uiViewController.onBack = onBack
         uiViewController.onSwitch = onSwitch
         uiViewController.onBroadcast = onBroadcast
         uiViewController.onLoopChanged = onLoopChanged
@@ -112,6 +115,7 @@ class MPVViewController: UIViewController {
     var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
+    var onBack: (() -> Void)?
     var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
     var onLoopChanged: ((Bool, PlayerReportIdentity) -> Bool)?
@@ -1103,19 +1107,15 @@ class MPVViewController: UIViewController {
         NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
 
         if type == .menu {
-            if playbackState.showSubtitleMenu  { playbackState.showSubtitleMenu = false; return }
-            if playbackState.showAudioMenu     { playbackState.showAudioMenu = false; return }
-            if playbackState.showEngineMenu    { playbackState.showEngineMenu = false; return }
-            if playbackState.isVirtualScrubbing {
-                cancelVirtualScrub()
-                return
-            }
+            // The player owner also knows about the playlist. Use the same Back
+            // levels as the phone so only the top overlay closes on each press.
             broadcastStatus()
-            onExit?()
+            onBack?()
             return
         }
 
-        if playbackState.showSubtitleMenu || playbackState.showAudioMenu || playbackState.showEngineMenu {
+        let menuOpen = playbackState.showSubtitleMenu || playbackState.showAudioMenu || playbackState.showEngineMenu
+        if type != .playPause && menuOpen {
             super.pressesBegan(presses, with: event); return
         }
 
@@ -1123,11 +1123,17 @@ class MPVViewController: UIViewController {
         case .select where playbackState.activeSkipSegment != nil && !playbackState.isVirtualScrubbing:
             super.pressesBegan(presses, with: event)
         case .playPause, .select:
-            if playbackState.isVirtualScrubbing {
+            switch PlayerRemoteNavigation.physicalPlaybackEffect(
+                for: type == .playPause ? .playPause : .select,
+                userPaused: playbackState.userPaused,
+                scrubbing: playbackState.isVirtualScrubbing,
+                menuOpen: menuOpen
+            ) {
+            case .commitScrub:
                 commitVirtualScrub()
-            } else if !playbackState.userPaused {
+            case .togglePlayback:
                 togglePlayPause()
-            } else {
+            default:
                 super.pressesBegan(presses, with: event)
             }
 
@@ -1608,9 +1614,9 @@ class MPVViewController: UIViewController {
             broadcastStatus()
             onExit?()
         case "seek_forward":
-            skipForward()
+            seekRelative(by: 15)
         case "seek_back":
-            skipBackward()
+            seekRelative(by: -15)
         case let c where c.hasPrefix("seek_to:"):
             if let ms = Double(c.dropFirst("seek_to:".count)) {
                 let secs = ms / 1000
