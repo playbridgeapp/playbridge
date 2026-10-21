@@ -15,6 +15,8 @@ final class ConnectionCoordinator: ObservableObject {
     private var nativePlaybackID: String?
     private var playbackSessionID: UUID?
     @Published var playlist: PlaylistUiState?
+    /// Chapters and skip segments from the receiver's `timeline` frame.
+    @Published var timeline: TvTimeline?
     @Published var videoTracks: [MediaTrack] = []
     @Published var audioTracks: [MediaTrack] = []
     @Published var subtitleTracks: [MediaTrack] = []
@@ -112,8 +114,12 @@ final class ConnectionCoordinator: ObservableObject {
                 durationMs: int64(json["duration"]),
                 title: (json["title"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 playbackId: nonEmpty(json["playbackId"]),
-                currentItemId: nonEmpty(json["currentItemId"])
+                currentItemId: nonEmpty(json["currentItemId"]),
+                bufferedMs: { let ms = int64(json["buffered"]); return ms > 0 ? ms : nil }()
             )
+
+        case "timeline":
+            timeline = TvTimeline.parse(json)
 
         case "playlist_status":
             if let id = nonEmpty(json["playbackId"]), id != nativePlaybackID {
@@ -277,6 +283,7 @@ final class ConnectionCoordinator: ObservableObject {
         clearReceiverMetadata(keepingVolume: keepingReceiverVolume)
         playback = nil
         playlist = nil
+        timeline = nil
         videoTracks = []
         audioTracks = []
         subtitleTracks = []

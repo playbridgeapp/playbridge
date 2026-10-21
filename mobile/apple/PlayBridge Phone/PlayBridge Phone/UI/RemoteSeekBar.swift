@@ -15,6 +15,11 @@ struct RemoteSeekBar: View {
     var onVolumeDown: () -> Void
     var onPlayPause: () -> Void
     @Binding var feedback: Feedback?
+    var isBuffering = false
+    /// Absolute buffered position (ms) from `status.buffered`.
+    var bufferedMs: Double? = nil
+    var chapters: [RemoteChapter] = []
+    var segments: [RemoteSegment] = []
 
     struct Feedback {
         enum Kind { case seek, volume }
@@ -25,6 +30,8 @@ struct RemoteSeekBar: View {
         let durationMs: Double
         let volumeDirection: String?
         var volumeLabel = "Volume"
+        /// Segment or chapter under the scrub target ("Intro", "Chapter 2 · The Heist").
+        var caption: String? = nil
     }
 
     @State private var dragging = false
@@ -32,6 +39,7 @@ struct RemoteSeekBar: View {
     @State private var axis: Axis?
     @State private var scrubMode: RemoteSeekBehavior.Mode = .relative
     @State private var volumeDirection: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // Same as Android: teach the gestures until each one has been used once, then show time left.
     @AppStorage("remote.seekHint.learnedSeek") private var learnedSeek = false
     @AppStorage("remote.seekHint.learnedVolume") private var learnedVolume = false
@@ -46,6 +54,11 @@ struct RemoteSeekBar: View {
     private var hasDuration: Bool { durationMs > 0 && !isLive && isSeekable }
     private var displayMs: Double { dragging && hasDuration ? dragMs : positionMs }
     private var fraction: Double { hasDuration ? min(1, max(0, displayMs / durationMs)) : 0 }
+    /// Playing grows the wave; pause, buffering and scrubbing flatten it.
+    private var waving: Bool { isPlaying && !isBuffering && !dragging && !reduceMotion }
+    /// The clock drifts the wave while playing and runs the shimmer while buffering.
+    private var clockRuns: Bool { isPlaying && !reduceMotion }
+
     private var activeColor: Color {
         scrubMode == .absolute && axis == .vertical
             ? Color(red: 1, green: 0.32, blue: 0.32) : Theme.primary
@@ -73,12 +86,21 @@ struct RemoteSeekBar: View {
                 }
                 .font(Theme.font(size: 10, weight: .bold)).tracking(1).foregroundStyle(axis == nil ? Theme.onSurfaceVariant : activeColor)
                 }
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.16))
-                        Capsule().fill(Theme.primary).frame(width: hasDuration ? geometry.size.width * fraction : 0)
-                    }
-                }.frame(height: 4)
+                if hasDuration {
+                    RemoteTimelineTrack(
+                        fraction: fraction, durationMs: durationMs, bufferedMs: isLive ? nil : bufferedMs,
+                        chapters: chapters, segments: segments,
+                        amplitude: waving ? RemoteSeekStyle.amplitude : 0,
+                        thumbRadius: dragging ? RemoteSeekStyle.thumbHeldRadius : RemoteSeekStyle.thumbRadius,
+                        held: dragging, shimmer: isBuffering && clockRuns, clockRuns: clockRuns, played: Theme.primary
+                    )
+                    .animation(reduceMotion ? nil : .easeInOut(duration: waving ? RemoteSeekStyle.grow : RemoteSeekStyle.flatten), value: waving)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: dragging)
+                    .frame(height: 4)
+                    .allowsHitTesting(false)
+                } else {
+                    Capsule().fill(Color.white.opacity(0.16)).frame(height: 4)
+                }
                 HStack {
                     Text(RemoteMode.time(Int64(min(displayMs, Double(Int64.max / 2)))))
                     Spacer()
@@ -98,7 +120,8 @@ struct RemoteSeekBar: View {
                     Image(systemName: "chevron.down")
                 }.font(Theme.font(size: 12, weight: .semibold)).foregroundStyle(axis == .vertical ? activeColor : Theme.onSurfaceVariant.opacity(0.45)).padding(.vertical, 4)
             }
-            SeekGesture(hasDuration: hasDuration, durationMs: durationMs, positionMs: positionMs, enableVolume: enableVolume) { event in
+            SeekGesture(hasDuration: hasDuration, durationMs: durationMs, positionMs: positionMs, enableVolume: enableVolume,
+                        chapters: chapters, segments: segments) { event in
                 switch event {
                 case .haptic(let feedback): RemoteHaptics.shared.perform(feedback, actionAllowed: hasDuration)
                 case .playPause: if enablePlayPause { learnedTap = true; onPlayPause() }
@@ -122,7 +145,10 @@ struct RemoteSeekBar: View {
                         positionMs: positionMs,
                         durationMs: durationMs,
                         volumeDirection: volumeDirection,
-                        volumeLabel: volumeLabel
+                        volumeLabel: volumeLabel,
+                        caption: nextAxis == .horizontal ? RemoteSeekTimeline.caption(
+                            chapters: chapters, segments: segments,
+                            positionMs: Int64(ms), durationMs: Int64(durationMs)) : nil
                     )
                 case .end(let ms):
                     if let ms, hasDuration { learnedSeek = true; onSeekTo(ms) }
@@ -166,6 +192,11 @@ struct RemoteSeekBar: View {
                             .lineLimit(1).minimumScaleFactor(0.75)
                         Text(RemoteSeekBehavior.signedOffset(targetMs: feedback.targetMs, currentMs: feedback.positionMs))
                             .font(Theme.font(size: 13)).monospacedDigit().foregroundStyle(Color.white.opacity(0.8))
+                        if let caption = feedback.caption {
+                            Text(caption)
+                                .font(Theme.font(size: 13, weight: .semibold)).foregroundStyle(Theme.tertiary)
+                                .lineLimit(1).truncationMode(.tail).frame(maxWidth: 220)
+                        }
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 28).padding(.vertical, 18)
@@ -201,6 +232,8 @@ struct RemoteSeekBar: View {
         var durationMs: Double
         var positionMs: Double
         var enableVolume: Bool
+        var chapters: [RemoteChapter]
+        var segments: [RemoteSegment]
         var onEvent: (GestureEvent) -> Void
 
         func makeCoordinator() -> Coordinator { Coordinator(onEvent: onEvent) }
@@ -216,6 +249,8 @@ struct RemoteSeekBar: View {
             uiView.durationMs = durationMs
             uiView.positionMs = positionMs
             uiView.enableVolume = enableVolume
+            uiView.chapters = chapters
+            uiView.segments = segments
         }
 
         final class Coordinator {
@@ -229,10 +264,13 @@ struct RemoteSeekBar: View {
             var durationMs = 0.0
             var positionMs = 0.0
             var enableVolume = false
+            var chapters: [RemoteChapter] = []
+            var segments: [RemoteSegment] = []
             private let pan = UIPanGestureRecognizer()
             private var down = Date.distantPast
             private var axis: Axis?
             private var dragMs = 0.0
+            private var rawDragMs = 0.0
             private var volAccum: CGFloat = 0
             private var lastTick: TimeInterval?
             private var mode: RemoteSeekBehavior.Mode = .relative
@@ -268,6 +306,7 @@ struct RemoteSeekBar: View {
                     volAccum = 0
                     lastTick = nil
                     dragMs = positionMs
+                    rawDragMs = positionMs
                     lastTranslation = .zero
                 case .changed:
                     let translation = gesture.translation(in: self)
@@ -281,12 +320,22 @@ struct RemoteSeekBar: View {
                     switch axis {
                     case .horizontal where hasDuration && bounds.width > 0:
                         let previous = dragMs
-                        dragMs = RemoteSeekBehavior.target(
-                            currentMs: dragMs, durationMs: durationMs, width: Double(bounds.width),
+                        // Snap from the unsnapped finger target, so leaving a magnet is never sticky.
+                        rawDragMs = RemoteSeekBehavior.target(
+                            currentMs: rawDragMs, durationMs: durationMs, width: Double(bounds.width),
                             fingerX: Double(location.x), dragX: Double(drag.x), mode: mode
                         )
+                        let duration = Int64(durationMs)
+                        let raw = Int64(rawDragMs)
+                        let snapped = RemoteSeekTimeline.snap(raw, durationMs: duration, chapters: chapters, segments: segments,
+                                                               toleranceMs: RemoteSeekTimeline.snapToleranceMs(durationMs: duration))
+                        dragMs = snapped == raw ? rawDragMs : Double(snapped)
                         let now = ProcessInfo.processInfo.systemUptime
-                        if let feedback = RemoteScrubFeedback.feedback(previous: previous, next: dragMs,
+                        if snapped != raw && Int64(previous) != snapped {
+                            // Landing on a chapter or a segment end is felt, not just seen.
+                            coordinator?.onEvent(.haptic(.seekBound))
+                            lastTick = now
+                        } else if let feedback = RemoteScrubFeedback.feedback(previous: previous, next: dragMs,
                             duration: durationMs, started: started, now: now, lastTick: lastTick) {
                             coordinator?.onEvent(.haptic(feedback))
                             lastTick = now

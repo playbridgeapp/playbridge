@@ -71,6 +71,74 @@ struct TvPlaybackStatus: Equatable {
     var title: String?
     var playbackId: String? = nil
     var currentItemId: String? = nil
+    /// Absolute position (ms) the receiver has buffered up to (`status.buffered`).
+    var bufferedMs: Int64? = nil
+}
+
+/// A chapter marker from the receiver's `timeline` frame.
+struct RemoteChapter: Equatable {
+    let startMs: Int64
+    var title: String? = nil
+}
+
+/// A skip segment (intro, recap, outro, preview); a nil end runs to the end of the media.
+struct RemoteSegment: Equatable {
+    let type: String
+    let startMs: Int64
+    let endMs: Int64?
+}
+
+/// The receiver's `timeline` frame: chapters and skip segments of one item.
+struct TvTimeline: Equatable {
+    var playbackId: String? = nil
+    var currentItemId: String? = nil
+    var chapters: [RemoteChapter] = []
+    var segments: [RemoteSegment] = []
+
+    static let maxChapters = 256
+    static let maxSegments = 16
+    static let maxTitleLength = 200
+    static let segmentTypes: Set<String> = ["intro", "recap", "outro", "preview"]
+
+    /// Bounded, sorted parse that drops invalid entries, matching the Android remote.
+    static func parse(_ json: [String: Any]) -> TvTimeline {
+        func id(_ key: String) -> String? { (json[key] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+        func ms(_ value: Any?) -> Int64? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            let double = number.doubleValue
+            guard double.isFinite, double >= 0, double < 9.2e18 else { return nil }
+            return Int64(double)
+        }
+        var chapters: [RemoteChapter] = []
+        for entry in (json["chapters"] as? [Any] ?? []).prefix(maxChapters) {
+            guard let object = entry as? [String: Any], let start = ms(object["startMs"]) else { continue }
+            let title = (object["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            chapters.append(RemoteChapter(startMs: start,
+                title: title.flatMap { $0.isEmpty ? nil : String($0.prefix(maxTitleLength)) }))
+        }
+        var seen = Set<Int64>()
+        chapters = chapters.sorted { $0.startMs < $1.startMs }.filter { seen.insert($0.startMs).inserted }
+        var segments: [RemoteSegment] = []
+        for entry in (json["segments"] as? [Any] ?? []).prefix(maxSegments) {
+            guard let object = entry as? [String: Any],
+                  let type = object["type"] as? String, segmentTypes.contains(type),
+                  let start = ms(object["startMs"]) else { continue }
+            let rawEnd = object["endMs"]
+            let end: Int64?
+            if rawEnd == nil || rawEnd is NSNull { end = nil } else {
+                guard let value = ms(rawEnd), value > start else { continue }
+                end = value
+            }
+            segments.append(RemoteSegment(type: type, startMs: start, endMs: end))
+        }
+        return TvTimeline(playbackId: id("playbackId"), currentItemId: id("currentItemId"),
+                          chapters: chapters, segments: segments.sorted { $0.startMs < $1.startMs })
+    }
+
+    /// The marks to draw for the queue's current item; a timeline for another item is ignored.
+    func marks(forQueueItem queueItemId: String?) -> TvTimeline? {
+        currentItemId == nil || queueItemId == nil || currentItemId == queueItemId ? self : nil
+    }
 }
 
 /// One audio/subtitle track the TV reports (the `tracks` message).

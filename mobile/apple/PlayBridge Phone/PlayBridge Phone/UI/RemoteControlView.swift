@@ -433,8 +433,17 @@ struct RemoteControlView: View {
             onVolumeUp: { vm.remote("volume_up") },
             onVolumeDown: { vm.remote("volume_down") },
             onPlayPause: { playPause(browser: browser) },
-            feedback: $seekFeedback
+            feedback: $seekFeedback,
+            isBuffering: playback?.state == "buffering",
+            bufferedMs: browser ? nil : playback?.bufferedMs.map(Double.init),
+            chapters: browser ? [] : timelineMarks?.chapters ?? [],
+            segments: browser ? [] : timelineMarks?.segments ?? []
         )
+    }
+
+    /// A timeline names its item; never paint the previous item's chapters on the next one.
+    private var timelineMarks: TvTimeline? {
+        vm.coordinator.timeline?.marks(forQueueItem: vm.coordinator.playlist?.currentItemId)
     }
 
     @ViewBuilder private var relativeSeekFallback: some View {
