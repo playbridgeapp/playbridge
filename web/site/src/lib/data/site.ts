@@ -136,7 +136,7 @@ export const STEPS: Step[] = [
   {
     num: '03',
     title: 'Connect on the same Wi-Fi',
-    desc: 'They discover each other automatically. Confirm a 6-digit code on first connect; paired devices stay trusted.',
+    desc: 'They discover each other automatically. On first connect, type the 6-digit code from the receiver into the sender; paired devices stay trusted.',
     phase: 'Set up once'
   },
   {
@@ -158,7 +158,7 @@ export const FEATURES: FeatureItem[] = [
   {
     tag: 'PAIRING',
     title: 'A 6-digit code. Then it stays trusted.',
-    desc: 'First connect shows a short code on the receiver. Confirm it on the sender for an encrypted local link. Paired devices reconnect on their own.',
+    desc: 'First connect shows a 6-digit code on the receiver. Type it on the sender to set up an encrypted local link. Paired devices reconnect on their own.',
     visual: 'allow'
   },
   {
@@ -224,7 +224,7 @@ export type InstallDetail = {
   cmd: string;
   downloadUrl?: string;
   playStoreUrl?: string;
-  /** Honest metadata only (role, platform, marker, status). No fake sizes/hashes. */
+  /** Honest metadata only (role, platform, store, minimum OS). No fake sizes/hashes or release markers. */
   meta: Array<[string, string]>;
   notice?: { badge: string; text: string };
   /** Use DESKTOP_PLATFORMS for OS-specific download steps. */
@@ -275,7 +275,6 @@ export type DesktopPlatform = {
 
 const desktopMeta = (min: string): Array<[string, string]> => [
   ['roles', 'sender + receiver'],
-  ['marker', RELEASE_MARKERS.desktop],
   ['min', min]
 ];
 
@@ -286,14 +285,14 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
     icon: 'apple',
     title: 'macOS Desktop',
     senderSteps: [
-      ['Download', `Latest .zip from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
+      ['Download', 'Latest .zip from GitHub Releases.'],
       ['Open', 'Extract and right-click → Open (unsigned build).'],
-      ['Cast out', 'Send local files or streams to a TV / other receiver. Pair the browser extension here if you cast from Chrome or Firefox.']
+      ['Cast out', 'Send local files or streams to a TV or another receiver. To cast from Chrome or Firefox, add the browser extension; it sends through this app.']
     ],
     receiverSteps: [
-      ['Download', `Latest .zip from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
+      ['Download', 'Latest .zip from GitHub Releases.'],
       ['Open', 'Extract and right-click → Open (unsigned build).'],
-      ['Approve senders', 'Allow phones and extensions that connect — this machine becomes the screen you watch on.']
+      ['Pair senders', 'A phone or CLI connecting for the first time shows a 6-digit code here. Type it on the sender. This machine becomes the screen you watch on.']
     ],
     cmd: releaseSearchUrl(RELEASE_MARKERS.desktop),
     downloadUrl: '/download/macos',
@@ -307,12 +306,12 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
     senderSteps: [
       ['Install', `In PowerShell: ${DESKTOP_WINDOWS_INSTALL_COMMAND} (verified, per-user, no admin). Or download the .zip and run playbridge_desktop.exe.`],
       ['Open', 'Start PlayBridge from the Start menu.'],
-      ['Cast out', 'Send local files or streams to a TV / other receiver. Pair the browser extension here if you cast from Chrome or Firefox.']
+      ['Cast out', 'Send local files or streams to a TV or another receiver. To cast from Chrome or Firefox, add the browser extension; it sends through this app.']
     ],
     receiverSteps: [
       ['Install', `In PowerShell: ${DESKTOP_WINDOWS_INSTALL_COMMAND} (verified, per-user, no admin). Or download the .zip and run playbridge_desktop.exe.`],
       ['Open', 'Start PlayBridge from the Start menu.'],
-      ['Approve senders', 'Allow phones and extensions that connect — this machine becomes the screen you watch on.']
+      ['Pair senders', 'A phone or CLI connecting for the first time shows a 6-digit code here. Type it on the sender. This machine becomes the screen you watch on.']
     ],
     cmd: releaseSearchUrl(RELEASE_MARKERS.desktop),
     downloadUrl: '/download/windows',
@@ -324,14 +323,14 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
     icon: 'linux',
     title: 'Linux Desktop',
     senderSteps: [
-      ['Download', `Latest .tar.gz from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
+      ['Download', 'Latest .tar.gz from GitHub Releases.'],
       ['Extract & run', 'Run bundle/playbridge_desktop (needs libmpv2).'],
-      ['Cast out', 'Send local files or streams to a TV / other receiver. Pair the browser extension here if you cast from Chrome or Firefox.']
+      ['Cast out', 'Send local files or streams to a TV or another receiver. To cast from Chrome or Firefox, add the browser extension; it sends through this app.']
     ],
     receiverSteps: [
-      ['Download', `Latest .tar.gz from GitHub Releases (marker ${RELEASE_MARKERS.desktop}).`],
+      ['Download', 'Latest .tar.gz from GitHub Releases.'],
       ['Extract & run', 'Run bundle/playbridge_desktop (needs libmpv2).'],
-      ['Approve senders', 'Allow phones and extensions that connect — this machine becomes the screen you watch on.']
+      ['Pair senders', 'A phone or CLI connecting for the first time shows a 6-digit code here. Type it on the sender. This machine becomes the screen you watch on.']
     ],
     cmd: releaseSearchUrl(RELEASE_MARKERS.desktop),
     downloadUrl: '/download/linux',
@@ -348,7 +347,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       title: 'Android phone (sender)',
       steps: [
         ['Google Play', 'Install PlayBridge Sender from the Google Play Store.'],
-        ['Or GitHub Releases', `Download APK from GitHub Releases (marker ${RELEASE_MARKERS.phone}) for direct sideloading.`],
+        ['Or GitHub Releases', 'Download the APK from GitHub Releases to sideload it.'],
         ['Open & cast', 'Discover a PlayBridge receiver or a DLNA / UPnP TV on your Wi‑Fi and send media to it.']
       ],
       notice: {
@@ -361,7 +360,6 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       meta: [
         ['role', 'sender'],
         ['store', 'Google Play Store'],
-        ['marker', RELEASE_MARKERS.phone],
         ['min', 'Android 8']
       ]
     }
@@ -376,12 +374,11 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       cmd: releaseSearchUrl(RELEASE_MARKERS.extension),
       meta: [
         ['role', 'sender'],
-        ['browsers', 'Chrome, Edge, Brave, Firefox'],
-        ['marker', RELEASE_MARKERS.extension]
+        ['browsers', 'Chrome, Edge, Brave, Firefox']
       ],
       notice: {
-        badge: 'Needs a receiver',
-        text: 'Pair with PlayBridge Desktop (or another receiver) so casted tabs have somewhere to play.'
+        badge: 'Needs Desktop',
+        text: 'The extension hands videos to PlayBridge Desktop on the same computer. Desktop plays them or sends them to a paired TV.'
       }
     }
   },
@@ -430,15 +427,14 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
         ],
         [
           'Manual archives',
-          `Verified multi-arch packages remain available on GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Verified packages for each OS and CPU are also on GitHub Releases.'
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
       installCommands: CLI_INSTALL_COMMANDS,
       meta: [
         ['role', 'sender'],
-        ['binary', 'playbridge'],
-        ['marker', RELEASE_MARKERS.cli]
+        ['binary', 'playbridge']
       ],
       notice: {
         badge: 'Also a receiver',
@@ -455,19 +451,18 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
         ],
         [
           'Receive',
-          'playbridge receiver — approve senders and play incoming casts via mpv.'
+          'playbridge receiver — prints a 6-digit pairing code for each new sender and plays incoming casts in mpv.'
         ],
         [
           'Manual archives',
-          `Verified multi-arch packages remain available on GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Verified packages for each OS and CPU are also on GitHub Releases.'
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
       installCommands: CLI_INSTALL_COMMANDS,
       meta: [
         ['role', 'receiver'],
-        ['binary', 'playbridge'],
-        ['marker', RELEASE_MARKERS.cli]
+        ['binary', 'playbridge']
       ],
       notice: {
         badge: 'Also a sender',
@@ -485,9 +480,9 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
         ['Google Play', 'Install PlayBridge for Android TV from Google Play (Open Testing).'],
         [
           'Or Downloader / Releases',
-          `Sideload with Downloader code 9557748, or GitHub Releases (marker ${RELEASE_MARKERS.tvPlayer}).`
+          'Sideload with Downloader code 9557748, or download the APK from GitHub Releases.'
         ],
-        ['Approve senders', 'Allow the first phone or CLI that connects.']
+        ['Pair senders', 'When a phone or CLI connects for the first time, the TV shows a 6-digit code. Type it on the sender.']
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.tvPlayer),
       playStoreUrl: 'https://play.google.com/store/apps/details?id=com.playbridge.player',
@@ -495,7 +490,6 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       meta: [
         ['role', 'receiver'],
         ['store', 'Google Play (Open Testing)'],
-        ['marker', RELEASE_MARKERS.tvPlayer],
         ['min', 'Android TV 8']
       ],
       plugin: {
@@ -520,7 +514,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       cmd: 'git clone https://github.com/playbridgeapp/PlayBridge.git',
       meta: [
         ['role', 'receiver'],
-        ['status', 'Active development'],
+        ['install', 'Build from source'],
         ['platform', 'tvOS 16.0+']
       ],
       notice: {
@@ -574,8 +568,8 @@ export const EXTENSION_BROWSERS: ExtensionBrowser[] = [
     steps: [
       ['Open Store', 'Install PlayBridge Video Detector from the Chrome Web Store.'],
       [
-        'Pair a receiver',
-        'Run PlayBridge Desktop (or another receiver) so the extension has a cast target.'
+        'Install Desktop',
+        'Run PlayBridge Desktop on the same computer. The extension hands videos to it, and Desktop plays them or sends them to a paired TV.'
       ],
       ['Cast videos', 'Detect streams on web pages and cast with one click.']
     ],
@@ -596,8 +590,8 @@ export const EXTENSION_BROWSERS: ExtensionBrowser[] = [
     steps: [
       ['Open Store', 'Install PlayBridge Video Detector from Firefox Add-ons.'],
       [
-        'Pair a receiver',
-        'Run PlayBridge Desktop (or another receiver) so the extension has a cast target.'
+        'Install Desktop',
+        'Run PlayBridge Desktop on the same computer. The extension hands videos to it, and Desktop plays them or sends them to a paired TV.'
       ],
       ['Cast videos', 'Detect streams on web pages and cast with one click.']
     ],
