@@ -10,7 +10,7 @@ import Libavutil
 final class HLSRemuxer {
     enum Failure: Error, CustomStringConvertible {
         case open(Int32), streamInfo(Int32), noVideo, unsupportedVideo(String), noKeyframeIndex
-        case unsupportedDolbyVision(Int), mux(String, Int32), segment(Int)
+        case unsupportedDolbyVision(Int), highDynamicRange(String), mux(String, Int32), segment(Int)
         var description: String {
             switch self {
             case .open(let code): return "open failed (\(code))"
@@ -19,6 +19,7 @@ final class HLSRemuxer {
             case .unsupportedVideo(let name): return "video codec \(name) not playable by AVPlayer"
             case .noKeyframeIndex: return "no keyframe index (cues)"
             case .unsupportedDolbyVision(let profile): return "Dolby Vision profile \(profile) not supported"
+            case .highDynamicRange(let range): return "\(range) video stays on mpv"
             case .mux(let step, let code): return "mux \(step) failed (\(code))"
             case .segment(let index): return "segment \(index) out of range"
             }
@@ -102,6 +103,13 @@ final class HLSRemuxer {
         if let dovi, dovi.profile != 5 && dovi.profile != 8 {
             avformat_close_input(&input)
             throw Failure.unsupportedDolbyVision(dovi.profile)
+        }
+        // HDR and Dolby Vision stay on mpv: on tvOS AVPlayer rejected every PQ
+        // variant of the remux and only played it tone-mapped to SDR.
+        let transfer = Self.transfer(videoPar)
+        if dovi != nil || transfer == AVCOL_TRC_SMPTE2084 || transfer == AVCOL_TRC_ARIB_STD_B67 {
+            avformat_close_input(&input)
+            throw Failure.highDynamicRange(dovi != nil ? "Dolby Vision" : transfer == AVCOL_TRC_ARIB_STD_B67 ? "HLG" : "HDR10")
         }
 
         // Matroska defers reading Cues until the first seek.
@@ -254,16 +262,12 @@ final class HLSRemuxer {
                           "VIDEO-RANGE=\(range)"]
         if fps > 0 { attributes.append(String(format: "FRAME-RATE=%.3f", fps)) }
         var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
-        // SPIKE: the same stream four times with fewer attributes each (v=1..4), so
-        // the variant tvOS picks shows which attribute made it reject the rest.
-        let bandwidth = attributes[0], codecList = attributes[1], videoRange = attributes[3]
+        // Dolby Vision first, then the same stream as its base layer (HDR10/HLG).
         if let supplemental {
             lines += ["#EXT-X-STREAM-INF:" + (attributes + ["SUPPLEMENTAL-CODECS=\"\(supplemental)\""])
-                .joined(separator: ","), "index.m3u8?v=1"]
+                .joined(separator: ","), "index.m3u8"]
         }
-        lines += ["#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8?v=2"]
-        lines += ["#EXT-X-STREAM-INF:" + [bandwidth, codecList, videoRange].joined(separator: ","), "index.m3u8?v=3"]
-        lines += ["#EXT-X-STREAM-INF:" + [bandwidth, codecList].joined(separator: ","), "index.m3u8?v=4"]
+        lines += ["#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8"]
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -369,21 +373,31 @@ final class HLSRemuxer {
 
     /// Top-level ISO BMFF boxes of the given types, in order.
     static func boxes(_ data: Data, keep: Set<String>) -> Data {
-        var result = Data()
-        var offset = 0
-        let bytes = [UInt8](data)
-        while offset + 8 <= bytes.count {
-            var size = Int(bytes[offset]) << 24 | Int(bytes[offset + 1]) << 16 | Int(bytes[offset + 2]) << 8 | Int(bytes[offset + 3])
-            let type = String(bytes: bytes[(offset + 4)..<(offset + 8)], encoding: .ascii) ?? ""
-            if size == 1, offset + 16 <= bytes.count {
-                size = bytes[(offset + 8)..<(offset + 16)].reduce(0) { $0 << 8 | Int($1) }
-            } else if size == 0 {
-                size = bytes.count - offset
+        var ranges: [Range<Int>] = []
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            var offset = 0
+            while offset + 8 <= bytes.count {
+                var size = Int(bytes[offset]) << 24 | Int(bytes[offset + 1]) << 16
+                    | Int(bytes[offset + 2]) << 8 | Int(bytes[offset + 3])
+                let type = String(decoding: bytes[(offset + 4)..<(offset + 8)], as: UTF8.self)
+                if size == 1, offset + 16 <= bytes.count {
+                    size = bytes[(offset + 8)..<(offset + 16)].reduce(0) { $0 << 8 | Int($1) }
+                } else if size == 0 {
+                    size = bytes.count - offset
+                }
+                guard size >= 8, offset + size <= bytes.count else { break }
+                if keep.contains(type) { ranges.append(offset..<(offset + size)) }
+                offset += size
             }
-            guard size >= 8, offset + size <= bytes.count else { break }
-            if keep.contains(type) { result.append(contentsOf: bytes[offset..<(offset + size)]) }
-            offset += size
         }
+        // The usual case keeps one contiguous run (moof + mdat): no copy needed.
+        if let first = ranges.first, let last = ranges.last,
+           ranges.count == 1 || zip(ranges, ranges.dropFirst()).allSatisfy({ $0.upperBound == $1.lowerBound }) {
+            return first.lowerBound == 0 && last.upperBound == data.count ? data : data.subdata(in: first.lowerBound..<last.upperBound)
+        }
+        var result = Data()
+        for range in ranges { result.append(data.subdata(in: range)) }
         return result
     }
 

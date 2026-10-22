@@ -21,8 +21,8 @@ final class LocalHLSServer {
 
         /// Read-ahead like mpv's cache: up to `aheadSegments` / `aheadBytes` past the
         /// last request, one segment per job so a new request waits for at most one.
-        static let aheadSegments = 8
-        static let aheadBytes = 256 * 1_048_576
+        static let aheadSegments = 6
+        static let aheadBytes = 96 * 1_048_576
 
         func requested(_ index: Int) {
             latestRequested = index
