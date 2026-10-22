@@ -36,6 +36,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let hasNextItem: Bool
     let metadata: TransportMetadata
     let playlistVisible: Bool
+    /// Settings-tab choices. `PlayerView.applyTuning` is the only writer; the
+    /// new values come back through `playbackSpeed` / `subtitleOffsetMs` / `scaling`.
+    let onLocalTuning: (PlayerTuning.Command) -> Void
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -65,6 +68,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.hasNextItem = hasNextItem
         vc.transportMetadata = metadata
         vc.playlistVisible = playlistVisible
+        vc.onLocalTuning = onLocalTuning
         return vc
     }
 
@@ -94,6 +98,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
             }
         }
         uiViewController.playlistVisible = playlistVisible
+        uiViewController.onLocalTuning = onLocalTuning
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
@@ -188,18 +193,23 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     var playbackSpeed = 1.0 {
         didSet {
-            if playbackSpeed != oldValue { setPropertyAsync("speed", value: PlayerTuning.mpvNumber(playbackSpeed)) }
+            guard playbackSpeed != oldValue else { return }
+            setPropertyAsync("speed", value: PlayerTuning.mpvNumber(playbackSpeed))
+            playbackState.tuning.speed = playbackSpeed
         }
     }
     var subtitleOffsetMs = 0 {
         didSet {
-            if subtitleOffsetMs != oldValue { setPropertyAsync("sub-delay", value: PlayerTuning.mpvSubDelay(ms: subtitleOffsetMs)) }
+            guard subtitleOffsetMs != oldValue else { return }
+            setPropertyAsync("sub-delay", value: PlayerTuning.mpvSubDelay(ms: subtitleOffsetMs))
+            playbackState.tuning.subtitleOffsetMs = subtitleOffsetMs
         }
     }
     var scaling = PlayerScaling.fit {
         didSet {
             if scaling != oldValue {
                 for (name, value) in PlayerTuning.mpvScalingProperties(scaling) { setPropertyAsync(name, value: value) }
+                playbackState.tuning.scaling = scaling
             }
         }
     }
@@ -246,6 +256,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private var consumedPlaybackSelect = false
     private var feedbackTimer: Timer?
     var transportMetadata = TransportMetadata()
+    var onLocalTuning: ((PlayerTuning.Command) -> Void)?
     var playlistVisible = false {
         didSet {
             guard oldValue != playlistVisible else { return }
@@ -1364,7 +1375,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         case .chapters: seekPanel(to: Double(row.id) / 1000)
         case .audio: selectAudioTrack(row.id)
         case .subtitles: selectSubtitleTrack(row.id)
-        case .settings: break
+        case .settings:
+            // The check moves when PlayerView hands the applied value back.
+            if let command = PlayerSettingsItem.command(rowID: row.id, tuning: playbackState.tuning,
+                                                        availability: playbackState.settingsAvailability) {
+                onLocalTuning?(command)
+            }
         }
         return true
     }

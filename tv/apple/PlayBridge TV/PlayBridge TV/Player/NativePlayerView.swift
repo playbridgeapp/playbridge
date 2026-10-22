@@ -43,6 +43,13 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let subtitleOffsetMs: Int
     let scaling: PlayerScaling
     let onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
+    /// Speed / Scaling / Subtitle Sync menu choices. `PlayerView.applyTuning` is
+    /// the only writer; applied values return as `playbackSpeed` etc.
+    let onLocalTuning: (PlayerTuning.Command) -> Void
+
+    private var tuning: PlayerTuning {
+        PlayerTuning(speed: playbackSpeed, subtitleOffsetMs: subtitleOffsetMs, scaling: scaling)
+    }
 
     private func gravity(_ scaling: PlayerScaling) -> AVLayerVideoGravity {
         switch scaling {
@@ -92,7 +99,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         controller.player = player
         controller.videoGravity = gravity(scaling)
-        // Phase 1 has one tuning owner (PlayerView), controlled from the phone.
+        // PlayerTuning is the single speed owner; our Speed menu replaces AVKit's.
         controller.speeds = []
         controller.allowsPictureInPicturePlayback = true
         controller.loadViewIfNeeded()
@@ -141,9 +148,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             children: [subtitleOffAction] + subtitleOptions.compactMap { subtitleActions[$0.id] })
         context.coordinator.configureTransportMenu(
             controller: controller,
-            base: subtitleOptions.isEmpty
-                ? [loopAction, switchMenu]
-                : [loopAction, externalSubtitleMenu, switchMenu],
+            leading: subtitleOptions.isEmpty ? [loopAction] : [loopAction, externalSubtitleMenu],
+            trailing: [switchMenu],
             playlist: playlistAction, hasPlaylist: hasPlaylist)
 
         player.volume = PlayerAppVolume.avPlayerVolume(appLevel)
@@ -166,6 +172,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         uiViewController.videoGravity = gravity(scaling)
         context.coordinator.onSidecarOverlayChanged = onSidecarOverlayChanged
         context.coordinator.subtitleOffsetMs = subtitleOffsetMs
+        context.coordinator.onLocalTuning = onLocalTuning
+        context.coordinator.setTuning(tuning)
         context.coordinator.refreshExternalSubtitle()
         uiViewController.player?.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         uiViewController.player?.isMuted = isPreBuffering || appMuted
@@ -181,7 +189,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
                     headers: headers, subtitles: subtitles, onBroadcast: onBroadcast,
                     onLoopChanged: onLoopChanged, onEndOfFile: onEndOfFile,
                     initialLoop: initialLoop, mediaIdentity: mediaIdentity,
-                    subtitleOffsetMs: subtitleOffsetMs, onSidecarOverlayChanged: onSidecarOverlayChanged)
+                    subtitleOffsetMs: subtitleOffsetMs, onSidecarOverlayChanged: onSidecarOverlayChanged,
+                    tuning: tuning, onLocalTuning: onLocalTuning)
     }
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
@@ -205,16 +214,60 @@ struct NativePlayerView: UIViewControllerRepresentable {
         var subtitleOffsetMs: Int
         var onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
         var loopAction: UIAction?
-        private var transportMenuBase: [UIMenuElement] = []
+        var onLocalTuning: (PlayerTuning.Command) -> Void
+        private var tuning: PlayerTuning
+        /// Mirrors the reporter's availability: Subtitle Sync only moves the overlay.
+        private var sidecarOverlayActive = false
+        private var transportMenuLeading: [UIMenuElement] = []
+        private var transportMenuTrailing: [UIMenuElement] = []
         private var playlistMenuItem: UIMenuElement?
         private var hasPlaylist = false
 
-        func configureTransportMenu(controller: AVPlayerViewController, base: [UIMenuElement],
-                                    playlist: UIMenuElement, hasPlaylist: Bool) {
-            transportMenuBase = base
+        func configureTransportMenu(controller: AVPlayerViewController, leading: [UIMenuElement],
+                                    trailing: [UIMenuElement], playlist: UIMenuElement, hasPlaylist: Bool) {
+            transportMenuLeading = leading
+            transportMenuTrailing = trailing
             playlistMenuItem = playlist
             self.hasPlaylist = hasPlaylist
             applyTransportMenu(controller)
+        }
+
+        /// Applied values from PlayerView. Menus are rebuilt only when they change.
+        func setTuning(_ value: PlayerTuning) {
+            guard value != tuning else { return }
+            tuning = value
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func setSidecarOverlay(_ active: Bool) {
+            onSidecarOverlayChanged(active, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
+            guard active != sidecarOverlayActive else { return }
+            sidecarOverlayActive = active
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func tuningMenus() -> [UIMenuElement] {
+            let availability = PlayerSettingsAvailability.forEngine(
+                PlaybackEngine.avplayer.rawValue, sidecarOverlayActive: sidecarOverlayActive)
+            return PlayerSettingsItem.sections(availability: availability).map { section in
+                UIMenu(title: section.rawValue,
+                       subtitle: PlayerSettingsItem.currentLabel(section, tuning: tuning),
+                       image: UIImage(systemName: section.symbol),
+                       children: PlayerSettingsItem.items(in: section).map { item in
+                           let id = item.id
+                           return UIAction(title: item.title,
+                                           identifier: UIAction.Identifier("playbridge.tuning." + id),
+                                           state: item.isSelected(tuning) ? .on : .off) { [weak self] _ in
+                               self?.selectTuning(id)
+                           }
+                       })
+            }
+        }
+
+        private func selectTuning(_ id: String) {
+            guard let command = PlayerSettingsItem.command(id: id, currentOffsetMs: tuning.subtitleOffsetMs)
+            else { return }
+            onLocalTuning(command)
         }
 
         /// The queue can grow mid-item (queue_add), so the Playlist item follows it.
@@ -225,7 +278,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func applyTransportMenu(_ controller: AVPlayerViewController) {
-            controller.transportBarCustomMenuItems = transportMenuBase
+            controller.transportBarCustomMenuItems = transportMenuLeading + tuningMenus() + transportMenuTrailing
                 + (hasPlaylist ? playlistMenuItem.map { [$0] } ?? [] : [])
         }
 
@@ -269,7 +322,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
              onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
              onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
              initialLoop: Bool, mediaIdentity: Int,
-             subtitleOffsetMs: Int, onSidecarOverlayChanged: @escaping (Bool, PlayerReportIdentity) -> Void) {
+             subtitleOffsetMs: Int, onSidecarOverlayChanged: @escaping (Bool, PlayerReportIdentity) -> Void,
+             tuning: PlayerTuning, onLocalTuning: @escaping (PlayerTuning.Command) -> Void) {
             self.title = title
             self.onDismiss = onDismiss
             self.onExit = onExit
@@ -282,6 +336,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.mediaIdentity = mediaIdentity
             self.subtitleOffsetMs = subtitleOffsetMs
             self.onSidecarOverlayChanged = onSidecarOverlayChanged
+            self.tuning = tuning
+            self.onLocalTuning = onLocalTuning
             self.isLooping = initialLoop
             super.init()
 
@@ -475,7 +531,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             subtitleRequestID = nil
             selectedExternalSubtitleID = nil
             externalCues = nil
-            onSidecarOverlayChanged(false, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
+            setSidecarOverlay(false)
             if let token = subtitleTimeObserver { player?.removeTimeObserver(token); subtitleTimeObserver = nil }
             subtitleLabel?.text = nil
             subtitleCaptionView?.isHidden = true
@@ -500,7 +556,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case .success(let cues):
                 selectedExternalSubtitleID = option.id
                 externalCues = cues
-                onSidecarOverlayChanged(true, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
+                setSidecarOverlay(true)
                 if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
                 TrackPreferences.shared.subtitlesOff = false
                 TrackPreferences.shared.subtitleLanguage = nil

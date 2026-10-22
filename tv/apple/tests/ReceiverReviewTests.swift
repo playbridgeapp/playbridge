@@ -295,6 +295,7 @@ struct ReceiverReviewTests {
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runPlayerTuningTests()
+        runPlayerSettingsMenuTests()
         runAppVolumeTests()
         runTimelineReportTests()
         runChapterNavigationTests()
@@ -1693,4 +1694,81 @@ private func runPlaybackFailureSessionTests() {
     _ = session.beginAttempt() // item replacement or teardown
     assert(!session.matches(nextItem) && !session.present(code: -13, attempt: nextItem))
     print("PASS: error attempt fencing, duplicate failures, retry/item replacement, close and stale timeouts")
+}
+
+private func runPlayerSettingsMenuTests() {
+    let mpv = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false)
+    let avNoSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: false)
+    let avSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: true)
+    assert(mpv.any && avNoSidecar.any && !PlayerSettingsAvailability.none.any)
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: mpv.any).last == .settings)
+
+    // Menu / row ids → PlayerTuning.Command (the design's examples).
+    assert(PlayerSettingsItem.command(id: "speed:1.25", currentOffsetMs: 0) == .speed(1.25))
+    assert(PlayerSettingsItem.command(id: "scaling:Zoom", currentOffsetMs: 0) == .scaling(.zoom))
+    assert(PlayerSettingsItem.command(id: "sub_offset:+500", currentOffsetMs: 250) == .subtitleOffsetDelta(500))
+    assert(PlayerSettingsItem.command(id: "sub_offset:-100", currentOffsetMs: 250) == .subtitleOffsetDelta(-100))
+    assert(PlayerSettingsItem.command(id: "sub_offset:reset", currentOffsetMs: 250) == .subtitleOffsetDelta(-250))
+    assert(PlayerSettingsItem.command(id: "sub_offset:reset", currentOffsetMs: -1_500) == .subtitleOffsetDelta(1_500))
+    for invalid in ["", "speed:3", "speed:1.3", "scaling:zoom", "sub_offset:+250", "sub_offset:", "reset"] {
+        assert(PlayerSettingsItem.command(id: invalid, currentOffsetMs: 0) == nil, "Unknown menu id must be ignored")
+    }
+    // Every id round-trips, and every command is one the engine accepts.
+    for item in PlayerSettingsItem.items(availability: mpv) {
+        assert(PlayerSettingsItem(id: item.id) == item)
+        assert(mpv.allows(item.command(currentOffsetMs: 250)))
+    }
+    assert(PlayerSettingsItem.speeds == [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])
+    assert(PlayerSettingsItem.items(in: .speed).allSatisfy {
+        guard case .speed(let value) = $0 else { return false }
+        return PlayerTuning.speedRange.contains(value)
+    })
+
+    // Reset through the real tuning model returns the offset to zero.
+    var tuning = PlayerTuning()
+    assert(tuning.apply(PlayerSettingsItem.subtitleStep(500).command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.apply(PlayerSettingsItem.subtitleStep(-100).command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.subtitleOffsetMs == 400)
+    assert(tuning.apply(PlayerSettingsItem.subtitleReset.command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.subtitleOffsetMs == 0)
+    assert(!tuning.apply(PlayerSettingsItem.subtitleReset.command(currentOffsetMs: 0)), "Reset at zero is a no-op")
+
+    // Sections: Subtitle Sync last, and only while offset is available.
+    assert(PlayerSettingsItem.sections(availability: mpv) == [.speed, .scaling, .subtitleSync])
+    assert(PlayerSettingsItem.sections(availability: avNoSidecar) == [.speed, .scaling])
+    assert(PlayerSettingsItem.sections(availability: avSidecar) == [.speed, .scaling, .subtitleSync])
+
+    // mpv Settings-tab rows: index ids, headers, checks, current offset on Reset.
+    tuning = PlayerTuning(speed: 1.25, subtitleOffsetMs: 250, scaling: .zoom)
+    let rows = PlayerSettingsItem.rows(tuning: tuning, availability: mpv)
+    assert(rows.count == 8 + 3 + 5)
+    assert(rows.map(\.id) == Array(0..<rows.count))
+    assert(rows.compactMap(\.section) == ["Speed", "Scaling", "Subtitle Sync"])
+    assert(rows[0].section == "Speed" && rows[8].section == "Scaling" && rows[11].section == "Subtitle Sync")
+    assert(rows.filter(\.selected).map(\.title) == ["1.25×", "Zoom"])
+    assert(InfoPanelModel.initialHighlight(rows: rows) == 4, "Opening Settings focuses the current speed")
+    assert(rows.map(\.title) == ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×",
+                                 "Fit", "Zoom", "Fill", "−500 ms", "−100 ms", "+100 ms", "+500 ms", "Reset"])
+    assert(rows[15].trailingText == "+250 ms" && rows[14].trailingText == nil)
+    func rowCommand(_ title: String) -> PlayerTuning.Command? {
+        guard let row = rows.first(where: { $0.title == title }) else { return nil }
+        return PlayerSettingsItem.command(rowID: row.id, tuning: tuning, availability: mpv)
+    }
+    assert(rowCommand("1.25×") == .speed(1.25))
+    assert(rowCommand("Zoom") == .scaling(.zoom))
+    assert(rowCommand("+500 ms") == .subtitleOffsetDelta(500))
+    assert(rowCommand("Reset") == .subtitleOffsetDelta(-250))
+    assert(PlayerSettingsItem.command(rowID: -1, tuning: tuning, availability: mpv) == nil)
+    assert(PlayerSettingsItem.command(rowID: rows.count, tuning: tuning, availability: mpv) == nil)
+    assert(PlayerSettingsItem.command(rowID: 11, tuning: tuning, availability: avNoSidecar) == nil,
+           "No Subtitle Sync rows without an offset owner")
+    assert(PlayerSettingsItem.rows(tuning: tuning, availability: .none).isEmpty)
+
+    // Labels the menus show beside their titles.
+    assert(PlayerSettingsItem.currentLabel(.speed, tuning: tuning) == "1.25×")
+    assert(PlayerSettingsItem.currentLabel(.scaling, tuning: tuning) == "Zoom")
+    assert(PlayerSettingsItem.currentLabel(.subtitleSync, tuning: tuning) == "+250 ms")
+    assert(PlayerSettingsItem.offsetLabel(0) == "0 ms" && PlayerSettingsItem.offsetLabel(-1_500) == "−1500 ms")
+    assert(PlayerSettingsItem.speedLabel(1) == "1×" && PlayerSettingsItem.speedLabel(0.3) == "0.3×")
+    print("PASS: Settings tab rows and AVPlayer tuning menus map to PlayerTuning commands, including Reset")
 }

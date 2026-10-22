@@ -105,6 +105,8 @@ struct InfoPanelRow: Equatable {
     var title: String
     var selected: Bool = false
     var trailingText: String? = nil
+    /// Header drawn above this row (the Settings tab's Speed / Scaling / Subtitle Sync blocks).
+    var section: String? = nil
 }
 
 extension InfoPanelModel {
