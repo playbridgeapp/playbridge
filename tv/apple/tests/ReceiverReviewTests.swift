@@ -1659,6 +1659,18 @@ private func runTransportChromeTests() {
     assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below") == "S1 E5 · Little Pot Rock")
     assert(TransportTimeLabels.distinctSubtitle("2024", title: "Movie") == "2024")
     assert(TransportTimeLabels.distinctSubtitle("", title: "Movie").isEmpty)
+    // 4K artwork: TMDB sizes are upgraded, then the URL as sent is the fallback.
+    let backdrop = ArtworkURL.candidates("https://image.tmdb.org/t/p/w780/abc.jpg", kind: .backdrop)
+    assert(backdrop.map(\.absoluteString) == ["https://image.tmdb.org/t/p/original/abc.jpg",
+                                               "https://image.tmdb.org/t/p/w780/abc.jpg"])
+    let posterArt = ArtworkURL.candidates("https://image.tmdb.org/t/p/w342/p.jpg", kind: .poster)
+    assert(posterArt.map(\.absoluteString).first == "https://image.tmdb.org/t/p/w780/p.jpg" && posterArt.count == 2)
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w1280/p.jpg", kind: .poster).count == 1, "Never shrinks")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/original/b.jpg", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("https://images.metahub.space/background/medium/tt1/img", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("https://image.tmdb.org/other/w780/b.jpg", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("", kind: .poster).isEmpty && ArtworkURL.candidates("file:///x.jpg", kind: .poster).isEmpty)
+    assert(!TransportMetadata(posterURL: "https://image.tmdb.org/t/p/w342/p.jpg").isEmpty, "A poster alone fills Info")
     assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
     assert(TransportAction.loop.moving(1, hasPlaylist: false) == .speed)
     assert(TransportAction.speed.moving(1, hasPlaylist: false) == .switchEngine)

@@ -150,10 +150,12 @@ struct TransportMetadata: Equatable {
     var runtime = ""
     var overview = ""
     var genres: [String] = []
+    /// Poster as sent (see `ArtworkURL`); the Info tab shows it beside the text.
+    var posterURL = ""
 
     /// Nothing for the Info tab to show besides the title.
     var isEmpty: Bool {
-        [subtitle, year, rating, runtime, overview].allSatisfy(\.isEmpty) && genres.isEmpty
+        [subtitle, year, rating, runtime, overview, posterURL].allSatisfy(\.isEmpty) && genres.isEmpty
     }
 }
 
