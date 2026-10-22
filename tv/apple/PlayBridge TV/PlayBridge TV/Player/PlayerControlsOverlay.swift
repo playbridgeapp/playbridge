@@ -58,9 +58,14 @@ class PlayerControlsData: ObservableObject {
 
     var panelTabs: [InfoPanelTab] {
         InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: settingsAvailability.any,
-            hasInfo: !metadata.isEmpty, audioTrackCount: audioTracks.count,
-            subtitleTrackCount: subtitleTracks.count + externalSubtitleTracks.count)
+            hasInfo: !metadata.isEmpty)
     }
+
+    /// The Subtitles button appears with the first embedded or sidecar track.
+    var hasSubtitles: Bool { !subtitleTracks.isEmpty || !externalSubtitleTracks.isEmpty }
+
+    /// Metadata line under the title, dropped when the title already carries it.
+    var displaySubtitle: String { TransportTimeLabels.distinctSubtitle(metadata.subtitle, title: title) }
 
     var panelRows: [InfoPanelRow] {
         switch panelTab {
@@ -68,13 +73,6 @@ class PlayerControlsData: ObservableObject {
         case .chapters:
             return InfoPanelModel.chapterRows(chapters: chapters,
                 durationMs: PlaybackTime.milliseconds(duration), positionMs: PlaybackTime.milliseconds(currentTime))
-        case .audio:
-            return audioTracks.map { InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentAudioIndex) }
-        case .subtitles:
-            return [InfoPanelRow(id: -1, title: "Off", selected: currentSubtitleIndex == -1)]
-                + (subtitleTracks + externalSubtitleTracks).map {
-                    InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentSubtitleIndex)
-                }
         case .settings: return PlayerSettingsItem.rows(tuning: tuning, availability: settingsAvailability)
         }
     }
@@ -112,6 +110,9 @@ class PlayerControlsData: ObservableObject {
         switch transportMenu {
         case .engine: return TransportMenuModel.engineRows(current: engine)
         case .speed: return TransportMenuModel.speedRows(current: tuning.speed)
+        case .subtitles:
+            return TransportMenuModel.subtitleRows(tracks: subtitleTracks + externalSubtitleTracks,
+                                                   current: currentSubtitleIndex)
         case .audio: return TransportMenuModel.audioRows(tracks: audioTracks, current: currentAudioIndex)
         }
     }
@@ -234,7 +235,7 @@ struct PlayerControlsOverlay: View {
     let onPanelDirection: (MoveCommandDirection) -> Void
     let onSubtitleClearanceChange: (Double) -> Void
     let engine: PlaybackEngine
-    private enum Control: Hashable { case scrubber, loop, speed, engine, audio, playlist }
+    private enum Control: Hashable { case scrubber, loop, speed, engine, subtitles, audio, playlist }
     @FocusState private var focused: Control?
     @Namespace private var transportActionsScope
     @Environment(\.resetFocus) private var resetTransportFocus
@@ -365,8 +366,8 @@ struct PlayerControlsOverlay: View {
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(.ultraThinMaterial, in: Capsule())
             }
-            if !data.metadata.subtitle.isEmpty {
-                Text(data.metadata.subtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+            if !data.displaySubtitle.isEmpty {
+                Text(data.displaySubtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
             }
             HStack(alignment: .bottom) {
                 Text(ChapterNavigation.timelineCaption(chapters: data.chapters, segments: data.skipSegments,
@@ -378,6 +379,11 @@ struct PlayerControlsOverlay: View {
                            perform: onLoopToggle)
                     action("Speed", icon: TransportMenu.speed.icon, control: .speed) { onOpenMenu(.speed) }
                     action("Switch", icon: TransportMenu.engine.icon, control: .engine) { onOpenMenu(.engine) }
+                    if data.hasSubtitles {
+                        action("Subtitles", icon: TransportMenu.subtitles.icon, control: .subtitles) {
+                            onOpenMenu(.subtitles)
+                        }
+                    }
                     action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
                     if data.hasPlaylist {
                         action("Playlist", icon: "list.bullet", control: .playlist) {
@@ -435,6 +441,7 @@ struct PlayerControlsOverlay: View {
         case .loop: return .loop
         case .speed: return .speed
         case .switchEngine: return .engine
+        case .subtitles: return .subtitles
         case .audio: return .audio
         case .playlist: return .playlist
         }
@@ -581,7 +588,7 @@ private struct PlaybackInfoPanel: View {
     private var info: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(data.title).font(.system(size: 32, weight: .semibold)).lineLimit(1)
-            if !data.metadata.subtitle.isEmpty { Text(data.metadata.subtitle).foregroundStyle(.white.opacity(0.72)) }
+            if !data.displaySubtitle.isEmpty { Text(data.displaySubtitle).foregroundStyle(.white.opacity(0.72)) }
             HStack(spacing: 16) {
                 ForEach([data.metadata.year, data.metadata.rating, data.metadata.runtime].filter { !$0.isEmpty }, id: \.self) { text in
                     Text(text).font(.system(size: 22)).padding(8).background(.white.opacity(0.1), in: Capsule())

@@ -19,6 +19,17 @@ enum TransportBarMetrics {
 }
 
 enum TransportTimeLabels {
+    /// The line under the title, unless the title already says it
+    /// ("Below · S1E5 · Little Pot Rock" over "S1 E5 · Little Pot Rock").
+    static func distinctSubtitle(_ subtitle: String, title: String) -> String {
+        func compact(_ text: String) -> String {
+            text.lowercased().filter { !$0.isWhitespace && $0 != "·" && $0 != "-" && $0 != ":" }
+        }
+        let line = compact(subtitle)
+        guard !line.isEmpty else { return "" }
+        return compact(title).contains(line) ? "" : subtitle
+    }
+
     /// AVPlayer's clock: zero-padded minutes ("01:51"), hours when needed ("1:02:03").
     static func clock(_ seconds: Double) -> String {
         let seconds = PlaybackTime.seconds(seconds)
@@ -109,21 +120,18 @@ enum TransportScrub {
     }
 }
 
+/// AVPlayer's panel tabs. Audio and subtitles are transport buttons, not tabs.
 enum InfoPanelTab: String, CaseIterable {
-    case info = "Info", chapters = "Chapters", audio = "Audio", subtitles = "Subtitles", settings = "Settings"
+    case info = "Info", chapters = "Chapters", settings = "Settings"
 }
 
 enum InfoPanelModel {
     /// Only tabs with something to show, as AVPlayer's info panel: Info needs
-    /// metadata beyond the title, Audio a choice of two tracks, Subtitles any track.
-    /// Never empty; a bare item still gets Info.
-    static func visibleTabs(chapterCount: Int, settingsAvailable: Bool, hasInfo: Bool = true,
-                            audioTrackCount: Int = 2, subtitleTrackCount: Int = 1) -> [InfoPanelTab] {
+    /// metadata beyond the title. Never empty; a bare item still gets Info.
+    static func visibleTabs(chapterCount: Int, settingsAvailable: Bool, hasInfo: Bool = true) -> [InfoPanelTab] {
         var tabs: [InfoPanelTab] = []
         if hasInfo { tabs.append(.info) }
         if chapterCount >= 2 { tabs.append(.chapters) }
-        if audioTrackCount >= 2 { tabs.append(.audio) }
-        if subtitleTrackCount >= 1 { tabs.append(.subtitles) }
         if settingsAvailable { tabs.append(.settings) }
         return tabs.isEmpty ? [.info] : tabs
     }
@@ -336,13 +344,17 @@ struct PlaybackFailureSession {
 }
 
 /// Physical transport focus order, matching AVPlayer's transport row (Loop,
-/// Speed, Switch, Audio). Playlist is absent for a one-item queue.
+/// Speed, Switch, Subtitles, Audio). Subtitles needs a track; Playlist is
+/// absent for a one-item queue.
 enum TransportAction: CaseIterable {
-    case loop, speed, switchEngine, audio, playlist
+    case loop, speed, switchEngine, subtitles, audio, playlist
 
-    static func available(hasPlaylist: Bool) -> [Self] {
-        let actions: [Self] = [.loop, .speed, .switchEngine, .audio]
-        return hasPlaylist ? actions + [.playlist] : actions
+    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false) -> [Self] {
+        var actions: [Self] = [.loop, .speed, .switchEngine]
+        if hasSubtitles { actions.append(.subtitles) }
+        actions.append(.audio)
+        if hasPlaylist { actions.append(.playlist) }
+        return actions
     }
 
     /// Switch, Speed and Audio open a pop-up menu above the row (AVPlayer's
@@ -351,25 +363,27 @@ enum TransportAction: CaseIterable {
         switch self {
         case .speed: return .speed
         case .switchEngine: return .engine
+        case .subtitles: return .subtitles
         case .audio: return .audio
         case .loop, .playlist: return nil
         }
     }
 
-    func moving(_ delta: Int, hasPlaylist: Bool) -> Self {
-        let actions = Self.available(hasPlaylist: hasPlaylist)
+    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false) -> Self {
+        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles)
         let index = actions.firstIndex(of: self) ?? 0
         return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
     }
 }
 
 enum TransportMenu: Equatable {
-    case engine, speed, audio
+    case engine, speed, subtitles, audio
 
     var title: String {
         switch self {
         case .engine: return "Switch Player"
         case .speed: return "Playback Speed"
+        case .subtitles: return "Subtitles"
         case .audio: return "Audio"
         }
     }
@@ -378,6 +392,7 @@ enum TransportMenu: Equatable {
         switch self {
         case .engine: return "arrow.triangle.2.circlepath"
         case .speed: return "speedometer"
+        case .subtitles: return "captions.bubble"
         case .audio: return "waveform"
         }
     }
@@ -399,6 +414,12 @@ enum TransportMenuModel {
 
     static func speed(forRow id: Int) -> Double? {
         PlayerSettingsItem.speeds.indices.contains(id) ? PlayerSettingsItem.speeds[id] : nil
+    }
+
+    /// Off (id -1) first, then embedded and sidecar tracks.
+    static func subtitleRows(tracks: [(id: Int, name: String)], current: Int) -> [TransportMenuRow] {
+        [TransportMenuRow(id: -1, title: "Off", selected: current == -1)]
+            + tracks.map { TransportMenuRow(id: $0.id, title: $0.name, selected: $0.id == current) }
     }
 
     static func audioRows(tracks: [(id: Int, name: String)], current: Int) -> [TransportMenuRow] {
