@@ -345,6 +345,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 self, selector: #selector(itemDidFinish),
                 name: .AVPlayerItemDidPlayToEndTime, object: nil)
             NotificationCenter.default.addObserver(
+                self, selector: #selector(itemFailedToPlay(_:)),
+                name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
+            NotificationCenter.default.addObserver(
                 self, selector: #selector(onControl(_:)),
                 name: WebSocketServer.controlCommand, object: nil)
             NotificationCenter.default.addObserver(
@@ -382,13 +385,39 @@ struct NativePlayerView: UIViewControllerRepresentable {
             switch status {
             case .readyToPlay:
                 itemWasReady = true
-            case .failed where !itemWasReady && !didFallBack:
-                didFallBack = true
-                let position = player?.currentTime().seconds ?? 0
-                onSwitch(.mpv, position.isFinite ? position : 0)
+            case .failed:
+                // Before ready: a format AVPlayer can't open. After ready: a fatal
+                // playback error. Either way mpv takes over at the same position.
+                fallBackToMpv(reason: player?.currentItem?.error)
             default:
                 break
             }
+        }
+
+        /// AVPlayer can load an item and then fail as soon as it decodes (posting
+        /// FailedToPlayToEndTime, e.g. -11800). Without this it stayed paused at
+        /// 0:00 behind a spinner; now mpv takes over.
+        @objc private func itemFailedToPlay(_ note: Notification) {
+            guard let item = note.object as? AVPlayerItem, item === player?.currentItem else { return }
+            let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            DispatchQueue.main.async { [weak self] in self?.fallBackToMpv(reason: error) }
+        }
+
+        private func fallBackToMpv(reason: Error?) {
+            guard !didFallBack else { return }
+            didFallBack = true
+            #if DEBUG
+            // Codes only: errors can carry request URLs.
+            var chain: [String] = []
+            var error = reason as NSError?
+            while let current = error {
+                chain.append("\(current.domain) \(current.code)")
+                error = current.userInfo[NSUnderlyingErrorKey] as? NSError
+            }
+            print("[AVPlayer] falling back to mpv: \(chain.joined(separator: " <- "))")
+            #endif
+            let position = player?.currentTime().seconds ?? 0
+            onSwitch(.mpv, position.isFinite ? position : 0)
         }
 
         func teardown() {
