@@ -98,9 +98,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private var observerRegistered = false
     private var ownsProcessMpv = false
     private var surfaceAttached = false
-    @Volatile
-    private var isPaused = false
-    private var cacheStalled = false
+    private val playbackSignals = MpvPlaybackSignals()
     @Volatile
     private var playbackSpeed = 1.0f
 
@@ -405,7 +403,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> "SHUTDOWN"
             else -> "UNKNOWN($eventId)"
         }
-        if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) cacheStalled = false
+        if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) playbackSignals.cacheStalled = false
         logger.d(TAG, "MPV Event: $eventName")
         if (controlQueue.isUnhealthy) return
 
@@ -424,7 +422,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 _state.value = PlaybackState.Ready
             }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
-                _state.value = if (isPaused) PlaybackState.Paused else PlaybackState.Playing
+                _state.value = playbackSignals.playbackRestarted()
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
                 MpvEndFilePolicy.classify(
@@ -440,18 +438,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun eventProperty(property: String, value: Boolean) {
         logger.d(TAG, "MPV Property changed: $property = $value")
+        val nextState = playbackSignals.propertyChanged(property, value, _state.value)
         if (controlQueue.isUnhealthy) return
-        if (_state.value is PlaybackState.Error || _state.value == PlaybackState.Ended) return
-        when (property) {
-            "pause" -> isPaused = value
-            "paused-for-cache" -> cacheStalled = value
-            else -> return
-        }
-        _state.value = when {
-            isPaused -> PlaybackState.Paused
-            cacheStalled -> PlaybackState.Buffering
-            else -> PlaybackState.Playing
-        }
+        nextState?.let { _state.value = it }
     }
 
     override fun eventProperty(property: String, value: Long) {
@@ -556,7 +545,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override suspend fun load(payload: PlayPayload) {
         logger.i(TAG, "load() queued for ${redactUrlForLog(payload.url)}")
-        isPaused = false
+        playbackSignals.isPaused = false
         enqueueControl("load") {
             var userAgentSet = false
             payload.headers.forEach { (k, v) ->
@@ -587,7 +576,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun play() {
         logger.d(TAG, "play() queued")
-        isPaused = false
+        playbackSignals.isPaused = false
         enqueueControl("play") {
             MPVLib.setPropertyBoolean("pause", false)
         }
@@ -595,7 +584,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun pause() {
         logger.d(TAG, "pause() queued")
-        isPaused = true
+        playbackSignals.isPaused = true
         enqueueControl("pause") {
             MPVLib.setPropertyBoolean("pause", true)
         }
