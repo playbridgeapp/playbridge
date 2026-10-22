@@ -290,6 +290,7 @@ struct ReceiverReviewTests {
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
         runRemoteNavigationTests()
+        runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runAppVolumeTests()
         runTimelineReportTests()
@@ -303,6 +304,45 @@ private func pumpMain() {
     while Date() < until {
         RunLoop.current.run(mode: .default, before: until)
     }
+}
+
+private func runPlayerControlsAuditTests() {
+    // The Siri Play/Pause key never becomes a focused-button activation, even
+    // when paused or inside a menu. A live scrub is committed before toggling.
+    for paused in [false, true] {
+        for menu in [false, true] {
+            assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+                for: .playPause, userPaused: paused, scrubbing: false, menuOpen: menu) == .togglePlayback)
+            assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+                for: .playPause, userPaused: paused, scrubbing: true, menuOpen: menu) == .commitScrub)
+        }
+    }
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+        for: .select, userPaused: true, scrubbing: false, menuOpen: false) == .ignored)
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+        for: .select, userPaused: false, scrubbing: false, menuOpen: false) == .togglePlayback)
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+        for: .select, userPaused: true, scrubbing: true, menuOpen: false) == .commitScrub)
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
+        for: .select, userPaused: false, scrubbing: false, menuOpen: true) == .ignored)
+    print("PASS: physical Play/Pause toggles while paused/in menus, commits scrub first, and Select keeps focus activation")
+
+    // Both physical MPV Back and phone Back now enter this same policy. The
+    // playlist belongs to the player screen and must precede the engine HUD.
+    var chrome = PlayerChromeState(sessionMatches: true, subtitleMenu: true,
+                                   scrubbing: true, playlist: true, controlsVisible: true)
+    for expected: PlayerRemoteEffect in [.dismissSubtitleMenu, .dismissScrub, .dismissPlaylist, .dismissControls] {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: chrome)
+        assert(effect == expected)
+        PlayerRemoteNavigation.closing(effect, in: &chrome)
+    }
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: chrome) == .exitPlayback)
+    var pausedHUD = PlayerChromeState(sessionMatches: true, controlsVisible: true)
+    let firstBack = PlayerRemoteNavigation.effect(for: "back", chrome: pausedHUD)
+    assert(firstBack == .dismissControls)
+    PlayerRemoteNavigation.closing(firstBack, in: &pausedHUD)
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: pausedHUD) == .exitPlayback)
+    print("PASS: shared physical/phone Back closes menus, scrub, playlist and HUD before exiting")
 }
 
 private func runRemoteNavigationTests() {

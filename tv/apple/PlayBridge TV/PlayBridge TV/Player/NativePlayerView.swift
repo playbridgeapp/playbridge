@@ -2,7 +2,10 @@ import SwiftUI
 import AVKit
 
 final class ActivityAVPlayerViewController: AVPlayerViewController {
+    var onPhysicalActivity: (() -> Void)?
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        onPhysicalActivity?()
         if StillWatchingGate.isPrompting {
             NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
             return
@@ -39,6 +42,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
         let controller = ActivityAVPlayerViewController()
         controller.delegate = context.coordinator
+        controller.onPhysicalActivity = { [weak coordinator = context.coordinator] in
+            coordinator?.restoreRemoteControls()
+        }
 
         // Setup Audio Session for TV output
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -168,6 +174,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var timeObserver: Any?
         private var subtitleTimeObserver: Any?
         private var timeControlObservation: NSKeyValueObservation?
+        /// AVPlayer cannot open some containers (MKV, WebM, AVI). If the item fails
+        /// before it was ever ready, hand the same position to mpv once, like the
+        /// Android TV engine fallback. Later failures stay here.
+        private var itemStatusObservation: NSKeyValueObservation?
+        private var itemWasReady = false
+        private var didFallBack = false
         private weak var playerController: AVPlayerViewController?
         private weak var subtitleCaptionView: UIView?
         private weak var subtitleLabel: UILabel?
@@ -184,8 +196,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var chapters: [TimelineChapter] = []
         private let skipLoader = SkipSegmentLoader()
         private var activeSkipSegment: SkipSegment?
-        /// Network Back hides the system transport. Later SwiftUI updates keep it hidden
-        /// until this player view is recreated for the next item.
+        /// Phone Back hides the transport until a physical remote press restores it.
         private var remoteControlsHidden = false
         private var controlsSuppressedByPreplay = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
@@ -243,6 +254,24 @@ struct NativePlayerView: UIViewControllerRepresentable {
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main
             ) { [weak self] _ in self?.broadcastStatus() }
+            itemStatusObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) {
+                [weak self] item, _ in
+                let status = item.status
+                DispatchQueue.main.async { self?.itemStatusChanged(status) }
+            }
+        }
+
+        private func itemStatusChanged(_ status: AVPlayerItem.Status) {
+            switch status {
+            case .readyToPlay:
+                itemWasReady = true
+            case .failed where !itemWasReady && !didFallBack:
+                didFallBack = true
+                let position = player?.currentTime().seconds ?? 0
+                onSwitch(.mpv, position.isFinite ? position : 0)
+            default:
+                break
+            }
         }
 
         func teardown() {
@@ -257,6 +286,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             subtitleCaptionView?.removeFromSuperview()
             timeControlObservation?.invalidate()
             timeControlObservation = nil
+            itemStatusObservation?.invalidate()
+            itemStatusObservation = nil
             if let token = timeObserver { player?.removeTimeObserver(token); timeObserver = nil }
             NotificationCenter.default.removeObserver(self)
             player?.pause()
@@ -478,13 +509,21 @@ struct NativePlayerView: UIViewControllerRepresentable {
         func playerViewController(_ playerViewController: AVPlayerViewController,
                                   didSelect mediaSelectionOption: AVMediaSelectionOption?,
                                   in mediaSelectionGroup: AVMediaSelectionGroup) {
+            let prefs = TrackPreferences.shared
+            if let audioGroup, mediaSelectionGroup == audioGroup {
+                prefs.audioLanguage = mediaSelectionOption?.locale?.identifier
+                    ?? mediaSelectionOption?.extendedLanguageTag
+                prefs.audioName = mediaSelectionOption?.displayName
+                broadcastTracks()
+                return
+            }
             guard let subtitleGroup, mediaSelectionGroup == subtitleGroup else { return }
             clearExternalSubtitle(explicitOff: false)
-            let prefs = TrackPreferences.shared
             prefs.subtitlesOff = mediaSelectionOption == nil
             prefs.subtitleLanguage = mediaSelectionOption?.locale?.identifier
                 ?? mediaSelectionOption?.extendedLanguageTag
             prefs.subtitleName = mediaSelectionOption?.displayName
+            broadcastTracks()
         }
 
         // MARK: - Phone Now-Playing Sync
@@ -797,6 +836,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
             remoteControlsHidden = true
             playerController?.showsPlaybackControls = false
             return true
+        }
+
+        func restoreRemoteControls() {
+            guard remoteControlsHidden else { return }
+            remoteControlsHidden = false
+            playerController?.showsPlaybackControls = !controlsSuppressedByPreplay
         }
 
         @objc private func onStillWatchingPause() { player?.pause(); broadcastStatus() }

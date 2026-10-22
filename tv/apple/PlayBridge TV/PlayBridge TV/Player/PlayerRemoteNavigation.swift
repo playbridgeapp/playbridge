@@ -93,6 +93,10 @@ final class PlayerEngineChrome {
     var apply: (PlayerRemoteEffect) -> Bool = { _ in false }
 }
 
+enum PlayerPlaybackPress {
+    case playPause, select
+}
+
 /// One trip through the player owner: finish progress, flush history, then the
 /// screen dismiss that clears the play request and broadcasts idle.
 enum PlayerSessionExit {
@@ -149,6 +153,20 @@ final class PlayerRemoteExitGate {
 }
 
 enum PlayerRemoteNavigation {
+    /// Play/Pause always toggles (or commits a scrub), including inside a track
+    /// menu. Select keeps activating the focused button while paused or in a menu.
+    static func physicalPlaybackEffect(
+        for press: PlayerPlaybackPress,
+        userPaused: Bool,
+        scrubbing: Bool,
+        menuOpen: Bool
+    ) -> PlayerRemoteEffect {
+        if press == .select && menuOpen { return .ignored }
+        if scrubbing { return .commitScrub }
+        if press == .playPause || !userPaused { return .togglePlayback }
+        return .ignored
+    }
+
     private struct Level {
         let effect: PlayerRemoteEffect
         let isOpen: (PlayerChromeState) -> Bool

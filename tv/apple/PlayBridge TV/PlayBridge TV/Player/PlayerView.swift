@@ -340,6 +340,7 @@ struct PlayerView: View {
                         title: currentRequest.titleOrNil,
                         onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
+                        onBack: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleRemoteNavigation("back") } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
                         onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
                         onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
