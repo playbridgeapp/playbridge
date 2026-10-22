@@ -33,6 +33,25 @@ internal fun findAddedSubtitleTrackId(
     id !in existingTrackIds && label == expectedLabel
 }?.first
 
+/**
+ * Maps MPV's [PlaybackState] to the wire state reported to [PlayerHostActivity].
+ * libmpv emits `MPV_EVENT_PLAYBACK_RESTART` (mapped to [PlaybackState.Playing]) after any
+ * seek finishes — even while paused — so [playWhenReady] must gate `"playing"`.
+ */
+internal fun mpvReportedStateName(
+    state: PlaybackState,
+    playWhenReady: Boolean,
+    isFileReady: Boolean,
+): String = when (state) {
+    PlaybackState.Buffering -> "buffering"
+    PlaybackState.Playing -> when {
+        !playWhenReady -> "paused"
+        isFileReady -> "playing"
+        else -> "buffering"
+    }
+    else -> "paused"
+}
+
 /** Headless MPV renderer for the permanent host process boundary. */
 class MpvRendererService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -334,15 +353,11 @@ class MpvRendererService : Service() {
                         lastCapabilitiesLive = isLive
                         sendCapabilities(renderer)
                     }
-                    val stateName = when (state) {
-                        PlaybackState.Buffering -> "buffering"
-                        PlaybackState.Playing -> if (fileReadySessionId == sessionId) {
-                            "playing"
-                        } else {
-                            "buffering"
-                        }
-                        else -> "paused"
-                    }
+                    val stateName = mpvReportedStateName(
+                        state = state,
+                        playWhenReady = playWhenReady,
+                        isFileReady = fileReadySessionId == sessionId,
+                    )
                     sendEvent(RendererProtocol.EVENT_STATE, Bundle().apply {
                         putString(RendererProtocol.KEY_STATE, stateName)
                         putLong(RendererProtocol.KEY_POSITION_MS, position.coerceAtLeast(0L))

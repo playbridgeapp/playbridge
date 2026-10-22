@@ -4,11 +4,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.tv.material3.*
 import com.playbridge.player.R
 
@@ -30,14 +31,39 @@ fun ControlActionButtons(
     onNext: () -> Unit,
     onLoop: () -> Unit,
     onSwitchPlayer: () -> Unit,
+    hasChapters: Boolean = false,
+    onChapters: () -> Unit = {},
+    initialFocusTarget: ControlActionFocusTarget = ControlActionFocusTarget.PLAY_PAUSE,
     isVisible: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val playPauseFocusRequester = remember { FocusRequester() }
+    val playlistFocusRequester = remember { FocusRequester() }
+    val chaptersFocusRequester = remember { FocusRequester() }
+    val subtitlesFocusRequester = remember { FocusRequester() }
+    val switchPlayerFocusRequester = remember { FocusRequester() }
+    val settingsFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(isVisible) {
+    LaunchedEffect(isVisible, initialFocusTarget, hasPlaylist, hasChapters, canSwitchPlayer, mediaKind) {
         if (isVisible) {
-            playPauseFocusRequester.requestFocus()
+            val requester = when (initialFocusTarget) {
+                ControlActionFocusTarget.PLAYLIST ->
+                    if (hasPlaylist) playlistFocusRequester else playPauseFocusRequester
+                ControlActionFocusTarget.CHAPTERS ->
+                    if (hasChapters) chaptersFocusRequester else playPauseFocusRequester
+                ControlActionFocusTarget.SUBTITLES ->
+                    if (mediaKind == "video") subtitlesFocusRequester else playPauseFocusRequester
+                ControlActionFocusTarget.SWITCH_PLAYER ->
+                    if (canSwitchPlayer && mediaKind != "image") switchPlayerFocusRequester else playPauseFocusRequester
+                ControlActionFocusTarget.SETTINGS ->
+                    if (mediaKind != "image") settingsFocusRequester else playPauseFocusRequester
+                ControlActionFocusTarget.PLAY_PAUSE -> playPauseFocusRequester
+            }
+            try {
+                requester.requestFocus()
+            } catch (_: Exception) {
+                // Ignore focus errors if not attached yet
+            }
         }
     }
 
@@ -96,7 +122,17 @@ fun ControlActionButtons(
             PlayerIconButton(
                 iconRes = R.drawable.ic_list,
                 contentDescription = "Playlist",
-                onClick = onPlaylist
+                onClick = onPlaylist,
+                modifier = Modifier.focusRequester(playlistFocusRequester),
+            )
+        }
+
+        if (hasChapters) {
+            PlayerIconButton(
+                iconRes = R.drawable.ic_chapters,
+                contentDescription = "Chapters",
+                onClick = onChapters,
+                modifier = Modifier.focusRequester(chaptersFocusRequester),
             )
         }
 
@@ -112,7 +148,8 @@ fun ControlActionButtons(
             PlayerIconButton(
                 iconRes = R.drawable.ic_subtitles,
                 contentDescription = "Subtitles",
-                onClick = onSubtitles
+                onClick = onSubtitles,
+                modifier = Modifier.focusRequester(subtitlesFocusRequester),
             )
         }
 
@@ -129,7 +166,8 @@ fun ControlActionButtons(
             PlayerIconButton(
                 iconRes = android.R.drawable.ic_menu_sort_by_size,
                 contentDescription = "Switch Player",
-                onClick = onSwitchPlayer
+                onClick = onSwitchPlayer,
+                modifier = Modifier.focusRequester(switchPlayerFocusRequester),
             )
         }
 
@@ -138,7 +176,8 @@ fun ControlActionButtons(
             PlayerIconButton(
                 iconRes = R.drawable.ic_settings,
                 contentDescription = "Tracks",
-                onClick = onTrackSelection
+                onClick = onTrackSelection,
+                modifier = Modifier.focusRequester(settingsFocusRequester),
             )
         }
     }
@@ -150,25 +189,45 @@ private fun PlayerIconButton(
     iconRes: Int,
     contentDescription: String,
     onClick: () -> Unit,
-    tint: Color = Color.White
+    tint: Color = Color.White,
+    modifier: Modifier = Modifier,
 ) {
+    var isFocused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.15f),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = if (isFocused) 1.08f else 1.15f),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color.Transparent,
             focusedContainerColor = Color.White.copy(alpha = 0.2f)
         ),
         shape = ClickableSurfaceDefaults.shape(MaterialTheme.shapes.medium),
-        modifier = Modifier.size(44.dp)
+        modifier = modifier
+            .height(44.dp)
+            .widthIn(min = 44.dp)
+            .onFocusChanged { isFocused = it.isFocused }
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .height(44.dp)
+                .padding(horizontal = if (isFocused) 12.dp else 10.dp),
+        ) {
             Icon(
                 painter = painterResource(iconRes),
                 contentDescription = contentDescription,
                 modifier = Modifier.size(24.dp),
                 tint = tint
             )
+            if (isFocused) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = contentDescription,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tint,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

@@ -505,6 +505,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             playbackCoordinator.index,
                         )
                     },
+                    onChapters = controlsViewModel::showChapters,
                     onPrev = { lifecycleScope.launch { playbackCoordinator.previous() } },
                     onNext = { lifecycleScope.launch { playbackCoordinator.next() } },
                     onLoop = {
@@ -547,6 +548,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         controlsViewModel.hideOverlay()
                         lifecycleScope.launch { playbackCoordinator.jumpTo(index) }
                     },
+                    onChapterPicked = ::jumpToChapterIndex,
                     onPlayerSwitched = { playerId ->
                         controlsViewModel.hideControls()
                         switchRenderer(
@@ -835,6 +837,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers += target
         rendererKind = target
         session = sessionCoordinator.begin(target)
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        controlsViewModel.setChapters(emptyList())
         hostPlaying = false
         pendingPlayingState = null
         controlsViewModel.setPlaying(false)
@@ -999,6 +1004,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        lastBufferedMs = 0L
+        bufferedSessionId = 0L
+        lastTimelineJson = null
+        controlsViewModel.setChapters(emptyList())
         externalSubtitleUrls = emptyList()
         itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
@@ -1934,8 +1945,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
             RendererProtocol.EVENT_CHAPTERS -> {
-                currentChapters = decodeChapters(event)
+                val normalized = normalizedChapters(decodeChapters(event))
+                currentChapters = normalized
                 chaptersSessionId = currentSession.sessionId
+                controlsViewModel.setChapters(normalized)
                 broadcastTimelineIfChanged()
             }
             RendererProtocol.EVENT_CAPABILITIES -> handleCapabilities(event)
@@ -2005,6 +2018,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        lastBufferedMs = 0L
+        bufferedSessionId = 0L
+        lastTimelineJson = null
+        controlsViewModel.setChapters(emptyList())
         externalSubtitleUrls = emptyList()
         itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
@@ -2541,6 +2560,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers += fallback
         rendererKind = fallback
         session = sessionCoordinator.begin(fallback)
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        controlsViewModel.setChapters(emptyList())
         resetVideoSurfaceLayout()
         controlsViewModel.setEngine(controlsAdapter, fallback.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, fallback.engineId)
@@ -2956,6 +2978,46 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
+    private fun jumpChapter(forward: Boolean): Boolean {
+        val currentSession = session ?: return false
+        val state = controlsViewModel.controlsState.value
+        if (!canJumpChapters(
+                state = state,
+                isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+                isImageMedia = currentMediaKind == MediaKind.IMAGE,
+            )
+        ) {
+            return false
+        }
+        val target = chapterJumpTarget(state.chapters, lastPositionMs, forward = forward)
+        if (target == null) {
+            if (forward) {
+                controlsViewModel.showSeekUI()
+                controlsViewModel.showChapterOsd(LAST_CHAPTER_OSD)
+                return true
+            }
+            return false
+        }
+        seekToChapterTarget(target, currentSession.sessionId)
+        return true
+    }
+
+    private fun jumpToChapterIndex(index: Int) {
+        val currentSession = session ?: return
+        val state = controlsViewModel.controlsState.value
+        val chapter = state.chapters.getOrNull(index) ?: return
+        val target = ChapterTarget(index + 1, chapter)
+        seekForSession(target.chapter.startMs, currentSession.sessionId)
+        controlsViewModel.hideOverlay()
+        controlsViewModel.showChapterOsd(chapterLabel(target))
+    }
+
+    private fun seekToChapterTarget(target: ChapterTarget, sessionId: Long) {
+        seekForSession(target.chapter.startMs, sessionId)
+        controlsViewModel.showSeekUI()
+        controlsViewModel.showChapterOsd(chapterLabel(target))
+    }
+
     private fun handleDirectionalInput(keyCode: Int, repeatCount: Int = 0): Boolean {
         val state = controlsViewModel.controlsState.value
         if (state.playbackTransitionMessage != null) return true
@@ -3048,7 +3110,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 KeyEvent.KEYCODE_DPAD_UP,
                 KeyEvent.KEYCODE_DPAD_DOWN,
                 KeyEvent.KEYCODE_DPAD_LEFT,
-                KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_CHANNEL_UP,
+                KeyEvent.KEYCODE_CHANNEL_DOWN,
+                KeyEvent.KEYCODE_PAGE_UP,
+                KeyEvent.KEYCODE_PAGE_DOWN,
+                KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+                KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> return true
             }
         }
         when (keyCode) {
@@ -3063,6 +3131,44 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 handleControl("pause")
                 return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_UP,
+            KeyEvent.KEYCODE_PAGE_DOWN -> {
+                if (jumpChapter(forward = true)) return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_DOWN,
+            KeyEvent.KEYCODE_PAGE_UP -> {
+                if (jumpChapter(forward = false)) return true
+            }
+            KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+            KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> {
+                val state = controlsViewModel.controlsState.value
+                when (
+                    resolveChapterKeyAction(
+                        keyCode = keyCode,
+                        state = state,
+                        isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+                        isImageMedia = currentMediaKind == MediaKind.IMAGE,
+                    )
+                ) {
+                    ChapterKeyAction.NEXT_CHAPTER -> {
+                        jumpChapter(forward = true)
+                        return true
+                    }
+                    ChapterKeyAction.PREV_CHAPTER -> {
+                        jumpChapter(forward = false)
+                        return true
+                    }
+                    ChapterKeyAction.SEEK_FORWARD_FALLBACK -> {
+                        session?.let { seekRelative(10_000L, it.sessionId) }
+                        return true
+                    }
+                    ChapterKeyAction.SEEK_BACKWARD_FALLBACK -> {
+                        session?.let { seekRelative(-10_000L, it.sessionId) }
+                        return true
+                    }
+                    ChapterKeyAction.NONE -> Unit
+                }
             }
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER -> {

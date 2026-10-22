@@ -32,6 +32,7 @@ import androidx.tv.material3.Text
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.playbridge.player.player.ChapterPickerDialog
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.StillWatchingState
 import com.playbridge.player.player.SwitchPlayerDialog
@@ -49,6 +50,7 @@ fun PlayerControlsOverlay(
     onTrackSelection: () -> Unit,
     onSubtitles: () -> Unit,
     onPlaylist: () -> Unit,
+    onChapters: () -> Unit = {},
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onLoop: () -> Unit,
@@ -63,6 +65,7 @@ fun PlayerControlsOverlay(
     onSettingsDismiss: () -> Unit = {},
     onOverlayDismiss: () -> Unit = {},
     onPlaylistItemPicked: (Int) -> Unit = {},
+    onChapterPicked: (Int) -> Unit = {},
     onPlayerSwitched: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleDelay: (Long) -> Unit = {},
@@ -145,6 +148,21 @@ fun PlayerControlsOverlay(
                     )
                 }
 
+                // Chapter Picker Overlay
+                AnimatedVisibility(
+                    visible = state.activeOverlay == ActiveOverlay.CHAPTERS,
+                    enter = slideInHorizontally(TvExpressiveMotion.spatial()) { it } + fadeIn(TvExpressiveMotion.effects()),
+                    exit = slideOutHorizontally(TvExpressiveMotion.spatial()) { it } + fadeOut(TvExpressiveMotion.effects()),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    ChapterPickerDialog(
+                        chapters = state.chapters,
+                        currentPositionMs = state.currentPosition,
+                        onChapterSelected = onChapterPicked,
+                        onDismiss = onOverlayDismiss,
+                    )
+                }
+
                 // Switch Player Overlay
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.SWITCH_PLAYER,
@@ -211,11 +229,27 @@ fun PlayerControlsOverlay(
                         }
 
                         if (mediaKind != "image") {
+                            val showTimelineMetadata = !state.capabilities.isLive && state.duration > 0L
+                            val timelineChapters = if (showTimelineMetadata) state.chapters else emptyList()
+                            val timelineSegments = if (showTimelineMetadata) state.skipSegments else emptyList()
+                            val seekCaption = state.chapterOsd ?: if (showTimelineMetadata) {
+                                com.playbridge.player.player.timelineCaption(
+                                    chapters = timelineChapters,
+                                    segments = timelineSegments,
+                                    positionMs = state.currentPosition,
+                                    durationMs = state.duration,
+                                )
+                            } else {
+                                null
+                            }
                             PlayerSeekbar(
                                 position = state.currentPosition,
                                 duration = state.duration,
                                 bufferedPosition = state.bufferedPosition,
                                 onSeek = { delta -> onSeek(delta) },
+                                chapters = timelineChapters,
+                                segments = timelineSegments,
+                                caption = seekCaption,
                             )
                         }
 
@@ -236,7 +270,10 @@ fun PlayerControlsOverlay(
                                 onNext = onNext,
                                 onLoop = onLoop,
                                 onSwitchPlayer = onSwitchPlayer,
-                                isVisible = state.isVisible
+                                hasChapters = state.hasSelectableChapters(mediaKind),
+                                onChapters = onChapters,
+                                isVisible = state.isVisible,
+                                initialFocusTarget = state.controlActionFocusTarget(mediaKind),
                             )
                         }
                     }
@@ -267,6 +304,11 @@ fun PlayerControlsOverlay(
             ?.takeUnless { state.isPlaybackObscured() }
             ?.let { segment ->
             val focusRequester = remember { FocusRequester() }
+            val skipButtonBottomPadding = when {
+                showExpandedControls -> 220.dp
+                state.isVisible || keepCompactMusicProgress -> 150.dp
+                else -> 120.dp
+            }
             
             // Request focus when the button becomes visible
             LaunchedEffect(segment) {
@@ -276,7 +318,7 @@ fun PlayerControlsOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(end = 48.dp, bottom = 120.dp), // floats above seekbar / controls
+                    .padding(end = 48.dp, bottom = skipButtonBottomPadding), // floats above seekbar / controls
                 contentAlignment = Alignment.BottomEnd
             ) {
                 Surface(
