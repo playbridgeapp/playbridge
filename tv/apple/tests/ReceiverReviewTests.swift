@@ -295,6 +295,8 @@ struct ReceiverReviewTests {
         runPlayerTuningTests()
         runAppVolumeTests()
         runTimelineReportTests()
+        runChapterNavigationTests()
+        runChapterRemoteTests()
         runSkipSegmentTests()
         runSkipSegmentFetchTests()
     }
@@ -1301,4 +1303,145 @@ private func runSkipSegmentFetchTests() {
     }
     assert(done.wait(timeout: .now() + 30) == .success)
     print("PASS: skip fetching off main, provider modes, User-Agent, HTTP/transport/JSON failures and fallback")
+}
+
+private func runChapterNavigationTests() {
+    typealias Nav = ChapterNavigation
+    let chapters = Nav.sorted([
+        TimelineChapter(startMs: 600_000, title: "The Heist"),
+        TimelineChapter(startMs: 0, title: "Opening"),
+        TimelineChapter(startMs: -1, title: "Bad"),
+        TimelineChapter(startMs: 1_200_000),
+    ])
+    assert(chapters.map(\.startMs) == [0, 600_000, 1_200_000], "Sorted like the timeline frame")
+    func jump(_ positionMs: Int, _ forward: Bool) -> Int? {
+        Nav.jumpTarget(chapters: chapters, positionMs: positionMs, forward: forward)?.number
+    }
+
+    // Next: the first start beyond position + 1 s lead.
+    assert(jump(0, true) == 2)
+    assert(jump(599_500, true) == 3, "A jump that has not landed yet does not pick the same chapter")
+    assert(jump(598_000, true) == 2)
+    assert(jump(1_200_000, true) == nil, "Past the last chapter there is no next")
+    // Previous: restart after 5 s into a chapter, otherwise go back one, clamped to the first.
+    assert(jump(610_000, false) == 2, "More than 5 s in restarts the chapter")
+    assert(jump(605_000, false) == 1, "Exactly 5 s in goes back one")
+    assert(jump(602_000, false) == 1)
+    assert(jump(1_000, false) == 1, "The first chapter clamps")
+    let late = [TimelineChapter(startMs: 30_000, title: "A"), TimelineChapter(startMs: 60_000)]
+    assert(Nav.jumpTarget(chapters: late, positionMs: 10_000, forward: false)?.number == 1,
+           "Before the first chapter, previous goes to chapter 1")
+    let single = [TimelineChapter(startMs: 0, title: "Only")]
+    assert(Nav.jumpTarget(chapters: single, positionMs: 0, forward: true) == nil)
+    assert(Nav.jumpTarget(chapters: single, positionMs: 50_000, forward: false) == nil)
+    assert(Nav.jumpTarget(chapters: [], positionMs: 0, forward: true) == nil)
+
+    // Repeated presses chain from the pending target, not a stale reported position.
+    var pending = 0
+    for expected in [2, 3] {
+        let target = Nav.jumpTarget(chapters: chapters, positionMs: pending, forward: true)!
+        assert(target.number == expected)
+        pending = target.chapter.startMs
+    }
+    assert(Nav.jumpTarget(chapters: chapters, positionMs: pending, forward: false)?.number == 2,
+           "Previous right after landing goes back one chapter")
+
+    // Labels and captions.
+    let heist = Nav.jumpTarget(chapters: chapters, positionMs: 0, forward: true)!
+    assert(Nav.label(heist) == "Chapter 2 · The Heist")
+    // Muxer placeholder titles are not repeated after the number.
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "Chapter 2"))) == "Chapter 2")
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "chapter 02"))) == "Chapter 2")
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "Chapter 3"))) == "Chapter 2 · Chapter 3")
+    assert(Nav.toast(heist) == "Chapter 2 · The Heist")
+    assert(Nav.toast(Nav.jumpTarget(chapters: chapters, positionMs: 1_300_000, forward: true)) == "Last chapter")
+    assert(Nav.label(ChapterJumpTarget(number: 3, chapter: TimelineChapter(startMs: 1, title: "  ")))
+           == "Chapter 3", "A blank title reads as the number")
+    assert(Nav.captionAt(chapters: chapters, positionMs: 1_250_000) == "Chapter 3")
+    assert(Nav.captionAt(chapters: chapters, positionMs: 700_000) == "Chapter 2 · The Heist")
+    assert(Nav.captionAt(chapters: late, positionMs: 1_000) == nil, "Nothing before the first chapter")
+    assert(Nav.captionAt(chapters: single, positionMs: 9_000) == "Only", "A lone chapter shows only its title")
+    assert(Nav.captionAt(chapters: [TimelineChapter(startMs: 0)], positionMs: 9_000) == nil)
+
+    let segments = [SkipSegment(type: "intro", startMs: 10_000, endMs: 40_000),
+                    SkipSegment(type: "outro", startMs: 1_700_000, endMs: nil)]
+    func caption(_ ms: Int) -> String? {
+        Nav.timelineCaption(chapters: chapters, segments: segments, positionMs: ms, durationMs: 1_800_000)
+    }
+    assert(caption(20_000) == "Intro", "A segment wins over the chapter")
+    assert(caption(40_000) == "Chapter 1 · Opening", "A segment end is exclusive")
+    assert(caption(1_750_000) == "Credits", "Outro reads Credits and open-ended runs to the end")
+    assert(Nav.segmentLabel("recap") == "Recap" && Nav.segmentLabel("preview") == "Preview")
+    assert(Nav.timelineCaption(chapters: [], segments: [], positionMs: 0, durationMs: 0) == nil)
+
+    // Geometry: gaps skip the chapter at 0 and any at or past the end.
+    let fractions = Nav.chapterFractions(
+        chapters: chapters + [TimelineChapter(startMs: 1_800_000)], durationMs: 1_800_000)
+    assert(fractions.count == 2 && abs(fractions[0] - 1.0 / 3) < 1e-9 && abs(fractions[1] - 2.0 / 3) < 1e-9)
+    assert(Nav.chapterFractions(chapters: chapters, durationMs: 0).isEmpty, "No duration, no gaps")
+    assert(Nav.chapterFractions(chapters: [TimelineChapter(startMs: 500)], durationMs: 1000).isEmpty,
+           "One chapter has nothing to separate")
+    let ranges = Nav.segmentRanges(segments: segments + [SkipSegment(type: "intro", startMs: 5, endMs: 5),
+                                                         SkipSegment(type: "bogus", startMs: 0, endMs: 9)],
+                                   durationMs: 2_000_000)
+    assert(ranges == [0.005...0.02, 0.85...1.0], "Open-ended clamps to the end; invalid segments draw nothing")
+    assert(Nav.segmentRanges(segments: [SkipSegment(type: "outro", startMs: 900, endMs: 5000)], durationMs: 1000)
+           == [0.9...1.0], "Bands clamp to the duration")
+    assert(Nav.segmentRanges(segments: segments, durationMs: 0).isEmpty)
+
+    // AVPlayer Chapters panel entries.
+    let markers = Nav.navigationMarkers(chapters: [TimelineChapter(startMs: 600_000), TimelineChapter(startMs: 0, title: " Opening ")],
+                                        durationMs: 900_000)
+    assert(markers == [ChapterNavigationMarker(startMs: 0, endMs: 600_000, title: "Opening"),
+                       ChapterNavigationMarker(startMs: 600_000, endMs: 900_000, title: "Chapter 2")])
+    let unknownEnd = Nav.navigationMarkers(chapters: chapters, durationMs: nil)
+    assert(unknownEnd.last == ChapterNavigationMarker(startMs: 1_200_000, endMs: nil, title: "Chapter 3"))
+    assert(Nav.navigationMarkers(chapters: single, durationMs: 900_000).isEmpty, "One chapter adds no Chapters tab")
+    print("PASS: chapter jumps (lead, restart, clamp, chain), labels, captions, gaps, bands and AVPlayer markers")
+}
+
+private func runChapterRemoteTests() {
+    func effect(_ key: String, _ chrome: PlayerChromeState) -> PlayerRemoteEffect {
+        PlayerRemoteNavigation.effect(for: key, chrome: chrome)
+    }
+    for count in [0, 1, 3] {
+        let jumps = count >= 2
+        let strip = PlayerChromeState(sessionMatches: true, controlsVisible: true,
+                                      chapterCount: count, seekStripVisible: true)
+        assert(effect("dpad_up", strip) == (jumps ? .chapterNext : .adjustAppVolume(steps: 1)))
+        assert(effect("dpad_down", strip) == (jumps ? .chapterPrevious : .adjustAppVolume(steps: -1)))
+        assert(effect("dpad_left", strip) == .seekBackward && effect("dpad_right", strip) == .seekForward)
+        assert(effect("dpad_center", strip) == .togglePlayback)
+        assert(effect("volume_up", strip) == .adjustAppVolume(steps: 1), "Phone volume keys stay volume")
+
+        let shown = PlayerChromeState(sessionMatches: true, controlsVisible: true, chapterCount: count)
+        assert(effect("dpad_up", shown) == .adjustAppVolume(steps: 1), "Controls without a seek keep volume")
+        assert(effect("dpad_down", PlayerChromeState(sessionMatches: true, chapterCount: count))
+               == .adjustAppVolume(steps: -1), "Hidden controls keep volume")
+
+        let scrub = PlayerChromeState(sessionMatches: true, scrubbing: true, controlsVisible: true, chapterCount: count)
+        assert(effect("dpad_up", scrub) == (jumps ? .chapterNext : .ignored), "Scrub Up moves the ghost")
+        assert(effect("dpad_down", scrub) == (jumps ? .chapterPrevious : .ignored))
+        assert(effect("dpad_center", scrub) == .commitScrub)
+
+        var menu = strip
+        menu.subtitleMenu = true
+        assert(effect("dpad_up", menu) == .moveHighlight(delta: -1), "A menu keeps Up/Down")
+        var playlist = strip
+        playlist.playlist = true
+        assert(effect("dpad_down", playlist) == .moveHighlight(delta: 1), "The playlist keeps Up/Down")
+        var prompt = strip
+        prompt.stillWatching = true
+        assert(effect("dpad_up", prompt) == .resumeStillWatching)
+        var sheet = strip
+        sheet.settingsSheet = true
+        assert(effect("dpad_up", sheet) == .ignored)
+        var stale = strip
+        stale.sessionMatches = false
+        assert(effect("dpad_up", stale) == .ignored)
+    }
+    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, chapterCount: 4, seekStripVisible: true)
+    let chrome = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
+    assert(chrome.chapterCount == 4 && chrome.seekStripVisible, "The snapshot carries the chapter flags")
+    print("PASS: Up/Down jump chapters only in the seek strip or scrub with two or more chapters")
 }

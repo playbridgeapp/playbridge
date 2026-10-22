@@ -656,6 +656,31 @@ struct NativePlayerView: UIViewControllerRepresentable {
             onBroadcast(TimelineReport.frame(chapters: chapters, segments: skipLoader.segments))
         }
 
+        /// Feeds the system Chapters tab of the Info panel. tvOS shows only the first
+        /// group, which with a nil title is the chapter list. No custom press handling.
+        private func applyNavigationMarkers(_ chapters: [TimelineChapter]) {
+            guard let item = player?.currentItem else { return }
+            let seconds = item.duration.seconds
+            let durationMs = seconds.isFinite && seconds > 0 ? PlaybackTime.milliseconds(seconds) : nil
+            let markers = ChapterNavigation.navigationMarkers(chapters: chapters, durationMs: durationMs)
+            guard !markers.isEmpty else {
+                item.navigationMarkerGroups = []
+                return
+            }
+            func time(_ ms: Int) -> CMTime { CMTime(value: CMTimeValue(ms), timescale: 1000) }
+            let groups = markers.map { marker -> AVTimedMetadataGroup in
+                let title = AVMutableMetadataItem()
+                title.identifier = .commonIdentifierTitle
+                title.value = marker.title as NSString
+                title.extendedLanguageTag = "und"
+                let start = time(marker.startMs)
+                let range = marker.endMs.map { CMTimeRange(start: start, end: time($0)) }
+                    ?? CMTimeRange(start: start, duration: .positiveInfinity)
+                return AVTimedMetadataGroup(items: [title], timeRange: range)
+            }
+            item.navigationMarkerGroups = [AVNavigationMarkersGroup(title: nil, timedNavigationMarkers: groups)]
+        }
+
         func startSkipSegments(_ metadata: SkipSegmentMetadata) {
             let identity = mediaIdentity
             skipLoader.start(metadata) { [weak self] in
@@ -709,6 +734,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                         self.applyPreferredTracks()
                         self.broadcastTracks()
                         self.chapters = chapters
+                        self.applyNavigationMarkers(chapters)
                         self.broadcastTimeline()
                     }
                 }
