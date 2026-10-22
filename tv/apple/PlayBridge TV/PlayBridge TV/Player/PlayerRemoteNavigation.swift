@@ -17,12 +17,14 @@ struct PlayerChromeState: Equatable {
     /// The transport strip a Left/Right seek opened is still showing while
     /// playing, with no menu open.
     var seekStripVisible = false
+    var infoPanel = false
 }
 
 /// Where a network Up or Down moves a highlighted row. The engine owns the
 /// track menus. The player screen owns the playlist.
 enum PlayerRemoteListOwner: Equatable {
     case stillWatching
+    case infoPanel
     case subtitleMenu
     case audioMenu
     case engineMenu
@@ -45,6 +47,7 @@ struct PlayerHighlightList: Equatable {
 enum PlayerRemoteEffect: Equatable {
     case ignored
     case dismissStillWatching
+    case dismissInfoPanel
     case dismissSubtitleMenu
     case dismissAudioMenu
     case dismissEngineMenu
@@ -80,6 +83,7 @@ struct PlayerEngineChromeSnapshot: Equatable {
     var controlsVisible = false
     var chapterCount = 0
     var seekStripVisible = false
+    var infoPanel = false
 
     func chrome(sessionMatches: Bool, stillWatching: Bool, playlist: Bool) -> PlayerChromeState {
         PlayerChromeState(
@@ -93,7 +97,8 @@ struct PlayerEngineChromeSnapshot: Equatable {
             playlist: playlist,
             controlsVisible: controlsVisible,
             chapterCount: chapterCount,
-            seekStripVisible: seekStripVisible
+            seekStripVisible: seekStripVisible,
+            infoPanel: infoPanel
         )
     }
 }
@@ -203,6 +208,7 @@ enum PlayerRemoteNavigation {
     /// Highest overlay first. Back closes one level. An empty stack exits.
     private static let backLevels: [Level] = [
         Level(effect: .dismissStillWatching, isOpen: { $0.stillWatching }, close: { $0.stillWatching = false }),
+        Level(effect: .dismissInfoPanel, isOpen: { $0.infoPanel }, close: { $0.infoPanel = false }),
         Level(effect: .dismissSubtitleMenu, isOpen: { $0.subtitleMenu }, close: { $0.subtitleMenu = false }),
         Level(effect: .dismissAudioMenu, isOpen: { $0.audioMenu }, close: { $0.audioMenu = false }),
         Level(effect: .dismissEngineMenu, isOpen: { $0.engineMenu }, close: { $0.engineMenu = false }),
@@ -254,6 +260,7 @@ enum PlayerRemoteNavigation {
     /// Menu wins over the playlist when both are open, matching Back order.
     static func listOwner(in chrome: PlayerChromeState) -> PlayerRemoteListOwner {
         if chrome.stillWatching { return .stillWatching }
+        if chrome.infoPanel { return .infoPanel }
         if chrome.subtitleMenu { return .subtitleMenu }
         if chrome.audioMenu { return .audioMenu }
         if chrome.engineMenu { return .engineMenu }

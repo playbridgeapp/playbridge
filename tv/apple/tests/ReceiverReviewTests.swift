@@ -290,6 +290,7 @@ struct ReceiverReviewTests {
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
         runRemoteNavigationTests()
+        runTransportChromeTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runPlayerTuningTests()
@@ -1444,4 +1445,214 @@ private func runChapterRemoteTests() {
     let chrome = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
     assert(chrome.chapterCount == 4 && chrome.seekStripVisible, "The snapshot carries the chapter flags")
     print("PASS: Up/Down jump chapters only in the seek strip or scrub with two or more chapters")
+}
+
+private func runTransportChromeTests() {
+    assert(TransportBarMetrics.horizontalInset == 80 && TransportBarMetrics.bottomInset == 60)
+    assert(TransportBarMetrics.frameHeight == 14 && TransportBarMetrics.lineHeight == 6)
+    assert(TransportBarMetrics.thumbDiameter == 16)
+    assert(TransportTimeLabels.elapsed(0) == "0:00")
+    assert(TransportTimeLabels.elapsed(65.9) == "1:05")
+    assert(TransportTimeLabels.elapsed(3723) == "1:02:03")
+    assert(TransportTimeLabels.remaining(12, duration: 3723) == "−1:01:51")
+    assert(TransportTimeLabels.remaining(3723, duration: 3723) == "−0:00")
+    assert(TransportTimeLabels.remaining(4000, duration: 3723) == "−0:00")
+    for invalid in [-1.0, .nan, .infinity, -.infinity] {
+        assert(TransportTimeLabels.elapsed(invalid) == "0:00")
+        assert(TransportTimeLabels.remaining(invalid, duration: 3723) == "−1:02:03")
+        assert(TransportTimeLabels.remaining(12, duration: invalid).isEmpty)
+    }
+    assert(TransportTimeLabels.elapsed(.greatestFiniteMagnitude) == "0:00")
+    assert(TransportTimeLabels.remaining(12, duration: 0).isEmpty)
+    assert(TransportTimeLabels.metadataSubtitle(title: "Show", year: "2024", season: 2, episode: 4,
+                                               episodeTitle: "  The Heist  ") == "S2 E4 · The Heist")
+    assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4) == "S2 E4")
+    assert(TransportTimeLabels.metadataSubtitle(season: 0, episode: 0, episodeTitle: "Special") == "S0 E0 · Special")
+    assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4, episodeTitle: " \n ") == "S2 E4")
+    assert(TransportTimeLabels.metadataSubtitle(year: " 2024 ") == "2024")
+    assert(TransportTimeLabels.metadataSubtitle(year: "2024", season: 2) == "2024")
+    assert(TransportTimeLabels.metadataSubtitle(title: "Only the main title", episodeTitle: "No coordinates").isEmpty)
+    assert(TransportTimeLabels.metadataSubtitle().isEmpty)
+    print("PASS: transport metrics, elapsed/remaining time bounds, metadata presence and season-zero labels")
+
+    assert(TransportScrub.clickSkipSeconds == 10 && TransportScrub.remoteSkipSeconds == 15)
+    assert(TransportScrub.holdThreshold == 0.5)
+    func proposal(_ translation: Double, velocity: Double = 0, duration: Double = 1000) -> Double {
+        TransportScrub.proposal(origin: 500, translationX: translation, velocityX: velocity, duration: duration)
+    }
+    assert(proposal(0) == 500)
+    assert(proposal(10) == 520 && proposal(-10) == 480)
+    assert(proposal(10, velocity: 299) == 520 && proposal(10, velocity: -299) == 520)
+    assert(proposal(10, velocity: 300) == 520)
+    assert(proposal(10, velocity: 1150) == 550)
+    assert(proposal(10, velocity: 2000) == 580 && proposal(10, velocity: -2000) == 580)
+    assert(proposal(10, velocity: 10000) == 580, "Gain caps at 4x")
+    assert(proposal(-1000) == 0 && proposal(1000) == 1000)
+    assert(proposal(.greatestFiniteMagnitude) == 1000 && proposal(-.greatestFiniteMagnitude) == 0)
+    for invalid in [Double.nan, .infinity, -.infinity] {
+        assert(proposal(invalid) == 500)
+        assert(proposal(10, velocity: invalid) == 520)
+        assert(proposal(10, duration: invalid) == 500)
+    }
+    assert(proposal(10, duration: 0) == 500 && proposal(10, duration: -1) == 500)
+    assert(TransportScrub.proposal(origin: 5, translationX: 50, velocityX: 0, duration: 10) == 10)
+    assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
+    print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
+
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false) == [.info, .audio, .subtitles])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 1, settingsAvailable: false) == [.info, .audio, .subtitles])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false) == [.info, .chapters, .audio, .subtitles])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .audio, .subtitles, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .audio, .subtitles, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: -1, settingsAvailable: false).contains(.audio))
+    print("PASS: info-panel tab ordering, chapter threshold, optional settings and unconditional audio/subtitles")
+
+    var stack = PlayerChromeState(sessionMatches: true, engineMenu: true, scrubbing: true,
+                                  playlist: true, controlsVisible: true, chapterCount: 3,
+                                  seekStripVisible: true, infoPanel: true)
+    for expected: PlayerRemoteEffect in [.dismissInfoPanel, .dismissEngineMenu, .dismissScrub,
+                                        .dismissPlaylist, .dismissControls, .exitPlayback] {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: stack)
+        assert(effect == expected)
+        let before = stack
+        PlayerRemoteNavigation.closing(effect, in: &stack)
+        if effect == .dismissInfoPanel {
+            assert(!stack.infoPanel && stack.engineMenu && stack.scrubbing && stack.playlist && stack.controlsVisible)
+        }
+        assert(stack.chapterCount == before.chapterCount && stack.seekStripVisible == before.seekStripVisible)
+    }
+    var panel = PlayerChromeState(sessionMatches: true, engineMenu: true, playlist: true,
+                                 controlsVisible: true, infoPanel: true)
+    assert(PlayerRemoteNavigation.listOwner(in: panel) == .infoPanel)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: panel) == .exitPlayback)
+    panel.stillWatching = true
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: panel) == .dismissStillWatching)
+    assert(PlayerRemoteNavigation.listOwner(in: panel) == .stillWatching)
+    panel.sessionMatches = false
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: panel) == .ignored)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: panel) == .ignored)
+    var transport = PlayerChromeState(sessionMatches: true, controlsVisible: true)
+    let firstBack = PlayerRemoteNavigation.effect(for: "back", chrome: transport)
+    assert(firstBack == .dismissControls)
+    PlayerRemoteNavigation.closing(firstBack, in: &transport)
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: transport) == .exitPlayback)
+    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, chapterCount: 4,
+                                              seekStripVisible: true, infoPanel: true)
+    let copied = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
+    assert(copied.infoPanel && copied.chapterCount == 4 && copied.seekStripVisible)
+    // Existing subtitle/audio menus remain until the later view replacement.
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: PlayerChromeState(
+        sessionMatches: true, subtitleMenu: true, audioMenu: true, infoPanel: true)) == .dismissInfoPanel)
+    print("PASS: info-panel Back/list priority, shared snapshot flags, paused-HUD exit levels, Home and stale keys")
+
+    func route(_ up: Bool, _ chrome: TransportChrome) -> TransportKeyRoute {
+        TransportKeyRoute.physicalVertical(up: up, chrome: chrome)
+    }
+    var chrome = TransportChrome()
+    assert(route(false, chrome) == .openPanel && route(true, chrome) == .showTransport)
+    // The old chapter flags still exist in the shared state until PR 3. None
+    // of them, nor pause/hold-scrub/Skip focus, may steal Down from Info here.
+    for visible in [false, true] {
+        for paused in [false, true] {
+            for scrubbing in [false, true] {
+                for skipFocused in [false, true] {
+                    chrome.navigation.controlsVisible = visible
+                    chrome.navigation.scrubbing = scrubbing
+                    chrome.navigation.chapterCount = 3
+                    chrome.navigation.seekStripVisible = true
+                    chrome.userPaused = paused
+                    chrome.skipPillFocused = skipFocused
+                    assert(route(false, chrome) == .openPanel)
+                    assert(route(true, chrome) == (visible ? .moveFocus : .showTransport))
+                }
+            }
+        }
+    }
+    chrome.navigation.infoPanel = true
+    assert(route(false, chrome) == .moveInPanel && route(true, chrome) == .moveInPanel)
+    chrome.panelTabBarFocused = true
+    assert(route(true, chrome) == .closePanel && route(false, chrome) == .moveInPanel)
+    chrome.navigation.infoPanel = false
+    for path in [\PlayerChromeState.subtitleMenu, \.audioMenu, \.engineMenu, \.settingsSheet, \.playlist] {
+        var menu = TransportChrome()
+        menu.navigation[keyPath: path] = true
+        // An open list owns Up and Down; Down only opens Info outside lists.
+        assert(route(false, menu) == .moveFocus)
+        assert(route(true, menu) == .moveFocus)
+    }
+
+    let ready = TransportChrome(userPaused: true, duration: 100)
+    assert(TransportKeyRoute.canTouchScrub(chrome: ready))
+    for duration in [0.0, -1, .nan, .infinity] {
+        var invalid = ready
+        invalid.duration = duration
+        assert(!TransportKeyRoute.canTouchScrub(chrome: invalid))
+    }
+    for path in [\TransportChrome.prebuffering, \.hasFailure, \.skipPillFocused,
+                 \.navigation.stillWatching, \.navigation.infoPanel, \.navigation.engineMenu,
+                 \.navigation.playlist, \.navigation.subtitleMenu, \.navigation.audioMenu,
+                 \.navigation.settingsSheet, \.navigation.scrubbing] {
+        var blocked = ready
+        blocked[keyPath: path] = true
+        assert(!TransportKeyRoute.canTouchScrub(chrome: blocked))
+    }
+    var playing = ready
+    playing.userPaused = false
+    assert(!TransportKeyRoute.canTouchScrub(chrome: playing))
+    print("PASS: Down always opens Info, Up keeps focus/reveal, panel tab movement and touch-scrub gates")
+
+    for cache in [false, true] {
+        for enginePaused in [false, true] {
+            let paused = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: true,
+                                                      prebuffering: false, enginePaused: enginePaused)
+            assert(paused == .paused && !paused.showsSpinner)
+            let preplay = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: false,
+                                                       prebuffering: true, enginePaused: enginePaused)
+            assert(preplay == .paused && !preplay.showsSpinner)
+            let active = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: false,
+                                                      prebuffering: false, enginePaused: enginePaused)
+            assert(active == (cache ? .buffering : enginePaused ? .paused : .playing))
+            assert(active.showsSpinner == cache)
+        }
+    }
+    assert(PlaybackSurfaceState.buffering.rawValue == "buffering")
+    print("PASS: playback surface reduction, user-pause/pre-play precedence and spinner visibility")
+
+    let open = "The video couldn't be opened."
+    let generic = "This video couldn't be played."
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -13) == open)
+    for code: Int32 in -11 ... -5 { assert(PlaybackFailureMessage.sentence(forMpvCode: code) == open) }
+    for code: Int32 in [0, -1, -4, -12, -14, -16, Int32.min, Int32.max] {
+        assert(PlaybackFailureMessage.sentence(forMpvCode: code) == generic)
+    }
+    for sentence in [open, generic] { assert(!sentence.contains("://") && !sentence.contains("//")) }
+    print("PASS: fixed playback failure sentences for mpv loading/init codes and unknown errors")
+
+    assert(PlaybackFailureModel.actions(hasNextItem: false) == [.tryAgain, .close])
+    assert(PlaybackFailureModel.actions(hasNextItem: true) == [.tryAgain, .next, .close])
+    assert(PlaybackFailureAction.tryAgain.rawValue == "Try Again")
+    assert(PlaybackFailureAction.next.rawValue == "Next" && PlaybackFailureAction.close.rawValue == "Close")
+    for hasNext in [false, true] {
+        assert(PlaybackFailureModel.actions(hasNextItem: hasNext).first == PlaybackFailureModel.defaultAction)
+    }
+    assert(PlaybackFailureModel.autoCloseSeconds == 60)
+    for elapsed in [-1.0, 0, 59.999, .nan, .infinity, -.infinity] {
+        assert(!PlaybackFailureModel.shouldAutoClose(elapsedSeconds: elapsed))
+    }
+    assert(PlaybackFailureModel.shouldAutoClose(elapsedSeconds: 60))
+    assert(PlaybackFailureModel.shouldAutoClose(elapsedSeconds: 61))
+    let initial = PlaybackFailureModel.phoneReport(for: .presented(mpvCode: -13))
+    assert(initial == .errorStatus(reason: open), "Presentation immediately reports the error, never idle")
+    assert(PlaybackFailureModel.phoneReport(for: .tryAgain) == nil)
+    assert(PlaybackFailureModel.phoneReport(for: .next) == nil)
+    assert(PlaybackFailureModel.phoneReport(for: .presented(mpvCode: -999)) == .errorStatus(reason: generic))
+    for closing: PlaybackFailureModel.Event in [.close, .phoneStop, .autoClose] {
+        assert(PlaybackFailureModel.phoneReport(for: closing) == .idleContext)
+    }
+    let retryAndNext: [PlaybackFailureModel.Event] = [
+        .presented(mpvCode: -13), .tryAgain, .presented(mpvCode: -999), .next,
+    ]
+    assert(retryAndNext.compactMap { PlaybackFailureModel.phoneReport(for: $0) }
+           == [.errorStatus(reason: open), .errorStatus(reason: generic)])
+    print("PASS: error actions/default focus, optional Next, 60-second auto-close and error-now/idle-on-close reporting")
 }
