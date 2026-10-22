@@ -1474,13 +1474,24 @@ private func runTransportChromeTests() {
     assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .audio, .subtitles, .settings])
     assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .audio, .subtitles, .settings])
     assert(InfoPanelModel.visibleTabs(chapterCount: -1, settingsAvailable: false).contains(.audio))
+    // Only tabs with content: a bare single-track file keeps Chapters and Settings.
+    assert(InfoPanelModel.visibleTabs(chapterCount: 3, settingsAvailable: true, hasInfo: false,
+        audioTrackCount: 1, subtitleTrackCount: 0) == [.chapters, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false,
+        audioTrackCount: 1, subtitleTrackCount: 0) == [.info])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false,
+        audioTrackCount: 2, subtitleTrackCount: 1) == [.audio, .subtitles])
+    assert(InfoPanelModel.validTab(.info, tabs: [.chapters, .settings]) == .chapters)
+    assert(InfoPanelModel.validTab(.settings, tabs: [.chapters, .settings]) == .settings)
+    assert(TransportMetadata().isEmpty && !TransportMetadata(year: "1999").isEmpty
+        && !TransportMetadata(genres: ["Drama"]).isEmpty)
     print("PASS: info-panel tab ordering, chapter threshold, optional settings and unconditional audio/subtitles")
 
     let chapterRows = InfoPanelModel.chapterRows(chapters: [
         TimelineChapter(startMs: 60000, title: "Chapter 02"),
         TimelineChapter(startMs: 0, title: nil),
         TimelineChapter(startMs: 120000, title: "The Heist")], durationMs: 180000, positionMs: 70000)
-    assert(chapterRows.map(\.title) == ["Chapter 1", "Chapter 2", "Chapter 3 · The Heist"])
+    assert(chapterRows.map(\.title) == ["Chapter 1", "Chapter 02", "The Heist"])
     assert(chapterRows.map(\.id) == [0, 60000, 120000])
     assert(chapterRows.map(\.trailingText) == ["0:00", "1:00", "2:00"])
     let longChapterRows = InfoPanelModel.chapterRows(chapters: [
@@ -1513,6 +1524,30 @@ private func runTransportChromeTests() {
     assert(firstRow.moving(-1, rowCount: 3, physical: false) == firstRow)
     assert(InfoPanelFocus(row: 2).moving(1, rowCount: 3, physical: false).row == 2)
     assert(firstRow.moving(1, rowCount: 0, physical: true).tabBar)
+    // Chapter cards: Up from any card reaches the tabs, Down stays, Left/Right move cards.
+    let thirdCard = InfoPanelFocus(row: 2)
+    assert(thirdCard.moving(-1, rowCount: 4, physical: true, horizontalRows: true) == InfoPanelFocus(row: 2, tabBar: true))
+    assert(thirdCard.moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
+    assert(InfoPanelFocus(row: 2, tabBar: true).moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
+    assert(thirdCard.moving(1, rowCount: 4, physical: false, horizontalRows: true).row == 3)
+    assert(InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: false))
+    assert(!InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: true))
+    assert(!InfoPanelModel.horizontalMovesRows(tab: .audio, tabBarFocused: false))
+    let moved = Date(timeIntervalSince1970: 1000)
+    assert(InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.05)))
+    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.5)))
+    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: .distantPast, now: moved))
+    // Duplicate chapter starts collapse; card frames sit a little into each chapter.
+    let duplicated = ChapterNavigation.sorted([TimelineChapter(startMs: 240_000, title: "Credits"),
+        TimelineChapter(startMs: 0, title: "Opening"), TimelineChapter(startMs: 240_000, title: "Credits")])
+    assert(duplicated.map(\.startMs) == [0, 240_000])
+    let frames = ChapterNavigation.thumbnailTimes(chapters: [TimelineChapter(startMs: 0),
+        TimelineChapter(startMs: 20_000), TimelineChapter(startMs: 200_000)], durationMs: 300_000)
+    assert(frames.map(\.startMs) == [0, 20_000, 200_000])
+    assert(frames.map(\.seconds) == [5, 30, 210])
+    assert(ChapterNavigation.thumbnailTimes(chapters: [TimelineChapter(startMs: 0)], durationMs: 300_000).isEmpty)
+    let many = (0..<60).map { TimelineChapter(startMs: $0 * 10_000) }
+    assert(ChapterNavigation.thumbnailTimes(chapters: many, durationMs: 700_000).count == ChapterNavigation.maxThumbnails)
     print("PASS: panel chapter labels/targets/checks, selected-row focus, tab clamps, Skip clearance and auto-hide gates")
 
     var stack = PlayerChromeState(sessionMatches: true, engineMenu: true, scrubbing: true,
@@ -1597,14 +1632,28 @@ private func runTransportChromeTests() {
         actions.navigation.engineMenu = true
         assert(route(true, actions) == .moveFocus, "An engine menu owns its directions")
     }
-    assert(TransportAction.available(hasPlaylist: false) == [.loop, .switchEngine])
-    assert(TransportAction.available(hasPlaylist: true) == [.loop, .switchEngine, .playlist])
+    assert(TransportAction.available(hasPlaylist: false) == [.loop, .speed, .switchEngine, .audio])
+    assert(TransportAction.available(hasPlaylist: true) == [.loop, .speed, .switchEngine, .audio, .playlist])
     assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
-    assert(TransportAction.loop.moving(1, hasPlaylist: false) == .switchEngine)
-    assert(TransportAction.switchEngine.moving(1, hasPlaylist: false) == .switchEngine)
-    assert(TransportAction.switchEngine.moving(1, hasPlaylist: true) == .playlist)
-    assert(TransportAction.playlist.moving(-1, hasPlaylist: true) == .switchEngine)
+    assert(TransportAction.loop.moving(1, hasPlaylist: false) == .speed)
+    assert(TransportAction.speed.moving(1, hasPlaylist: false) == .switchEngine)
+    assert(TransportAction.audio.moving(1, hasPlaylist: false) == .audio)
+    assert(TransportAction.audio.moving(1, hasPlaylist: true) == .playlist)
+    assert(TransportAction.playlist.moving(-1, hasPlaylist: true) == .audio)
     assert(TransportAction.playlist.moving(1, hasPlaylist: true) == .playlist)
+    assert(TransportAction.speed.menu == .speed && TransportAction.audio.menu == .audio
+        && TransportAction.switchEngine.menu == .engine)
+    assert(TransportAction.loop.menu == nil && TransportAction.playlist.menu == nil)
+    let speedRows = TransportMenuModel.speedRows(current: 1.25)
+    assert(speedRows.count == PlayerSettingsItem.speeds.count)
+    assert(TransportMenuModel.initialHighlight(rows: speedRows) == PlayerSettingsItem.speeds.firstIndex(of: 1.25))
+    assert(TransportMenuModel.speed(forRow: speedRows[0].id) == PlayerSettingsItem.speeds[0])
+    assert(TransportMenuModel.speed(forRow: -1) == nil && TransportMenuModel.speed(forRow: 99) == nil)
+    let audioRows = TransportMenuModel.audioRows(tracks: [(id: 1, name: "English"), (id: 2, name: "Hindi")], current: 2)
+    assert(audioRows.map(\.id) == [1, 2] && TransportMenuModel.initialHighlight(rows: audioRows) == 1)
+    assert(TransportMenuModel.initialHighlight(rows: TransportMenuModel.audioRows(tracks: [], current: -1)) == 0)
+    let engineRows = TransportMenuModel.engineRows(current: .mpv)
+    assert(engineRows.filter(\.selected).map(\.id) == [PlaybackEngine.mpv.menuID])
     assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,
         selectActivatesFocusedControl: true) == .ignored, "Action Select never toggles playback")
     print("PASS: playing/paused transport action focus, Down to scrubber, Back hides, optional Playlist and clamped Left/Right")

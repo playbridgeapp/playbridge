@@ -248,6 +248,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
     /// Chapter markers of the open file (mpv `chapter-list`). Main-thread only.
+    private var chapterThumbnailer: ChapterThumbnailer?
     private var chapters: [TimelineChapter] = [] {
         didSet { playbackState.chapters = ChapterNavigation.sorted(chapters) }
     }
@@ -710,6 +711,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         self.mediaTitle = title
 
         chapters = []
+        stopChapterThumbnails()
         playbackState.showInfoPanel = false
         playbackState.panelTab = .info
         playbackState.metadata = transportMetadata
@@ -1219,10 +1221,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 guard let self, !self.consumedPlaybackSelect else { return }
                 _ = self.handlePlaybackPress(.select)
             },
-            onSwitchEngine: { [weak self] target in
-                guard let self else { return }
-                self.onSwitch?(target, self.playbackState.currentTime)
+            onOpenMenu: { [weak self] menu in
+                guard let self, !self.consumedPlaybackSelect else { return }
+                self.openTransportMenu(menu)
             },
+            onMenuSelect: { [weak self] menu, id in self?.applyTransportMenu(menu, rowID: id) },
             onTogglePlaylist: { [weak self] in
                 guard let self, !self.consumedPlaybackSelect else { return }
                 self.closeInfoPanel()
@@ -1234,7 +1237,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             },
             onSkipSegment: { [weak self] in self?.skipActiveSegment() },
             onFailureAction: { [weak self] in self?.handleFailureAction($0) },
-            onPanelActivate: { [weak self] in _ = self?.activatePanelRow() },
+            onPanelActivate: { [weak self] in
+                guard let self else { return }
+                // Select on the tab bar enters that tab's rows, like Down.
+                if self.playbackState.panelTabBarFocused { self.movePanelRow(1, physical: true) }
+                else { _ = self.activatePanelRow() }
+            },
             onChromeActivity: { [weak self] in self?.showUI() },
             onPanelDirection: { [weak self] in self?.panelDirection($0) },
             onSubtitleClearanceChange: { [weak self] height in
@@ -1360,14 +1368,38 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         openInfoPanel()
     }
 
-    private func openInfoPanel() {
+    private func openInfoPanel(tab: InfoPanelTab? = nil) {
         cancelTouchScrub()
         holdTimer?.invalidate()
-        if !playbackState.panelTabs.contains(playbackState.panelTab) { playbackState.panelTab = .info }
+        playbackState.transportActionFocused = false
+        if let tab, playbackState.panelTabs.contains(tab) { playbackState.panelTab = tab }
+        playbackState.panelTab = InfoPanelModel.validTab(playbackState.panelTab, tabs: playbackState.panelTabs)
         playbackState.showInfoPanel = true
         playbackState.focusPanelSelection()
         mpvQueue.async { [weak self] in self?.updateTracks() }
+        startChapterThumbnails()
         showUI(autoHide: false)
+    }
+
+    /// Fetches the chapter card frames once per item, the first time the panel opens.
+    private func startChapterThumbnails() {
+        guard chapterThumbnailer == nil, let url, playbackState.duration > 0 else { return }
+        let times = ChapterNavigation.thumbnailTimes(chapters: chapters,
+            durationMs: PlaybackTime.milliseconds(playbackState.duration))
+        guard !times.isEmpty else { return }
+        let thumbnailer = ChapterThumbnailer()
+        chapterThumbnailer = thumbnailer
+        let generation = mediaIdentity
+        thumbnailer.start(url: url, headers: headers, times: times) { [weak self] startMs, image in
+            guard let self, self.mediaIdentity == generation, self.chapterThumbnailer === thumbnailer else { return }
+            self.playbackState.chapterThumbnails[startMs] = image
+        }
+    }
+
+    private func stopChapterThumbnails() {
+        chapterThumbnailer?.cancel()
+        chapterThumbnailer = nil
+        playbackState.chapterThumbnails = [:]
     }
 
     private func closeInfoPanel() {
@@ -1380,21 +1412,37 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func changePanelTab(_ delta: Int) {
         playbackState.panelTab = InfoPanelModel.movingTab(playbackState.panelTab, delta: delta,
             tabs: playbackState.panelTabs)
-        playbackState.focusPanelSelection()
+        // Moving along the tab bar keeps the highlight there (AVPlayer); Down enters the rows.
+        playbackState.focusPanelSelection(keepTabBar: true)
     }
 
     private func movePanelRow(_ delta: Int, physical: Bool) {
         let focus = InfoPanelFocus(row: playbackState.panelHighlight, tabBar: playbackState.panelTabBarFocused)
-            .moving(delta, rowCount: playbackState.panelRows.count, physical: physical)
+            .moving(delta, rowCount: playbackState.panelRows.count, physical: physical,
+                    horizontalRows: playbackState.panelTab == .chapters)
         playbackState.panelHighlight = focus.row
         playbackState.panelTabBarFocused = focus.tabBar
         playbackState.panelFocusRevision += 1
     }
 
+    /// Physical Left/Right inside the panel: tabs, or cards on the chapter strip.
+    private func panelHorizontal(_ delta: Int) {
+        if InfoPanelModel.horizontalMovesRows(tab: playbackState.panelTab,
+                                              tabBarFocused: playbackState.panelTabBarFocused) {
+            movePanelRow(delta, physical: false)
+        } else {
+            changePanelTab(delta)
+        }
+    }
+
     private func panelDirection(_ direction: MoveCommandDirection) {
+        // The panel's only direction input: clicks and swipes both arrive here.
+        let now = Date()
+        guard !InfoPanelModel.isMoveEcho(focusMovedAt: playbackState.panelMovedAt, now: now) else { return }
+        playbackState.panelMovedAt = now
         switch direction {
-        case .left: changePanelTab(-1)
-        case .right: changePanelTab(1)
+        case .left: panelHorizontal(-1)
+        case .right: panelHorizontal(1)
         case .up:
             var chrome = TransportChrome()
             chrome.navigation.infoPanel = true
@@ -1647,12 +1695,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func activateTransportAction() {
-        switch playbackState.transportActionHighlight {
+        let action = playbackState.transportActionHighlight
+        if let menu = action.menu {
+            openTransportMenu(menu)
+            return
+        }
+        switch action {
+        case .speed, .switchEngine, .audio: break
         case .loop: setLooping(!playbackState.isLooping)
-        case .switchEngine:
-            playbackState.showInfoPanel = false
-            playbackState.engineHighlight = PlaybackEngine.menuOrder(current: .mpv).firstIndex(of: .mpv) ?? 0
-            playbackState.showEngineMenu = true
         case .playlist:
             guard hasPlaylist else { return }
             NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
@@ -1685,6 +1735,13 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             return
         }
 
+        // The panel surface receives every arrow as onMoveCommand (panelDirection).
+        if playbackState.showInfoPanel,
+           [.upArrow, .downArrow, .leftArrow, .rightArrow].contains(type) {
+            super.pressesBegan(presses, with: event)
+            return
+        }
+
         if type == .upArrow || type == .downArrow {
             var chrome = TransportChrome()
             chrome.navigation = engineChrome?.snapshot().chrome(sessionMatches: true,
@@ -1713,11 +1770,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             return
         }
         if playbackState.showInfoPanel {
-            switch type {
-            case .leftArrow: changePanelTab(-1)
-            case .rightArrow: changePanelTab(1)
-            default: super.pressesBegan(presses, with: event)
-            }
+            super.pressesBegan(presses, with: event)
             return
         }
         if playbackState.showEngineMenu || playlistVisible {
@@ -2142,10 +2195,31 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func engineRowIDs() -> [Int] {
-        PlayerRemoteNavigation.menuRowIDs(
-            trackIDs: PlaybackEngine.menuOrder(current: .mpv).map(\.menuID),
-            includeOff: false
-        )
+        playbackState.transportMenuRows(engine: .mpv).map(\.id)
+    }
+
+    /// Switch, Speed and Audio pop-ups above the action row.
+    private func openTransportMenu(_ menu: TransportMenu) {
+        playbackState.showInfoPanel = false
+        playbackState.transportMenu = menu
+        playbackState.engineHighlight = TransportMenuModel.initialHighlight(
+            rows: playbackState.transportMenuRows(engine: .mpv))
+        playbackState.showEngineMenu = true
+        if menu == .audio { mpvQueue.async { [weak self] in self?.updateTracks() } }
+        showUI()
+    }
+
+    private func applyTransportMenu(_ menu: TransportMenu, rowID id: Int) {
+        switch menu {
+        case .engine:
+            if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != .mpv {
+                onSwitch?(target, playbackState.currentTime)
+            }
+        case .speed:
+            if let speed = TransportMenuModel.speed(forRow: id) { onLocalTuning?(.speed(speed)) }
+        case .audio:
+            selectAudioTrack(id)
+        }
     }
 
     private func moveOpenMenu(_ delta: Int) -> Bool {
@@ -2175,9 +2249,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             playbackState.showEngineMenu = false
             playbackState.transportFocusRevision += 1
             showUI()
-            if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != .mpv {
-                onSwitch?(target, playbackState.currentTime)
-            }
+            applyTransportMenu(playbackState.transportMenu, rowID: id)
             return true
         }
         return false
@@ -2296,6 +2368,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         isMpvStopped = true
         invalidateFailure()
         skipLoader.cancel()
+        chapterThumbnailer?.cancel()
+        chapterThumbnailer = nil
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
