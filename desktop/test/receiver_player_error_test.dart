@@ -457,4 +457,25 @@ void main() {
       );
     });
   });
+  testWidgets(
+      'frozen buffering reports a terminal stall without more engine events',
+      (tester) async {
+    final engine = _FakeEngine();
+    var now = 0;
+    final controller = PlayerController(
+        engineForTest: engine, monotonicMilliseconds: () => now);
+    PlaybackFailure? failure;
+    controller.onTerminalError = (value) => failure = value;
+    await controller.playItem(
+        QueueItem(url: 'https://example.test/video.mp4', title: 'Video'));
+    engine.setStateForTest('buffering');
+    await tester.pump(const Duration(seconds: 1));
+    now = 29999;
+    await tester.pump(const Duration(seconds: 1));
+    expect(failure, isNull);
+    now = 30000;
+    await tester.pump(const Duration(seconds: 1));
+    expect(failure?.error, 'The video stopped loading');
+    await controller.dispose();
+  });
 }

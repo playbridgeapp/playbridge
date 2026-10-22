@@ -283,6 +283,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private var timeObserver: Any?
+        private var stallTimer: Timer?
+        private var stallDetector = PlaybackStallDetector()
+        private var stallHasFirstFrame = false
         private var subtitleTimeObserver: Any?
         private var timeControlObservation: NSKeyValueObservation?
         /// AVPlayer cannot open some containers (MKV, WebM, AVI). If the item fails
@@ -364,9 +367,16 @@ struct NativePlayerView: UIViewControllerRepresentable {
         /// Called once the player exists: drive periodic now-playing status to the phone.
         func attach(player: AVPlayer) {
             self.player = player
+            stallDetector.reset()
+            stallHasFirstFrame = false
+            // AVPlayer's periodic time observer stops while waiting, so use a wall timer.
+            stallTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                self?.checkForStall()
+            }
             timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) {
                 [weak self] _, _ in
                 DispatchQueue.main.async {
+                    if self?.player?.timeControlStatus == .playing { self?.stallHasFirstFrame = true }
                     self?.broadcastStatus()
                     self?.refreshExternalSubtitle()
                 }
@@ -378,6 +388,25 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 [weak self] item, _ in
                 let status = item.status
                 DispatchQueue.main.async { self?.itemStatusChanged(status) }
+            }
+        }
+
+        private func checkForStall() {
+            guard let player, !didFallBack else { return }
+            if player.timeControlStatus == .playing { stallHasFirstFrame = true }
+            let position = player.currentTime().seconds
+            let end = player.currentItem?.loadedTimeRanges.compactMap { value -> Double? in
+                let range = value.timeRangeValue
+                let start = range.start.seconds
+                let end = CMTimeRangeGetEnd(range).seconds
+                return start <= position && end >= position ? end : nil
+            }.max() ?? position
+            if stallDetector.sample(now: ProcessInfo.processInfo.systemUptime,
+                buffering: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                playbackRequested: player.timeControlStatus != .paused && !controlsSuppressedByPreplay && !StillWatchingGate.isPrompting,
+                hasFirstFrame: stallHasFirstFrame, position: position,
+                bufferedAhead: max(0, end - position)) {
+                fallBackToMpv(reason: nil)
             }
         }
 
@@ -421,6 +450,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            stallTimer?.invalidate()
+            stallTimer = nil
+            stallDetector.reset()
             skipLoader.cancel()
             playerController?.contextualActions = []
             lateSubtitleDownload?.cancel()
@@ -1029,6 +1061,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func seek(to seconds: Double) {
+            stallDetector.reset()
             guard seconds.isFinite, seconds >= 0 else { return }
             player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
         }

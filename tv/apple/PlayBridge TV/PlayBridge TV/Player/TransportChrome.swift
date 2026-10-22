@@ -318,6 +318,7 @@ enum PlaybackFailureModel {
     enum Event {
         case presented(mpvCode: Int32)
         case tryAgain, next, close, phoneStop, autoClose
+        case stalled
     }
 
     enum PhoneReport: Equatable {
@@ -333,6 +334,7 @@ enum PlaybackFailureModel {
         case .presented(let code): return .errorStatus(reason: PlaybackFailureMessage.sentence(forMpvCode: code))
         case .close, .phoneStop, .autoClose: return .idleContext
         case .tryAgain, .next: return nil
+        case .stalled: return .errorStatus(reason: PlaybackStallDetector.sentence)
         }
     }
 }
@@ -364,6 +366,13 @@ struct PlaybackFailureSession {
     mutating func close(attempt token: UUID) -> Bool {
         guard matches(token), sentence != nil else { return false }
         closed = true
+        return true
+    }
+
+    mutating func presentStall(attempt token: UUID) -> Bool {
+        guard matches(token), sentence == nil,
+              case .errorStatus(let reason) = PlaybackFailureModel.phoneReport(for: .stalled) else { return false }
+        sentence = reason
         return true
     }
 }

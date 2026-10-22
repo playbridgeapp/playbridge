@@ -10,6 +10,7 @@ import 'skip_segment.dart';
 import 'subtitle_delay.dart';
 import 'subtitle_delay.dart' as subtitle_delay;
 import 'video_scaling.dart';
+import 'playback_stall_detector.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
 import 'engines/playback_request_preparer.dart';
@@ -117,7 +118,11 @@ class PlayerController extends ChangeNotifier {
     PlayerEngine? engineForTest,
     bool preselectHlsQuality = false,
     this.store,
+    int Function()? monotonicMilliseconds,
   }) : _preselectHlsQuality = preselectHlsQuality {
+    _stallClock.start();
+    _monotonicMilliseconds =
+        monotonicMilliseconds ?? (() => _stallClock.elapsedMilliseconds);
     if (engineForTest != null) {
       _currentType = initialEngine;
       _engine = engineForTest;
@@ -131,6 +136,41 @@ class PlayerController extends ChangeNotifier {
   }
 
   final PairingStore? store;
+  final _stallDetector = PlaybackStallDetector();
+  final _stallClock = Stopwatch();
+  late final int Function() _monotonicMilliseconds;
+  Timer? _stallTimer;
+  bool _stallPlaybackRequested = false;
+  bool _stallHasFirstFrame = false;
+
+  void _startStallMonitor() {
+    _stallTimer?.cancel();
+    _stallDetector.reset();
+    _stallHasFirstFrame = false;
+    _stallPlaybackRequested = true;
+    _stallTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_currentIndex < 0 ||
+          currentMediaKind == MediaKind.image ||
+          _hasTerminalError) {
+        return;
+      }
+      if (_engine.state == 'playing') _stallHasFirstFrame = true;
+      if (_stallDetector.sample(
+        nowMs: _monotonicMilliseconds(),
+        buffering: _engine.state == 'buffering',
+        playbackRequested:
+            _stallPlaybackRequested && _engine.playbackRequested != false,
+        hasFirstFrame: _stallHasFirstFrame,
+        positionMs: _engine.positionMs,
+        bufferedAheadMs:
+            math.max(0, (_engine.bufferedMs ?? 0) - _engine.positionMs),
+      )) {
+        _stallTimer?.cancel();
+        unawaited(_handleTerminalError(PlaybackStallDetector.message));
+      }
+    });
+  }
+
   late PlayerEngine _engine;
   EngineType _currentType = EngineType.mpvInternal;
 
@@ -759,6 +799,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> _openCurrentItem() async {
     _hasTerminalError = false;
     _terminalError = null;
+    _stallTimer?.cancel();
     _imageTimer?.cancel();
     _imageTimer = null;
     final item = _queue[_currentIndex];
@@ -779,6 +820,7 @@ class PlayerController extends ChangeNotifier {
     _imagePositionMs = 0;
     _imageDurationMs = 0;
     _imagePlaying = false;
+    _startStallMonitor();
     try {
       await _engine.open(item);
     } catch (e) {
@@ -984,6 +1026,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> resume() async {
+    _stallPlaybackRequested = true;
+    _stallDetector.reset();
     if (_waitingForLinkedItems) {
       _waitingForLinkedItems = false;
       await _openCurrentItem();
@@ -1001,6 +1045,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> pause() async {
+    _stallPlaybackRequested = false;
+    _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) {
       _imagePlaying = false;
       _imageTimer?.cancel();
@@ -1011,6 +1057,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> seek(Duration position) async {
+    _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) return;
     await _engine.seek(position);
   }
@@ -1078,6 +1125,9 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _stallPlaybackRequested = false;
+    _stallTimer?.cancel();
+    _stallDetector.reset();
     await _waitForProxyToggle();
     _playbackBoundary('stopped', sessionEnded: true);
     _waitingForLinkedItems = false;
@@ -1115,8 +1165,9 @@ class PlayerController extends ChangeNotifier {
       {int? httpStatus}) async {
     if (_hasTerminalError) return;
     _hasTerminalError = true;
-    final safeMsg =
-        formatPlaybackErrorMessage(rawError, httpStatus: httpStatus);
+    final safeMsg = rawError == PlaybackStallDetector.message
+        ? PlaybackStallDetector.message
+        : formatPlaybackErrorMessage(rawError, httpStatus: httpStatus);
     _terminalError = safeMsg;
     debugPrint('[player] error: $safeMsg');
 
@@ -1416,6 +1467,8 @@ class PlayerController extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _stallTimer?.cancel();
+    _stallClock.stop();
     _playbackBoundary('stopped', sessionEnded: true);
     await playbackBoundaries.close();
     indexChanges.dispose();
