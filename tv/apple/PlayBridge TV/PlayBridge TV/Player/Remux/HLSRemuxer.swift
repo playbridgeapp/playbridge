@@ -130,7 +130,10 @@ final class HLSRemuxer {
             + " segments=\(segments.count) duration=\(String(format: "%.1f", totalSeconds))"
     }
 
-    deinit { avformat_close_input(&input) }
+    deinit {
+        Self.release(carry)
+        avformat_close_input(&input)
+    }
 
     // MARK: Planning
 
@@ -330,17 +333,27 @@ final class HLSRemuxer {
 
     /// ftyp + moov, taken from segment 0's muxer (delay_moov writes it with the
     /// first fragment, once audio parameters are parsed).
+    /// Segment 0 muxed while building the init segment, served once.
+    private var firstSegment: Data?
+    private static let mediaBoxes: Set<String> = ["styp", "sidx", "moof", "mdat"]
+
     func initSegment() throws -> Data {
         if let cachedInit = lock.withLock({ cachedInit }) { return cachedInit }
         let output = try mux(0)
         let header = Self.boxes(output, keep: ["ftyp", "moov"])
-        lock.withLock { cachedInit = header }
+        lock.withLock {
+            cachedInit = header
+            firstSegment = Self.boxes(output, keep: Self.mediaBoxes)
+        }
         return header
     }
 
     /// moof + mdat for one segment.
     func segment(_ index: Int) throws -> Data {
-        Self.boxes(try mux(index), keep: ["styp", "sidx", "moof", "mdat"])
+        if index == 0, let first = lock.withLock({ () -> Data? in defer { firstSegment = nil }; return firstSegment }) {
+            return first
+        }
+        return Self.boxes(try mux(index), keep: Self.mediaBoxes)
     }
 
     /// Top-level ISO BMFF boxes of the given types, in order.
@@ -377,54 +390,90 @@ final class HLSRemuxer {
         return frame * frames
     }
 
+    /// Packets read past the previous segment's end (its boundary keyframe and
+    /// later audio). The next segment continues from them without a seek, so a
+    /// remote source keeps one connection while AVPlayer plays forward.
+    private var carry: [UnsafeMutablePointer<AVPacket>] = []
+    private var nextSequential: Int?
+
+    private static func release(_ packets: [UnsafeMutablePointer<AVPacket>]) {
+        for packet in packets {
+            var ref: UnsafeMutablePointer<AVPacket>? = packet
+            av_packet_free(&ref)
+        }
+    }
+
     private func mux(_ index: Int) throws -> Data {
         lock.lock(); defer { lock.unlock() }
         guard segments.indices.contains(index), let input else { throw Failure.segment(index) }
         let segment = segments[index]
         let videoStream = input.pointee.streams[Int(videoIndex)]!
-        var status = av_seek_frame(input, videoIndex, segment.start, AVSEEK_FLAG_BACKWARD)
-        guard status >= 0 else { throw Failure.mux("seek", status) }
+        let started = Date()
+
+        var carried: [UnsafeMutablePointer<AVPacket>] = []
+        let sequential = index == nextSequential
+        if sequential {
+            carried = carry
+        } else {
+            Self.release(carry)
+            let status = av_seek_frame(input, videoIndex, segment.start, AVSEEK_FLAG_BACKWARD)
+            guard status >= 0 else { carry = []; nextSequential = nil; throw Failure.mux("seek", status) }
+        }
+        carry = []
+        nextSequential = nil
 
         let startSeconds = Self.seconds(segment.start, videoTimeBase)
         let endSeconds = segment.end.map { Self.seconds($0, videoTimeBase) } ?? .infinity
         var video: [UnsafeMutablePointer<AVPacket>] = []
         var audio: [UnsafeMutablePointer<AVPacket>] = []
-        defer {
-            for packet in video + audio {
-                var ref: UnsafeMutablePointer<AVPacket>? = packet
-                av_packet_free(&ref)
+        var spill: [UnsafeMutablePointer<AVPacket>] = []
+        defer { Self.release(video + audio) }
+        var videoStarted = false, videoDone = false, audioDone = audioIndex == nil
+
+        /// Files one packet (taking ownership of `owned`) into this segment, the
+        /// next segment's carry, or drops it.
+        func take(_ owned: UnsafeMutablePointer<AVPacket>) {
+            let streamIndex = owned.pointee.stream_index
+            if streamIndex == videoIndex, owned.pointee.pts != Int64.min {
+                if videoDone { spill.append(owned); return }
+                let isKey = owned.pointee.flags & AV_PKT_FLAG_KEY != 0
+                if !videoStarted {
+                    // Decode order starts at this segment's keyframe.
+                    guard isKey, owned.pointee.pts >= segment.start else { Self.release([owned]); return }
+                    videoStarted = true
+                } else if isKey, let end = segment.end, owned.pointee.pts >= end {
+                    videoDone = true
+                    spill.append(owned)
+                    return
+                }
+                video.append(owned)
+            } else if let audioIndex, streamIndex == audioIndex, owned.pointee.pts != Int64.min {
+                if audioDone { spill.append(owned); return }
+                let audioStream = input.pointee.streams[Int(audioIndex)]!
+                let time = Self.seconds(owned.pointee.pts, audioStream.pointee.time_base)
+                if time >= endSeconds { audioDone = true; spill.append(owned); return }
+                guard time >= startSeconds else { Self.release([owned]); return }
+                audio.append(owned)
+            } else {
+                Self.release([owned])
             }
         }
-        var videoStarted = false, videoDone = false, audioDone = audioIndex == nil
+
+        for packet in carried { take(packet) }
         guard let packet = av_packet_alloc() else { throw Failure.mux("packet", -1) }
         var packetRef: UnsafeMutablePointer<AVPacket>? = packet
         defer { av_packet_free(&packetRef) }
-
+        var reachedEnd = false
         while !(videoDone && audioDone) {
-            status = av_read_frame(input, packet)
-            if status < 0 { break }  // end of file or read error: close the segment
-            defer { av_packet_unref(packet) }
-            let streamIndex = packet.pointee.stream_index
-            if streamIndex == videoIndex {
-                guard !videoDone, packet.pointee.pts != Int64.min else { continue }
-                let isKey = packet.pointee.flags & AV_PKT_FLAG_KEY != 0
-                if !videoStarted {
-                    // Decode order starts at this segment's keyframe.
-                    guard isKey, packet.pointee.pts >= segment.start else { continue }
-                    videoStarted = true
-                } else if isKey, let end = segment.end, packet.pointee.pts >= end {
-                    videoDone = true
-                    continue
-                }
-                if let copy = av_packet_clone(packet) { video.append(copy) }
-            } else if let audioIndex, streamIndex == audioIndex {
-                guard !audioDone, packet.pointee.pts != Int64.min else { continue }
-                let audioStream = input.pointee.streams[Int(audioIndex)]!
-                let time = Self.seconds(packet.pointee.pts, audioStream.pointee.time_base)
-                if time >= endSeconds { audioDone = true; continue }
-                guard time >= startSeconds else { continue }
-                if let copy = av_packet_clone(packet) { audio.append(copy) }
-            }
+            if av_read_frame(input, packet) < 0 { reachedEnd = true; break }  // EOF or read error
+            if let copy = av_packet_clone(packet) { take(copy) }
+            av_packet_unref(packet)
+        }
+        if reachedEnd || segment.end == nil {
+            Self.release(spill)
+        } else {
+            carry = spill
+            nextSequential = index + 1
         }
 
         let delay = reorderDelay
@@ -443,6 +492,10 @@ final class HLSRemuxer {
         av_write_frame(muxer.context, nil)
         let output = Self.drain(muxer.context.pointee.pb)
         muxer.context.pointee.pb = nil
+        #if DEBUG
+        print(String(format: "[Remux] seg%d %.1f MB in %.0f ms (%@)", index, Double(output.count) / 1_048_576,
+                     Date().timeIntervalSince(started) * 1000, sequential ? "sequential" : "seek"))
+        #endif
         return output
     }
 

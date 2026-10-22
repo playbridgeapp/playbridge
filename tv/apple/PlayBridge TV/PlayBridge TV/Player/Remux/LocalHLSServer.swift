@@ -14,6 +14,8 @@ final class LocalHLSServer {
         let work: DispatchQueue
         var remuxer: HLSRemuxer?
         var failure: Error?
+        /// Segments produced ahead of AVPlayer's requests (on `work` only).
+        var ready: [Int: Data] = [:]
 
         init(source: URL, headers: [String: String], token: String) {
             self.source = source
@@ -128,13 +130,26 @@ final class LocalHLSServer {
                 case .master: body = Data(remuxer.masterPlaylist.utf8)
                 case .media: body = Data(remuxer.mediaPlaylist.utf8)
                 case .initSegment: body = try remuxer.initSegment()
-                case .segment(let index): body = try remuxer.segment(index)
+                case .segment(let index):
+                    body = try session.ready.removeValue(forKey: index) ?? remuxer.segment(index)
+                    session.ready = session.ready.filter { $0.key > index && $0.key <= index + 2 }
+                    // Produce the next segment now, while AVPlayer plays this one.
+                    let next = index + 1
+                    if next < remuxer.segments.count, session.ready[next] == nil {
+                        session.work.async {
+                            guard session.ready[next] == nil, let data = try? remuxer.segment(next) else { return }
+                            session.ready[next] = data
+                        }
+                    }
                 }
                 self.queue.async {
                     self.respond(connection, status: "200 OK", type: route.resource.contentType,
                                  body: body, headOnly: headOnly)
                 }
             } catch {
+                #if DEBUG
+                print("[Remux] \(route.resource) failed: \(error)")
+                #endif
                 self.queue.async {
                     self.respond(connection, status: "500 Internal Server Error", type: "text/plain", body: Data())
                 }
