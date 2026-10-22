@@ -16,6 +16,34 @@ final class LocalHLSServer {
         var failure: Error?
         /// Segments produced ahead of AVPlayer's requests (on `work` only).
         var ready: [Int: Data] = [:]
+        var latestRequested = -1
+        var prefetching = false
+
+        /// Read-ahead like mpv's cache: up to `aheadSegments` / `aheadBytes` past the
+        /// last request, one segment per job so a new request waits for at most one.
+        static let aheadSegments = 8
+        static let aheadBytes = 256 * 1_048_576
+
+        func requested(_ index: Int) {
+            latestRequested = index
+            ready = ready.filter { $0.key > index && $0.key <= index + Self.aheadSegments }
+        }
+
+        func schedulePrefetch(_ remuxer: HLSRemuxer) {
+            guard !prefetching else { return }
+            prefetching = true
+            work.async { [weak self] in self?.prefetchNext(remuxer) }
+        }
+
+        private func prefetchNext(_ remuxer: HLSRemuxer) {
+            prefetching = false
+            guard latestRequested >= 0, ready.values.reduce(0, { $0 + $1.count }) < Self.aheadBytes else { return }
+            let window = (latestRequested + 1)...min(latestRequested + Self.aheadSegments, remuxer.segments.count - 1)
+            guard !window.isEmpty, let next = window.first(where: { ready[$0] == nil }),
+                  let data = try? remuxer.segment(next) else { return }
+            ready[next] = data
+            schedulePrefetch(remuxer)
+        }
 
         init(source: URL, headers: [String: String], token: String) {
             self.source = source
@@ -140,16 +168,10 @@ final class LocalHLSServer {
                 case .media: body = Data(remuxer.mediaPlaylist.utf8)
                 case .initSegment: body = try remuxer.initSegment()
                 case .segment(let index):
-                    body = try session.ready.removeValue(forKey: index) ?? remuxer.segment(index)
-                    session.ready = session.ready.filter { $0.key > index && $0.key <= index + 2 }
-                    // Produce the next segment now, while AVPlayer plays this one.
-                    let next = index + 1
-                    if next < remuxer.segments.count, session.ready[next] == nil {
-                        session.work.async {
-                            guard session.ready[next] == nil, let data = try? remuxer.segment(next) else { return }
-                            session.ready[next] = data
-                        }
-                    }
+                    let cached = session.ready.removeValue(forKey: index)
+                    session.requested(index)
+                    body = try cached ?? remuxer.segment(index)
+                    session.schedulePrefetch(remuxer)
                 }
                 self.queue.async {
                     self.respond(connection, status: "200 OK", type: route.resource.contentType,
