@@ -108,6 +108,9 @@ struct PlayerEngineChromeSnapshot: Equatable {
 final class PlayerEngineChrome {
     var snapshot: () -> PlayerEngineChromeSnapshot = { PlayerEngineChromeSnapshot() }
     var apply: (PlayerRemoteEffect) -> Bool = { _ in false }
+    /// An error screen owns Back and its action buttons before ordinary chrome.
+    /// The player owner still gives pre-play/still-watching their existing priority.
+    var handleFailureKey: (String) -> Bool = { _ in false }
 }
 
 enum PlayerPlaybackPress {

@@ -291,6 +291,7 @@ struct ReceiverReviewTests {
 
         runRemoteNavigationTests()
         runTransportChromeTests()
+        runPlaybackFailureSessionTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runPlayerTuningTests()
@@ -1655,4 +1656,30 @@ private func runTransportChromeTests() {
     assert(retryAndNext.compactMap { PlaybackFailureModel.phoneReport(for: $0) }
            == [.errorStatus(reason: open), .errorStatus(reason: generic)])
     print("PASS: error actions/default focus, optional Next, 60-second auto-close and error-now/idle-on-close reporting")
+}
+
+private func runPlaybackFailureSessionTests() {
+    var session = PlaybackFailureSession()
+    let first = session.beginAttempt()
+    assert(session.matches(first) && session.sentence == nil)
+    assert(!session.close(attempt: first), "Normal playback is not an error-screen close")
+    assert(session.present(code: -13, attempt: first))
+    assert(session.sentence == PlaybackFailureMessage.sentence(forMpvCode: -13))
+    assert(!session.present(code: -999, attempt: first), "Duplicate end/init errors cannot restart the 60-second timer")
+    let retry = session.beginAttempt()
+    assert(session.sentence == nil && !session.matches(first))
+    assert(!session.present(code: -13, attempt: first), "A late result from the failed attempt must not replace its retry")
+    assert(!session.close(attempt: first), "An old timeout cannot close the retry")
+    assert(session.present(code: -999, attempt: retry))
+    assert(session.sentence == PlaybackFailureMessage.sentence(forMpvCode: -999))
+    assert(session.close(attempt: retry))
+    assert(!session.matches(retry) && !session.close(attempt: retry))
+    assert(!session.present(code: -13, attempt: retry), "Close is terminal for that attempt")
+    let nextItem = session.beginAttempt()
+    assert(session.sentence == nil && session.matches(nextItem))
+    assert(!session.close(attempt: retry))
+    assert(session.present(code: -13, attempt: nextItem))
+    _ = session.beginAttempt() // item replacement or teardown
+    assert(!session.matches(nextItem) && !session.present(code: -13, attempt: nextItem))
+    print("PASS: error attempt fencing, duplicate failures, retry/item replacement, close and stale timeouts")
 }
