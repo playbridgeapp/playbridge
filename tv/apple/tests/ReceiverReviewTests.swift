@@ -291,6 +291,7 @@ struct ReceiverReviewTests {
 
         runRemoteNavigationTests()
         runTransportChromeTests()
+        runTouchScrubTests()
         runPlaybackFailureSessionTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
@@ -1563,7 +1564,7 @@ private func runTransportChromeTests() {
                     chrome.userPaused = paused
                     chrome.skipPillFocused = skipFocused
                     assert(route(false, chrome) == .openPanel)
-                    assert(route(true, chrome) == (visible ? .moveFocus : .showTransport))
+                    assert(route(true, chrome) == (visible ? (skipFocused ? .moveFocus : .focusActions) : .showTransport))
                 }
             }
         }
@@ -1580,6 +1581,33 @@ private func runTransportChromeTests() {
         assert(route(false, menu) == .moveFocus)
         assert(route(true, menu) == .moveFocus)
     }
+
+    for paused in [false, true] {
+        var actions = TransportChrome(userPaused: paused)
+        actions.navigation.sessionMatches = true
+        actions.navigation.controlsVisible = true
+        assert(route(true, actions) == .focusActions)
+        actions.transportActionFocused = true
+        assert(route(true, actions) == .focusActions, "Up stays in the action row")
+        assert(route(false, actions) == .focusScrubber)
+        assert(PlayerRemoteNavigation.effect(for: "back", chrome: actions.navigation) == .dismissControls)
+        actions.navigation.infoPanel = true
+        assert(route(false, actions) == .moveInPanel, "A panel keeps priority over stale action focus")
+        actions.navigation.infoPanel = false
+        actions.navigation.engineMenu = true
+        assert(route(true, actions) == .moveFocus, "An engine menu owns its directions")
+    }
+    assert(TransportAction.available(hasPlaylist: false) == [.loop, .switchEngine])
+    assert(TransportAction.available(hasPlaylist: true) == [.loop, .switchEngine, .playlist])
+    assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
+    assert(TransportAction.loop.moving(1, hasPlaylist: false) == .switchEngine)
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: false) == .switchEngine)
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: true) == .playlist)
+    assert(TransportAction.playlist.moving(-1, hasPlaylist: true) == .switchEngine)
+    assert(TransportAction.playlist.moving(1, hasPlaylist: true) == .playlist)
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,
+        selectActivatesFocusedControl: true) == .ignored, "Action Select never toggles playback")
+    print("PASS: playing/paused transport action focus, Down to scrubber, Back hides, optional Playlist and clamped Left/Right")
 
     let ready = TransportChrome(userPaused: true, duration: 100)
     assert(TransportKeyRoute.canTouchScrub(chrome: ready))
@@ -1599,7 +1627,7 @@ private func runTransportChromeTests() {
     var playing = ready
     playing.userPaused = false
     assert(!TransportKeyRoute.canTouchScrub(chrome: playing))
-    print("PASS: Down always opens Info, Up keeps focus/reveal, panel tab movement and touch-scrub gates")
+    print("PASS: Up reaches actions, Down opens Info from the scrubber, panel/list priority and touch-scrub gates")
 
     let placement = TransportSubtitlePlacement.position
     assert(placement(0, 1080) == 100)
@@ -1771,4 +1799,89 @@ private func runPlayerSettingsMenuTests() {
     assert(PlayerSettingsItem.offsetLabel(0) == "0 ms" && PlayerSettingsItem.offsetLabel(-1_500) == "−1500 ms")
     assert(PlayerSettingsItem.speedLabel(1) == "1×" && PlayerSettingsItem.speedLabel(0.3) == "0.3×")
     print("PASS: Settings tab rows and AVPlayer tuning menus map to PlayerTuning commands, including Reset")
+}
+
+private func runTouchScrubTests() {
+    let ready = TransportChrome(userPaused: true, duration: 1000)
+    func accepts(_ x: Double, _ y: Double, _ chrome: TransportChrome = ready, action: Bool = false) -> Bool {
+        TouchScrubSession.canBegin(chrome: chrome, actionFocused: action, translationX: x, translationY: y)
+    }
+    assert(accepts(12, 0) && accepts(-12, 5))
+    assert(!accepts(11, 0) && !accepts(12, 12) && !accepts(12, 30))
+    assert(!accepts(.nan, 0) && !accepts(20, .infinity))
+    assert(!accepts(20, 0, action: true))
+    for path in [\TransportChrome.prebuffering, \.hasFailure, \.skipPillFocused,
+                 \.navigation.stillWatching, \.navigation.infoPanel, \.navigation.engineMenu,
+                 \.navigation.settingsSheet, \.navigation.playlist, \.navigation.scrubbing] {
+        var chrome = ready
+        chrome[keyPath: path] = true
+        assert(!accepts(20, 0, chrome))
+    }
+    var playing = ready
+    playing.userPaused = false
+    assert(!accepts(20, 0, playing))
+    for duration in [0.0, -1, .nan, .infinity] {
+        var invalid = ready
+        invalid.duration = duration
+        assert(!accepts(20, 0, invalid))
+    }
+    print("PASS: paused pan gates, horizontal slop, vertical swipe ownership, button/list/Skip focus and invalid durations")
+
+    var scrub = TouchScrubSession()
+    let token = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.begin(position: 100, duration: 1000) == nil, "Cannot begin another live pan")
+    assert(scrub.update(token: token, translationX: 50, velocityX: 0))
+    assert(scrub.proposal?.position == 200 && scrub.proposal?.origin == 100)
+    scrub.click(by: TransportScrub.clickSkipSeconds)
+    assert(scrub.proposal?.position == 210)
+    assert(scrub.update(token: token, translationX: 75, velocityX: 0))
+    assert(scrub.proposal?.position == 260, "Later pan samples preserve click adjustments")
+    assert(scrub.update(token: token, translationX: 50, velocityX: 2000))
+    assert(scrub.proposal?.position == 510, "Fast drag uses the existing fourfold gain")
+    scrub.click(by: 5000)
+    assert(scrub.proposal?.position == 1000)
+    scrub.click(by: -5000)
+    assert(scrub.proposal?.position == 0)
+    let duringDrag = scrub.commit()!
+    assert(duringDrag == TouchScrubSession.Commit(position: 0, requiresSeek: true))
+    assert(scrub.proposal == nil && scrub.commit() == nil)
+    print("PASS: pan preview, gain, click accumulation, clamps and mid-pan commit without per-sample seeks")
+
+    let releaseToken = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.update(token: releaseToken, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: releaseToken) == 200)
+    assert(scrub.proposal?.isPanning == false)
+    assert(!scrub.update(token: releaseToken, translationX: 100, velocityX: 0), "Released drag ignores late movement")
+    assert(scrub.commit() == TouchScrubSession.Commit(position: 200, requiresSeek: false),
+           "Select/Play after release does not seek twice")
+    let second = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.update(token: second, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: second) == 200)
+    let third = scrub.begin(position: 200, duration: 1000)!
+    assert(scrub.proposal?.origin == 100, "Consecutive drags retain the original pause point")
+    assert(scrub.update(token: third, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: third) == 300)
+    assert(scrub.cancel() == 100 && scrub.proposal == nil)
+    assert(scrub.cancel() == nil)
+    print("PASS: release stays pending for confirmation, seeks once, consecutive drags and Back restore the paused origin")
+
+    for interruption in ["phone relative seek", "phone absolute seek", "new item", "error", "teardown"] {
+        let old = scrub.begin(position: 100, duration: 1000)!
+        assert(scrub.update(token: old, translationX: 50, velocityX: 0))
+        scrub.discard()
+        scrub.click(by: TransportScrub.clickSkipSeconds)
+        assert(scrub.proposal == nil, "A pending click cannot revive a discarded gesture")
+        assert(!scrub.update(token: old, translationX: 200, velocityX: 2000), interruption)
+        assert(scrub.release(token: old) == nil && scrub.cancel() == nil, interruption)
+        let fresh = scrub.begin(position: 115, duration: 1000)!
+        assert(fresh != old)
+        assert(!scrub.update(token: old, translationX: 200, velocityX: 2000))
+        assert(scrub.release(token: old) == nil)
+        assert(scrub.proposal?.position == 115, "A late callback cannot override the phone's winning seek")
+        scrub.discard()
+    }
+    var invalid = TouchScrubSession()
+    assert(invalid.begin(position: .nan, duration: 1000) == nil)
+    assert(invalid.begin(position: 100, duration: 0) == nil)
+    print("PASS: phone seeks, item/error/teardown discard touch transactions and fence old pan callbacks")
 }

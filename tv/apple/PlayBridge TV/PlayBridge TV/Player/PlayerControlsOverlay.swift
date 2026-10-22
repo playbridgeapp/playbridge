@@ -41,6 +41,8 @@ class PlayerControlsData: ObservableObject {
     @Published var transportFocusRevision = 0
     @Published var feedbackSymbol: String?
     @Published var transportActionFocused = false
+    @Published var transportActionHighlight = TransportAction.loop
+    @Published var transportActionFocusRevision = 0
     @Published var skipPillFocused = false
     /// Mirror of `PlayerView`'s session tuning; the Settings tab only reads it.
     @Published var tuning = PlayerTuning()
@@ -74,6 +76,10 @@ class PlayerControlsData: ObservableObject {
         panelTabBarFocused = false
         panelFocusRevision += 1
     }
+
+    /// Paused touch proposal. Actual currentTime remains the reported playhead.
+    @Published var touchScrubTime: Double?
+    var isScrubbing: Bool { isVirtualScrubbing || touchScrubTime != nil }
 
     // Virtual Scrubbing Ghost HUD
     @Published var isVirtualScrubbing: Bool = false
@@ -209,9 +215,11 @@ struct PlayerControlsOverlay: View {
     let engine: PlaybackEngine
     private enum Control: Hashable { case scrubber, loop, engine, playlist }
     @FocusState private var focused: Control?
+    @Namespace private var transportActionsScope
+    @Environment(\.resetFocus) private var resetTransportFocus
     @State private var transportHeight: CGFloat = 0
 
-    private var displayTime: Double { data.isVirtualScrubbing ? data.virtualTime : data.currentTime }
+    private var displayTime: Double { data.touchScrubTime ?? (data.isVirtualScrubbing ? data.virtualTime : data.currentTime) }
     private var durationMs: Int { PlaybackTime.milliseconds(data.duration) }
 
     var body: some View {
@@ -238,7 +246,7 @@ struct PlayerControlsOverlay: View {
             }
 
             if data.skipControlsEnabled, let segment = data.activeSkipSegment,
-               !data.isVirtualScrubbing, !data.menuOpen, !data.playlistVisible {
+               !data.isScrubbing, !data.menuOpen, !data.playlistVisible {
                 HStack {
                     Spacer()
                     SkipSegmentButton(title: segment.buttonTitle,
@@ -297,8 +305,22 @@ struct PlayerControlsOverlay: View {
         .onPreferenceChange(SubtitleClearancePreference.self) { onSubtitleClearanceChange(Double($0)) }
         .onPreferenceChange(TransportHeightPreference.self) { transportHeight = $0 }
         .onChange(of: data.transportFocusRevision) { _, _ in focused = .scrubber }
+        .onChange(of: data.transportActionFocusRevision) { _, _ in
+            switch data.transportActionHighlight {
+            case .loop: focused = .loop
+            case .switchEngine: focused = .engine
+            case .playlist: focused = .playlist
+            }
+            resetTransportFocus(in: transportActionsScope)
+        }
         .onChange(of: focused) { _, value in
             data.transportActionFocused = value != nil && value != .scrubber
+            switch value {
+            case .loop: data.transportActionHighlight = .loop
+            case .engine: data.transportActionHighlight = .switchEngine
+            case .playlist: data.transportActionHighlight = .playlist
+            default: break
+            }
             if value != nil { onChromeActivity() }
         }
         .allowsHitTesting(data.failureSentence != nil || data.showUI || data.menuOpen || data.activeSkipSegment != nil)
@@ -338,7 +360,11 @@ struct PlayerControlsOverlay: View {
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
+                .focusScope(transportActionsScope)
             }
+            // Include the leading Spacer in the focus section so UIKit's Up
+            // search can reach the trailing buttons from the whole seek bar.
+            .focusSection()
             // Reserve space for the complete action labels and focus expansion
             // above the scrubber, independently of the seek button's hit area.
             .fixedSize(horizontal: false, vertical: true)
@@ -368,16 +394,25 @@ struct PlayerControlsOverlay: View {
         .foregroundStyle(.white)
     }
 
+    private func isPreferredAction(_ control: Control) -> Bool {
+        switch data.transportActionHighlight {
+        case .loop: return control == .loop
+        case .switchEngine: return control == .engine
+        case .playlist: return control == .playlist
+        }
+    }
+
     private func action(_ title: String, icon: String, control: Control, tint: Color = .white,
                         perform: @escaping () -> Void) -> some View {
         Button { perform(); onChromeActivity() } label: {
             VStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 26)).frame(width: 66, height: 56)
                 Text(title).font(.system(size: 22))
-            }.foregroundStyle(focused == control ? .black : tint)
+            }.foregroundStyle(control == .loop && data.isLooping ? Theme.accent : (focused == control ? .black : tint))
         }
         .buttonStyle(TransportActionStyle(focused: focused == control))
         .focused($focused, equals: control)
+        .prefersDefaultFocus(data.transportActionFocused && isPreferredAction(control), in: transportActionsScope)
     }
 }
 

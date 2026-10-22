@@ -269,12 +269,28 @@ struct PlaybackFailureSession {
     }
 }
 
+/// Physical transport focus order; Playlist is absent for a one-item queue.
+enum TransportAction: CaseIterable {
+    case loop, switchEngine, playlist
+
+    static func available(hasPlaylist: Bool) -> [Self] {
+        hasPlaylist ? [.loop, .switchEngine, .playlist] : [.loop, .switchEngine]
+    }
+
+    func moving(_ delta: Int, hasPlaylist: Bool) -> Self {
+        let actions = Self.available(hasPlaylist: hasPlaylist)
+        let index = actions.firstIndex(of: self) ?? 0
+        return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
+    }
+}
+
 /// Physical-only context supplements the shared network chrome without adding
 /// pause, gesture or focus state to the wire-key policy.
 struct TransportChrome: Equatable {
     var navigation = PlayerChromeState()
     var userPaused = false
     var panelTabBarFocused = false
+    var transportActionFocused = false
     var skipPillFocused = false
     var duration = 0.0
     var prebuffering = false
@@ -283,13 +299,13 @@ struct TransportChrome: Equatable {
 
 enum TransportKeyRoute: Equatable {
     case showTransport, openPanel, closePanel, moveInPanel
-    /// Existing menus, the playlist and the transport action row keep UIKit
-    /// focus movement on Up. Down opens Info even when the Skip pill is focused.
+    case focusActions, focusScrubber
+    /// Existing menus, the playlist and the Skip pill keep UIKit focus movement.
     case moveFocus
 
     /// Call after the controller's still-watching, pre-play and error guards.
-    /// Down always requests Info when closed. Chapter selection belongs in its
-    /// tab; no seek-strip or hold-scrub chapter shortcut is modeled here.
+    /// Down from the action row returns to the scrubber; elsewhere it opens
+    /// Info. Explicit Up routing avoids relying on the above-right geometry.
     static func physicalVertical(up: Bool, chrome: TransportChrome) -> Self {
         let state = chrome.navigation
         if state.infoPanel {
@@ -299,8 +315,12 @@ enum TransportKeyRoute: Equatable {
         if state.engineMenu || state.settingsSheet || state.playlist {
             return .moveFocus
         }
+        if state.controlsVisible && chrome.transportActionFocused {
+            return up ? .focusActions : .focusScrubber
+        }
         if !up { return .openPanel }
-        return state.controlsVisible ? .moveFocus : .showTransport
+        guard state.controlsVisible else { return .showTransport }
+        return chrome.skipPillFocused ? .moveFocus : .focusActions
     }
 
     /// Gate for the later touch recognizer. The proposal math also handles an

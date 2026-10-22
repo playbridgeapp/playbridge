@@ -240,6 +240,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private var hideControlsTimer: Timer?
     private var holdTimer: Timer?
     private var virtualScrubTickTimer: Timer?
+    private var touchScrub = TouchScrubSession()
+    private var panToken: UUID?
+    private lazy var touchPan = UIPanGestureRecognizer(target: self, action: #selector(onTouchPan(_:)))
     private var ignoreTimeUpdatesUntil: Date = .distantPast
     private var timelineUpdateGate = PlaybackUIUpdateGate()
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
@@ -280,8 +283,13 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private let videoView = FocusableView()
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if !isPreBuffering, !StillWatchingGate.isPrompting,
-           (playbackState.failureSentence != nil || playbackState.menuOpen || playbackState.activeSkipSegment != nil || playbackState.showUI), let hv = hostingController?.view { return [hv] }
+        guard !isPreBuffering, !StillWatchingGate.isPrompting,
+              let controls = hostingController?.view else { return [videoView] }
+        if playbackState.failureSentence != nil || playbackState.menuOpen { return [controls] }
+        // The action focus scope's requested default wins over the renderer or
+        // Skip. focusTransportActions also forces a focus update after layout.
+        if playbackState.showUI && playbackState.transportActionFocused { return [controls] }
+        if playbackState.activeSkipSegment != nil || playbackState.showUI { return [controls] }
         return [videoView]
     }
 
@@ -312,6 +320,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(openInfoPanelFromSwipe))
         swipe.direction = .down
         swipe.delegate = self
+        touchPan.delegate = self
+        touchPan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        touchPan.cancelsTouchesInView = false
+        view.addGestureRecognizer(touchPan)
+        swipe.require(toFail: touchPan)
         swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
         swipe.cancelsTouchesInView = false
         view.addGestureRecognizer(swipe)
@@ -546,6 +559,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func presentFailure(code: Int32, generation: Int, attempt: UUID) {
         guard !isMpvStopped, generation == mediaIdentity,
               failureSession.present(code: code, attempt: attempt) else { return }
+        discardTouchScrub()
         hideControlsTimer?.invalidate()
         holdTimer?.invalidate()
         virtualScrubTickTimer?.invalidate()
@@ -682,6 +696,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
                      initialTime: Double, title: String?) {
         guard !isMpvStopped else { return }
+        discardTouchScrub()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
@@ -1209,11 +1224,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.onSwitch?(target, self.playbackState.currentTime)
             },
             onTogglePlaylist: { [weak self] in
-                self?.closeInfoPanel()
+                guard let self, !self.consumedPlaybackSelect else { return }
+                self.closeInfoPanel()
                 NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
             },
             onLoopToggle: { [weak self] in
-                guard let self else { return }
+                guard let self, !self.consumedPlaybackSelect else { return }
                 self.setLooping(!self.playbackState.isLooping)
             },
             onSkipSegment: { [weak self] in self?.skipActiveSegment() },
@@ -1242,6 +1258,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.prebuffering = isPreBuffering
         playbackState.skipControlsEnabled = !isPreBuffering
         if isPreBuffering {
+            discardTouchScrub()
             playbackState.showUI = false
             hideControlsTimer?.invalidate()
         } else {
@@ -1268,8 +1285,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private var canAutoHide: Bool {
-        TransportVisibility.canAutoHide(userPaused: playbackState.userPaused,
-            scrubbing: playbackState.isVirtualScrubbing, panel: playbackState.showInfoPanel,
+        !playbackState.transportActionFocused && TransportVisibility.canAutoHide(userPaused: playbackState.userPaused,
+            scrubbing: playbackState.isScrubbing, panel: playbackState.showInfoPanel,
             engineMenu: playbackState.showEngineMenu, playlist: playlistVisible, prebuffering: isPreBuffering)
     }
 
@@ -1279,6 +1296,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, revision == self.controlsRevision, !self.isMpvStopped, !self.isPreBuffering,
                   self.playbackState.failureSentence == nil else { return }
+            if self.touchScrub.proposal != nil && (self.playbackState.menuOpen || self.playlistVisible) {
+                self.cancelTouchScrub()
+            }
             self.playbackState.showUI = true
             self.setNeedsFocusUpdate()
             self.hideControlsTimer?.invalidate()
@@ -1311,7 +1331,28 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        canOpenPanelFromSwipe
+        if gestureRecognizer === touchPan {
+            let translation = touchPan.translation(in: view)
+            return TouchScrubSession.canBegin(chrome: touchScrubChrome,
+                actionFocused: playbackState.transportActionFocused,
+                translationX: Double(translation.x), translationY: Double(translation.y))
+        }
+        return canOpenPanelFromSwipe
+    }
+
+    private var touchScrubChrome: TransportChrome {
+        var chrome = TransportChrome()
+        chrome.navigation = engineChrome?.snapshot().chrome(sessionMatches: true,
+            stillWatching: StillWatchingGate.isPrompting, playlist: playlistVisible) ?? PlayerChromeState()
+        // A released, still-paused transaction can accept another drag. A live
+        // gesture or a hold scrub cannot; the public Back stack still sees both.
+        chrome.navigation.scrubbing = playbackState.isVirtualScrubbing || touchScrub.proposal?.isPanning == true
+        chrome.userPaused = playbackState.userPaused
+        chrome.skipPillFocused = playbackState.skipPillFocused
+        chrome.duration = playbackState.duration
+        chrome.prebuffering = isPreBuffering
+        chrome.hasFailure = playbackState.failureSentence != nil
+        return chrome
     }
 
     @objc private func openInfoPanelFromSwipe() {
@@ -1320,6 +1361,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func openInfoPanel() {
+        cancelTouchScrub()
         holdTimer?.invalidate()
         if !playbackState.panelTabs.contains(playbackState.panelTab) { playbackState.panelTab = .info }
         playbackState.showInfoPanel = true
@@ -1389,6 +1431,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         // A chapter/action selection replaces a pending ghost scan. The scan
         // began while playing; return to that intent at the selected position.
         if playbackState.isVirtualScrubbing { cancelVirtualScrub() }
+        discardTouchScrub()
         playbackState.currentTime = seconds
         ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
         seekAsync(to: seconds)
@@ -1417,6 +1460,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func seekRelative(by delta: Double) {
+        discardTouchScrub()
         let cap = playbackState.duration > 0 ? max(0, playbackState.duration - 2) : Double.infinity
         let target = max(0, min(playbackState.currentTime + delta, cap))
         playbackState.currentTime = target
@@ -1431,9 +1475,96 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpvQueue.async { self.mpvCommand(handle, ["seek", pos, "absolute"]) }
     }
 
+    // MARK: - Paused touch scrubbing
+
+    @objc private func onTouchPan(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            guard !isMpvStopped, TransportKeyRoute.canTouchScrub(chrome: touchScrubChrome),
+                  !playbackState.transportActionFocused else { return }
+            holdTimer?.invalidate()
+            clickDirection = nil
+            panToken = touchScrub.begin(position: playbackState.currentTime, duration: playbackState.duration)
+            recognizer.setTranslation(.zero, in: view)
+            playbackState.touchScrubTime = touchScrub.proposal?.position
+            playbackState.transportFocusRevision += 1
+            showUI(autoHide: false)
+            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+        case .changed:
+            guard let token = panToken else { return }
+            let translation = recognizer.translation(in: view)
+            let velocity = recognizer.velocity(in: view)
+            if touchScrub.update(token: token, translationX: Double(translation.x), velocityX: Double(velocity.x)) {
+                playbackState.touchScrubTime = touchScrub.proposal?.position
+            }
+        case .ended:
+            guard let token = panToken, let position = touchScrub.release(token: token) else { return }
+            panToken = nil
+            applyTouchSeek(position)
+        case .cancelled, .failed:
+            guard panToken != nil else { return }
+            cancelTouchScrub()
+        default: break
+        }
+    }
+
+    private func applyTouchSeek(_ position: Double) {
+        playbackState.currentTime = position
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        seekAsync(to: position)
+        updateActiveSkipSegment()
+        broadcastStatus()
+    }
+
+    private func resetPanRecognizer() {
+        panToken = nil
+        clickDirection = nil
+        holdTimer?.invalidate()
+        // Cancel UIKit tracking too, so a phone seek cannot be overwritten by
+        // later changes/end from the finger that's still on the remote.
+        touchPan.isEnabled = false
+        touchPan.isEnabled = true
+    }
+
+    private func discardTouchScrub() {
+        guard touchScrub.proposal != nil else { return }
+        touchScrub.discard()
+        playbackState.touchScrubTime = nil
+        resetPanRecognizer()
+    }
+
+    @discardableResult
+    private func commitTouchScrub(resume: Bool) -> Bool {
+        guard let commit = touchScrub.commit() else { return false }
+        playbackState.touchScrubTime = nil
+        resetPanRecognizer()
+        if commit.requiresSeek { applyTouchSeek(commit.position) }
+        setPlaybackPaused(!resume)
+        return true
+    }
+
+    private func cancelTouchScrub() {
+        guard let origin = touchScrub.cancel() else { return }
+        playbackState.touchScrubTime = nil
+        resetPanRecognizer()
+        applyTouchSeek(origin)
+        setPlaybackPaused(true)
+    }
+
+    private func clickTouchProposal(forward: Bool) {
+        touchScrub.click(by: (forward ? 1 : -1) * TransportScrub.clickSkipSeconds)
+        playbackState.touchScrubTime = touchScrub.proposal?.position
+        if let proposal = touchScrub.proposal, !proposal.isPanning,
+           let position = touchScrub.release(token: proposal.token) {
+            applyTouchSeek(position)
+        }
+        showUI(autoHide: false)
+    }
+
     // MARK: - Virtual Scrubbing
 
     private func startVirtualScrub(forward: Bool) {
+        guard !playbackState.userPaused, touchScrub.proposal == nil else { return }
         playbackState.isVirtualScrubbing = true
         playbackState.virtualTime = playbackState.currentTime
         setPropertyAsync("pause", value: "yes")
@@ -1483,6 +1614,52 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         showUI(autoHide: true)
     }
 
+    private var consumedTransportDirection: UIPress.PressType?
+
+    private func updateTransportFocus() {
+        setNeedsFocusUpdate()
+        // SwiftUI must first apply the FocusState/default-focus request to its
+        // UIKit descendants. Then resolve preferredFocusEnvironments immediately.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isMpvStopped else { return }
+            self.hostingController?.view.layoutIfNeeded()
+            self.setNeedsFocusUpdate()
+            self.updateFocusIfNeeded()
+        }
+    }
+
+    private func focusTransportActions(_ target: TransportAction? = nil) {
+        holdTimer?.invalidate()
+        clickDirection = nil
+        if let target { playbackState.transportActionHighlight = target }
+        else if !playbackState.transportActionFocused { playbackState.transportActionHighlight = .loop }
+        playbackState.transportActionFocused = true
+        playbackState.transportActionFocusRevision += 1
+        showUI(autoHide: false)
+        updateTransportFocus()
+    }
+
+    private func focusTransportScrubber() {
+        playbackState.transportActionFocused = false
+        playbackState.transportFocusRevision += 1
+        showUI()
+        updateTransportFocus()
+    }
+
+    private func activateTransportAction() {
+        switch playbackState.transportActionHighlight {
+        case .loop: setLooping(!playbackState.isLooping)
+        case .switchEngine:
+            playbackState.showInfoPanel = false
+            playbackState.engineHighlight = PlaybackEngine.menuOrder(current: .mpv).firstIndex(of: .mpv) ?? 0
+            playbackState.showEngineMenu = true
+        case .playlist:
+            guard hasPlaylist else { return }
+            NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
+        }
+        showUI()
+    }
+
     // MARK: - Siri Remote
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -1513,11 +1690,19 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             chrome.navigation = engineChrome?.snapshot().chrome(sessionMatches: true,
                 stillWatching: false, playlist: playlistVisible) ?? PlayerChromeState()
             chrome.panelTabBarFocused = playbackState.panelTabBarFocused
+            chrome.transportActionFocused = playbackState.transportActionFocused
+            chrome.skipPillFocused = playbackState.skipPillFocused
             switch TransportKeyRoute.physicalVertical(up: type == .upArrow, chrome: chrome) {
             case .openPanel: openInfoPanel()
             case .closePanel: closeInfoPanel()
             case .moveInPanel: movePanelRow(type == .upArrow ? -1 : 1, physical: true)
             case .showTransport: showUI()
+            case .focusActions:
+                consumedTransportDirection = type
+                focusTransportActions()
+            case .focusScrubber:
+                consumedTransportDirection = type
+                focusTransportScrubber()
             case .moveFocus: super.pressesBegan(presses, with: event)
             }
             return
@@ -1541,11 +1726,18 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         }
         switch type {
         case .select:
+            if playbackState.transportActionFocused {
+                consumedPlaybackSelect = true
+                activateTransportAction()
+                return
+            }
             if handlePlaybackPress(.select) { consumedPlaybackSelect = true }
             else { super.pressesBegan(presses, with: event) }
         case .leftArrow, .rightArrow:
             if playbackState.transportActionFocused {
-                super.pressesBegan(presses, with: event)
+                consumedTransportDirection = type
+                let delta = type == .rightArrow ? 1 : -1
+                focusTransportActions(playbackState.transportActionHighlight.moving(delta, hasPlaylist: hasPlaylist))
                 return
             }
             let forward = type == .rightArrow
@@ -1569,8 +1761,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         let focusedControl = playbackState.menuOpen || playlistVisible
             || playbackState.skipPillFocused || playbackState.transportActionFocused
         switch PlayerRemoteNavigation.physicalPlaybackEffect(for: press,
-            scrubbing: playbackState.isVirtualScrubbing, selectActivatesFocusedControl: focusedControl) {
-        case .commitScrub: commitVirtualScrub(); return true
+            scrubbing: playbackState.isScrubbing, selectActivatesFocusedControl: focusedControl) {
+        case .commitScrub:
+            if !commitTouchScrub(resume: true) { commitVirtualScrub() }
+            return true
         case .togglePlayback: togglePlayPause(); return true
         default: return false
         }
@@ -1579,6 +1773,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private var clickDirection: Bool?
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if let type = presses.first?.type, type == consumedTransportDirection {
+            consumedTransportDirection = nil
+            return
+        }
         if presses.first?.type == .select, consumedPlaybackSelect {
             consumedPlaybackSelect = false
             return
@@ -1591,7 +1789,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             holdTimer?.invalidate()
             clickDirection = nil
             if shortClick && !playbackState.isVirtualScrubbing && !playbackState.menuOpen && !playlistVisible {
-                seekRelative(by: (forward ? 1 : -1) * TransportScrub.clickSkipSeconds)
+                if touchScrub.proposal != nil { clickTouchProposal(forward: forward) }
+                else { seekRelative(by: (forward ? 1 : -1) * TransportScrub.clickSkipSeconds) }
                 showFeedback(forward ? "goforward.10" : "gobackward.10")
             }
             return
@@ -1600,6 +1799,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if let type = presses.first?.type, type == consumedTransportDirection {
+            consumedTransportDirection = nil
+            return
+        }
         if presses.first?.type == .select, consumedPlaybackSelect {
             consumedPlaybackSelect = false
             return
@@ -1774,7 +1977,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         broadcastTimeline()
     }
 
-    @objc private func onStillWatchingPause() { setPropertyAsync("pause", value: "yes") }
+    @objc private func onStillWatchingPause() {
+        cancelTouchScrub()
+        setPropertyAsync("pause", value: "yes")
+    }
     @objc private func onStillWatchingResume() {
         if playbackState.failureSentence == nil { setPropertyAsync("pause", value: "no") }
     }
@@ -1857,7 +2063,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             return PlayerEngineChromeSnapshot(
                 engineMenu: self.playbackState.showEngineMenu,
                 settingsSheet: false,
-                scrubbing: self.playbackState.isVirtualScrubbing,
+                scrubbing: self.playbackState.isScrubbing,
                 controlsVisible: self.playbackState.showUI && !self.isPreBuffering,
                 infoPanel: self.playbackState.showInfoPanel
             )
@@ -1883,6 +2089,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             showUI()
             return true
         case .dismissScrub:
+            if touchScrub.proposal != nil { cancelTouchScrub(); return true }
             guard playbackState.isVirtualScrubbing else { return false }
             cancelVirtualScrub()
             return true
@@ -1902,16 +2109,19 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             seekRelative(by: TransportScrub.remoteSkipSeconds)
             return true
         case .scrubBackward:
+            if touchScrub.proposal != nil { seekRelative(by: -TransportScrub.remoteSkipSeconds); return true }
             guard playbackState.isVirtualScrubbing else { return false }
             showUI(autoHide: false)
             increaseScrubMultiplier(false)
             return true
         case .scrubForward:
+            if touchScrub.proposal != nil { seekRelative(by: TransportScrub.remoteSkipSeconds); return true }
             guard playbackState.isVirtualScrubbing else { return false }
             showUI(autoHide: false)
             increaseScrubMultiplier(true)
             return true
         case .commitScrub:
+            if commitTouchScrub(resume: true) { return true }
             guard playbackState.isVirtualScrubbing else { return false }
             commitVirtualScrub()
             return true
@@ -1926,6 +2136,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         hideControlsTimer?.invalidate()
         hideControlsTimer = nil
         playbackState.showUI = false
+        playbackState.transportActionFocused = false
         setNeedsFocusUpdate()
         return true
     }
@@ -2018,6 +2229,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func handleControlCommand(_ cmd: String) {
         if let paused = PlaybackPauseCommand.targetPaused(
             for: cmd, isPlaying: playbackState.isPlaying) {
+            if commitTouchScrub(resume: !paused) { return }
             setPlaybackPaused(paused)
             return
         }
@@ -2030,7 +2242,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         case "seek_back":
             seekRelative(by: -TransportScrub.remoteSkipSeconds)
         case let c where c.hasPrefix("seek_to:"):
-            if let ms = Double(c.dropFirst("seek_to:".count)) {
+            if let ms = Double(c.dropFirst("seek_to:".count)), ms.isFinite, ms >= 0 {
+                discardTouchScrub()
                 let secs = ms / 1000
                 playbackState.currentTime = secs
                 ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
@@ -2079,6 +2292,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// and `deinit`. The first call does the work; later calls are no-ops via `isMpvStopped`.
     func teardown() {
         guard !isMpvStopped else { return }
+        discardTouchScrub()
         isMpvStopped = true
         invalidateFailure()
         skipLoader.cancel()
