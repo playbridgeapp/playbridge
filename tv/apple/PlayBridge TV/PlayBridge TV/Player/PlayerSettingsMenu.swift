@@ -154,4 +154,7 @@ enum PlayerSettingsItem: Equatable {
 
 extension PlayerSettingsAvailability {
     var any: Bool { speed || scaling || subtitleOffset }
+
+    /// The mpv Settings tab: speed has its own transport button and menu.
+    var withoutSpeed: Self { Self(speed: false, scaling: scaling, subtitleOffset: subtitleOffset) }
 }

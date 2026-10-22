@@ -1433,6 +1433,20 @@ private func runTransportChromeTests() {
     }
     assert(TransportTimeLabels.elapsed(.greatestFiniteMagnitude) == "0:00")
     assert(TransportTimeLabels.remaining(12, duration: 0).isEmpty)
+    // AVPlayer clock and the label riding under the playhead.
+    assert(TransportTimeLabels.clock(0) == "00:00" && TransportTimeLabels.clock(111) == "01:51")
+    assert(TransportTimeLabels.clock(3723) == "1:02:03")
+    assert(TransportTimeLabels.clockRemaining(111, duration: 301) == "-03:10")
+    assert(TransportTimeLabels.clockRemaining(400, duration: 301) == "-00:00")
+    assert(TransportTimeLabels.clockRemaining(12, duration: .nan).isEmpty)
+    let start = TransportTimeLabels.playheadLabelLayout(fraction: 0, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(start.x == 0 && start.showsRemaining)
+    let middle = TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(middle.x == 460 && middle.showsRemaining)
+    let end = TransportTimeLabels.playheadLabelLayout(fraction: 1, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(end.x == 920 && !end.showsRemaining)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: .nan, width: 1000, elapsedWidth: 80, remainingWidth: 90).x == 0)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 0, elapsedWidth: 80, remainingWidth: 90).x == 0)
     assert(TransportTimeLabels.metadataSubtitle(title: "Show", year: "2024", season: 2, episode: 4,
                                                episodeTitle: "  The Heist  ") == "S2 E4 · The Heist")
     assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4) == "S2 E4")
@@ -1652,6 +1666,10 @@ private func runTransportChromeTests() {
     let audioRows = TransportMenuModel.audioRows(tracks: [(id: 1, name: "English"), (id: 2, name: "Hindi")], current: 2)
     assert(audioRows.map(\.id) == [1, 2] && TransportMenuModel.initialHighlight(rows: audioRows) == 1)
     assert(TransportMenuModel.initialHighlight(rows: TransportMenuModel.audioRows(tracks: [], current: -1)) == 0)
+    // The mpv Settings tab leaves speed to the transport's Speed button.
+    let mpvTab = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false).withoutSpeed
+    assert(!mpvTab.speed && mpvTab.scaling && mpvTab.subtitleOffset && mpvTab.any)
+    assert(PlayerSettingsItem.rows(tuning: PlayerTuning(), availability: mpvTab).first?.section == "Scaling")
     let engineRows = TransportMenuModel.engineRows(current: .mpv)
     assert(engineRows.filter(\.selected).map(\.id) == [PlaybackEngine.mpv.menuID])
     assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,

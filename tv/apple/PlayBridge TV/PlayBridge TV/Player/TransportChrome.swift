@@ -10,9 +10,42 @@ enum TransportBarMetrics {
     static let lineHeight = 6.0
     static let thumbDiameter = 16.0
     static let focusedThumbDiameter = 24.0
+    /// AVPlayer-style bar: thick and bright while focused, thin and dim otherwise,
+    /// with a narrow playhead tick instead of a round thumb.
+    static let focusedLineHeight = 12.0
+    static let playheadWidth = 3.0
+    static let playheadOverhang = 5.0
+    static let timeLabelGap = 24.0
 }
 
 enum TransportTimeLabels {
+    /// AVPlayer's clock: zero-padded minutes ("01:51"), hours when needed ("1:02:03").
+    static func clock(_ seconds: Double) -> String {
+        let seconds = PlaybackTime.seconds(seconds)
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let rest = String(format: "%02d", seconds % 60)
+        return hours > 0 ? "\(hours):\(String(format: "%02d", minutes)):\(rest)"
+                         : "\(String(format: "%02d", minutes)):\(rest)"
+    }
+
+    static func clockRemaining(_ displayTime: Double, duration: Double) -> String {
+        guard duration.isFinite, duration > 0 else { return "" }
+        let display = displayTime.isFinite && displayTime > 0 ? displayTime : 0
+        return "-" + clock(max(0, duration - display))
+    }
+
+    /// Leading x of the elapsed label, centred under the playhead and kept on the
+    /// bar. The remaining label hides while the elapsed one would touch it.
+    static func playheadLabelLayout(fraction: Double, width: Double, elapsedWidth: Double,
+                                    remainingWidth: Double) -> (x: Double, showsRemaining: Bool) {
+        guard width.isFinite, width > 0 else { return (0, true) }
+        let progress = fraction.isFinite ? min(max(fraction, 0), 1) : 0
+        let x = min(max(width * progress - elapsedWidth / 2, 0), max(width - elapsedWidth, 0))
+        let showsRemaining = x + elapsedWidth + TransportBarMetrics.timeLabelGap <= width - remainingWidth
+        return (x, showsRemaining)
+    }
+
     static func elapsed(_ seconds: Double) -> String {
         let seconds = PlaybackTime.seconds(seconds)
         let hours = seconds / 3600
