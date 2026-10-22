@@ -292,7 +292,7 @@ struct PlayerView: View {
         case .moveHighlight, .activateHighlight:
             if engineChrome.apply(effect) { break }
             applyPlaylistHighlight(effect)
-        case .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
+        case .dismissInfoPanel, .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
              .dismissSettingsSheet, .dismissScrub, .dismissControls,
              .togglePlayback, .seekBackward, .seekForward,
              .scrubBackward, .scrubForward, .commitScrub,
