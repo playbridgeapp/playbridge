@@ -76,6 +76,36 @@ class ReceiverPlaybackFailureTest {
         assertTrue(state.status("error", "three", "New receiver"))
     }
 
+    @Test fun dismissSurvivesRepeatedStatusUntilRecoveryOrNewPlayback() {
+        val state = ReceiverPlaybackFailures()
+        state.status("error", "one", "Failed")
+        state.dismiss()
+        assertNull(state.notice.value)
+        state.status("error", "one", "Failed")
+        assertNull(state.notice.value)
+        state.status("buffering", "one", null)
+        state.status("error", "one", "Failed")
+        assertNull(state.notice.value)
+        state.status("playing", "one", null)
+        state.status("error", "one", "Failed")
+        assertEquals("Failed", state.notice.value?.message)
+        state.dismiss()
+        state.playlist("two")
+        state.status("error", "two", "Failed")
+        assertEquals("Failed", state.notice.value?.message)
+    }
+
+    @Test fun coordinatorExposesDismissWithoutClearingPlaybackState() = runTest {
+        val messages = MutableSharedFlow<String>(extraBufferCapacity = 2)
+        val coordinator = ConnectionCoordinator(messages, null, backgroundScope) { 0L }
+        runCurrent()
+        messages.emit("""{"type":"status","state":"error","error":"Failed","position":0,"duration":0}""")
+        runCurrent()
+        coordinator.dismissPlaybackFailure()
+        assertNull(coordinator.playbackFailure.value)
+        assertEquals("error", coordinator.tvPlayback.value?.state)
+    }
+
     @Test fun reasonIsOnePlainLineAndCappedWithoutSplittingEmoji() {
         assertEquals("<b>Failed</b> https://example.test", ReceiverPlaybackFailures.message("<b>Failed</b>\u2028\t https://example.test"))
         val bounded = ReceiverPlaybackFailures.message("😀".repeat(600))

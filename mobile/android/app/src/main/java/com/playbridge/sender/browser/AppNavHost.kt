@@ -79,7 +79,6 @@ import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -205,17 +204,6 @@ fun AppNavHost(
         { addToCollectionDraft = it }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val playbackFailure by connectionCoordinator.playbackFailure.collectAsStateWithLifecycle()
-    LaunchedEffect(playbackFailure) {
-        val failure = playbackFailure ?: return@LaunchedEffect
-        val toast = Toast.makeText(appContext, failure.message, Toast.LENGTH_LONG)
-        toast.show()
-        try {
-            awaitCancellation()
-        } finally {
-            // A new cast/session clears any still-visible notice immediately.
-            toast.cancel()
-        }
-    }
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
     val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()
@@ -443,8 +431,21 @@ fun AppNavHost(
             session?.exitFullScreenMode()
         }
     }
+    // Browser/Tabs/Extensions use the Activity's Scaffold toolbar; other screens own theirs.
+    val bannerTopPadding = if (currentScreen in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)) {
+        innerPadding.calculateTopPadding()
+    } else 0.dp
+    Column(Modifier.fillMaxSize().padding(top = if (playbackFailure != null) bannerTopPadding else 0.dp)) {
+        playbackFailure?.let { failure ->
+            com.playbridge.sender.ui.ReceiverPlaybackFailureBanner(
+                message = failure.message,
+                onDismiss = connectionCoordinator::dismissPlaybackFailure,
+                modifier = if (bannerTopPadding > 0.dp) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            )
+        }
     Box(
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.weight(1f).fillMaxWidth()
+            .then(if (playbackFailure != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)
             .observeFullscreenInteractions(fullscreenBrowser) { fullscreenInteraction++ },
     ) {
     AnimatedContent(
@@ -474,7 +475,7 @@ fun AppNavHost(
         label = "ScreenTransition"
     ) { targetScreen ->
         val isOwnTopBar = targetScreen !in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)
-        val resolvedPadding = if (isOwnTopBar) {
+        val resolvedPadding = if (isOwnTopBar || playbackFailure != null) {
             PaddingValues(
                 start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
                 top = 0.dp,
@@ -1826,6 +1827,8 @@ fun AppNavHost(
             }
         }
     }
+
+    } // Main content column: the same persistent notice also covers Remote.
 
     // Shared Add-to-Collection sheet, driven by any screen's onAddToCollection(draft).
     addToCollectionDraft?.let { draft ->
