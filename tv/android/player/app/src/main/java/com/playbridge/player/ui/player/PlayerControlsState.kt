@@ -7,7 +7,7 @@ enum class SettingsTab {
 }
 
 enum class ActiveOverlay {
-    NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, SWITCH_PLAYER
+    NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, CHAPTERS, SWITCH_PLAYER
 }
 
 @Immutable
@@ -87,7 +87,16 @@ data class PlayerControlsState(
     val skipSegments: List<com.playbridge.player.player.SkipSegment> = emptyList(),
     val activeSkipSegment: com.playbridge.player.player.SkipSegment? = null,
     val isSkipButtonFocused: Boolean = false,
+    val chapters: List<com.playbridge.shared.player.PlayerChapter> = emptyList(),
+    val chapterOsd: String? = null,
 )
 
 internal fun PlayerControlsState.isPlaybackObscured(): Boolean =
     playbackTransitionMessage != null || isBuffering || prePlayMetadata != null
+
+internal fun PlayerControlsState.hasSelectableChapters(mediaKind: String = "video"): Boolean =
+    mediaKind != "image" &&
+        !capabilities.isLive &&
+        capabilities.isSeekable &&
+        chapters.size >= 2
+

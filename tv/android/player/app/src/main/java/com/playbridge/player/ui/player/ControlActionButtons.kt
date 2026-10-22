@@ -30,6 +30,8 @@ fun ControlActionButtons(
     onNext: () -> Unit,
     onLoop: () -> Unit,
     onSwitchPlayer: () -> Unit,
+    hasChapters: Boolean = false,
+    onChapters: () -> Unit = {},
     isVisible: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -97,6 +99,14 @@ fun ControlActionButtons(
                 iconRes = R.drawable.ic_list,
                 contentDescription = "Playlist",
                 onClick = onPlaylist
+            )
+        }
+
+        if (hasChapters) {
+            PlayerIconButton(
+                iconRes = R.drawable.ic_chapters,
+                contentDescription = "Chapters",
+                onClick = onChapters
             )
         }
 

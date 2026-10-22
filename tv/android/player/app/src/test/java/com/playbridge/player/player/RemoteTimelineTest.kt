@@ -77,4 +77,22 @@ class RemoteTimelineTest {
         assertEquals(100_000L, reportedBufferedMs(150_000L, 10_000L, 100_000L))
         assertNull(reportedBufferedMs(40_000L, 10_000L, 0L))
     }
+
+    @Test
+    fun `normalizedChapters filters negatives, sorts by startMs and normalizes titles`() {
+        val result = normalizedChapters(
+            listOf(
+                PlayerChapter(120_000L, "  Act II  "),
+                PlayerChapter(-1L, "Negative"),
+                PlayerChapter(0L, "   "),
+            ),
+        )
+        assertEquals(
+            listOf(
+                PlayerChapter(0L, null),
+                PlayerChapter(120_000L, "Act II"),
+            ),
+            result,
+        )
+    }
 }

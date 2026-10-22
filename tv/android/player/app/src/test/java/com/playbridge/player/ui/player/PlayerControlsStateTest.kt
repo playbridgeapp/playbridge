@@ -47,6 +47,41 @@ class PlayerControlsStateTest {
         assertFalse(PlayerControlsState(canSwitchPlayer = false).canSwitchPlayer)
     }
 
+    @Test
+    fun `chapters and chapterOsd default to empty and null`() {
+        val state = PlayerControlsState()
+        assertTrue(state.chapters.isEmpty())
+        assertFalse(state.chapterOsd != null)
+    }
+
+    @Test
+    fun `chapters button requires at least two chapters on seekable non-live media`() {
+        val twoChapters = listOf(
+            com.playbridge.shared.player.PlayerChapter(0L, "Part 1"),
+            com.playbridge.shared.player.PlayerChapter(60_000L, "Part 2"),
+        )
+        assertFalse(PlayerControlsState().hasSelectableChapters())
+        assertFalse(
+            PlayerControlsState(
+                chapters = listOf(com.playbridge.shared.player.PlayerChapter(0L, "Only")),
+            ).hasSelectableChapters(),
+        )
+        val withChapters = PlayerControlsState(chapters = twoChapters)
+        assertTrue(withChapters.hasSelectableChapters())
+        assertTrue(withChapters.hasSelectableChapters(mediaKind = "audio"))
+        assertFalse(withChapters.hasSelectableChapters(mediaKind = "image"))
+        assertFalse(
+            withChapters.copy(
+                capabilities = PlaybackCapabilities(isLive = true),
+            ).hasSelectableChapters(),
+        )
+        assertFalse(
+            withChapters.copy(
+                capabilities = PlaybackCapabilities(isSeekable = false),
+            ).hasSelectableChapters(),
+        )
+    }
+
     private fun videoTrack(id: String) = UnifiedTrack(
         id = id,
         name = id,

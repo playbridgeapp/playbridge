@@ -217,6 +217,49 @@ class PlayerControlsViewModel : ViewModel() {
     }
     
     private var skipSegmentsJob: kotlinx.coroutines.Job? = null
+    private var chapterOsdJob: Job? = null
+
+    fun setChapters(chapters: List<com.playbridge.shared.player.PlayerChapter>) {
+        if (chapters.isEmpty()) {
+            chapterOsdJob?.cancel()
+            _controlsState.update { state ->
+                state.copy(
+                    chapters = emptyList(),
+                    chapterOsd = null,
+                    activeOverlay = if (state.activeOverlay == ActiveOverlay.CHAPTERS) {
+                        ActiveOverlay.NONE
+                    } else {
+                        state.activeOverlay
+                    },
+                )
+            }
+        } else {
+            _controlsState.update { state ->
+                state.copy(
+                    chapters = chapters,
+                    activeOverlay = if (chapters.size < 2 && state.activeOverlay == ActiveOverlay.CHAPTERS) {
+                        ActiveOverlay.NONE
+                    } else {
+                        state.activeOverlay
+                    },
+                )
+            }
+        }
+    }
+
+    fun showChapters() {
+        if (!_controlsState.value.hasSelectableChapters()) return
+        showOverlay(ActiveOverlay.CHAPTERS)
+    }
+
+    fun showChapterOsd(text: String) {
+        chapterOsdJob?.cancel()
+        _controlsState.update { it.copy(chapterOsd = text) }
+        chapterOsdJob = viewModelScope.launch {
+            delay(2_000L)
+            _controlsState.update { it.copy(chapterOsd = null) }
+        }
+    }
 
     fun setPrePlay(
         metadata: playbridge.VisualMetadata?,
@@ -230,16 +273,24 @@ class PlayerControlsViewModel : ViewModel() {
         }
         skipSegmentsJob?.cancel()
         lastSkippedSegment = null
+        val clearTimeline = metadata != null || clearOnlineSubs
+        if (clearTimeline) {
+            chapterOsdJob?.cancel()
+        }
 
         _controlsState.update { state ->
             val nextActiveMetadata = metadata ?: if (!clearOnlineSubs) state.activeMetadata else null
-            val nextSkipSegments = if (metadata != null) emptyList() else if (!clearOnlineSubs) state.skipSegments else emptyList()
-            val nextActiveSkipSegment = if (metadata != null) null else if (!clearOnlineSubs) state.activeSkipSegment else null
+            val nextSkipSegments = if (clearTimeline) emptyList() else state.skipSegments
+            val nextActiveSkipSegment = if (clearTimeline) null else state.activeSkipSegment
+            val nextChapters = if (clearTimeline) emptyList() else state.chapters
+            val nextChapterOsd = if (clearTimeline) null else state.chapterOsd
             state.copy(
                 activeMetadata = nextActiveMetadata,
                 prePlayMetadata = if (metadata != null && showCountdown) metadata else null,
                 skipSegments = nextSkipSegments,
-                activeSkipSegment = nextActiveSkipSegment
+                activeSkipSegment = nextActiveSkipSegment,
+                chapters = nextChapters,
+                chapterOsd = nextChapterOsd,
             )
         }
 
@@ -650,6 +701,8 @@ class PlayerControlsViewModel : ViewModel() {
         progressUpdateJob?.cancel()
         commitSeekJob?.cancel()
         onlineSubtitleJob?.cancel()
+        skipSegmentsJob?.cancel()
+        chapterOsdJob?.cancel()
         cachedOnlineTracks = emptyList()
         onEndSegmentSkipped = null
         engine = null
