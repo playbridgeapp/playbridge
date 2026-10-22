@@ -263,6 +263,7 @@ struct PlayerView: View {
     }
 
     private func handleRemoteNavigation(_ key: String) {
+        if !stillWatching.isPrompting, !isPreBuffering, engineChrome.handleFailureKey(key) { return }
         let engine = exitGate.liveEngine
         let generation = exitGate.liveGeneration
         let chrome = engineChrome.snapshot().chrome(
@@ -351,7 +352,11 @@ struct PlayerView: View {
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
                         onBack: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleRemoteNavigation("back") } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        onBroadcast: { frame in
+                            guard isCurrentPlayback(currentEngine, generation: currentGeneration) else { return }
+                            if frame["state"] as? String == "error" { showPlaylist = false }
+                            broadcast(frame, for: currentRequest)
+                        },
                         onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
                         onEndOfFile: { identity in emitEnd(identity) },
                         initialLoop: settingsReporter.loop,
@@ -361,7 +366,8 @@ struct PlayerView: View {
                         hasPlaylist: playlistStore.items.count > 1,
                         playbackSpeed: tuning.speed,
                         subtitleOffsetMs: tuning.subtitleOffsetMs,
-                        scaling: tuning.scaling
+                        scaling: tuning.scaling,
+                        hasNextItem: playlistStore.hasNext
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)

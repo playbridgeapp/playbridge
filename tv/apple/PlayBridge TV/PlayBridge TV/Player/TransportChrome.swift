@@ -151,6 +151,37 @@ enum PlaybackFailureModel {
     }
 }
 
+/// Main-thread attempt fence shared by initialization, end-file callbacks and
+/// the error-screen timeout. A retry can reuse an item generation, so it needs
+/// a fresh token as well. A closed attempt cannot present another late error.
+struct PlaybackFailureSession {
+    private(set) var attempt = UUID()
+    private(set) var sentence: String?
+    private var closed = false
+
+    mutating func beginAttempt() -> UUID {
+        attempt = UUID()
+        sentence = nil
+        closed = false
+        return attempt
+    }
+
+    func matches(_ token: UUID) -> Bool { token == attempt && !closed }
+
+    mutating func present(code: Int32, attempt token: UUID) -> Bool {
+        guard matches(token), sentence == nil,
+              case .errorStatus(let reason) = PlaybackFailureModel.phoneReport(for: .presented(mpvCode: code)) else { return false }
+        sentence = reason
+        return true
+    }
+
+    mutating func close(attempt token: UUID) -> Bool {
+        guard matches(token), sentence != nil else { return false }
+        closed = true
+        return true
+    }
+}
+
 /// Physical-only context supplements the shared network chrome without adding
 /// pause, gesture or focus state to the wire-key policy.
 struct TransportChrome: Equatable {

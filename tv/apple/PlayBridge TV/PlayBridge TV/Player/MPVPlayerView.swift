@@ -33,6 +33,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let playbackSpeed: Double
     let subtitleOffsetMs: Int
     let scaling: PlayerScaling
+    let hasNextItem: Bool
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -59,6 +60,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.playbackSpeed = playbackSpeed
         vc.subtitleOffsetMs = subtitleOffsetMs
         vc.scaling = scaling
+        vc.hasNextItem = hasNextItem
         return vc
     }
 
@@ -79,11 +81,13 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.playbackSpeed = playbackSpeed
         uiViewController.subtitleOffsetMs = subtitleOffsetMs
         uiViewController.scaling = scaling
+        uiViewController.hasNextItem = hasNextItem
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
         // instead of paying a full mpv re-init per item.
         if uiViewController.url != url || uiViewController.mediaIdentity != mediaIdentity {
+            uiViewController.invalidateFailure()
             uiViewController.skipLoader.cancel()
             uiViewController.skipMetadata = skipMetadata
             uiViewController.mediaIdentity = mediaIdentity
@@ -134,8 +138,23 @@ class MPVViewController: UIViewController {
     var onLoopChanged: ((Bool, PlayerReportIdentity) -> Bool)?
     var onEndOfFile: ((PlayerReportIdentity) -> PlayerEndDecision)?
     var initialLoop = false
+    var hasNextItem = false {
+        didSet {
+            guard hasNextItem != oldValue else { return }
+            playbackState.failureHasNextItem = hasNextItem
+            if !hasNextItem, playbackState.failureHighlight == .next {
+                playbackState.failureHighlight = PlaybackFailureModel.defaultAction
+            }
+        }
+    }
+    private var failureSession = PlaybackFailureSession()
+    private var failureTimer: Timer?
+    /// Assigned on mpvQueue when START_FILE arrives, including files that fail
+    /// before FILE_LOADED. Retries share the item identity but get a new token.
+    private var pendingLoadedAttempt: UUID?
+    private var loadedAttempt: UUID?
     /// Item generation of the file mpv has actually opened. Touched only on `mpvQueue`.
-    /// Stays at the previous item until FILE_LOADED, so a late EOF cannot adopt the next item.
+    /// Stays at the previous item until START_FILE, so a late EOF cannot adopt the next item.
     private var loadedIdentity = -1
     private var pendingLoadedIdentity = -1
     private var engineChrome: PlayerEngineChrome?
@@ -218,7 +237,8 @@ class MPVViewController: UIViewController {
     private let videoView = FocusableView()
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if (playbackState.userPaused || playbackState.activeSkipSegment != nil), let hv = hostingController?.view { return [hv] }
+        if !isPreBuffering, !StillWatchingGate.isPrompting,
+           (playbackState.failureSentence != nil || playbackState.userPaused || playbackState.activeSkipSegment != nil), let hv = hostingController?.view { return [hv] }
         return [videoView]
     }
 
@@ -239,6 +259,8 @@ class MPVViewController: UIViewController {
         videoView.layer.addSublayer(metalLayer)
 
         playbackState.title = mediaTitle ?? ""
+        playbackState.currentTime = initialTime
+        playbackState.prebuffering = isPreBuffering
         playbackState.isLooping = initialLoop
         externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
@@ -311,7 +333,7 @@ class MPVViewController: UIViewController {
         configureAudioSession()
 
         guard let handle = mpv_create() else {
-            print("[MPV] mpv_create() failed")
+            initializationFailed(operation: "mpv_create", code: MPV_ERROR_NOMEM.rawValue)
             return
         }
         mpv = handle
@@ -439,12 +461,123 @@ class MPVViewController: UIViewController {
 
     private func initializationFailed(operation: String, code: Int32) {
         print("[MPV] initialization failed at \(operation): \(code)")
-        // Do not leave a failed renderer on a black player screen or advance the queue.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isMpvStopped else { return }
-            self.teardown()
-            self.onExit?()
+        // No wakeup callback is installed before successful initialization. Drop
+        // only this partial core: keep the controller/HUD alive for Try Again.
+        if let handle = mpv {
+            mpv = nil
+            let outputLayer = metalLayer
+            mpvQueue.async {
+                mpv_destroy(handle)
+                withExtendedLifetime(outputLayer) {}
+            }
         }
+        presentFailure(code: code, generation: mediaIdentity, attempt: failureSession.attempt)
+    }
+
+    fileprivate func invalidateFailure() {
+        failureTimer?.invalidate()
+        failureTimer = nil
+        _ = failureSession.beginAttempt()
+    }
+
+    private func clearFailure() {
+        invalidateFailure()
+        playbackState.failureSentence = nil
+        playbackState.cacheStalled = false
+        playbackState.failureHighlight = PlaybackFailureModel.defaultAction
+    }
+
+    private func presentFailure(code: Int32, generation: Int, attempt: UUID) {
+        guard !isMpvStopped, generation == mediaIdentity,
+              failureSession.present(code: code, attempt: attempt) else { return }
+        hideControlsTimer?.invalidate()
+        holdTimer?.invalidate()
+        virtualScrubTickTimer?.invalidate()
+        playbackState.isVirtualScrubbing = false
+        playbackState.scrubMultiplier = 0
+        playbackState.showUI = false
+        playbackState.showSubtitleMenu = false
+        playbackState.showAudioMenu = false
+        playbackState.showEngineMenu = false
+        playbackState.activeSkipSegment = nil
+        playbackState.cacheStalled = false
+        playbackState.isPlaying = false
+        playbackState.failureSentence = failureSession.sentence
+        playbackState.failureHighlight = PlaybackFailureModel.defaultAction
+        setPropertyAsync("pause", value: "yes")
+        broadcastStatus()
+        failureTimer?.invalidate()
+        failureTimer = Timer.scheduledTimer(withTimeInterval: PlaybackFailureModel.autoCloseSeconds, repeats: false) { [weak self] _ in
+            guard let self, self.mediaIdentity == generation, self.failureSession.matches(attempt) else { return }
+            self.closeFailure(event: .autoClose)
+        }
+        setNeedsFocusUpdate()
+    }
+
+    private func closeFailure(event: PlaybackFailureModel.Event = .close) {
+        guard !isMpvStopped,
+              PlaybackFailureModel.phoneReport(for: event) == .idleContext,
+              failureSession.close(attempt: failureSession.attempt) else { return }
+        failureTimer?.invalidate()
+        failureTimer = nil
+        // The existing owner exit sends idle, flushes progress and dismisses once.
+        onExit?()
+    }
+
+    private func handleFailureAction(_ action: PlaybackFailureAction) {
+        guard !isMpvStopped, !isPreBuffering, !StillWatchingGate.isPrompting,
+              failureSession.sentence != nil, failureSession.matches(failureSession.attempt),
+              PlaybackFailureModel.actions(hasNextItem: hasNextItem).contains(action) else { return }
+        NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+        switch action {
+        case .close: closeFailure()
+        case .next:
+            clearFailure()
+            onDismiss?() // Explicit Next bypasses repeat-one, unlike natural EOF.
+        case .tryAgain:
+            let position = playbackState.currentTime
+            clearFailure()
+            initialTime = position.isFinite && position >= 0 ? position : 0
+            playbackState.userPaused = false
+            playbackState.isPlaying = false
+            if let url, mpv != nil {
+                loadFile(url)
+                setPropertyAsync("pause", value: "no")
+                showUI(autoHide: true)
+            } else {
+                setupAfterCleanup()
+            }
+        }
+    }
+
+    private func setupAfterCleanup() {
+        // A first layout still owns initial setup; a failed init can retry only
+        // after its partial core has finished destruction on the serial queue.
+        guard didSetupMPV else { return }
+        let attempt = failureSession.attempt
+        mpvQueue.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isMpvStopped, self.mpv == nil,
+                      self.failureSession.matches(attempt) else { return }
+                self.setupMPV()
+            }
+        }
+    }
+
+    private func handleFailureKey(_ key: String) -> Bool {
+        guard !isMpvStopped, !isPreBuffering, !StillWatchingGate.isPrompting,
+              failureSession.sentence != nil, failureSession.matches(failureSession.attempt) else { return false }
+        let actions = PlaybackFailureModel.actions(hasNextItem: hasNextItem)
+        switch key {
+        case "back", "home": closeFailure()
+        case "dpad_center": handleFailureAction(playbackState.failureHighlight)
+        case "dpad_left", "dpad_up", "dpad_right", "dpad_down":
+            let index = actions.firstIndex(of: playbackState.failureHighlight) ?? 0
+            let delta = key == "dpad_left" || key == "dpad_up" ? -1 : 1
+            playbackState.failureHighlight = actions[min(max(index + delta, 0), actions.count - 1)]
+        default: return false
+        }
+        return true
     }
 
     private func configureAudioSession() {
@@ -516,7 +649,7 @@ class MPVViewController: UIViewController {
         didApplyTrackPreferences = false
         ignoreTimeUpdatesUntil = .distantPast
         playbackState.title = title ?? ""
-        playbackState.currentTime = 0
+        playbackState.currentTime = initialTime
         playbackState.duration = 0
         playbackState.userPaused = false
         playbackState.audioTracks = []
@@ -524,7 +657,8 @@ class MPVViewController: UIViewController {
         externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
 
-        loadFile(url)
+        clearFailure()
+        if mpv == nil { setupAfterCleanup() } else { loadFile(url) }
         mpvQueue.async {
             oldSubtitleFiles.forEach { try? FileManager.default.removeItem(at: $0) }
         }
@@ -532,6 +666,8 @@ class MPVViewController: UIViewController {
 
     private func loadFile(_ url: URL, fromStart: Bool = false) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
+        clearFailure()
+        let attempt = failureSession.attempt
         pendingExternalSubtitles = subtitles ?? []
         timelineUpdateGate.reset()
         // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
@@ -549,6 +685,7 @@ class MPVViewController: UIViewController {
         mpvQueue.async { [weak self] in
             guard let self, let handle = self.mpv else { return }
             self.pendingLoadedIdentity = itemIdentity
+            self.pendingLoadedAttempt = attempt
 
             // User-Agent must go via the dedicated "user-agent" option, not http-header-fields.
             // Fall back to a browser UA — some servers reject mpv's default "Lavf/..." agent.
@@ -567,7 +704,13 @@ class MPVViewController: UIViewController {
                 mpv_set_property_string(handle, "start", "none")
             }
             mpv_set_property_string(handle, "volume", volume)
-            self.mpvCommand(handle, loadArguments)
+            let result = self.mpvCommand(handle, loadArguments)
+            if result >= 0 { mpv_set_property_string(handle, "pause", "no") }
+            if result < 0 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentFailure(code: result, generation: itemIdentity, attempt: attempt)
+                }
+            }
         }
     }
 
@@ -599,32 +742,35 @@ class MPVViewController: UIViewController {
 
     private func handleEvent(_ event: mpv_event) {
         switch event.event_id {
-        case MPV_EVENT_FILE_LOADED:
+        case MPV_EVENT_START_FILE:
             loadedIdentity = pendingLoadedIdentity
+            loadedAttempt = pendingLoadedAttempt
+
+        case MPV_EVENT_FILE_LOADED:
             onFileLoaded()
 
         case MPV_EVENT_END_FILE:
-            // The handle is reused across episodes: our own `loadfile replace`
-            // (advance/loop) also emits END_FILE, with reason STOP/REDIRECT.
-            // Only a natural EOF or a hard error may advance the playlist —
-            // otherwise the replace that *performs* an advance would immediately
-            // trigger another one and skip episodes.
-            if let efPtr = event.data?.assumingMemoryBound(to: mpv_event_end_file.self) {
-                let reason = efPtr.pointee.reason
-                guard reason == MPV_END_FILE_REASON_EOF || reason == MPV_END_FILE_REASON_ERROR else {
-                    break
-                }
-            }
-            let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: loadedIdentity)
+            // STOP/REDIRECT are caused by our own loadfile replace. Only EOF
+            // advances or loops; an error stays on its own screen until action.
+            guard let end = event.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee,
+                  let attempt = loadedAttempt else { break }
+            let reason = end.reason
+            let code = end.error
+            let generation = loadedIdentity
+            let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: generation)
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isMpvStopped else { return }
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      self.failureSession.matches(attempt) else { return }
+                if reason == MPV_END_FILE_REASON_ERROR {
+                    self.presentFailure(code: code, generation: generation, attempt: attempt)
+                    return
+                }
+                guard reason == MPV_END_FILE_REASON_EOF, self.playbackState.failureSentence == nil else { return }
                 switch self.onEndOfFile?(identity) ?? .ignored {
                 case .repeatCurrentItem:
                     if let url = self.url { self.loadFile(url, fromStart: true) }
-                case .advanceOrLeave:
-                    self.onDismiss?()
-                case .ignored:
-                    break
+                case .advanceOrLeave: self.onDismiss?()
+                case .ignored: break
                 }
             }
 
@@ -653,13 +799,25 @@ class MPVViewController: UIViewController {
     private func onFileLoaded() {
         guard let handle = mpv else { return }
 
-        // Reconcile mute with current main-thread state even if preplay ended while
-        // the asynchronous load was in flight. Reused cores must clear mute too.
+        // Initial observer samples can precede START_FILE. Seed both flags
+        // once loaded, otherwise a normal unpaused file may never emit pause again.
+        var paused: Int32 = 0
+        var stalled: Int32 = 0
+        mpv_get_property(handle, "pause", MPV_FORMAT_FLAG, &paused)
+        mpv_get_property(handle, "paused-for-cache", MPV_FORMAT_FLAG, &stalled)
+        let isPaused = paused != 0
+        let cacheStalled = stalled != 0
+        let attempt = loadedAttempt
+        let generation = loadedIdentity
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isMpvStopped else { return }
+            guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                  let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
+            self.playbackState.isPlaying = !isPaused
+            self.playbackState.cacheStalled = cacheStalled
             self.applyAudibleMute()
             self.applyAppVolumeProperty()
             self.activateAudioSession()
+            self.broadcastStatus()
         }
 
         // Surface embedded audio/subtitle tracks right away. (mpvQueue context; updateTracks
@@ -675,12 +833,16 @@ class MPVViewController: UIViewController {
     }
 
     private func handlePropertyChange(name: String, prop: mpv_event_property) {
+        let attempt = loadedAttempt
+        let generation = loadedIdentity
         switch name {
         case "time-pos":
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isMpvStopped, Date() > self.ignoreTimeUpdatesUntil,
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil,
+                      Date() > self.ignoreTimeUpdatesUntil,
                       self.timelineUpdateGate.shouldUpdate(at: CACurrentMediaTime()) else { return }
                 // UI progress does not need a SwiftUI redraw for every decoded frame.
                 self.playbackState.currentTime = val
@@ -693,7 +855,9 @@ class MPVViewController: UIViewController {
                   let cString = prop.data?.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee else { break }
             let parsed = TimelineReport.parseMpvChapterList(String(cString: cString))
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isMpvStopped, parsed != self.chapters else { return }
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil,
+                      parsed != self.chapters else { return }
                 self.chapters = parsed
                 self.broadcastTimeline()
             }
@@ -708,30 +872,22 @@ class MPVViewController: UIViewController {
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isMpvStopped else { return }
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
                 // Store every cache sample, but publish the buffer bar with the throttled
                 // time-pos update instead of triggering another per-frame HUD redraw.
                 self.cacheAheadSec = val
             }
 
         case "paused-for-cache":
-            // The decode-vs-network discriminator. If this fires "STALLED" repeatedly during
-            // playback, mpv is starved for data (network-bound — the proxy hypothesis). If it
-            // never fires but playback is still choppy/desynced, the demuxer is keeping up and
-            // the bottleneck is decode (4K AV1 software — a hardware limit the proxy can't fix).
             guard prop.format == MPV_FORMAT_FLAG,
                   let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
             let stalled = val != 0
-            var cacheDur: Double = 0
-            if let handle = mpv {
-                mpv_get_property(handle, "demuxer-cache-duration", MPV_FORMAT_DOUBLE, &cacheDur)
-            }
-            print("[MPV] paused-for-cache: \(stalled ? "STALLED (network can't keep up)" : "resumed") — demuxer cache ahead = \(String(format: "%.1f", cacheDur))s")
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                NotificationCenter.default.post(
-                    name: .playBridgePlaybackActivity, object: nil,
-                    userInfo: ["isPlaying": self.playbackState.isPlaying && !stalled])
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
+                self.playbackState.cacheStalled = stalled
+                self.broadcastStatus()
             }
 
         case "duration":
@@ -739,8 +895,10 @@ class MPVViewController: UIViewController {
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee,
                   val > 0 else { break }
             DispatchQueue.main.async { [weak self] in
-                self?.playbackState.duration = val
-                self?.updateActiveSkipSegment()
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
+                self.playbackState.duration = val
+                self.updateActiveSkipSegment()
             }
 
         case "pause":
@@ -748,11 +906,10 @@ class MPVViewController: UIViewController {
                   let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
             let isPaused = val != 0
             DispatchQueue.main.async { [weak self] in
-                self?.playbackState.isPlaying = !isPaused
-                self?.broadcastStatus()
-                NotificationCenter.default.post(
-                    name: .playBridgePlaybackActivity, object: nil,
-                    userInfo: ["isPlaying": !isPaused])
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
+                self.playbackState.isPlaying = !isPaused
+                self.broadcastStatus()
             }
 
         case "current-ao":
@@ -991,6 +1148,7 @@ class MPVViewController: UIViewController {
                 self.setLooping(!self.playbackState.isLooping)
             },
             onSkipSegment: { [weak self] in self?.skipActiveSegment() },
+            onFailureAction: { [weak self] in self?.handleFailureAction($0) },
             engine: .mpv
         )
         let hosting = UIHostingController(rootView: overlay)
@@ -1005,6 +1163,7 @@ class MPVViewController: UIViewController {
 
     private func applyPreBufferingState() {
         applyAudibleMute()
+        playbackState.prebuffering = isPreBuffering
         playbackState.skipControlsEnabled = !isPreBuffering
         if isPreBuffering {
             playbackState.showUI = false
@@ -1014,7 +1173,7 @@ class MPVViewController: UIViewController {
             showUI(autoHide: true)
             NotificationCenter.default.post(
                 name: .playBridgePlaybackActivity, object: nil,
-                userInfo: ["isPlaying": !playbackState.userPaused])
+                userInfo: ["isPlaying": playbackState.failureSentence == nil && playbackState.surfaceState == .playing])
         }
     }
 
@@ -1022,7 +1181,7 @@ class MPVViewController: UIViewController {
     /// which Up/Down jump chapters. Any other reason to show the HUD clears it.
     private func showUI(autoHide: Bool = true, seekStrip: Bool = false) {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isMpvStopped, self.playbackState.failureSentence == nil else { return }
             self.playbackState.showUI = true
             self.playbackState.seekStripActive = seekStrip
             self.setNeedsFocusUpdate()
@@ -1205,6 +1364,12 @@ class MPVViewController: UIViewController {
         guard let type = presses.first?.type else { super.pressesBegan(presses, with: event); return }
         NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
 
+        if playbackState.failureSentence != nil {
+            if type == .menu { closeFailure() }
+            else { super.pressesBegan(presses, with: event) }
+            return
+        }
+
         if type == .menu {
             // The player owner also knows about the playlist. Use the same Back
             // levels as the phone so only the top overlay closes on each press.
@@ -1263,6 +1428,7 @@ class MPVViewController: UIViewController {
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if presses.first?.type == .menu { return }
+        if playbackState.failureSentence != nil { super.pressesEnded(presses, with: event); return }
         if let type = presses.first?.type, type == .leftArrow || type == .rightArrow {
             if !playbackState.userPaused || playbackState.isVirtualScrubbing {
                 if let timer = holdTimer, timer.isValid {
@@ -1353,19 +1519,26 @@ class MPVViewController: UIViewController {
 
         // Periodic status (covers live position) — 1s cadence matches the Android receiver.
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.broadcastStatus()
+            guard let self, self.playbackState.failureSentence == nil else { return }
+            self.broadcastStatus()
         }
     }
 
     /// Wire format mirrors the Android receiver: `status` carries ms positions.
     private func broadcastStatus() {
+        guard !isMpvStopped else { return }
+        if playbackState.failureSentence != nil, !failureSession.matches(failureSession.attempt) { return }
+        let state = playbackState.failureSentence == nil ? playbackState.surfaceState.rawValue : "error"
         var json: [String: Any] = [
             "type": "status",
-            "state": playbackState.isPlaying ? "playing" : "paused",
+            "state": state,
             "position": PlaybackTime.milliseconds(playbackState.currentTime),
             "duration": PlaybackTime.milliseconds(playbackState.duration),
         ]
         if let t = mediaTitle, !t.isEmpty { json["title"] = t }
+        if let sentence = playbackState.failureSentence { json["error"] = sentence }
+        NotificationCenter.default.post(name: .playBridgePlaybackActivity, object: nil,
+            userInfo: ["isPlaying": state == "playing"])
         if let buffered = TimelineReport.buffered(bufferedSeconds: playbackState.bufferedTime,
             positionSeconds: playbackState.currentTime, durationSeconds: playbackState.duration) {
             json["buffered"] = buffered
@@ -1391,6 +1564,7 @@ class MPVViewController: UIViewController {
     }
 
     private func updateActiveSkipSegment() {
+        guard playbackState.failureSentence == nil else { return }
         let active = skipLoader.segments.first {
             $0.contains(seconds: playbackState.currentTime)
                 && $0.targetSeconds(duration: playbackState.duration) != nil
@@ -1439,10 +1613,17 @@ class MPVViewController: UIViewController {
     }
 
     @objc private func onStillWatchingPause() { setPropertyAsync("pause", value: "yes") }
-    @objc private func onStillWatchingResume() { setPropertyAsync("pause", value: "no") }
+    @objc private func onStillWatchingResume() {
+        if playbackState.failureSentence == nil { setPropertyAsync("pause", value: "no") }
+    }
 
     @objc private func onControlNotification(_ note: Notification) {
         guard let cmd = note.userInfo?["command"] as? String else { return }
+        if playbackState.failureSentence != nil {
+            if cmd == "stop" { closeFailure(event: .phoneStop) }
+            (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
+            return
+        }
         if cmd == "add_subtitle" {
             guard let resource = note.userInfo?["subtitleResource"] as? Playbridge_SubtitleResource,
                   let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void),
@@ -1508,6 +1689,7 @@ class MPVViewController: UIViewController {
 
     func bindEngineChrome(_ chrome: PlayerEngineChrome) {
         engineChrome = chrome
+        chrome.handleFailureKey = { [weak self] key in self?.handleFailureKey(key) ?? false }
         chrome.snapshot = { [weak self] in
             guard let self else { return PlayerEngineChromeSnapshot() }
             return PlayerEngineChromeSnapshot(
@@ -1530,6 +1712,7 @@ class MPVViewController: UIViewController {
     /// Network Back closes one MPV overlay. Scrub cancel matches the physical Menu path.
     /// Directional keys move the same menus the focus ring uses.
     private func applyRemoteEffect(_ effect: PlayerRemoteEffect) -> Bool {
+        if playbackState.failureSentence != nil { return true }
         switch effect {
         case .dismissSubtitleMenu:
             guard playbackState.showSubtitleMenu else { return false }
@@ -1782,6 +1965,7 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
+        invalidateFailure()
         skipLoader.cancel()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()

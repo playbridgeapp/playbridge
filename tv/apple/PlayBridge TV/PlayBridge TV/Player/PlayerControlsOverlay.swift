@@ -5,6 +5,16 @@ import Combine
 
 class PlayerControlsData: ObservableObject {
     @Published var isPlaying: Bool = false
+    @Published var cacheStalled = false
+    @Published var prebuffering = false
+    @Published var failureSentence: String?
+    @Published var failureHasNextItem = false
+    @Published var failureHighlight = PlaybackFailureModel.defaultAction
+
+    var surfaceState: PlaybackSurfaceState {
+        .resolve(cacheStalled: cacheStalled, userPaused: userPaused,
+                 prebuffering: prebuffering, enginePaused: !isPlaying)
+    }
     @Published var userPaused: Bool = false
     @Published var title: String = ""
     @Published var currentTime: Double = 0
@@ -165,6 +175,7 @@ struct PlayerControlsOverlay: View {
     let onTogglePlaylist: () -> Void
     let onLoopToggle: () -> Void
     let onSkipSegment: () -> Void
+    let onFailureAction: (PlaybackFailureAction) -> Void
     /// Active playback engine, also shown in the controls badge.
     let engine: PlaybackEngine
 
@@ -451,13 +462,28 @@ struct PlayerControlsOverlay: View {
                 }
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
+
+            if !data.prebuffering {
+                if let sentence = data.failureSentence {
+                    PlaybackFailureOverlay(title: data.title, sentence: sentence,
+                        hasNextItem: data.failureHasNextItem, highlighted: $data.failureHighlight,
+                        onAction: onFailureAction)
+                } else if data.surfaceState.showsSpinner {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(2)
+                        .frame(width: 64, height: 64)
+                        .accessibilityLabel("Buffering")
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .animation(.easeInOut(duration: 0.3), value: data.showUI)
         .animation(.easeInOut(duration: 0.3), value: data.userPaused)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showSubtitleMenu)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showAudioMenu)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showEngineMenu)
-        .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
+        .allowsHitTesting(data.failureSentence != nil || data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
     }
 
     private static let captionRowHeight: CGFloat = 28
@@ -529,6 +555,63 @@ struct PlayerControlsOverlay: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         } else {
             return String(format: "%d:%02d", m, s)
+        }
+    }
+}
+
+private struct PlaybackFailureOverlay: View {
+    let title: String
+    let sentence: String
+    let hasNextItem: Bool
+    @Binding var highlighted: PlaybackFailureAction
+    let onAction: (PlaybackFailureAction) -> Void
+    @FocusState private var focused: PlaybackFailureAction?
+
+    private static func icon(_ action: PlaybackFailureAction) -> String {
+        switch action {
+        case .tryAgain: return "arrow.clockwise"
+        case .next: return "forward.end.fill"
+        case .close: return "xmark"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 32) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 64))
+                    .foregroundColor(.white.opacity(0.8))
+                if !title.isEmpty {
+                    Text(title).font(.system(size: 36, weight: .semibold)).lineLimit(1)
+                }
+                Text(sentence).font(.system(size: 28)).lineLimit(1)
+                HStack(spacing: 32) {
+                    ForEach(PlaybackFailureModel.actions(hasNextItem: hasNextItem), id: \.self) { action in
+                        Button { onAction(action) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: Self.icon(action))
+                                    .font(.system(size: 24, weight: .semibold))
+                                Text(action.rawValue)
+                                    .font(.system(size: 26, weight: .semibold))
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
+                        }
+                        // Same pill as Skip Intro: no tvOS card platter around a tight label.
+                        .buttonStyle(SkipPillStyle(focused: focused == action))
+                        .focused($focused, equals: action)
+                    }
+                }
+                .padding(.top, 16)
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 80)
+        }
+        .onAppear { focused = PlaybackFailureModel.defaultAction }
+        .onChange(of: highlighted) { _, value in focused = value }
+        .onChange(of: focused) { _, value in
+            if let value { highlighted = value }
         }
     }
 }
