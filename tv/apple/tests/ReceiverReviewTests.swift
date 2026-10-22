@@ -1676,6 +1676,20 @@ private func runTransportChromeTests() {
     let posterArt = ArtworkURL.candidates("https://image.tmdb.org/t/p/w342/p.jpg", kind: .poster)
     assert(posterArt.map(\.absoluteString).first == "https://image.tmdb.org/t/p/w780/p.jpg" && posterArt.count == 2)
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w1280/p.jpg", kind: .poster).count == 1, "Never shrinks")
+    // Experimental Matroska remux routing and the loopback HLS paths.
+    assert(RemuxRoute.isCandidate(URL(string: "https://cdn.example/x/Movie.2024.MKV?token=1")!))
+    assert(RemuxRoute.isCandidate(URL(fileURLWithPath: "/tmp/a.mk3d")))
+    assert(!RemuxRoute.isCandidate(URL(string: "https://cdn.example/x/movie.mp4")!))
+    assert(!RemuxRoute.isCandidate(URL(string: "https://cdn.example/stream?file=a.mkv")!))
+    assert(!RemuxRoute.isCandidate(URL(string: "ftp://host/a.mkv")!))
+    assert(RemuxRoute.parse(path: "/abc/master.m3u8")! == ("abc", .master))
+    assert(RemuxRoute.parse(path: "/abc/index.m3u8?x=1")! == ("abc", .media))
+    assert(RemuxRoute.parse(path: "/abc/init.mp4")! == ("abc", .initSegment))
+    assert(RemuxRoute.parse(path: "/abc/seg12.m4s")! == ("abc", .segment(12)))
+    for bad in ["/abc/seg-1.m4s", "/abc/segx.m4s", "/abc", "/abc/def/master.m3u8", "/", "//master.m3u8", "/abc/other.ts"] {
+        assert(RemuxRoute.parse(path: bad) == nil, bad)
+    }
+    assert(RemuxRoute.Resource.segment(0).contentType == "video/iso.segment")
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w300/b.jpg", kind: .card).first?.absoluteString
         == "https://image.tmdb.org/t/p/w780/b.jpg")
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w780/b.jpg", kind: .card).count == 1)

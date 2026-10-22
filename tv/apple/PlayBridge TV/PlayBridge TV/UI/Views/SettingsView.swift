@@ -5,6 +5,7 @@ struct SettingsView: View {
 
     @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage(RemuxRoute.settingKey) var remuxMatroska: Bool = false
     @AppStorage("skip_segments_provider") var skipProvider: String = "both"
     @AppStorage("enable_history") var enableHistory: Bool = true
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
@@ -36,6 +37,9 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    // Experimental: AVPlayer plays MKV via an on-device remux (Dolby Vision,
+                    // Atmos passthrough); anything it can't take falls back to MPV.
+                    Toggle("Play MKV in Native Player (Experimental)", isOn: $remuxMatroska)
                     // A Picker here is not focusable on tvOS without a navigation stack;
                     // cycle on each press like the reminder rows below.
                     Button(action: selectNextSkipProvider) {

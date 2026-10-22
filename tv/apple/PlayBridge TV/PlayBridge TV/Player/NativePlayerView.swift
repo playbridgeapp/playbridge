@@ -76,7 +76,16 @@ struct NativePlayerView: UIViewControllerRepresentable {
         if let headers = headers {
             options["AVURLAssetHTTPHeaderFieldsKey"] = headers
         }
-        let asset = AVURLAsset(url: url, options: options)
+        // Experimental: Matroska plays through the on-device HLS remux. The source
+        // headers go to the remuxer's own requests, not to the loopback server.
+        var assetURL = url
+        if UserDefaults.standard.bool(forKey: RemuxRoute.settingKey), RemuxRoute.isCandidate(url),
+           let local = LocalHLSServer.shared.register(source: url, headers: headers) {
+            assetURL = local.url
+            options = [:]
+            context.coordinator.remuxToken = local.token
+        }
+        let asset = AVURLAsset(url: assetURL, options: options)
         let playerItem = AVPlayerItem(asset: asset)
 
         // Title shown in the native tvOS transport bar (read from externalMetadata).
@@ -290,6 +299,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         /// Android TV engine fallback. Later failures stay here.
         private var itemStatusObservation: NSKeyValueObservation?
         private var itemWasReady = false
+        /// Loopback HLS session of an experimental Matroska remux.
+        var remuxToken: String?
         private var didFallBack = false
         private weak var playerController: AVPlayerViewController?
         private weak var subtitleCaptionView: UIView?
@@ -392,6 +403,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            if let remuxToken { LocalHLSServer.shared.remove(token: remuxToken) }
+            remuxToken = nil
             skipLoader.cancel()
             playerController?.contextualActions = []
             lateSubtitleDownload?.cancel()
