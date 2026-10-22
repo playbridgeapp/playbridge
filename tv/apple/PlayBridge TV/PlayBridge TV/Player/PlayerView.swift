@@ -32,7 +32,7 @@ struct PlayerView: View {
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var playlistStore: PlaylistStore
     @EnvironmentObject var server: WebSocketServer
-    @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage("preferredPlayer") var preferredPlayer: String = PlaybackEngine.defaultEngine.rawValue
     // Engine chosen via the on-screen switch this session. Takes precedence over both the
     // phone's player_mode and the stored preference, but is not persisted.
     @State private var sessionEngine: PlaybackEngine? = nil
@@ -44,10 +44,10 @@ struct PlayerView: View {
     @State private var engineChrome = PlayerEngineChrome()
     @State private var exitGate = PlayerRemoteExitGate()
     @State private var tuning = PlayerTuning()
-    @State private var settingsReporter = PlayerSettingsReporter(engine: "avplayer", generation: 0)
+    @State private var settingsReporter = PlayerSettingsReporter(engine: PlaybackEngine.defaultEngine.rawValue, generation: 0)
     /// App volume for this playback session. A new player screen starts at full
     /// level, unmuted. Engine switches and playlist moves keep the stored level.
-    @State private var appVolume = PlayerAppVolumeController(engine: "avplayer", generation: 0)
+    @State private var appVolume = PlayerAppVolumeController(engine: PlaybackEngine.defaultEngine.rawValue, generation: 0)
     @State private var appVolumeBanner: String?
     @State private var appVolumeShownLevel = PlayerAppVolume.defaultLevel
     @State private var appVolumeBannerID = 0
@@ -141,7 +141,7 @@ struct PlayerView: View {
         if item.hasPlayerMode, let requested = PlaybackEngine(command: item.playerMode) {
             return requested
         }
-        return PlaybackEngine(command: preferredPlayer) ?? .avplayer
+        return PlaybackEngine(command: preferredPlayer) ?? .defaultEngine
     }
 
     private func isCurrentPlayback(_ engine: PlaybackEngine, generation: Int) -> Bool {
