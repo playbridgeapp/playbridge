@@ -295,7 +295,8 @@ struct PlayerView: View {
         case .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
              .dismissSettingsSheet, .dismissScrub, .dismissControls,
              .togglePlayback, .seekBackward, .seekForward,
-             .scrubBackward, .scrubForward, .commitScrub:
+             .scrubBackward, .scrubForward, .commitScrub,
+             .chapterNext, .chapterPrevious:
             _ = engineChrome.apply(effect)
         case .adjustAppVolume(let steps):
             publishAppVolume(appVolume.step(steps, identity: liveVolumeIdentity()))

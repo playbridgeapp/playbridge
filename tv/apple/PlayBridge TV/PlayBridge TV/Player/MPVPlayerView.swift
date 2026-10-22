@@ -204,7 +204,10 @@ class MPVViewController: UIViewController {
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
     /// Chapter markers of the open file (mpv `chapter-list`). Main-thread only.
-    private var chapters: [TimelineChapter] = []
+    private var chapters: [TimelineChapter] = [] {
+        didSet { playbackState.chapters = ChapterNavigation.sorted(chapters) }
+    }
+    private var chapterToastTimer: Timer?
     /// When the current file started loading — used to log time-to-audio for diagnosing delays.
     private var loadStartTime = Date()
 
@@ -504,6 +507,8 @@ class MPVViewController: UIViewController {
         self.mediaTitle = title
 
         chapters = []
+        clearChapterToast()
+        playbackState.seekStripActive = false
         playbackState.activeSkipSegment = nil
         startSkipSegments()
 
@@ -1013,10 +1018,13 @@ class MPVViewController: UIViewController {
         }
     }
 
-    private func showUI(autoHide: Bool = true) {
+    /// `seekStrip` marks the HUD as the strip a seek or chapter jump opened, in
+    /// which Up/Down jump chapters. Any other reason to show the HUD clears it.
+    private func showUI(autoHide: Bool = true, seekStrip: Bool = false) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.playbackState.showUI = true
+            self.playbackState.seekStripActive = seekStrip
             self.setNeedsFocusUpdate()
             self.hideControlsTimer?.invalidate()
             guard autoHide, !self.playbackState.isVirtualScrubbing else { return }
@@ -1024,6 +1032,7 @@ class MPVViewController: UIViewController {
                 DispatchQueue.main.async {
                     withAnimation {
                         self?.playbackState.showUI = false
+                        self?.playbackState.seekStripActive = false
                         self?.setNeedsFocusUpdate()
                     }
                 }
@@ -1075,7 +1084,56 @@ class MPVViewController: UIViewController {
         seekAsync(to: target)
         let menuOpen = playbackState.showSubtitleMenu || playbackState.showAudioMenu
             || playbackState.showEngineMenu
-        if !menuOpen { showUI(autoHide: !playbackState.userPaused) }
+        if !menuOpen { showUI(autoHide: !playbackState.userPaused, seekStrip: !playbackState.userPaused) }
+    }
+
+    // MARK: - Chapters
+
+    /// Up/Down in the seek strip, or during a scrub (where the ghost moves instead).
+    /// Repeated presses chain from the pending target: seeks set `currentTime`
+    /// optimistically and hold off mpv's stale `time-pos`.
+    private func jumpChapter(forward: Bool) {
+        let list = playbackState.chapters
+        guard ChapterNavigation.canJump(list) else { return }
+        let scrubbing = playbackState.isVirtualScrubbing
+        let base = scrubbing ? playbackState.virtualTime : playbackState.currentTime
+        let target = ChapterNavigation.jumpTarget(
+            chapters: list, positionMs: PlaybackTime.milliseconds(base), forward: forward)
+        showChapterToast(ChapterNavigation.toast(target))
+        guard let target else {
+            if scrubbing { showUI(autoHide: false) } else { showUI(autoHide: true, seekStrip: true) }
+            return
+        }
+        var seconds = Double(target.chapter.startMs) / 1000
+        if playbackState.duration > 0 { seconds = min(seconds, playbackState.duration) }
+        if scrubbing {
+            // Stop the ghost on the chapter; Select commits, Left/Right scrub on from there.
+            playbackState.scrubMultiplier = 0
+            playbackState.virtualTime = seconds
+            showUI(autoHide: false)
+            return
+        }
+        playbackState.currentTime = seconds
+        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+        seekAsync(to: seconds)
+        updateActiveSkipSegment()
+        showUI(autoHide: true, seekStrip: true)
+    }
+
+    private func showChapterToast(_ text: String) {
+        playbackState.chapterToast = text
+        chapterToastTimer?.invalidate()
+        chapterToastTimer = Timer.scheduledTimer(
+            withTimeInterval: ChapterNavigation.toastSeconds, repeats: false
+        ) { [weak self] _ in
+            DispatchQueue.main.async { self?.playbackState.chapterToast = nil }
+        }
+    }
+
+    private func clearChapterToast() {
+        chapterToastTimer?.invalidate()
+        chapterToastTimer = nil
+        playbackState.chapterToast = nil
     }
 
     private func seekAsync(to seconds: Double) {
@@ -1133,7 +1191,7 @@ class MPVViewController: UIViewController {
         seekAsync(to: target)
         setPropertyAsync("pause", value: "no")
         playbackState.userPaused = false
-        showUI(autoHide: true)
+        showUI(autoHide: true, seekStrip: true)
     }
 
     // MARK: - Siri Remote
@@ -1161,6 +1219,12 @@ class MPVViewController: UIViewController {
         }
 
         switch type {
+        case .upArrow where playbackState.chapterKeysActive,
+             .downArrow where playbackState.chapterKeysActive:
+            // Ahead of the Skip branches: the Skip pill is the only focus target,
+            // so Up/Down have no focus meaning while it shows.
+            jumpChapter(forward: type == .upArrow)
+
         case .select where playbackState.activeSkipSegment != nil && !playbackState.isVirtualScrubbing:
             super.pressesBegan(presses, with: event)
         case .playPause, .select:
@@ -1316,8 +1380,10 @@ class MPVViewController: UIViewController {
 
     private func startSkipSegments() {
         let identity = mediaIdentity
+        playbackState.skipSegments = []
         skipLoader.start(skipMetadata) { [weak self] in
             guard let self, !self.isMpvStopped, self.mediaIdentity == identity else { return }
+            self.playbackState.skipSegments = self.skipLoader.segments
             self.updateActiveSkipSegment()
             self.broadcastTimeline()
         }
@@ -1450,7 +1516,10 @@ class MPVViewController: UIViewController {
                 engineMenu: self.playbackState.showEngineMenu,
                 settingsSheet: false,
                 scrubbing: self.playbackState.isVirtualScrubbing,
-                controlsVisible: self.playbackState.showUI && !self.isPreBuffering
+                controlsVisible: self.playbackState.showUI && !self.isPreBuffering,
+                chapterCount: self.playbackState.chapters.count,
+                seekStripVisible: !self.isPreBuffering && self.playbackState.seekStripActive
+                    && self.playbackState.showUI && !self.playbackState.userPaused
             )
         }
         chrome.apply = { [weak self] effect in
@@ -1506,6 +1575,10 @@ class MPVViewController: UIViewController {
         case .commitScrub:
             guard playbackState.isVirtualScrubbing else { return false }
             commitVirtualScrub()
+            return true
+        case .chapterNext, .chapterPrevious:
+            guard !isPreBuffering, ChapterNavigation.canJump(playbackState.chapters) else { return false }
+            jumpChapter(forward: effect == .chapterNext)
             return true
         default:
             return false
@@ -1724,6 +1797,8 @@ class MPVViewController: UIViewController {
         holdTimer = nil
         virtualScrubTickTimer?.invalidate()
         virtualScrubTickTimer = nil
+        chapterToastTimer?.invalidate()
+        chapterToastTimer = nil
         NotificationCenter.default.removeObserver(self)
 
         guard let handle = mpv else {

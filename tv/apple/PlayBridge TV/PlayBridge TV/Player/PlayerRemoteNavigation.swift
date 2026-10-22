@@ -12,6 +12,11 @@ struct PlayerChromeState: Equatable {
     var scrubbing = false
     var playlist = false
     var controlsVisible = false
+    /// Chapters of the open item. Up/Down jump them only with two or more.
+    var chapterCount = 0
+    /// The transport strip a Left/Right seek opened is still showing while
+    /// playing, with no menu open.
+    var seekStripVisible = false
 }
 
 /// Where a network Up or Down moves a highlighted row. The engine owns the
@@ -57,6 +62,9 @@ enum PlayerRemoteEffect: Equatable {
     case scrubBackward
     case scrubForward
     case commitScrub
+    /// Jump to the next or previous chapter start; during a scrub, move the ghost there.
+    case chapterNext
+    case chapterPrevious
     /// One relative app-volume step. Positive raises playback attenuation.
     case adjustAppVolume(steps: Int)
     case toggleAppMute
@@ -70,6 +78,8 @@ struct PlayerEngineChromeSnapshot: Equatable {
     var settingsSheet = false
     var scrubbing = false
     var controlsVisible = false
+    var chapterCount = 0
+    var seekStripVisible = false
 
     func chrome(sessionMatches: Bool, stillWatching: Bool, playlist: Bool) -> PlayerChromeState {
         PlayerChromeState(
@@ -81,7 +91,9 @@ struct PlayerEngineChromeSnapshot: Equatable {
             settingsSheet: settingsSheet,
             scrubbing: scrubbing,
             playlist: playlist,
-            controlsVisible: controlsVisible
+            controlsVisible: controlsVisible,
+            chapterCount: chapterCount,
+            seekStripVisible: seekStripVisible
         )
     }
 }
@@ -268,16 +280,19 @@ enum PlayerRemoteNavigation {
             case .left: return .scrubBackward
             case .right: return .scrubForward
             case .center: return .commitScrub
-            case .up, .down: return .ignored
+            case .up: return chrome.chapterCount >= 2 ? .chapterNext : .ignored
+            case .down: return chrome.chapterCount >= 2 ? .chapterPrevious : .ignored
             }
         }
         if chrome.playlist { return verticalList(direction) }
         // Playing, paused, and pre-play, with the transport showing or hidden.
-        // Up and Down step app volume. Menus, the playlist, scrub, and a
+        // Up and Down step app volume, except that they jump chapters while the
+        // strip a seek opened is showing. Menus, the playlist, scrub, and a
         // presented sheet never reach this branch.
+        let chapterKeys = chrome.seekStripVisible && chrome.chapterCount >= 2
         switch direction {
-        case .up: return .adjustAppVolume(steps: 1)
-        case .down: return .adjustAppVolume(steps: -1)
+        case .up: return chapterKeys ? .chapterNext : .adjustAppVolume(steps: 1)
+        case .down: return chapterKeys ? .chapterPrevious : .adjustAppVolume(steps: -1)
         case .center: return .togglePlayback
         case .left: return .seekBackward
         case .right: return .seekForward

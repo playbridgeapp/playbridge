@@ -17,6 +17,23 @@ class PlayerControlsData: ObservableObject {
     @Published var hasPlaylist = false
     @Published var activeSkipSegment: SkipSegment?
     @Published var skipControlsEnabled = true
+    /// Sorted chapter markers of the open item (`ChapterNavigation.sorted`).
+    @Published var chapters: [TimelineChapter] = []
+    /// Skip segments drawn as bands on the seek bar.
+    @Published var skipSegments: [SkipSegment] = []
+    /// Jump toast ("Chapter 3 · The Heist", "Last chapter"); replaces the caption briefly.
+    @Published var chapterToast: String?
+    /// The HUD is showing because of a Left/Right seek or a chapter jump. Up/Down
+    /// jump chapters only then (and during a scrub).
+    @Published var seekStripActive = false
+
+    var menuOpen: Bool { showSubtitleMenu || showAudioMenu || showEngineMenu }
+
+    /// Up/Down jump chapters (or move the scrub ghost to one) right now.
+    var chapterKeysActive: Bool {
+        guard ChapterNavigation.canJump(chapters), !menuOpen else { return false }
+        return isVirtualScrubbing || (seekStripActive && showUI && !userPaused)
+    }
     
     // Virtual Scrubbing Ghost HUD
     @Published var isVirtualScrubbing: Bool = false
@@ -206,43 +223,51 @@ struct PlayerControlsOverlay: View {
 
                     // Bottom control bar
                     VStack(spacing: 24) {
-                        // Progress bar
-                        HStack(spacing: 16) {
-                            let displayTime = data.isVirtualScrubbing ? data.virtualTime : data.currentTime
-                            Text(formatTime(displayTime))
-                                .font(.system(size: 22, weight: .medium, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.8))
+                        let displayTime = data.isVirtualScrubbing ? data.virtualTime : data.currentTime
+                        VStack(spacing: 10) {
+                            // Progress bar
+                            HStack(spacing: 16) {
+                                Text(formatTime(displayTime))
+                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.8))
 
-                            GeometryReader { proxy in
-                                ZStack(alignment: .leading) {
-                                    // Track
-                                    Capsule().fill(Color.white.opacity(0.2))
-                                    // Buffered-ahead range
-                                    if data.duration > 0, data.bufferedTime > displayTime {
-                                        Capsule()
-                                            .fill(Color.white.opacity(0.35))
-                                            .frame(
-                                                width: proxy.size.width
-                                                    * CGFloat(min(data.bufferedTime / data.duration, 1.0)))
+                                SeekTrack(
+                                    progress: data.duration > 0 ? displayTime / data.duration : 0,
+                                    buffered: data.duration > 0 && data.bufferedTime > displayTime
+                                        ? min(data.bufferedTime / data.duration, 1.0) : nil,
+                                    chapterFractions: ChapterNavigation.chapterFractions(
+                                        chapters: data.chapters, durationMs: durationMs),
+                                    segmentRanges: ChapterNavigation.segmentRanges(
+                                        segments: data.skipSegments, durationMs: durationMs))
+                                    .frame(height: SeekTrack.height)
+
+                                Text(formatTime(data.duration))
+                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+
+                            if hasCaptionRow {
+                                HStack(spacing: 16) {
+                                    if let toast = data.chapterToast {
+                                        Text(toast)
+                                            .font(.system(size: 22, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                    } else if let caption = caption(at: displayTime) {
+                                        Text(caption)
+                                            .font(.system(size: 20, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.75))
+                                            .lineLimit(1)
                                     }
-                                    // Played progress
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [Theme.accent, Theme.accent.opacity(0.7)],
-                                                startPoint: .leading, endPoint: .trailing)
-                                        )
-                                        .frame(
-                                            width: proxy.size.width
-                                                * CGFloat(
-                                                    data.duration > 0
-                                                        ? displayTime / data.duration : 0))
+                                    Spacer(minLength: 0)
+                                    if data.chapterKeysActive {
+                                        Text(ChapterNavigation.hint)
+                                            .font(.system(size: 18, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.6))
+                                    }
                                 }
-                            }.frame(height: 8)
-
-                            Text(formatTime(data.duration))
-                                .font(.system(size: 22, weight: .medium, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.8))
+                                .frame(height: Self.captionRowHeight)
+                            }
                         }
                         .padding(.horizontal, 80)
 
@@ -365,7 +390,7 @@ struct PlayerControlsOverlay: View {
                             action: onSkipSegment)
                     }
                     .padding(.horizontal, 80)
-                    .padding(.bottom, data.showUI ? (data.userPaused ? 300 : 140) : 80)
+                    .padding(.bottom, skipButtonBottomPadding)
                 }
             }
 
@@ -435,6 +460,28 @@ struct PlayerControlsOverlay: View {
         .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
     }
 
+    private static let captionRowHeight: CGFloat = 28
+
+    private var durationMs: Int { PlaybackTime.milliseconds(data.duration) }
+
+    private func caption(at seconds: Double) -> String? {
+        ChapterNavigation.timelineCaption(
+            chapters: data.chapters, segments: data.skipSegments,
+            positionMs: PlaybackTime.milliseconds(seconds), durationMs: durationMs)
+    }
+
+    /// The row under the bar holds the jump toast, the playhead caption, or the hint.
+    private var hasCaptionRow: Bool {
+        !data.chapters.isEmpty || !data.skipSegments.isEmpty || data.chapterToast != nil
+    }
+
+    /// Keeps the Skip pill clear of the bottom bar, which grows by the caption row.
+    private var skipButtonBottomPadding: CGFloat {
+        guard data.showUI else { return 80 }
+        let base: CGFloat = data.userPaused ? 300 : 140
+        return hasCaptionRow ? base + Self.captionRowHeight + 10 : base
+    }
+
     private var subtitleRowIndex: Int {
         let ids = PlayerRemoteNavigation.menuRowIDs(
             trackIDs: data.subtitleTracks.map(\.id) + data.externalSubtitleTracks.map(\.id),
@@ -483,6 +530,59 @@ struct PlayerControlsOverlay: View {
         } else {
             return String(format: "%d:%02d", m, s)
         }
+    }
+}
+
+/// The seek bar: skip-segment bands under the track, then the track, the
+/// buffered range, and the played range, with chapter gaps cleared through all
+/// of them (the phone remote's draw order, scaled for the TV).
+private struct SeekTrack: View {
+    static let height: CGFloat = 16
+    static let lineHeight: CGFloat = 8
+    static let gapWidth: CGFloat = 4
+
+    let progress: Double
+    let buffered: Double?
+    let chapterFractions: [Double]
+    let segmentRanges: [ClosedRange<Double>]
+
+    var body: some View {
+        Canvas { context, size in
+            let width = size.width
+            let midY = size.height / 2
+            func capsule(from start: Double, to end: Double, height: CGFloat) -> Path {
+                let x0 = width * CGFloat(min(max(start, 0), 1))
+                let x1 = width * CGFloat(min(max(end, 0), 1))
+                let rect = CGRect(x: x0, y: midY - height / 2, width: max(x1 - x0, 0), height: height)
+                return Path(roundedRect: rect, cornerRadius: height / 2)
+            }
+
+            for range in segmentRanges {
+                context.fill(capsule(from: range.lowerBound, to: range.upperBound, height: size.height),
+                             with: .color(Theme.segment.opacity(0.35)))
+            }
+            context.fill(capsule(from: 0, to: 1, height: Self.lineHeight), with: .color(.white.opacity(0.2)))
+            if let buffered, buffered > progress {
+                context.fill(capsule(from: 0, to: buffered, height: Self.lineHeight),
+                             with: .color(.white.opacity(0.35)))
+            }
+            if progress > 0 {
+                let played = capsule(from: 0, to: progress, height: Self.lineHeight)
+                context.fill(played, with: .linearGradient(
+                    Gradient(colors: [Theme.accent, Theme.accent.opacity(0.7)]),
+                    startPoint: CGPoint(x: 0, y: midY),
+                    endPoint: CGPoint(x: width * CGFloat(min(progress, 1)), y: midY)))
+            }
+
+            context.blendMode = .clear
+            for fraction in chapterFractions {
+                let x = width * CGFloat(fraction)
+                guard x > Self.gapWidth, x < width - Self.gapWidth else { continue }
+                context.fill(Path(CGRect(x: x - Self.gapWidth / 2, y: 0, width: Self.gapWidth, height: size.height)),
+                             with: .color(.black))
+            }
+        }
+        .compositingGroup()
     }
 }
 
