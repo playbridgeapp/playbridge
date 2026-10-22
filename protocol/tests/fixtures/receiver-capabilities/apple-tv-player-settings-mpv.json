@@ -1,0 +1,16 @@
+{
+  "type": "player_settings",
+  "speed": 1.5,
+  "scaling": "Zoom",
+  "audioBoost": false,
+  "subtitleOffsetMs": 250,
+  "engine": "mpv",
+  "speedAvailable": true,
+  "scalingAvailable": true,
+  "audioBoostAvailable": false,
+  "qualityAvailable": false,
+  "subtitleOffsetAvailable": true,
+  "loopAvailable": true,
+  "engineAvailable": true,
+  "loop": false
+}

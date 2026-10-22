@@ -28,22 +28,23 @@ enum PlayerPlaybackReport {
         "subtitleOffsetAvailable", "engineAvailable", "loopAvailable", "loop",
     ]
 
-    /// Neutral values for settings this receiver does not implement, plus the
-    /// real engine id and repeat-one flag. Availability flags are honest.
-    static func settings(engine: String, loop: Bool) -> [String: Any] {
+    /// Available tuning values plus neutral values for unsupported settings.
+    /// Default arguments preserve the legacy complete snapshot.
+    static func settings(engine: String, loop: Bool, tuning: PlayerTuning = .init(),
+                         availability: PlayerSettingsAvailability = .none) -> [String: Any] {
         [
             "type": "player_settings",
-            "speed": 1,
-            "scaling": "Fit",
+            "speed": availability.speed ? tuning.speed as Any : 1,
+            "scaling": availability.scaling ? tuning.scaling.rawValue : "Fit",
             "audioBoost": false,
-            "subtitleOffsetMs": 0,
+            "subtitleOffsetMs": availability.subtitleOffset ? tuning.subtitleOffsetMs : 0,
             "engine": engine,
             "loop": loop,
-            "speedAvailable": false,
-            "scalingAvailable": false,
+            "speedAvailable": availability.speed,
+            "scalingAvailable": availability.scaling,
             "audioBoostAvailable": false,
             "qualityAvailable": false,
-            "subtitleOffsetAvailable": false,
+            "subtitleOffsetAvailable": availability.subtitleOffset,
             "engineAvailable": true,
             "loopAvailable": true,
         ]
@@ -113,6 +114,8 @@ final class PlayerSettingsReporter {
     private(set) var engine: String
     private(set) var generation: Int
     private(set) var loop: Bool
+    private(set) var tuning = PlayerTuning()
+    private(set) var sidecarOverlayActive = false
 
     init(engine: String, generation: Int, loop: Bool = false) {
         self.engine = engine
@@ -121,12 +124,27 @@ final class PlayerSettingsReporter {
     }
 
     func note(engine: String, generation: Int) {
+        if self.engine != engine || self.generation != generation { sidecarOverlayActive = false }
         self.engine = engine
         self.generation = generation
     }
 
     func settingsFrame() -> [String: Any] {
-        PlayerPlaybackReport.settings(engine: engine, loop: loop)
+        PlayerPlaybackReport.settings(engine: engine, loop: loop, tuning: tuning,
+            availability: .forEngine(engine, sidecarOverlayActive: sidecarOverlayActive))
+    }
+
+    func apply(_ command: PlayerTuning.Command, identity: PlayerReportIdentity) -> [String: Any]? {
+        guard matches(identity),
+              PlayerSettingsAvailability.forEngine(engine, sidecarOverlayActive: sidecarOverlayActive).allows(command),
+              tuning.apply(command) else { return nil }
+        return settingsFrame()
+    }
+
+    func setSidecarOverlay(_ active: Bool, identity: PlayerReportIdentity) -> [String: Any]? {
+        guard matches(identity), sidecarOverlayActive != active else { return nil }
+        sidecarOverlayActive = active
+        return settingsFrame()
     }
 
     /// Phone, transport-bar, or on-screen loop command for the live item.
@@ -140,6 +158,7 @@ final class PlayerSettingsReporter {
     func switchEngine(from source: PlayerReportIdentity, to target: String) -> [String: Any]? {
         guard matches(source), target != source.engine, !target.isEmpty else { return nil }
         engine = target
+        sidecarOverlayActive = false
         return settingsFrame()
     }
 
