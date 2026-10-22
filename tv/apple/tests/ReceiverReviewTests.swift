@@ -1433,6 +1433,20 @@ private func runTransportChromeTests() {
     }
     assert(TransportTimeLabels.elapsed(.greatestFiniteMagnitude) == "0:00")
     assert(TransportTimeLabels.remaining(12, duration: 0).isEmpty)
+    // AVPlayer clock and the label riding under the playhead.
+    assert(TransportTimeLabels.clock(0) == "00:00" && TransportTimeLabels.clock(111) == "01:51")
+    assert(TransportTimeLabels.clock(3723) == "1:02:03")
+    assert(TransportTimeLabels.clockRemaining(111, duration: 301) == "-03:10")
+    assert(TransportTimeLabels.clockRemaining(400, duration: 301) == "-00:00")
+    assert(TransportTimeLabels.clockRemaining(12, duration: .nan).isEmpty)
+    let start = TransportTimeLabels.playheadLabelLayout(fraction: 0, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(start.x == 0 && start.showsRemaining)
+    let middle = TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(middle.x == 460 && middle.showsRemaining)
+    let end = TransportTimeLabels.playheadLabelLayout(fraction: 1, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(end.x == 920 && !end.showsRemaining)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: .nan, width: 1000, elapsedWidth: 80, remainingWidth: 90).x == 0)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 0, elapsedWidth: 80, remainingWidth: 90).x == 0)
     assert(TransportTimeLabels.metadataSubtitle(title: "Show", year: "2024", season: 2, episode: 4,
                                                episodeTitle: "  The Heist  ") == "S2 E4 · The Heist")
     assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4) == "S2 E4")
@@ -1468,19 +1482,16 @@ private func runTransportChromeTests() {
     assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
     print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
 
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false) == [.info, .audio, .subtitles])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 1, settingsAvailable: false) == [.info, .audio, .subtitles])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false) == [.info, .chapters, .audio, .subtitles])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .audio, .subtitles, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .audio, .subtitles, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: -1, settingsAvailable: false).contains(.audio))
-    // Only tabs with content: a bare single-track file keeps Chapters and Settings.
-    assert(InfoPanelModel.visibleTabs(chapterCount: 3, settingsAvailable: true, hasInfo: false,
-        audioTrackCount: 1, subtitleTrackCount: 0) == [.chapters, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false,
-        audioTrackCount: 1, subtitleTrackCount: 0) == [.info])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false,
-        audioTrackCount: 2, subtitleTrackCount: 1) == [.audio, .subtitles])
+    // AVPlayer's tabs; audio and subtitles are transport buttons.
+    assert(InfoPanelTab.allCases == [.info, .chapters, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false) == [.info])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 1, settingsAvailable: false) == [.info])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false) == [.info, .chapters])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .settings])
+    // Only tabs with content: a file without metadata keeps Chapters and Settings.
+    assert(InfoPanelModel.visibleTabs(chapterCount: 3, settingsAvailable: true, hasInfo: false) == [.chapters, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false) == [.info])
     assert(InfoPanelModel.validTab(.info, tabs: [.chapters, .settings]) == .chapters)
     assert(InfoPanelModel.validTab(.settings, tabs: [.chapters, .settings]) == .settings)
     assert(TransportMetadata().isEmpty && !TransportMetadata(year: "1999").isEmpty
@@ -1506,7 +1517,7 @@ private func runTransportChromeTests() {
     let tabs = InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false)
     assert(InfoPanelModel.movingTab(.info, delta: -1, tabs: tabs) == .info)
     assert(InfoPanelModel.movingTab(.info, delta: 1, tabs: tabs) == .chapters)
-    assert(InfoPanelModel.movingTab(.subtitles, delta: 1, tabs: tabs) == .subtitles)
+    assert(InfoPanelModel.movingTab(.chapters, delta: 1, tabs: tabs) == .chapters)
     assert(InfoPanelModel.movingTab(.settings, delta: 1, tabs: []) == .info)
     assert(TransportBarMetrics.skipVisibleInset == 240 && TransportBarMetrics.skipHiddenInset == 80)
     assert(TransportVisibility.autoHideSeconds == 5 && TransportVisibility.feedbackSeconds == 0.8)
@@ -1532,7 +1543,7 @@ private func runTransportChromeTests() {
     assert(thirdCard.moving(1, rowCount: 4, physical: false, horizontalRows: true).row == 3)
     assert(InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: false))
     assert(!InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: true))
-    assert(!InfoPanelModel.horizontalMovesRows(tab: .audio, tabBarFocused: false))
+    assert(!InfoPanelModel.horizontalMovesRows(tab: .settings, tabBarFocused: false))
     let moved = Date(timeIntervalSince1970: 1000)
     assert(InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.05)))
     assert(!InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.5)))
@@ -1634,6 +1645,20 @@ private func runTransportChromeTests() {
     }
     assert(TransportAction.available(hasPlaylist: false) == [.loop, .speed, .switchEngine, .audio])
     assert(TransportAction.available(hasPlaylist: true) == [.loop, .speed, .switchEngine, .audio, .playlist])
+    assert(TransportAction.available(hasPlaylist: true, hasSubtitles: true)
+        == [.loop, .speed, .switchEngine, .subtitles, .audio, .playlist])
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: false, hasSubtitles: true) == .subtitles)
+    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true) == .audio)
+    assert(TransportAction.subtitles.menu == .subtitles)
+    let subtitleRows = TransportMenuModel.subtitleRows(tracks: [(id: 3, name: "English"), (id: 4, name: "SDH")], current: 4)
+    assert(subtitleRows.map(\.id) == [-1, 3, 4] && subtitleRows.map(\.title).first == "Off")
+    assert(TransportMenuModel.initialHighlight(rows: subtitleRows) == 2)
+    assert(TransportMenuModel.subtitleRows(tracks: [], current: -1).first?.selected == true)
+    // The episode line is dropped when the title already carries it.
+    assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below · S1E5 · Little Pot Rock").isEmpty)
+    assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below") == "S1 E5 · Little Pot Rock")
+    assert(TransportTimeLabels.distinctSubtitle("2024", title: "Movie") == "2024")
+    assert(TransportTimeLabels.distinctSubtitle("", title: "Movie").isEmpty)
     assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
     assert(TransportAction.loop.moving(1, hasPlaylist: false) == .speed)
     assert(TransportAction.speed.moving(1, hasPlaylist: false) == .switchEngine)
@@ -1652,6 +1677,10 @@ private func runTransportChromeTests() {
     let audioRows = TransportMenuModel.audioRows(tracks: [(id: 1, name: "English"), (id: 2, name: "Hindi")], current: 2)
     assert(audioRows.map(\.id) == [1, 2] && TransportMenuModel.initialHighlight(rows: audioRows) == 1)
     assert(TransportMenuModel.initialHighlight(rows: TransportMenuModel.audioRows(tracks: [], current: -1)) == 0)
+    // The mpv Settings tab leaves speed to the transport's Speed button.
+    let mpvTab = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false).withoutSpeed
+    assert(!mpvTab.speed && mpvTab.scaling && mpvTab.subtitleOffset && mpvTab.any)
+    assert(PlayerSettingsItem.rows(tuning: PlayerTuning(), availability: mpvTab).first?.section == "Scaling")
     let engineRows = TransportMenuModel.engineRows(current: .mpv)
     assert(engineRows.filter(\.selected).map(\.id) == [PlaybackEngine.mpv.menuID])
     assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,

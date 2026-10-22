@@ -1463,8 +1463,6 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         switch playbackState.panelTab {
         case .info: seekPanel(to: 0)
         case .chapters: seekPanel(to: Double(row.id) / 1000)
-        case .audio: selectAudioTrack(row.id)
-        case .subtitles: selectSubtitleTrack(row.id)
         case .settings:
             // The check moves when PlayerView hands the applied value back.
             if let command = PlayerSettingsItem.command(rowID: row.id, tuning: playbackState.tuning,
@@ -1701,7 +1699,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             return
         }
         switch action {
-        case .speed, .switchEngine, .audio: break
+        case .speed, .switchEngine, .subtitles, .audio: break
         case .loop: setLooping(!playbackState.isLooping)
         case .playlist:
             guard hasPlaylist else { return }
@@ -1790,7 +1788,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             if playbackState.transportActionFocused {
                 consumedTransportDirection = type
                 let delta = type == .rightArrow ? 1 : -1
-                focusTransportActions(playbackState.transportActionHighlight.moving(delta, hasPlaylist: hasPlaylist))
+                focusTransportActions(playbackState.transportActionHighlight.moving(delta,
+                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles))
                 return
             }
             let forward = type == .rightArrow
@@ -2205,7 +2204,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.engineHighlight = TransportMenuModel.initialHighlight(
             rows: playbackState.transportMenuRows(engine: .mpv))
         playbackState.showEngineMenu = true
-        if menu == .audio { mpvQueue.async { [weak self] in self?.updateTracks() } }
+        if menu == .audio || menu == .subtitles { mpvQueue.async { [weak self] in self?.updateTracks() } }
         showUI()
     }
 
@@ -2217,6 +2216,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             }
         case .speed:
             if let speed = TransportMenuModel.speed(forRow: id) { onLocalTuning?(.speed(speed)) }
+        case .subtitles:
+            selectSubtitleTrack(id)
         case .audio:
             selectAudioTrack(id)
         }

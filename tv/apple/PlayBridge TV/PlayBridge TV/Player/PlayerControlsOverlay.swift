@@ -51,15 +51,21 @@ class PlayerControlsData: ObservableObject {
     @Published var skipPillFocused = false
     /// Mirror of `PlayerView`'s session tuning; the Settings tab only reads it.
     @Published var tuning = PlayerTuning()
+    /// Settings tab rows. Speed is left out: the transport's Speed button owns it.
     let settingsAvailability = PlayerSettingsAvailability.forEngine(PlaybackEngine.mpv.rawValue,
-        sidecarOverlayActive: false)
+        sidecarOverlayActive: false).withoutSpeed
     var menuOpen: Bool { showInfoPanel || showEngineMenu }
 
     var panelTabs: [InfoPanelTab] {
         InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: settingsAvailability.any,
-            hasInfo: !metadata.isEmpty, audioTrackCount: audioTracks.count,
-            subtitleTrackCount: subtitleTracks.count + externalSubtitleTracks.count)
+            hasInfo: !metadata.isEmpty)
     }
+
+    /// The Subtitles button appears with the first embedded or sidecar track.
+    var hasSubtitles: Bool { !subtitleTracks.isEmpty || !externalSubtitleTracks.isEmpty }
+
+    /// Metadata line under the title, dropped when the title already carries it.
+    var displaySubtitle: String { TransportTimeLabels.distinctSubtitle(metadata.subtitle, title: title) }
 
     var panelRows: [InfoPanelRow] {
         switch panelTab {
@@ -67,13 +73,6 @@ class PlayerControlsData: ObservableObject {
         case .chapters:
             return InfoPanelModel.chapterRows(chapters: chapters,
                 durationMs: PlaybackTime.milliseconds(duration), positionMs: PlaybackTime.milliseconds(currentTime))
-        case .audio:
-            return audioTracks.map { InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentAudioIndex) }
-        case .subtitles:
-            return [InfoPanelRow(id: -1, title: "Off", selected: currentSubtitleIndex == -1)]
-                + (subtitleTracks + externalSubtitleTracks).map {
-                    InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentSubtitleIndex)
-                }
         case .settings: return PlayerSettingsItem.rows(tuning: tuning, availability: settingsAvailability)
         }
     }
@@ -111,6 +110,9 @@ class PlayerControlsData: ObservableObject {
         switch transportMenu {
         case .engine: return TransportMenuModel.engineRows(current: engine)
         case .speed: return TransportMenuModel.speedRows(current: tuning.speed)
+        case .subtitles:
+            return TransportMenuModel.subtitleRows(tracks: subtitleTracks + externalSubtitleTracks,
+                                                   current: currentSubtitleIndex)
         case .audio: return TransportMenuModel.audioRows(tracks: audioTracks, current: currentAudioIndex)
         }
     }
@@ -233,7 +235,7 @@ struct PlayerControlsOverlay: View {
     let onPanelDirection: (MoveCommandDirection) -> Void
     let onSubtitleClearanceChange: (Double) -> Void
     let engine: PlaybackEngine
-    private enum Control: Hashable { case scrubber, loop, speed, engine, audio, playlist }
+    private enum Control: Hashable { case scrubber, loop, speed, engine, subtitles, audio, playlist }
     @FocusState private var focused: Control?
     @Namespace private var transportActionsScope
     @Environment(\.resetFocus) private var resetTransportFocus
@@ -364,8 +366,8 @@ struct PlayerControlsOverlay: View {
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(.ultraThinMaterial, in: Capsule())
             }
-            if !data.metadata.subtitle.isEmpty {
-                Text(data.metadata.subtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+            if !data.displaySubtitle.isEmpty {
+                Text(data.displaySubtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
             }
             HStack(alignment: .bottom) {
                 Text(ChapterNavigation.timelineCaption(chapters: data.chapters, segments: data.skipSegments,
@@ -377,6 +379,11 @@ struct PlayerControlsOverlay: View {
                            perform: onLoopToggle)
                     action("Speed", icon: TransportMenu.speed.icon, control: .speed) { onOpenMenu(.speed) }
                     action("Switch", icon: TransportMenu.engine.icon, control: .engine) { onOpenMenu(.engine) }
+                    if data.hasSubtitles {
+                        action("Subtitles", icon: TransportMenu.subtitles.icon, control: .subtitles) {
+                            onOpenMenu(.subtitles)
+                        }
+                    }
                     action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
                     if data.hasPlaylist {
                         action("Playlist", icon: "list.bullet", control: .playlist) {
@@ -400,19 +407,26 @@ struct PlayerControlsOverlay: View {
     }
 
     private var seekRow: some View {
+            // AVPlayer's layout: a full-width bar, elapsed time riding under the
+            // playhead, remaining time at the end; both dim when focus leaves the bar.
             Button(action: onTogglePlayPause) {
-                HStack(spacing: 24) {
-                    Text(TransportTimeLabels.elapsed(displayTime))
-                    SeekTrack(progress: data.duration > 0 ? displayTime / data.duration : 0,
+                let fraction = data.duration > 0 ? displayTime / data.duration : 0
+                VStack(spacing: 12) {
+                    SeekTrack(progress: fraction,
                         buffered: data.duration > 0 ? data.bufferedTime / data.duration : nil,
                         chapterFractions: ChapterNavigation.chapterFractions(chapters: data.chapters, durationMs: durationMs),
                         segmentRanges: ChapterNavigation.segmentRanges(segments: data.skipSegments, durationMs: durationMs),
                         focused: focused == .scrubber)
                         .frame(height: TransportBarMetrics.focusedThumbDiameter)
-                    Text(TransportTimeLabels.remaining(displayTime, duration: data.duration))
+                    SeekTimeLabels(fraction: fraction,
+                        elapsed: TransportTimeLabels.clock(displayTime),
+                        remaining: TransportTimeLabels.clockRemaining(displayTime, duration: data.duration),
+                        paused: data.userPaused && !data.isScrubbing)
+                        .font(.system(size: 24, weight: .semibold).monospacedDigit())
+                        .opacity(focused == .scrubber ? 0.9 : 0.55)
                 }
-                .font(.system(size: 29, weight: .medium, design: .monospaced))
-                .padding(.vertical, 12)
+                .padding(.vertical, 8)
+                .animation(.easeOut(duration: 0.15), value: focused == .scrubber)
             }
             .buttonStyle(TransportSeekStyle())
             .focused($focused, equals: .scrubber)
@@ -427,6 +441,7 @@ struct PlayerControlsOverlay: View {
         case .loop: return .loop
         case .speed: return .speed
         case .switchEngine: return .engine
+        case .subtitles: return .subtitles
         case .audio: return .audio
         case .playlist: return .playlist
         }
@@ -573,7 +588,7 @@ private struct PlaybackInfoPanel: View {
     private var info: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(data.title).font(.system(size: 32, weight: .semibold)).lineLimit(1)
-            if !data.metadata.subtitle.isEmpty { Text(data.metadata.subtitle).foregroundStyle(.white.opacity(0.72)) }
+            if !data.displaySubtitle.isEmpty { Text(data.displaySubtitle).foregroundStyle(.white.opacity(0.72)) }
             HStack(spacing: 16) {
                 ForEach([data.metadata.year, data.metadata.rating, data.metadata.runtime].filter { !$0.isEmpty }, id: \.self) { text in
                     Text(text).font(.system(size: 22)).padding(8).background(.white.opacity(0.1), in: Capsule())
@@ -751,7 +766,6 @@ private struct PlaybackFailureOverlay: View {
 /// buffered range, and the played range, with chapter gaps cleared through all
 /// of them (the phone remote's draw order, scaled for the TV).
 private struct SeekTrack: View {
-    static let lineHeight: CGFloat = TransportBarMetrics.lineHeight
     static let gapWidth: CGFloat = 4
 
     let progress: Double
@@ -764,6 +778,7 @@ private struct SeekTrack: View {
         Canvas { context, size in
             let width = size.width
             let midY = size.height / 2
+            let line = CGFloat(focused ? TransportBarMetrics.focusedLineHeight : TransportBarMetrics.lineHeight)
             func capsule(from start: Double, to end: Double, height: CGFloat) -> Path {
                 let x0 = width * CGFloat(min(max(start, 0), 1))
                 let x1 = width * CGFloat(min(max(end, 0), 1))
@@ -772,23 +787,18 @@ private struct SeekTrack: View {
             }
 
             for range in segmentRanges {
-                context.fill(capsule(from: range.lowerBound, to: range.upperBound, height: TransportBarMetrics.frameHeight),
+                context.fill(capsule(from: range.lowerBound, to: range.upperBound,
+                                     height: max(CGFloat(TransportBarMetrics.frameHeight), line + 8)),
                              with: .color(Theme.segment.opacity(0.35)))
             }
-            context.fill(capsule(from: 0, to: 1, height: Self.lineHeight), with: .color(.white.opacity(focused ? 0.3 : 0.2)))
+            context.fill(capsule(from: 0, to: 1, height: line), with: .color(.white.opacity(focused ? 0.25 : 0.18)))
             if let buffered, buffered > progress {
-                context.fill(capsule(from: 0, to: buffered, height: Self.lineHeight),
-                             with: .color(.white.opacity(0.35)))
+                context.fill(capsule(from: 0, to: buffered, height: line), with: .color(.white.opacity(0.32)))
             }
             if progress > 0 {
-                let played = capsule(from: 0, to: progress, height: Self.lineHeight)
-                context.fill(played, with: .color(.white))
+                context.fill(capsule(from: 0, to: progress, height: line),
+                             with: .color(.white.opacity(focused ? 0.85 : 0.6)))
             }
-
-            let thumbX = width * CGFloat(min(max(progress, 0), 1))
-            let diameter = focused ? TransportBarMetrics.focusedThumbDiameter : TransportBarMetrics.thumbDiameter
-            context.fill(Path(ellipseIn: CGRect(x: thumbX - diameter / 2, y: midY - diameter / 2,
-                width: diameter, height: diameter)), with: .color(.white))
 
             context.blendMode = .clear
             for fraction in chapterFractions {
@@ -797,9 +807,63 @@ private struct SeekTrack: View {
                 context.fill(Path(CGRect(x: x - Self.gapWidth / 2, y: 0, width: Self.gapWidth, height: size.height)),
                              with: .color(.black))
             }
+
+            // Playhead tick, drawn last so a chapter gap never cuts it.
+            context.blendMode = .normal
+            let tickX = width * CGFloat(min(max(progress, 0), 1))
+            let tickWidth = CGFloat(TransportBarMetrics.playheadWidth)
+            let tickHeight = line + CGFloat(TransportBarMetrics.playheadOverhang) * 2
+            context.fill(Path(roundedRect: CGRect(x: min(max(tickX - tickWidth / 2, 0), width - tickWidth),
+                                                  y: midY - tickHeight / 2, width: tickWidth, height: tickHeight),
+                              cornerRadius: tickWidth / 2),
+                         with: .color(.white))
         }
         .compositingGroup()
         .animation(.easeOut(duration: 0.15), value: focused)
+    }
+}
+
+/// AVPlayer's time row: elapsed under the playhead, remaining at the trailing end.
+private struct SeekTimeLabels: View {
+    let fraction: Double
+    let elapsed: String
+    let remaining: String
+    let paused: Bool
+    @State private var elapsedWidth: Double = 0
+    @State private var remainingWidth: Double = 0
+
+    var body: some View {
+        GeometryReader { geometry in
+            let layout = TransportTimeLabels.playheadLabelLayout(fraction: fraction,
+                width: geometry.size.width, elapsedWidth: elapsedWidth, remainingWidth: remainingWidth)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 10) {
+                    Text(elapsed)
+                    if paused { Image(systemName: "pause.circle") }
+                }
+                .fixedSize()
+                .background(GeometryReader { Color.clear.preference(key: LabelWidth.self, value: $0.size.width) })
+                .onPreferenceChange(LabelWidth.self) { elapsedWidth = Double($0) }
+                .offset(x: layout.x)
+                Text(remaining)
+                    .fixedSize()
+                    .background(GeometryReader { Color.clear.preference(key: RemainingWidth.self, value: $0.size.width) })
+                    .onPreferenceChange(RemainingWidth.self) { remainingWidth = Double($0) }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .opacity(layout.showsRemaining ? 1 : 0)
+            }
+        }
+        .frame(height: 30)
+    }
+
+    private struct LabelWidth: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    }
+
+    private struct RemainingWidth: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
     }
 }
 
