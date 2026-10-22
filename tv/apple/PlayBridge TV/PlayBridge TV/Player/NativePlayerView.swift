@@ -37,6 +37,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let appMuted: Bool
     let mediaIdentity: Int
     let engineChrome: PlayerEngineChrome
+    /// More than one queue item; a one-item queue hides the Playlist menu item.
+    let hasPlaylist: Bool
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
@@ -120,9 +122,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
             title: "External Subtitles",
             image: UIImage(systemName: "captions.bubble"),
             children: [subtitleOffAction] + subtitleOptions.compactMap { subtitleActions[$0.id] })
-        controller.transportBarCustomMenuItems = subtitleOptions.isEmpty
-            ? [loopAction, switchMenu, playlistAction]
-            : [loopAction, externalSubtitleMenu, switchMenu, playlistAction]
+        context.coordinator.configureTransportMenu(
+            controller: controller,
+            base: subtitleOptions.isEmpty
+                ? [loopAction, switchMenu]
+                : [loopAction, externalSubtitleMenu, switchMenu],
+            playlist: playlistAction, hasPlaylist: hasPlaylist)
 
         player.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         player.isMuted = isPreBuffering || appMuted
@@ -135,6 +140,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.setHasPlaylist(hasPlaylist)
         uiViewController.player?.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         uiViewController.player?.isMuted = isPreBuffering || appMuted
         context.coordinator.bindEngineChrome(
@@ -170,6 +176,29 @@ struct NativePlayerView: UIViewControllerRepresentable {
         var onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
         var mediaIdentity: Int
         var loopAction: UIAction?
+        private var transportMenuBase: [UIMenuElement] = []
+        private var playlistMenuItem: UIMenuElement?
+        private var hasPlaylist = false
+
+        func configureTransportMenu(controller: AVPlayerViewController, base: [UIMenuElement],
+                                    playlist: UIMenuElement, hasPlaylist: Bool) {
+            transportMenuBase = base
+            playlistMenuItem = playlist
+            self.hasPlaylist = hasPlaylist
+            applyTransportMenu(controller)
+        }
+
+        /// The queue can grow mid-item (queue_add), so the Playlist item follows it.
+        func setHasPlaylist(_ value: Bool) {
+            guard value != hasPlaylist else { return }
+            hasPlaylist = value
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func applyTransportMenu(_ controller: AVPlayerViewController) {
+            controller.transportBarCustomMenuItems = transportMenuBase
+                + (hasPlaylist ? playlistMenuItem.map { [$0] } ?? [] : [])
+        }
 
         private var timeObserver: Any?
         private var subtitleTimeObserver: Any?

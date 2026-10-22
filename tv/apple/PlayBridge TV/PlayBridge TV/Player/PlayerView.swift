@@ -348,7 +348,8 @@ struct PlayerView: View {
                         initialLoop: settingsReporter.loop,
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
-                        engineChrome: engineChrome
+                        engineChrome: engineChrome,
+                        hasPlaylist: playlistStore.items.count > 1
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -376,7 +377,8 @@ struct PlayerView: View {
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
                         mediaIdentity: currentGeneration,
-                        engineChrome: engineChrome
+                        engineChrome: engineChrome,
+                        hasPlaylist: playlistStore.items.count > 1
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
