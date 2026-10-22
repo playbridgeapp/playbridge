@@ -5,21 +5,19 @@ import Foundation
 struct PlayerChromeState: Equatable {
     var sessionMatches = false
     var stillWatching = false
-    var subtitleMenu = false
-    var audioMenu = false
     var engineMenu = false
     var settingsSheet = false
     var scrubbing = false
     var playlist = false
     var controlsVisible = false
+    var infoPanel = false
 }
 
 /// Where a network Up or Down moves a highlighted row. The engine owns the
 /// track menus. The player screen owns the playlist.
 enum PlayerRemoteListOwner: Equatable {
     case stillWatching
-    case subtitleMenu
-    case audioMenu
+    case infoPanel
     case engineMenu
     case playlist
     case none
@@ -40,8 +38,7 @@ struct PlayerHighlightList: Equatable {
 enum PlayerRemoteEffect: Equatable {
     case ignored
     case dismissStillWatching
-    case dismissSubtitleMenu
-    case dismissAudioMenu
+    case dismissInfoPanel
     case dismissEngineMenu
     case dismissSettingsSheet
     case dismissScrub
@@ -64,24 +61,22 @@ enum PlayerRemoteEffect: Equatable {
 
 /// Live flags read from the engine that is on screen.
 struct PlayerEngineChromeSnapshot: Equatable {
-    var subtitleMenu = false
-    var audioMenu = false
     var engineMenu = false
     var settingsSheet = false
     var scrubbing = false
     var controlsVisible = false
+    var infoPanel = false
 
     func chrome(sessionMatches: Bool, stillWatching: Bool, playlist: Bool) -> PlayerChromeState {
         PlayerChromeState(
             sessionMatches: sessionMatches,
             stillWatching: stillWatching,
-            subtitleMenu: subtitleMenu,
-            audioMenu: audioMenu,
             engineMenu: engineMenu,
             settingsSheet: settingsSheet,
             scrubbing: scrubbing,
             playlist: playlist,
-            controlsVisible: controlsVisible
+            controlsVisible: controlsVisible,
+            infoPanel: infoPanel
         )
     }
 }
@@ -91,6 +86,13 @@ struct PlayerEngineChromeSnapshot: Equatable {
 final class PlayerEngineChrome {
     var snapshot: () -> PlayerEngineChromeSnapshot = { PlayerEngineChromeSnapshot() }
     var apply: (PlayerRemoteEffect) -> Bool = { _ in false }
+    /// An error screen owns Back and its action buttons before ordinary chrome.
+    /// The player owner still gives pre-play/still-watching their existing priority.
+    var handleFailureKey: (String) -> Bool = { _ in false }
+}
+
+enum PlayerPlaybackPress {
+    case playPause, select
 }
 
 /// One trip through the player owner: finish progress, flush history, then the
@@ -149,6 +151,19 @@ final class PlayerRemoteExitGate {
 }
 
 enum PlayerRemoteNavigation {
+    /// Select on the video/seek bar toggles in both pause states. Only an
+    /// actual focused button or list owns Select; HUD visibility alone does not.
+    /// Play/Pause always commits a scrub or toggles, even inside a menu.
+    static func physicalPlaybackEffect(
+        for press: PlayerPlaybackPress,
+        scrubbing: Bool,
+        selectActivatesFocusedControl: Bool
+    ) -> PlayerRemoteEffect {
+        if press == .select && selectActivatesFocusedControl { return .ignored }
+        if scrubbing { return .commitScrub }
+        return .togglePlayback
+    }
+
     private struct Level {
         let effect: PlayerRemoteEffect
         let isOpen: (PlayerChromeState) -> Bool
@@ -173,8 +188,7 @@ enum PlayerRemoteNavigation {
     /// Highest overlay first. Back closes one level. An empty stack exits.
     private static let backLevels: [Level] = [
         Level(effect: .dismissStillWatching, isOpen: { $0.stillWatching }, close: { $0.stillWatching = false }),
-        Level(effect: .dismissSubtitleMenu, isOpen: { $0.subtitleMenu }, close: { $0.subtitleMenu = false }),
-        Level(effect: .dismissAudioMenu, isOpen: { $0.audioMenu }, close: { $0.audioMenu = false }),
+        Level(effect: .dismissInfoPanel, isOpen: { $0.infoPanel }, close: { $0.infoPanel = false }),
         Level(effect: .dismissEngineMenu, isOpen: { $0.engineMenu }, close: { $0.engineMenu = false }),
         Level(effect: .dismissSettingsSheet, isOpen: { $0.settingsSheet }, close: { $0.settingsSheet = false }),
         Level(effect: .dismissScrub, isOpen: { $0.scrubbing }, close: { $0.scrubbing = false }),
@@ -224,8 +238,7 @@ enum PlayerRemoteNavigation {
     /// Menu wins over the playlist when both are open, matching Back order.
     static func listOwner(in chrome: PlayerChromeState) -> PlayerRemoteListOwner {
         if chrome.stillWatching { return .stillWatching }
-        if chrome.subtitleMenu { return .subtitleMenu }
-        if chrome.audioMenu { return .audioMenu }
+        if chrome.infoPanel { return .infoPanel }
         if chrome.engineMenu { return .engineMenu }
         if chrome.playlist { return .playlist }
         return .none
@@ -242,21 +255,20 @@ enum PlayerRemoteNavigation {
     ) -> PlayerRemoteEffect {
         if chrome.stillWatching { return .resumeStillWatching }
         if chrome.settingsSheet { return .ignored }
-        if chrome.subtitleMenu || chrome.audioMenu || chrome.engineMenu {
+        if chrome.infoPanel || chrome.engineMenu {
             return verticalList(direction)
         }
+        if chrome.playlist { return verticalList(direction) }
         if chrome.scrubbing {
             switch direction {
             case .left: return .scrubBackward
             case .right: return .scrubForward
             case .center: return .commitScrub
-            case .up, .down: return .ignored
+            case .up: return .adjustAppVolume(steps: 1)
+            case .down: return .adjustAppVolume(steps: -1)
             }
         }
-        if chrome.playlist { return verticalList(direction) }
-        // Playing, paused, and pre-play, with the transport showing or hidden.
-        // Up and Down step app volume. Menus, the playlist, scrub, and a
-        // presented sheet never reach this branch.
+        // Outside lists, network Up/Down always adjust app volume.
         switch direction {
         case .up: return .adjustAppVolume(steps: 1)
         case .down: return .adjustAppVolume(steps: -1)

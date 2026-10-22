@@ -574,7 +574,9 @@ components:
                   description: |
                     Transport: toggle, play, pause, stop, seek_back, seek_forward,
                     seek_to:<milliseconds>, loop_on, loop_off. Player configuration:
-                    speed:<number>, scaling:<mode>, audio_boost, sub_offset:<milliseconds>,
+                    speed:<number>, scaling:Fit|Zoom|Fill, audio_boost,
+                    sub_offset:<signed delta milliseconds> (accumulated by the receiver,
+                    clamped to ±120000 ms; positive delays subtitles, matching mpv sub-delay),
                     video_quality:auto|<maximum-height>,
                     switch_player:<engine>. Tracks: audio_track:<id>, sub_track:<id>,
                     add_subtitle:<url> (legacy), or add_subtitle with subtitleResource.

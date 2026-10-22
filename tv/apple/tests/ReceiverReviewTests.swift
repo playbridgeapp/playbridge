@@ -290,9 +290,19 @@ struct ReceiverReviewTests {
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
         runRemoteNavigationTests()
+        runTransportChromeTests()
+        runTouchScrubTests()
+        runPlaybackFailureSessionTests()
+        runPlayerControlsAuditTests()
         runPlayerSettingsTests()
+        runPlayerTuningTests()
+        runPlayerSettingsMenuTests()
         runAppVolumeTests()
         runTimelineReportTests()
+        runChapterNavigationTests()
+        runChapterRemoteTests()
+        runSkipSegmentTests()
+        runSkipSegmentFetchTests()
     }
 }
 
@@ -303,11 +313,42 @@ private func pumpMain() {
     }
 }
 
+private func runPlayerControlsAuditTests() {
+    // HUD visibility and pause state do not delegate Select; only a focused
+    // Skip/action button or a list does. Play/Pause always controls playback.
+    for owned in [false, true] {
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .playPause,
+            scrubbing: false, selectActivatesFocusedControl: owned) == .togglePlayback)
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .playPause,
+            scrubbing: true, selectActivatesFocusedControl: owned) == .commitScrub)
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select,
+            scrubbing: false, selectActivatesFocusedControl: owned) == (owned ? .ignored : .togglePlayback))
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select,
+            scrubbing: true, selectActivatesFocusedControl: owned) == (owned ? .ignored : .commitScrub))
+    }
+    print("PASS: Select toggles on the video/seek bar, focused buttons retain Select, and hold-scrub commits")
+
+    // Both physical MPV Back and phone Back now enter this same policy. The
+    // playlist belongs to the player screen and must precede the engine HUD.
+    var chrome = PlayerChromeState(sessionMatches: true, scrubbing: true, playlist: true, controlsVisible: true, infoPanel: true)
+    for expected: PlayerRemoteEffect in [.dismissInfoPanel, .dismissScrub, .dismissPlaylist, .dismissControls] {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: chrome)
+        assert(effect == expected)
+        PlayerRemoteNavigation.closing(effect, in: &chrome)
+    }
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: chrome) == .exitPlayback)
+    var pausedHUD = PlayerChromeState(sessionMatches: true, controlsVisible: true)
+    let firstBack = PlayerRemoteNavigation.effect(for: "back", chrome: pausedHUD)
+    assert(firstBack == .dismissControls)
+    PlayerRemoteNavigation.closing(firstBack, in: &pausedHUD)
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: pausedHUD) == .exitPlayback)
+    print("PASS: shared physical/phone Back closes menus, scrub, playlist and HUD before exiting")
+}
+
 private func runRemoteNavigationTests() {
     let overlays: [(String, WritableKeyPath<PlayerChromeState, Bool>, PlayerRemoteEffect)] = [
         ("still watching", \.stillWatching, .dismissStillWatching),
-        ("subtitle menu", \.subtitleMenu, .dismissSubtitleMenu),
-        ("audio menu", \.audioMenu, .dismissAudioMenu),
+        ("info panel", \.infoPanel, .dismissInfoPanel),
         ("engine menu", \.engineMenu, .dismissEngineMenu),
         ("settings sheet", \.settingsSheet, .dismissSettingsSheet),
         ("scrub", \.scrubbing, .dismissScrub),
@@ -333,13 +374,12 @@ private func runRemoteNavigationTests() {
         var stacked = PlayerChromeState(
             sessionMatches: true,
             stillWatching: true,
-            subtitleMenu: true,
-            audioMenu: true,
             engineMenu: true,
             settingsSheet: true,
             scrubbing: true,
             playlist: true,
-            controlsVisible: true
+            controlsVisible: true,
+            infoPanel: true
         )
         stacked[keyPath: path] = false
         // The highest remaining overlay is the one Back closes.
@@ -352,13 +392,12 @@ private func runRemoteNavigationTests() {
     let everything = PlayerChromeState(
         sessionMatches: true,
         stillWatching: true,
-        subtitleMenu: true,
-        audioMenu: true,
         engineMenu: true,
         settingsSheet: true,
         scrubbing: true,
         playlist: true,
-        controlsVisible: true
+        controlsVisible: true,
+        infoPanel: true
     )
     var walk = everything
     for (_, path, expected) in overlays {
@@ -478,7 +517,7 @@ private func runRemoteDirectionTests() {
         assert(effect("mute", chrome) == .toggleAppMute, "\(name) mute toggles app mute")
     }
 
-    let menu = PlayerChromeState(sessionMatches: true, subtitleMenu: true)
+    let menu = PlayerChromeState(sessionMatches: true, infoPanel: true)
     assert(effect("dpad_up", menu) == .moveHighlight(delta: -1))
     assert(effect("dpad_down", menu) == .moveHighlight(delta: 1))
     assert(effect("dpad_center", menu) == .activateHighlight)
@@ -498,11 +537,11 @@ private func runRemoteDirectionTests() {
     for key in ["Back", "Home", ""] {
         assert(effect(key, menu) == .ignored, "\(key) stays ignored while a menu is open")
     }
-    assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, audioMenu: true)) == .moveHighlight(delta: -1))
+    assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, engineMenu: true)) == .moveHighlight(delta: -1))
     assert(effect("dpad_center", PlayerChromeState(sessionMatches: true, engineMenu: true)) == .activateHighlight)
 
-    var menuAndPlaylist = PlayerChromeState(sessionMatches: true, subtitleMenu: true, playlist: true)
-    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .subtitleMenu)
+    var menuAndPlaylist = PlayerChromeState(sessionMatches: true, playlist: true, infoPanel: true)
+    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .infoPanel)
     assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
     assert(effect("dpad_center", menuAndPlaylist) == .activateHighlight)
     var playlistRows = PlayerHighlightList(count: 5, index: 2)
@@ -512,7 +551,7 @@ private func runRemoteDirectionTests() {
         playlistRows = playlistRows.moving(delta)
     }
     assert(playlistRows == playlistBefore, "An open menu keeps the playlist highlight where it is")
-    menuAndPlaylist.subtitleMenu = false
+    menuAndPlaylist.infoPanel = false
     assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .playlist)
     assert(effect("dpad_up", menuAndPlaylist) == .moveHighlight(delta: -1))
     assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
@@ -554,8 +593,8 @@ private func runRemoteDirectionTests() {
     assert(effect("dpad_left", scrub) == .scrubBackward)
     assert(effect("dpad_right", scrub) == .scrubForward)
     assert(effect("dpad_center", scrub) == .commitScrub)
-    assert(effect("dpad_up", scrub) == .ignored)
-    assert(effect("dpad_down", scrub) == .ignored)
+    assert(effect("dpad_up", scrub) == .adjustAppVolume(steps: 1))
+    assert(effect("dpad_down", scrub) == .adjustAppVolume(steps: -1))
     assert(effect("volume_down", scrub) == .adjustAppVolume(steps: -1), "Scrub leaves Up and Down alone")
     assert(effect("back", scrub) == .dismissScrub)
 
@@ -568,7 +607,7 @@ private func runRemoteDirectionTests() {
     assert(effect("home", sheet) == .exitPlayback)
 
     var staleList = PlayerHighlightList(count: 4, index: 1)
-    let staleMenu = PlayerChromeState(sessionMatches: false, subtitleMenu: true, playlist: true, controlsVisible: true)
+    let staleMenu = PlayerChromeState(sessionMatches: false, playlist: true, controlsVisible: true, infoPanel: true)
     for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right", "back", "home",
                 "volume_up", "volume_down", "mute"] {
         let staleEffect = effect(key, staleMenu)
@@ -741,7 +780,8 @@ private func runPlayerSettingsTests() {
 
     let expectedTransport = ["play", "pause", "toggle", "stop", "seek_absolute", "seek_relative"]
     let expectedKeys = ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"]
-    let expectedSettings = ["loop", "engine"]
+    let expectedSettings = ["avplayer": ["loop", "engine", "speed", "scaling", "subtitle_offset"],
+                            "mpv": ["loop", "engine", "speed", "scaling", "subtitle_offset"]]
     let expectedTracks = ["audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add"]
     let expectedQueue = ["replace", "append", "jump_index", "jump_item", "remove", "move", "clear"]
     let expectedReporting = ["status", "context", "tracks", "playlist_status", "player_settings", "timeline", "buffered"]
@@ -753,7 +793,7 @@ private func runPlayerSettingsTests() {
         }
         assert(engineCaps["transport"] as? [String] == expectedTransport, "Transport operations match")
         assert(engineCaps["keys"] as? [String] == expectedKeys, "Key operations match")
-        assert(engineCaps["settings"] as? [String] == expectedSettings, "Settings operations match")
+        assert(engineCaps["settings"] as? [String] == expectedSettings[engineName], "Settings operations match")
         assert(engineCaps["tracks"] as? [String] == expectedTracks, "Track operations match")
         assert(engineCaps["queue"] as? [String] == expectedQueue, "Queue operations match")
         assert(engineCaps["reporting"] as? [String] == expectedReporting, "Reporting operations match")
@@ -962,6 +1002,107 @@ private func runAppVolumeTests() {
     print("PASS: app volume step, absolute, mute, clamp, engine switch, and stale volume_state")
 }
 
+private func runPlayerTuningTests() {
+    assert(PlayerTuning.parse("speed:1.25") == .speed(1.25))
+    assert(PlayerTuning.parse("speed:1.0") == .speed(1))
+    assert(PlayerTuning.parse("speed:1") == .speed(1))
+    assert(PlayerTuning.parse("sub_offset:-100") == .subtitleOffsetDelta(-100))
+    assert(PlayerTuning.parse("sub_offset:+100") == .subtitleOffsetDelta(100))
+    assert(PlayerTuning.parse("scaling:Zoom") == .scaling(.zoom))
+    for invalid in ["speed:nan", "speed:inf", "speed:-inf", "speed:1e999", "speed:abc", "speed:",
+                    "sub_offset:1.5", "sub_offset:9223372036854775808", "sub_offset:",
+                    "scaling:zoom", "scaling:16:9", "scaling:", "audio_boost", "video_quality:auto"] {
+        assert(PlayerTuning.parse(invalid) == nil, "Unsupported or malformed tuning must be ignored")
+    }
+    var tuning = PlayerTuning()
+    assert(!tuning.apply(.speed(.nan)) && !tuning.apply(.speed(.infinity)))
+    assert(!tuning.apply(.speed(1)))
+    assert(tuning.apply(PlayerTuning.parse("speed:9")!) && tuning.speed == 2)
+    assert(tuning.apply(PlayerTuning.parse("speed:0.1")!) && tuning.speed == 0.25)
+    assert(!tuning.apply(.speed(-1)) && tuning.speed == 0.25)
+    assert(tuning.apply(.subtitleOffsetDelta(100)))
+    assert(tuning.apply(.subtitleOffsetDelta(500)) && tuning.subtitleOffsetMs == 600)
+    assert(tuning.apply(.subtitleOffsetDelta(-100)) && tuning.subtitleOffsetMs == 500)
+    assert(tuning.apply(.subtitleOffsetDelta(-tuning.subtitleOffsetMs)) && tuning.subtitleOffsetMs == 0)
+    assert(!tuning.apply(.subtitleOffsetDelta(0)))
+    assert(tuning.apply(.subtitleOffsetDelta(100)))
+    assert(tuning.apply(PlayerTuning.parse("sub_offset:9223372036854775807")!) && tuning.subtitleOffsetMs == 120_000)
+    assert(!tuning.apply(.subtitleOffsetDelta(Int.max)))
+    assert(tuning.apply(.subtitleOffsetDelta(-240_000)) && tuning.subtitleOffsetMs == -120_000)
+    assert(!tuning.apply(.subtitleOffsetDelta(Int.min)))
+    assert(tuning.apply(.subtitleOffsetDelta(-tuning.subtitleOffsetMs)) && tuning.subtitleOffsetMs == 0)
+    assert(tuning.apply(.scaling(.fill)) && !tuning.apply(.scaling(.fill)))
+    print("PASS: tuning command parsing, speed bounds, accumulated signed subtitle deltas, overflow saturation and Reset")
+
+    assert(PlayerTuning.mpvNumber(1.25) == "1.25")
+    assert(PlayerTuning.mpvSubDelay(ms: 250) == "0.25")
+    assert(PlayerTuning.mpvSubDelay(ms: -500) == "-0.5")
+    for (mode, aspect, panscan) in [(PlayerScaling.fit, "yes", "0"), (.zoom, "yes", "1.0"), (.fill, "no", "0")] {
+        let properties = Dictionary(uniqueKeysWithValues: PlayerTuning.mpvScalingProperties(mode))
+        assert(properties == ["video-unscaled": "no", "keepaspect": aspect, "panscan": panscan])
+    }
+    assert(PlayerTuning.overlayCueTime(position: 10, offsetMs: 500) == 9.5)
+    assert(PlayerTuning.overlayCueTime(position: 10, offsetMs: -500) == 10.5)
+    assert(PlayerTuning.overlayCueTime(position: .nan, offsetMs: 500).isNaN)
+    let cues = ExternalSubtitleCues(data: Data("1\n00:00:01,000 --> 00:00:02,000\nHello\n".utf8))!
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 1.1, offsetMs: 500)) == nil)
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 2.1, offsetMs: 500)) == "Hello")
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 0.6, offsetMs: -500)) == "Hello")
+    print("PASS: mpv number/scaling mappings and positive-later external subtitle cue timing")
+
+    let fixtures = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+    let reporter = PlayerSettingsReporter(engine: "mpv", generation: 4)
+    let mpv = PlayerReportIdentity(engine: "mpv", generation: 4)
+    func checked(_ frame: [String: Any]?) -> [String: Any] {
+        guard let frame else { fatalError("Expected a changed settings snapshot") }
+        assert(PlayerPlaybackReport.isValidSnapshot(frame))
+        return frame
+    }
+    _ = checked(reporter.apply(.speed(1.5), identity: mpv))
+    _ = checked(reporter.apply(.scaling(.zoom), identity: mpv))
+    let mpvFrame = checked(reporter.apply(.subtitleOffsetDelta(250), identity: mpv))
+    assert(canonicalJSON(mpvFrame) == canonicalJSON(jsonObject(at: fixtures.appendingPathComponent("apple-tv-player-settings-mpv.json"))))
+    assert(reporter.apply(.speed(1.5), identity: mpv) == nil)
+    let retained = reporter.tuning
+    let stale = PlayerReportIdentity(engine: "mpv", generation: 3)
+    assert(reporter.apply(.subtitleOffsetDelta(100), identity: stale) == nil && reporter.tuning == retained)
+    assert(reporter.setSidecarOverlay(true, identity: stale) == nil && !reporter.sidecarOverlayActive)
+    _ = checked(reporter.switchEngine(from: mpv, to: "avplayer"))
+    let avplayer = PlayerReportIdentity(engine: "avplayer", generation: 4)
+    assert(reporter.tuning == retained && !reporter.sidecarOverlayActive)
+    assert(reporter.apply(.subtitleOffsetDelta(100), identity: avplayer) == nil && reporter.tuning == retained)
+    assert(reporter.apply(.speed(2), identity: mpv) == nil)
+    _ = checked(reporter.apply(.speed(1.25), identity: avplayer))
+    let avFrame = checked(reporter.apply(.scaling(.fill), identity: avplayer))
+    assert(canonicalJSON(avFrame) == canonicalJSON(jsonObject(at: fixtures.appendingPathComponent("apple-tv-player-settings-avplayer.json"))))
+    let active = checked(reporter.setSidecarOverlay(true, identity: avplayer))
+    assert(active["subtitleOffsetAvailable"] as? Bool == true && active["subtitleOffsetMs"] as? Int == 250)
+    assert(reporter.setSidecarOverlay(true, identity: avplayer) == nil)
+    reporter.note(engine: "avplayer", generation: 4) // body renders must not withdraw overlay availability
+    assert(reporter.sidecarOverlayActive)
+    _ = checked(reporter.apply(.subtitleOffsetDelta(-100), identity: avplayer))
+    let inactive = checked(reporter.setSidecarOverlay(false, identity: avplayer))
+    assert(inactive["subtitleOffsetAvailable"] as? Bool == false && inactive["subtitleOffsetMs"] as? Int == 0)
+    assert(reporter.tuning.subtitleOffsetMs == 150)
+    _ = checked(reporter.setSidecarOverlay(true, identity: avplayer))
+    let nextTuning = reporter.tuning
+    reporter.note(engine: "avplayer", generation: 5)
+    assert(!reporter.sidecarOverlayActive && reporter.tuning == nextTuning)
+    assert(reporter.setSidecarOverlay(true, identity: avplayer) == nil)
+    let nextItem = PlayerReportIdentity(engine: "avplayer", generation: 5)
+    let nextFrame = checked(reporter.resync(identity: nextItem))
+    assert(nextFrame["speed"] as? Double == 1.25 && nextFrame["scaling"] as? String == "Fill")
+    _ = checked(reporter.setSidecarOverlay(true, identity: nextItem))
+    _ = checked(reporter.switchEngine(from: nextItem, to: "mpv"))
+    assert(!reporter.sidecarOverlayActive && reporter.tuning == nextTuning)
+    let newSession = PlayerSettingsReporter(engine: "mpv", generation: 0)
+    assert(newSession.tuning == PlayerTuning())
+    assert(PlayerSettingsAvailability.forEngine("unknown", sidecarOverlayActive: true) == .none)
+    let unknown = PlayerSettingsReporter(engine: "unknown", generation: 0)
+    assert(unknown.apply(.speed(1.5), identity: PlayerReportIdentity(engine: "unknown", generation: 0)) == nil)
+    print("PASS: tuning snapshots match protocol fixtures, engine/overlay availability, session carry/reset, resync and stale-result fencing")
+}
+
 private func runTimelineReportTests() {
     // mpv chapter-list: seconds to ms, placeholder titles dropped, malformed entries skipped.
     let parsed = TimelineReport.parseMpvChapterList(
@@ -994,3 +1135,843 @@ private func runTimelineReportTests() {
     print("PASS: timeline chapters from mpv, bounded frame without segments, and buffered clamping")
 }
 
+
+private func runSkipSegmentTests() {
+    func data(_ json: String) -> Data { Data(json.utf8) }
+    let episode = SkipSegmentMetadata(imdbID: " tt0903747 ", tmdbID: "1396", season: 1, episode: 2)
+    let movie = SkipSegmentMetadata(imdbID: "tt0137523", tmdbID: "550")
+    func query(_ url: URL?) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: URLComponents(url: url!, resolvingAgainstBaseURL: false)!
+            .queryItems!.map { ($0.name, $0.value!) })
+    }
+    assert(SkipSegmentFetcher.introDBURL(movie) == nil)
+    assert(query(SkipSegmentFetcher.introDBURL(episode)) == ["imdb_id": "tt0903747", "season": "1", "episode": "2"])
+    assert(query(SkipSegmentFetcher.theIntroDBURL(movie)) == ["tmdb_id": "550"])
+    var coordinates = episode
+    coordinates.tmdbID = nil
+    assert(query(SkipSegmentFetcher.theIntroDBURL(coordinates)) == ["imdb_id": "tt0903747", "season": "1", "episode": "2"])
+    coordinates.episode = nil
+    assert(SkipSegmentFetcher.theIntroDBURL(coordinates) == nil)
+    coordinates.season = nil
+    coordinates.episode = 1
+    assert(SkipSegmentFetcher.theIntroDBURL(coordinates) == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(SkipSegmentMetadata()) == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: "not a URL") == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: "file:///tmp") == nil)
+    assert(SkipSegmentFetcher.theIntroDBURL(movie, baseURL: " ")!.absoluteString == "https://api.theintrodb.org/v4/media?tmdb_id=550")
+    for suffix in ["", "/", "/v1", "/v2/", "/v3", "/v3///", "/v4/"] {
+        let url = SkipSegmentFetcher.theIntroDBURL(movie, baseURL: " https://example.test/proxy\(suffix) ")!
+        assert(url.path == "/proxy/v4/media")
+    }
+    let custom = SkipSegmentFetcher.theIntroDBURL(movie,
+        baseURL: "https://example.test/proxy%2Froute/v3/?key=a%26b&tvdb_id=123&season=8&episode=9#fragment")!
+    assert(URLComponents(url: custom, resolvingAgainstBaseURL: false)!.percentEncodedPath == "/proxy%2Froute/v4/media")
+    assert(query(custom) == ["key": "a&b", "tmdb_id": "550"] && custom.fragment == nil)
+    let injected = SkipSegmentMetadata(imdbID: "tt1&mapping=dvd", season: 0, episode: 0)
+    assert(query(SkipSegmentFetcher.theIntroDBURL(injected)) == ["imdb_id": "tt1&mapping=dvd", "season": "0", "episode": "0"])
+    assert(query(SkipSegmentFetcher.introDBURL(injected))["imdb_id"] == "tt1&mapping=dvd")
+    print("PASS: skip provider movie/episode URLs, ID preference, query encoding and partial-coordinate guards")
+
+    let intro = SkipSegmentFetcher.parseIntroDB(data(#"{"intro":{"start_ms":1000,"end_ms":23000},"recap":{"start_sec":0.5,"end_sec":2.75},"outro":{"start_ms":-2,"end_ms":300}}"#))
+    assert(intro == [SkipSegment(type: "intro", startMs: 1000, endMs: 23000),
+                     SkipSegment(type: "recap", startMs: 500, endMs: 2750)])
+    assert(SkipSegmentFetcher.parseIntroDB(data(#"{"intro":{"start_ms":0,"end_ms":null},"recap":{"start_ms":2,"end_ms":2},"outro":{"start_sec":true,"end_sec":3}}"#)).isEmpty)
+    let secondary = SkipSegmentFetcher.parseTheIntroDB(data(#"{"tvdb_id":81189,"type":"tv","intro":[{"start_ms":null,"end_ms":23000},{"start_ms":30000,"end_ms":90000}],"recap":[{"start_ms":null,"end_ms":12000}],"credits":[{"start_ms":5801777,"end_ms":6371111},{"start_ms":6408000,"end_ms":null}],"preview":[{"start_ms":1680000,"end_ms":1740000}]}"#))
+    assert(secondary == [SkipSegment(type: "intro", startMs: 0, endMs: 23000),
+                         SkipSegment(type: "intro", startMs: 30000, endMs: 90000),
+                         SkipSegment(type: "recap", startMs: 0, endMs: 12000),
+                         SkipSegment(type: "outro", startMs: 5801777, endMs: 6371111),
+                         SkipSegment(type: "outro", startMs: 6408000, endMs: nil),
+                         SkipSegment(type: "preview", startMs: 1680000, endMs: 1740000)])
+    assert(SkipSegmentFetcher.parseTheIntroDB(data(#"{"intro":[{"start_ms":null,"end_ms":0},{"start_ms":0},{"end_ms":2},{"start_ms":-1,"end_ms":2},{"start_ms":2,"end_ms":1},{"start_ms":true,"end_ms":5},{"start_ms":0,"end_ms":"bad"},{"start_ms":1e30,"end_ms":null}],"outro":{},"credits":[{"start_ms":null,"end_ms":5},{"start_ms":90000,"end_ms":null}]}"#)) == [SkipSegment(type: "outro", startMs: 90000, endMs: nil)])
+    // Android gives an existing outro array precedence over the credits alias, even if empty.
+    assert(SkipSegmentFetcher.parseTheIntroDB(data(#"{"outro":[],"credits":[{"start_ms":9,"end_ms":null}]}"#)).isEmpty)
+    for malformed in ["not json", "[]", "null", #"{"episodes":[]}"#] {
+        assert(SkipSegmentFetcher.parseIntroDB(data(malformed)).isEmpty)
+        assert(SkipSegmentFetcher.parseTheIntroDB(data(malformed)).isEmpty)
+    }
+    let merged = SkipSegmentFetcher.merge(intro, secondary)
+    assert(merged.filter { $0.type == "intro" } == [intro[0]])
+    assert(merged.filter { $0.type == "recap" } == [intro[1]])
+    assert(merged.map(\.startMs) == merged.map(\.startMs).sorted())
+    assert(merged.contains { $0.type == "outro" && $0.endMs == nil })
+    print("PASS: IntroDB milliseconds/seconds, TheIntroDB arrays/nulls/credits, malformed ranges and provider precedence")
+
+    let invalid = [SkipSegment(type: "unknown", startMs: 0, endMs: 100),
+                   SkipSegment(type: "intro", startMs: -1, endMs: 100),
+                   SkipSegment(type: "intro", startMs: 20, endMs: 20),
+                   SkipSegment(type: "intro", startMs: 20, endMs: 10)]
+    let many = (0..<30).reversed().map { SkipSegment(type: "intro", startMs: $0 * 1000, endMs: $0 * 1000 + 500) }
+    let bounded = TimelineReport.frame(chapters: [], segments: invalid + many)["segments"] as! [[String: Any]]
+    assert(bounded.count == TimelineReport.maxSegments)
+    assert(bounded.map { $0["startMs"] as! Int } == (0..<16).map { $0 * 1000 })
+    let open = SkipSegment(type: "outro", startMs: 90_000, endMs: nil)
+    let frame = TimelineReport.frame(chapters: [], segments: [open])
+    assert((frame["segments"] as! [[String: Any]])[0]["endMs"] is NSNull)
+    assert(JSONSerialization.isValidJSONObject(frame))
+    assert(open.buttonTitle == "Skip Credits" && intro[0].buttonTitle == "Skip Intro")
+    assert(!open.contains(seconds: 89) && open.contains(seconds: 90) && open.contains(seconds: 100))
+    assert(!open.contains(seconds: .nan) && !open.contains(seconds: .infinity))
+    assert(open.targetSeconds(duration: 100) == 100)
+    assert(open.targetSeconds(duration: 0) == nil && open.targetSeconds(duration: .nan) == nil)
+    assert(intro[0].contains(seconds: 1) && !intro[0].contains(seconds: 23))
+    assert(intro[0].targetSeconds(duration: 20) == 20 && intro[0].targetSeconds(duration: 0) == 23)
+    // Open-ended or within a second of the end advances to the next item (Android TV parity).
+    assert(open.endsPlayback(duration: 100) && open.endsPlayback(duration: 0))
+    let nearEnd = SkipSegment(type: "outro", startMs: 90_000, endMs: 99_500)
+    assert(nearEnd.endsPlayback(duration: 100) && !nearEnd.endsPlayback(duration: 120))
+    assert(!intro[0].endsPlayback(duration: 1_000) && !nearEnd.endsPlayback(duration: 0))
+    print("PASS: timeline segment types, sorting, max 16, null ends, containment, duration-clamped skip targets and end-of-item skips")
+
+    var state = SkipSegmentResultState()
+    let firstA = state.reset()
+    assert(state.accept(intro, token: firstA) && state.segments == intro.sorted { $0.startMs < $1.startMs })
+    let itemB = state.reset()
+    assert(state.segments.isEmpty)
+    assert(!state.accept(secondary, token: firstA) && state.segments.isEmpty)
+    let nextA = state.reset()
+    assert(!state.accept(secondary, token: firstA) && !state.accept(secondary, token: itemB))
+    assert(state.accept([open], token: nextA) && state.segments == [open])
+    _ = state.reset() // teardown/cancel also revokes queued completions
+    assert(!state.accept(intro, token: nextA) && state.segments.isEmpty)
+    print("PASS: skip fetch stale-result fencing across item changes, A/B/A reuse and teardown")
+}
+
+/// No real provider requests: exercise HTTP/transport errors and provider selection
+/// through URLSession, rather than testing only the parsers in isolation.
+private final class SkipSegmentTestProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        assert(!Thread.isMainThread)
+        let url = request.url!
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+        let id = query.first { ["imdb_id", "tmdb_id"].contains($0.name) }!.value!
+        let ua = request.value(forHTTPHeaderField: "User-Agent") ?? ""
+        assert(ua.hasPrefix("PlayBridgeTV/") && ua.hasSuffix(" (+https://github.com/playbridgeapp/playbridge)"))
+        if id == "transport-fail" {
+            client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+            return
+        }
+        let primary = url.host == "api.introdb.app"
+        let body = id == "malformed" ? "not JSON" : primary
+            ? #"{"intro":{"start_ms":1000,"end_ms":23000}}"#
+            : #"{"intro":[{"start_ms":0,"end_ms":5000}],"credits":[{"start_ms":90000,"end_ms":null}]}"#
+        let response = HTTPURLResponse(url: url, statusCode: id == "http-fail" ? 503 : 200,
+                                       httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private func runSkipSegmentFetchTests() {
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+        func fetch(_ metadata: SkipSegmentMetadata, _ provider: SkipSegmentProvider) async -> [SkipSegment] {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [SkipSegmentTestProtocol.self]
+            return await SkipSegmentFetcher.fetch(metadata, provider: provider, configuration: config)
+        }
+        let metadata = SkipSegmentMetadata(imdbID: "valid", tmdbID: "valid", season: 1, episode: 2)
+        let primary = SkipSegment(type: "intro", startMs: 1000, endMs: 23000)
+        let secondary = SkipSegment(type: "intro", startMs: 0, endMs: 5000)
+        let credits = SkipSegment(type: "outro", startMs: 90000, endMs: nil)
+        let both = await fetch(metadata, .both)
+        assert(both == [primary, credits])
+        let introDBOnly = await fetch(metadata, .introdb)
+        assert(introDBOnly == [primary])
+        let theIntroDBOnly = await fetch(metadata, .theintrodb)
+        assert(theIntroDBOnly == [secondary, credits])
+        let disabled = await fetch(metadata, .disabled)
+        assert(disabled.isEmpty)
+        for failure in ["http-fail", "transport-fail", "malformed"] {
+            let failing = SkipSegmentMetadata(imdbID: failure, tmdbID: failure, season: 1, episode: 2)
+            let empty = await fetch(failing, .both)
+            assert(empty.isEmpty)
+            let fallback = await fetch(SkipSegmentMetadata(imdbID: failure, tmdbID: "valid", season: 1, episode: 2), .both)
+            assert(fallback == [secondary, credits], "One provider failing must not suppress the other")
+        }
+        done.signal()
+    }
+    assert(done.wait(timeout: .now() + 30) == .success)
+    print("PASS: skip fetching off main, provider modes, User-Agent, HTTP/transport/JSON failures and fallback")
+}
+
+private func runChapterNavigationTests() {
+    typealias Nav = ChapterNavigation
+    let chapters = Nav.sorted([
+        TimelineChapter(startMs: 600_000, title: "The Heist"),
+        TimelineChapter(startMs: 0, title: "Opening"),
+        TimelineChapter(startMs: -1, title: "Bad"),
+        TimelineChapter(startMs: 1_200_000),
+    ])
+    assert(chapters.map(\.startMs) == [0, 600_000, 1_200_000], "Sorted like the timeline frame")
+    func jump(_ positionMs: Int, _ forward: Bool) -> Int? {
+        Nav.jumpTarget(chapters: chapters, positionMs: positionMs, forward: forward)?.number
+    }
+
+    // Next: the first start beyond position + 1 s lead.
+    assert(jump(0, true) == 2)
+    assert(jump(599_500, true) == 3, "A jump that has not landed yet does not pick the same chapter")
+    assert(jump(598_000, true) == 2)
+    assert(jump(1_200_000, true) == nil, "Past the last chapter there is no next")
+    // Previous: restart after 5 s into a chapter, otherwise go back one, clamped to the first.
+    assert(jump(610_000, false) == 2, "More than 5 s in restarts the chapter")
+    assert(jump(605_000, false) == 1, "Exactly 5 s in goes back one")
+    assert(jump(602_000, false) == 1)
+    assert(jump(1_000, false) == 1, "The first chapter clamps")
+    let late = [TimelineChapter(startMs: 30_000, title: "A"), TimelineChapter(startMs: 60_000)]
+    assert(Nav.jumpTarget(chapters: late, positionMs: 10_000, forward: false)?.number == 1,
+           "Before the first chapter, previous goes to chapter 1")
+    let single = [TimelineChapter(startMs: 0, title: "Only")]
+    assert(Nav.jumpTarget(chapters: single, positionMs: 0, forward: true) == nil)
+    assert(Nav.jumpTarget(chapters: single, positionMs: 50_000, forward: false) == nil)
+    assert(Nav.jumpTarget(chapters: [], positionMs: 0, forward: true) == nil)
+
+    // Repeated presses chain from the pending target, not a stale reported position.
+    var pending = 0
+    for expected in [2, 3] {
+        let target = Nav.jumpTarget(chapters: chapters, positionMs: pending, forward: true)!
+        assert(target.number == expected)
+        pending = target.chapter.startMs
+    }
+    assert(Nav.jumpTarget(chapters: chapters, positionMs: pending, forward: false)?.number == 2,
+           "Previous right after landing goes back one chapter")
+
+    // Labels and captions.
+    let heist = Nav.jumpTarget(chapters: chapters, positionMs: 0, forward: true)!
+    assert(Nav.label(heist) == "Chapter 2 · The Heist")
+    // Muxer placeholder titles are not repeated after the number.
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "Chapter 2"))) == "Chapter 2")
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "chapter 02"))) == "Chapter 2")
+    assert(Nav.label(ChapterJumpTarget(number: 2, chapter: TimelineChapter(startMs: 0, title: "Chapter 3"))) == "Chapter 2 · Chapter 3")
+    assert(Nav.toast(heist) == "Chapter 2 · The Heist")
+    assert(Nav.toast(Nav.jumpTarget(chapters: chapters, positionMs: 1_300_000, forward: true)) == "Last chapter")
+    assert(Nav.label(ChapterJumpTarget(number: 3, chapter: TimelineChapter(startMs: 1, title: "  ")))
+           == "Chapter 3", "A blank title reads as the number")
+    assert(Nav.captionAt(chapters: chapters, positionMs: 1_250_000) == "Chapter 3")
+    assert(Nav.captionAt(chapters: chapters, positionMs: 700_000) == "Chapter 2 · The Heist")
+    assert(Nav.captionAt(chapters: late, positionMs: 1_000) == nil, "Nothing before the first chapter")
+    assert(Nav.captionAt(chapters: single, positionMs: 9_000) == "Only", "A lone chapter shows only its title")
+    assert(Nav.captionAt(chapters: [TimelineChapter(startMs: 0)], positionMs: 9_000) == nil)
+
+    let segments = [SkipSegment(type: "intro", startMs: 10_000, endMs: 40_000),
+                    SkipSegment(type: "outro", startMs: 1_700_000, endMs: nil)]
+    func caption(_ ms: Int) -> String? {
+        Nav.timelineCaption(chapters: chapters, segments: segments, positionMs: ms, durationMs: 1_800_000)
+    }
+    assert(caption(20_000) == "Intro", "A segment wins over the chapter")
+    assert(caption(40_000) == "Chapter 1 · Opening", "A segment end is exclusive")
+    assert(caption(1_750_000) == "Credits", "Outro reads Credits and open-ended runs to the end")
+    assert(Nav.segmentLabel("recap") == "Recap" && Nav.segmentLabel("preview") == "Preview")
+    assert(Nav.timelineCaption(chapters: [], segments: [], positionMs: 0, durationMs: 0) == nil)
+
+    // Geometry: gaps skip the chapter at 0 and any at or past the end.
+    let fractions = Nav.chapterFractions(
+        chapters: chapters + [TimelineChapter(startMs: 1_800_000)], durationMs: 1_800_000)
+    assert(fractions.count == 2 && abs(fractions[0] - 1.0 / 3) < 1e-9 && abs(fractions[1] - 2.0 / 3) < 1e-9)
+    assert(Nav.chapterFractions(chapters: chapters, durationMs: 0).isEmpty, "No duration, no gaps")
+    assert(Nav.chapterFractions(chapters: [TimelineChapter(startMs: 500)], durationMs: 1000).isEmpty,
+           "One chapter has nothing to separate")
+    let ranges = Nav.segmentRanges(segments: segments + [SkipSegment(type: "intro", startMs: 5, endMs: 5),
+                                                         SkipSegment(type: "bogus", startMs: 0, endMs: 9)],
+                                   durationMs: 2_000_000)
+    assert(ranges == [0.005...0.02, 0.85...1.0], "Open-ended clamps to the end; invalid segments draw nothing")
+    assert(Nav.segmentRanges(segments: [SkipSegment(type: "outro", startMs: 900, endMs: 5000)], durationMs: 1000)
+           == [0.9...1.0], "Bands clamp to the duration")
+    assert(Nav.segmentRanges(segments: segments, durationMs: 0).isEmpty)
+
+    // AVPlayer Chapters panel entries.
+    let markers = Nav.navigationMarkers(chapters: [TimelineChapter(startMs: 600_000), TimelineChapter(startMs: 0, title: " Opening ")],
+                                        durationMs: 900_000)
+    assert(markers == [ChapterNavigationMarker(startMs: 0, endMs: 600_000, title: "Opening"),
+                       ChapterNavigationMarker(startMs: 600_000, endMs: 900_000, title: "Chapter 2")])
+    let unknownEnd = Nav.navigationMarkers(chapters: chapters, durationMs: nil)
+    assert(unknownEnd.last == ChapterNavigationMarker(startMs: 1_200_000, endMs: nil, title: "Chapter 3"))
+    assert(Nav.navigationMarkers(chapters: single, durationMs: 900_000).isEmpty, "One chapter adds no Chapters tab")
+    print("PASS: chapter jumps (lead, restart, clamp, chain), labels, captions, gaps, bands and AVPlayer markers")
+}
+
+private func runChapterRemoteTests() {
+    for scrubbing in [false, true] {
+        for visible in [false, true] {
+            let chrome = PlayerChromeState(sessionMatches: true, scrubbing: scrubbing, controlsVisible: visible)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: chrome) == .adjustAppVolume(steps: 1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: chrome) == .adjustAppVolume(steps: -1))
+            var panel = chrome
+            panel.infoPanel = true
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: panel) == .moveHighlight(delta: -1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: panel) == .moveHighlight(delta: 1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_center", chrome: panel) == .activateHighlight)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_left", chrome: panel) == .seekBackward)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_right", chrome: panel) == .seekForward)
+            var playlist = chrome
+            playlist.playlist = true
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: playlist) == .moveHighlight(delta: -1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: playlist) == .moveHighlight(delta: 1))
+        }
+    }
+    print("PASS: network Up/Down adjust volume outside lists, including hold-scrub, and panel rows own highlight/activation")
+}
+
+private func runTransportChromeTests() {
+    assert(TransportBarMetrics.horizontalInset == 80 && TransportBarMetrics.bottomInset == 60)
+    assert(TransportBarMetrics.frameHeight == 14 && TransportBarMetrics.lineHeight == 6)
+    assert(TransportBarMetrics.thumbDiameter == 16)
+    assert(TransportTimeLabels.elapsed(0) == "0:00")
+    assert(TransportTimeLabels.elapsed(65.9) == "1:05")
+    assert(TransportTimeLabels.elapsed(3723) == "1:02:03")
+    assert(TransportTimeLabels.remaining(12, duration: 3723) == "−1:01:51")
+    assert(TransportTimeLabels.remaining(3723, duration: 3723) == "−0:00")
+    assert(TransportTimeLabels.remaining(4000, duration: 3723) == "−0:00")
+    for invalid in [-1.0, .nan, .infinity, -.infinity] {
+        assert(TransportTimeLabels.elapsed(invalid) == "0:00")
+        assert(TransportTimeLabels.remaining(invalid, duration: 3723) == "−1:02:03")
+        assert(TransportTimeLabels.remaining(12, duration: invalid).isEmpty)
+    }
+    assert(TransportTimeLabels.elapsed(.greatestFiniteMagnitude) == "0:00")
+    assert(TransportTimeLabels.remaining(12, duration: 0).isEmpty)
+    // AVPlayer clock and the label riding under the playhead.
+    assert(TransportTimeLabels.clock(0) == "00:00" && TransportTimeLabels.clock(111) == "01:51")
+    assert(TransportTimeLabels.clock(3723) == "1:02:03")
+    assert(TransportTimeLabels.clockRemaining(111, duration: 301) == "-03:10")
+    assert(TransportTimeLabels.clockRemaining(400, duration: 301) == "-00:00")
+    assert(TransportTimeLabels.clockRemaining(12, duration: .nan).isEmpty)
+    let start = TransportTimeLabels.playheadLabelLayout(fraction: 0, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(start.x == 0 && start.showsRemaining)
+    let middle = TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(middle.x == 460 && middle.showsRemaining)
+    let end = TransportTimeLabels.playheadLabelLayout(fraction: 1, width: 1000, elapsedWidth: 80, remainingWidth: 90)
+    assert(end.x == 920 && !end.showsRemaining)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: .nan, width: 1000, elapsedWidth: 80, remainingWidth: 90).x == 0)
+    assert(TransportTimeLabels.playheadLabelLayout(fraction: 0.5, width: 0, elapsedWidth: 80, remainingWidth: 90).x == 0)
+    assert(TransportTimeLabels.metadataSubtitle(title: "Show", year: "2024", season: 2, episode: 4,
+                                               episodeTitle: "  The Heist  ") == "S2 E4 · The Heist")
+    assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4) == "S2 E4")
+    assert(TransportTimeLabels.metadataSubtitle(season: 0, episode: 0, episodeTitle: "Special") == "S0 E0 · Special")
+    assert(TransportTimeLabels.metadataSubtitle(season: 2, episode: 4, episodeTitle: " \n ") == "S2 E4")
+    assert(TransportTimeLabels.metadataSubtitle(year: " 2024 ") == "2024")
+    assert(TransportTimeLabels.metadataSubtitle(year: "2024", season: 2) == "2024")
+    assert(TransportTimeLabels.metadataSubtitle(title: "Only the main title", episodeTitle: "No coordinates").isEmpty)
+    assert(TransportTimeLabels.metadataSubtitle().isEmpty)
+    print("PASS: transport metrics, elapsed/remaining time bounds, metadata presence and season-zero labels")
+
+    assert(TransportScrub.clickSkipSeconds == 10 && TransportScrub.remoteSkipSeconds == 15)
+    assert(TransportScrub.holdThreshold == 0.5)
+    func proposal(_ translation: Double, velocity: Double = 0, duration: Double = 1000) -> Double {
+        TransportScrub.proposal(origin: 500, translationX: translation, velocityX: velocity, duration: duration)
+    }
+    assert(proposal(0) == 500)
+    assert(proposal(10) == 520 && proposal(-10) == 480)
+    assert(proposal(10, velocity: 299) == 520 && proposal(10, velocity: -299) == 520)
+    assert(proposal(10, velocity: 300) == 520)
+    assert(proposal(10, velocity: 1150) == 550)
+    assert(proposal(10, velocity: 2000) == 580 && proposal(10, velocity: -2000) == 580)
+    assert(proposal(10, velocity: 10000) == 580, "Gain caps at 4x")
+    assert(proposal(-1000) == 0 && proposal(1000) == 1000)
+    assert(proposal(.greatestFiniteMagnitude) == 1000 && proposal(-.greatestFiniteMagnitude) == 0)
+    for invalid in [Double.nan, .infinity, -.infinity] {
+        assert(proposal(invalid) == 500)
+        assert(proposal(10, velocity: invalid) == 520)
+        assert(proposal(10, duration: invalid) == 500)
+    }
+    assert(proposal(10, duration: 0) == 500 && proposal(10, duration: -1) == 500)
+    assert(TransportScrub.proposal(origin: 5, translationX: 50, velocityX: 0, duration: 10) == 10)
+    assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
+    print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
+
+    // AVPlayer's tabs; audio and subtitles are transport buttons.
+    assert(InfoPanelTab.allCases == [.info, .chapters, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false) == [.info])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 1, settingsAvailable: false) == [.info])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false) == [.info, .chapters])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .settings])
+    // Only tabs with content: a file without metadata keeps Chapters and Settings.
+    assert(InfoPanelModel.visibleTabs(chapterCount: 3, settingsAvailable: true, hasInfo: false) == [.chapters, .settings])
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false) == [.info])
+    assert(InfoPanelModel.validTab(.info, tabs: [.chapters, .settings]) == .chapters)
+    assert(InfoPanelModel.validTab(.settings, tabs: [.chapters, .settings]) == .settings)
+    assert(TransportMetadata().isEmpty && !TransportMetadata(year: "1999").isEmpty
+        && !TransportMetadata(genres: ["Drama"]).isEmpty)
+    print("PASS: info-panel tab ordering, chapter threshold, optional settings and unconditional audio/subtitles")
+
+    let chapterRows = InfoPanelModel.chapterRows(chapters: [
+        TimelineChapter(startMs: 60000, title: "Chapter 02"),
+        TimelineChapter(startMs: 0, title: nil),
+        TimelineChapter(startMs: 120000, title: "The Heist")], durationMs: 180000, positionMs: 70000)
+    assert(chapterRows.map(\.title) == ["Chapter 1", "Chapter 02", "The Heist"])
+    assert(chapterRows.map(\.id) == [0, 60000, 120000])
+    assert(chapterRows.map(\.trailingText) == ["0:00", "1:00", "2:00"])
+    let longChapterRows = InfoPanelModel.chapterRows(chapters: [
+        TimelineChapter(startMs: 0), TimelineChapter(startMs: 3_723_500)],
+        durationMs: 5_000_000, positionMs: 3_800_000)
+    assert(longChapterRows.map(\.trailingText) == ["0:00", "1:02:03"])
+    assert(longChapterRows.last?.selected == true)
+    assert(InfoPanelRow(id: 1, title: "Audio").trailingText == nil)
+    assert(InfoPanelModel.initialHighlight(rows: chapterRows) == 1)
+    assert(InfoPanelModel.initialHighlight(rows: []) == 0)
+    assert(InfoPanelModel.chapterRows(chapters: [], durationMs: 0, positionMs: 0).isEmpty)
+    let tabs = InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false)
+    assert(InfoPanelModel.movingTab(.info, delta: -1, tabs: tabs) == .info)
+    assert(InfoPanelModel.movingTab(.info, delta: 1, tabs: tabs) == .chapters)
+    assert(InfoPanelModel.movingTab(.chapters, delta: 1, tabs: tabs) == .chapters)
+    assert(InfoPanelModel.movingTab(.settings, delta: 1, tabs: []) == .info)
+    assert(TransportBarMetrics.skipVisibleInset == 240 && TransportBarMetrics.skipHiddenInset == 80)
+    assert(TransportVisibility.autoHideSeconds == 5 && TransportVisibility.feedbackSeconds == 0.8)
+    assert(TransportVisibility.canAutoHide(userPaused: false, scrubbing: false, panel: false,
+        engineMenu: false, playlist: false, prebuffering: false))
+    for gate in 0..<6 {
+        assert(!TransportVisibility.canAutoHide(userPaused: gate == 0, scrubbing: gate == 1,
+            panel: gate == 2, engineMenu: gate == 3, playlist: gate == 4, prebuffering: gate == 5))
+    }
+    let firstRow = InfoPanelFocus()
+    let tabsFocus = firstRow.moving(-1, rowCount: 3, physical: true)
+    assert(tabsFocus == InfoPanelFocus(row: 0, tabBar: true))
+    assert(tabsFocus.moving(1, rowCount: 3, physical: true) == firstRow)
+    assert(firstRow.moving(1, rowCount: 3, physical: true).row == 1)
+    assert(firstRow.moving(-1, rowCount: 3, physical: false) == firstRow)
+    assert(InfoPanelFocus(row: 2).moving(1, rowCount: 3, physical: false).row == 2)
+    assert(firstRow.moving(1, rowCount: 0, physical: true).tabBar)
+    // Chapter cards: Up from any card reaches the tabs, Down stays, Left/Right move cards.
+    let thirdCard = InfoPanelFocus(row: 2)
+    assert(thirdCard.moving(-1, rowCount: 4, physical: true, horizontalRows: true) == InfoPanelFocus(row: 2, tabBar: true))
+    assert(thirdCard.moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
+    assert(InfoPanelFocus(row: 2, tabBar: true).moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
+    assert(thirdCard.moving(1, rowCount: 4, physical: false, horizontalRows: true).row == 3)
+    assert(InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: false))
+    assert(!InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: true))
+    assert(!InfoPanelModel.horizontalMovesRows(tab: .settings, tabBarFocused: false))
+    let moved = Date(timeIntervalSince1970: 1000)
+    assert(InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.05)))
+    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.5)))
+    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: .distantPast, now: moved))
+    // Duplicate chapter starts collapse; card frames sit a little into each chapter.
+    let duplicated = ChapterNavigation.sorted([TimelineChapter(startMs: 240_000, title: "Credits"),
+        TimelineChapter(startMs: 0, title: "Opening"), TimelineChapter(startMs: 240_000, title: "Credits")])
+    assert(duplicated.map(\.startMs) == [0, 240_000])
+    let frames = ChapterNavigation.thumbnailTimes(chapters: [TimelineChapter(startMs: 0),
+        TimelineChapter(startMs: 20_000), TimelineChapter(startMs: 200_000)], durationMs: 300_000)
+    assert(frames.map(\.startMs) == [0, 20_000, 200_000])
+    assert(frames.map(\.seconds) == [5, 30, 210])
+    assert(ChapterNavigation.thumbnailTimes(chapters: [TimelineChapter(startMs: 0)], durationMs: 300_000).isEmpty)
+    let many = (0..<60).map { TimelineChapter(startMs: $0 * 10_000) }
+    assert(ChapterNavigation.thumbnailTimes(chapters: many, durationMs: 700_000).count == ChapterNavigation.maxThumbnails)
+    print("PASS: panel chapter labels/targets/checks, selected-row focus, tab clamps, Skip clearance and auto-hide gates")
+
+    var stack = PlayerChromeState(sessionMatches: true, engineMenu: true, scrubbing: true,
+                                  playlist: true, controlsVisible: true, infoPanel: true)
+    for expected: PlayerRemoteEffect in [.dismissInfoPanel, .dismissEngineMenu, .dismissScrub,
+                                        .dismissPlaylist, .dismissControls, .exitPlayback] {
+        let effect = PlayerRemoteNavigation.effect(for: "back", chrome: stack)
+        assert(effect == expected)
+        PlayerRemoteNavigation.closing(effect, in: &stack)
+        if effect == .dismissInfoPanel {
+            assert(!stack.infoPanel && stack.engineMenu && stack.scrubbing && stack.playlist && stack.controlsVisible)
+        }
+    }
+    var panel = PlayerChromeState(sessionMatches: true, engineMenu: true, playlist: true,
+                                 controlsVisible: true, infoPanel: true)
+    assert(PlayerRemoteNavigation.listOwner(in: panel) == .infoPanel)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: panel) == .exitPlayback)
+    panel.stillWatching = true
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: panel) == .dismissStillWatching)
+    assert(PlayerRemoteNavigation.listOwner(in: panel) == .stillWatching)
+    panel.sessionMatches = false
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: panel) == .ignored)
+    assert(PlayerRemoteNavigation.effect(for: "home", chrome: panel) == .ignored)
+    var transport = PlayerChromeState(sessionMatches: true, controlsVisible: true)
+    let firstBack = PlayerRemoteNavigation.effect(for: "back", chrome: transport)
+    assert(firstBack == .dismissControls)
+    PlayerRemoteNavigation.closing(firstBack, in: &transport)
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: transport) == .exitPlayback)
+    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, infoPanel: true)
+    let copied = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
+    assert(copied.infoPanel && copied.controlsVisible)
+    // Panel ownership replaces the old subtitle/audio menus.
+    assert(PlayerRemoteNavigation.effect(for: "back", chrome: PlayerChromeState(
+        sessionMatches: true, engineMenu: true, infoPanel: true)) == .dismissInfoPanel)
+    print("PASS: info-panel Back/list priority, shared snapshot flags, paused-HUD exit levels, Home and stale keys")
+
+    func route(_ up: Bool, _ chrome: TransportChrome) -> TransportKeyRoute {
+        TransportKeyRoute.physicalVertical(up: up, chrome: chrome)
+    }
+    var chrome = TransportChrome()
+    assert(route(false, chrome) == .openPanel && route(true, chrome) == .showTransport)
+    // Pause, hold-scrub and Skip focus do not steal Down from Info.
+    for visible in [false, true] {
+        for paused in [false, true] {
+            for scrubbing in [false, true] {
+                for skipFocused in [false, true] {
+                    chrome.navigation.controlsVisible = visible
+                    chrome.navigation.scrubbing = scrubbing
+                    chrome.userPaused = paused
+                    chrome.skipPillFocused = skipFocused
+                    assert(route(false, chrome) == .openPanel)
+                    assert(route(true, chrome) == (visible ? (skipFocused ? .moveFocus : .focusActions) : .showTransport))
+                }
+            }
+        }
+    }
+    chrome.navigation.infoPanel = true
+    assert(route(false, chrome) == .moveInPanel && route(true, chrome) == .moveInPanel)
+    chrome.panelTabBarFocused = true
+    assert(route(true, chrome) == .closePanel && route(false, chrome) == .moveInPanel)
+    chrome.navigation.infoPanel = false
+    for path in [\PlayerChromeState.engineMenu, \.settingsSheet, \.playlist] {
+        var menu = TransportChrome()
+        menu.navigation[keyPath: path] = true
+        // An open list owns Up and Down; Down only opens Info outside lists.
+        assert(route(false, menu) == .moveFocus)
+        assert(route(true, menu) == .moveFocus)
+    }
+
+    for paused in [false, true] {
+        var actions = TransportChrome(userPaused: paused)
+        actions.navigation.sessionMatches = true
+        actions.navigation.controlsVisible = true
+        assert(route(true, actions) == .focusActions)
+        actions.transportActionFocused = true
+        assert(route(true, actions) == .focusActions, "Up stays in the action row")
+        assert(route(false, actions) == .focusScrubber)
+        assert(PlayerRemoteNavigation.effect(for: "back", chrome: actions.navigation) == .dismissControls)
+        actions.navigation.infoPanel = true
+        assert(route(false, actions) == .moveInPanel, "A panel keeps priority over stale action focus")
+        actions.navigation.infoPanel = false
+        actions.navigation.engineMenu = true
+        assert(route(true, actions) == .moveFocus, "An engine menu owns its directions")
+    }
+    assert(TransportAction.available(hasPlaylist: false) == [.loop, .speed, .switchEngine, .audio])
+    assert(TransportAction.available(hasPlaylist: true) == [.loop, .speed, .switchEngine, .audio, .playlist])
+    assert(TransportAction.available(hasPlaylist: true, hasSubtitles: true)
+        == [.loop, .speed, .switchEngine, .subtitles, .audio, .playlist])
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: false, hasSubtitles: true) == .subtitles)
+    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true) == .audio)
+    assert(TransportAction.subtitles.menu == .subtitles)
+    let subtitleRows = TransportMenuModel.subtitleRows(tracks: [(id: 3, name: "English"), (id: 4, name: "SDH")], current: 4)
+    assert(subtitleRows.map(\.id) == [-1, 3, 4] && subtitleRows.map(\.title).first == "Off")
+    assert(TransportMenuModel.initialHighlight(rows: subtitleRows) == 2)
+    assert(TransportMenuModel.subtitleRows(tracks: [], current: -1).first?.selected == true)
+    // The episode line is dropped when the title already carries it.
+    assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below · S1E5 · Little Pot Rock").isEmpty)
+    assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below") == "S1 E5 · Little Pot Rock")
+    assert(TransportTimeLabels.distinctSubtitle("2024", title: "Movie") == "2024")
+    assert(TransportTimeLabels.distinctSubtitle("", title: "Movie").isEmpty)
+    // 4K artwork: TMDB sizes are upgraded, then the URL as sent is the fallback.
+    let backdrop = ArtworkURL.candidates("https://image.tmdb.org/t/p/w780/abc.jpg", kind: .backdrop)
+    assert(backdrop.map(\.absoluteString) == ["https://image.tmdb.org/t/p/original/abc.jpg",
+                                               "https://image.tmdb.org/t/p/w780/abc.jpg"])
+    let posterArt = ArtworkURL.candidates("https://image.tmdb.org/t/p/w342/p.jpg", kind: .poster)
+    assert(posterArt.map(\.absoluteString).first == "https://image.tmdb.org/t/p/w780/p.jpg" && posterArt.count == 2)
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w1280/p.jpg", kind: .poster).count == 1, "Never shrinks")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/original/b.jpg", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("https://images.metahub.space/background/medium/tt1/img", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("https://image.tmdb.org/other/w780/b.jpg", kind: .backdrop).count == 1)
+    assert(ArtworkURL.candidates("", kind: .poster).isEmpty && ArtworkURL.candidates("file:///x.jpg", kind: .poster).isEmpty)
+    assert(!TransportMetadata(posterURL: "https://image.tmdb.org/t/p/w342/p.jpg").isEmpty, "A poster alone fills Info")
+    assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
+    assert(TransportAction.loop.moving(1, hasPlaylist: false) == .speed)
+    assert(TransportAction.speed.moving(1, hasPlaylist: false) == .switchEngine)
+    assert(TransportAction.audio.moving(1, hasPlaylist: false) == .audio)
+    assert(TransportAction.audio.moving(1, hasPlaylist: true) == .playlist)
+    assert(TransportAction.playlist.moving(-1, hasPlaylist: true) == .audio)
+    assert(TransportAction.playlist.moving(1, hasPlaylist: true) == .playlist)
+    assert(TransportAction.speed.menu == .speed && TransportAction.audio.menu == .audio
+        && TransportAction.switchEngine.menu == .engine)
+    assert(TransportAction.loop.menu == nil && TransportAction.playlist.menu == nil)
+    let speedRows = TransportMenuModel.speedRows(current: 1.25)
+    assert(speedRows.count == PlayerSettingsItem.speeds.count)
+    assert(TransportMenuModel.initialHighlight(rows: speedRows) == PlayerSettingsItem.speeds.firstIndex(of: 1.25))
+    assert(TransportMenuModel.speed(forRow: speedRows[0].id) == PlayerSettingsItem.speeds[0])
+    assert(TransportMenuModel.speed(forRow: -1) == nil && TransportMenuModel.speed(forRow: 99) == nil)
+    let audioRows = TransportMenuModel.audioRows(tracks: [(id: 1, name: "English"), (id: 2, name: "Hindi")], current: 2)
+    assert(audioRows.map(\.id) == [1, 2] && TransportMenuModel.initialHighlight(rows: audioRows) == 1)
+    assert(TransportMenuModel.initialHighlight(rows: TransportMenuModel.audioRows(tracks: [], current: -1)) == 0)
+    // The mpv Settings tab leaves speed to the transport's Speed button.
+    let mpvTab = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false).withoutSpeed
+    assert(!mpvTab.speed && mpvTab.scaling && mpvTab.subtitleOffset && mpvTab.any)
+    assert(PlayerSettingsItem.rows(tuning: PlayerTuning(), availability: mpvTab).first?.section == "Scaling")
+    let engineRows = TransportMenuModel.engineRows(current: .mpv)
+    assert(engineRows.filter(\.selected).map(\.id) == [PlaybackEngine.mpv.menuID])
+    assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,
+        selectActivatesFocusedControl: true) == .ignored, "Action Select never toggles playback")
+    print("PASS: playing/paused transport action focus, Down to scrubber, Back hides, optional Playlist and clamped Left/Right")
+
+    let ready = TransportChrome(userPaused: true, duration: 100)
+    assert(TransportKeyRoute.canTouchScrub(chrome: ready))
+    for duration in [0.0, -1, .nan, .infinity] {
+        var invalid = ready
+        invalid.duration = duration
+        assert(!TransportKeyRoute.canTouchScrub(chrome: invalid))
+    }
+    for path in [\TransportChrome.prebuffering, \.hasFailure, \.skipPillFocused,
+                 \.navigation.stillWatching, \.navigation.infoPanel, \.navigation.engineMenu,
+                 \.navigation.playlist,
+                 \.navigation.settingsSheet, \.navigation.scrubbing] {
+        var blocked = ready
+        blocked[keyPath: path] = true
+        assert(!TransportKeyRoute.canTouchScrub(chrome: blocked))
+    }
+    var playing = ready
+    playing.userPaused = false
+    assert(!TransportKeyRoute.canTouchScrub(chrome: playing))
+    print("PASS: Up reaches actions, Down opens Info from the scrubber, panel/list priority and touch-scrub gates")
+
+    let placement = TransportSubtitlePlacement.position
+    assert(placement(0, 1080) == 100)
+    assert(placement(360, 1080) < 70)
+    assert(placement(880, 1080) < placement(360, 1080))
+    assert(placement(360, 1080) == placement(720 + 24, 2160))
+    assert(placement(2000, 1080) == TransportSubtitlePlacement.minimumPosition)
+    for invalid in [0.0, -1, .nan, .infinity] {
+        assert(placement(360, invalid) == 100)
+        assert(placement(invalid, 1080) == 100)
+    }
+    assert(placement(0, 1080) == TransportSubtitlePlacement.normalPosition, "Hiding chrome restores subtitles")
+    print("PASS: subtitle placement clears transport/panel, scales by viewport, clamps and restores when hidden")
+
+    for cache in [false, true] {
+        for enginePaused in [false, true] {
+            let paused = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: true,
+                                                      prebuffering: false, enginePaused: enginePaused)
+            assert(paused == .paused && !paused.showsSpinner)
+            let preplay = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: false,
+                                                       prebuffering: true, enginePaused: enginePaused)
+            assert(preplay == .paused && !preplay.showsSpinner)
+            let active = PlaybackSurfaceState.resolve(cacheStalled: cache, userPaused: false,
+                                                      prebuffering: false, enginePaused: enginePaused)
+            assert(active == (cache ? .buffering : enginePaused ? .paused : .playing))
+            assert(active.showsSpinner == cache)
+        }
+    }
+    assert(PlaybackSurfaceState.buffering.rawValue == "buffering")
+    print("PASS: playback surface reduction, user-pause/pre-play precedence and spinner visibility")
+
+    let open = "The video couldn't be opened."
+    let generic = "This video couldn't be played."
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -13) == open)
+    for code: Int32 in -11 ... -5 { assert(PlaybackFailureMessage.sentence(forMpvCode: code) == open) }
+    for code: Int32 in [0, -1, -4, -12, -14, -16, Int32.min, Int32.max] {
+        assert(PlaybackFailureMessage.sentence(forMpvCode: code) == generic)
+    }
+    for sentence in [open, generic] { assert(!sentence.contains("://") && !sentence.contains("//")) }
+    print("PASS: fixed playback failure sentences for mpv loading/init codes and unknown errors")
+
+    assert(PlaybackFailureModel.actions(hasNextItem: false) == [.tryAgain, .close])
+    assert(PlaybackFailureModel.actions(hasNextItem: true) == [.tryAgain, .next, .close])
+    assert(PlaybackFailureAction.tryAgain.rawValue == "Try Again")
+    assert(PlaybackFailureAction.next.rawValue == "Next" && PlaybackFailureAction.close.rawValue == "Close")
+    for hasNext in [false, true] {
+        assert(PlaybackFailureModel.actions(hasNextItem: hasNext).first == PlaybackFailureModel.defaultAction)
+    }
+    assert(PlaybackFailureModel.autoCloseSeconds == 60)
+    for elapsed in [-1.0, 0, 59.999, .nan, .infinity, -.infinity] {
+        assert(!PlaybackFailureModel.shouldAutoClose(elapsedSeconds: elapsed))
+    }
+    assert(PlaybackFailureModel.shouldAutoClose(elapsedSeconds: 60))
+    assert(PlaybackFailureModel.shouldAutoClose(elapsedSeconds: 61))
+    let initial = PlaybackFailureModel.phoneReport(for: .presented(mpvCode: -13))
+    assert(initial == .errorStatus(reason: open), "Presentation immediately reports the error, never idle")
+    assert(PlaybackFailureModel.phoneReport(for: .tryAgain) == nil)
+    assert(PlaybackFailureModel.phoneReport(for: .next) == nil)
+    assert(PlaybackFailureModel.phoneReport(for: .presented(mpvCode: -999)) == .errorStatus(reason: generic))
+    for closing: PlaybackFailureModel.Event in [.close, .phoneStop, .autoClose] {
+        assert(PlaybackFailureModel.phoneReport(for: closing) == .idleContext)
+    }
+    let retryAndNext: [PlaybackFailureModel.Event] = [
+        .presented(mpvCode: -13), .tryAgain, .presented(mpvCode: -999), .next,
+    ]
+    assert(retryAndNext.compactMap { PlaybackFailureModel.phoneReport(for: $0) }
+           == [.errorStatus(reason: open), .errorStatus(reason: generic)])
+    print("PASS: error actions/default focus, optional Next, 60-second auto-close and error-now/idle-on-close reporting")
+}
+
+private func runPlaybackFailureSessionTests() {
+    var session = PlaybackFailureSession()
+    let first = session.beginAttempt()
+    assert(session.matches(first) && session.sentence == nil)
+    assert(!session.close(attempt: first), "Normal playback is not an error-screen close")
+    assert(session.present(code: -13, attempt: first))
+    assert(session.sentence == PlaybackFailureMessage.sentence(forMpvCode: -13))
+    assert(!session.present(code: -999, attempt: first), "Duplicate end/init errors cannot restart the 60-second timer")
+    let retry = session.beginAttempt()
+    assert(session.sentence == nil && !session.matches(first))
+    assert(!session.present(code: -13, attempt: first), "A late result from the failed attempt must not replace its retry")
+    assert(!session.close(attempt: first), "An old timeout cannot close the retry")
+    assert(session.present(code: -999, attempt: retry))
+    assert(session.sentence == PlaybackFailureMessage.sentence(forMpvCode: -999))
+    assert(session.close(attempt: retry))
+    assert(!session.matches(retry) && !session.close(attempt: retry))
+    assert(!session.present(code: -13, attempt: retry), "Close is terminal for that attempt")
+    let nextItem = session.beginAttempt()
+    assert(session.sentence == nil && session.matches(nextItem))
+    assert(!session.close(attempt: retry))
+    assert(session.present(code: -13, attempt: nextItem))
+    _ = session.beginAttempt() // item replacement or teardown
+    assert(!session.matches(nextItem) && !session.present(code: -13, attempt: nextItem))
+    print("PASS: error attempt fencing, duplicate failures, retry/item replacement, close and stale timeouts")
+}
+
+private func runPlayerSettingsMenuTests() {
+    let mpv = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false)
+    let avNoSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: false)
+    let avSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: true)
+    assert(mpv.any && avNoSidecar.any && !PlayerSettingsAvailability.none.any)
+    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: mpv.any).last == .settings)
+
+    // Menu / row ids → PlayerTuning.Command (the design's examples).
+    assert(PlayerSettingsItem.command(id: "speed:1.25", currentOffsetMs: 0) == .speed(1.25))
+    assert(PlayerSettingsItem.command(id: "scaling:Zoom", currentOffsetMs: 0) == .scaling(.zoom))
+    assert(PlayerSettingsItem.command(id: "sub_offset:+500", currentOffsetMs: 250) == .subtitleOffsetDelta(500))
+    assert(PlayerSettingsItem.command(id: "sub_offset:-100", currentOffsetMs: 250) == .subtitleOffsetDelta(-100))
+    assert(PlayerSettingsItem.command(id: "sub_offset:reset", currentOffsetMs: 250) == .subtitleOffsetDelta(-250))
+    assert(PlayerSettingsItem.command(id: "sub_offset:reset", currentOffsetMs: -1_500) == .subtitleOffsetDelta(1_500))
+    for invalid in ["", "speed:3", "speed:1.3", "scaling:zoom", "sub_offset:+250", "sub_offset:", "reset"] {
+        assert(PlayerSettingsItem.command(id: invalid, currentOffsetMs: 0) == nil, "Unknown menu id must be ignored")
+    }
+    // Every id round-trips, and every command is one the engine accepts.
+    for item in PlayerSettingsItem.items(availability: mpv) {
+        assert(PlayerSettingsItem(id: item.id) == item)
+        assert(mpv.allows(item.command(currentOffsetMs: 250)))
+    }
+    assert(PlayerSettingsItem.speeds == [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])
+    assert(PlayerSettingsItem.items(in: .speed).allSatisfy {
+        guard case .speed(let value) = $0 else { return false }
+        return PlayerTuning.speedRange.contains(value)
+    })
+
+    // Reset through the real tuning model returns the offset to zero.
+    var tuning = PlayerTuning()
+    assert(tuning.apply(PlayerSettingsItem.subtitleStep(500).command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.apply(PlayerSettingsItem.subtitleStep(-100).command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.subtitleOffsetMs == 400)
+    assert(tuning.apply(PlayerSettingsItem.subtitleReset.command(currentOffsetMs: tuning.subtitleOffsetMs)))
+    assert(tuning.subtitleOffsetMs == 0)
+    assert(!tuning.apply(PlayerSettingsItem.subtitleReset.command(currentOffsetMs: 0)), "Reset at zero is a no-op")
+
+    // Sections: Subtitle Sync last, and only while offset is available.
+    assert(PlayerSettingsItem.sections(availability: mpv) == [.speed, .scaling, .subtitleSync])
+    assert(PlayerSettingsItem.sections(availability: avNoSidecar) == [.speed, .scaling])
+    assert(PlayerSettingsItem.sections(availability: avSidecar) == [.speed, .scaling, .subtitleSync])
+
+    // mpv Settings-tab rows: index ids, headers, checks, current offset on Reset.
+    tuning = PlayerTuning(speed: 1.25, subtitleOffsetMs: 250, scaling: .zoom)
+    let rows = PlayerSettingsItem.rows(tuning: tuning, availability: mpv)
+    assert(rows.count == 8 + 3 + 5)
+    assert(rows.map(\.id) == Array(0..<rows.count))
+    assert(rows.compactMap(\.section) == ["Speed", "Scaling", "Subtitle Sync"])
+    assert(rows[0].section == "Speed" && rows[8].section == "Scaling" && rows[11].section == "Subtitle Sync")
+    assert(rows.filter(\.selected).map(\.title) == ["1.25×", "Zoom"])
+    assert(InfoPanelModel.initialHighlight(rows: rows) == 4, "Opening Settings focuses the current speed")
+    assert(rows.map(\.title) == ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×",
+                                 "Fit", "Zoom", "Fill", "−500 ms", "−100 ms", "+100 ms", "+500 ms", "Reset"])
+    assert(rows[15].trailingText == "+250 ms" && rows[14].trailingText == nil)
+    func rowCommand(_ title: String) -> PlayerTuning.Command? {
+        guard let row = rows.first(where: { $0.title == title }) else { return nil }
+        return PlayerSettingsItem.command(rowID: row.id, tuning: tuning, availability: mpv)
+    }
+    assert(rowCommand("1.25×") == .speed(1.25))
+    assert(rowCommand("Zoom") == .scaling(.zoom))
+    assert(rowCommand("+500 ms") == .subtitleOffsetDelta(500))
+    assert(rowCommand("Reset") == .subtitleOffsetDelta(-250))
+    assert(PlayerSettingsItem.command(rowID: -1, tuning: tuning, availability: mpv) == nil)
+    assert(PlayerSettingsItem.command(rowID: rows.count, tuning: tuning, availability: mpv) == nil)
+    assert(PlayerSettingsItem.command(rowID: 11, tuning: tuning, availability: avNoSidecar) == nil,
+           "No Subtitle Sync rows without an offset owner")
+    assert(PlayerSettingsItem.rows(tuning: tuning, availability: .none).isEmpty)
+
+    // Labels the menus show beside their titles.
+    assert(PlayerSettingsItem.currentLabel(.speed, tuning: tuning) == "1.25×")
+    assert(PlayerSettingsItem.currentLabel(.scaling, tuning: tuning) == "Zoom")
+    assert(PlayerSettingsItem.currentLabel(.subtitleSync, tuning: tuning) == "+250 ms")
+    assert(PlayerSettingsItem.offsetLabel(0) == "0 ms" && PlayerSettingsItem.offsetLabel(-1_500) == "−1500 ms")
+    assert(PlayerSettingsItem.speedLabel(1) == "1×" && PlayerSettingsItem.speedLabel(0.3) == "0.3×")
+    print("PASS: Settings tab rows and AVPlayer tuning menus map to PlayerTuning commands, including Reset")
+}
+
+private func runTouchScrubTests() {
+    let ready = TransportChrome(userPaused: true, duration: 1000)
+    func accepts(_ x: Double, _ y: Double, _ chrome: TransportChrome = ready, action: Bool = false) -> Bool {
+        TouchScrubSession.canBegin(chrome: chrome, actionFocused: action, translationX: x, translationY: y)
+    }
+    assert(accepts(12, 0) && accepts(-12, 5))
+    assert(!accepts(11, 0) && !accepts(12, 12) && !accepts(12, 30))
+    assert(!accepts(.nan, 0) && !accepts(20, .infinity))
+    assert(!accepts(20, 0, action: true))
+    for path in [\TransportChrome.prebuffering, \.hasFailure, \.skipPillFocused,
+                 \.navigation.stillWatching, \.navigation.infoPanel, \.navigation.engineMenu,
+                 \.navigation.settingsSheet, \.navigation.playlist, \.navigation.scrubbing] {
+        var chrome = ready
+        chrome[keyPath: path] = true
+        assert(!accepts(20, 0, chrome))
+    }
+    var playing = ready
+    playing.userPaused = false
+    assert(!accepts(20, 0, playing))
+    for duration in [0.0, -1, .nan, .infinity] {
+        var invalid = ready
+        invalid.duration = duration
+        assert(!accepts(20, 0, invalid))
+    }
+    print("PASS: paused pan gates, horizontal slop, vertical swipe ownership, button/list/Skip focus and invalid durations")
+
+    var scrub = TouchScrubSession()
+    let token = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.begin(position: 100, duration: 1000) == nil, "Cannot begin another live pan")
+    assert(scrub.update(token: token, translationX: 50, velocityX: 0))
+    assert(scrub.proposal?.position == 200 && scrub.proposal?.origin == 100)
+    scrub.click(by: TransportScrub.clickSkipSeconds)
+    assert(scrub.proposal?.position == 210)
+    assert(scrub.update(token: token, translationX: 75, velocityX: 0))
+    assert(scrub.proposal?.position == 260, "Later pan samples preserve click adjustments")
+    assert(scrub.update(token: token, translationX: 50, velocityX: 2000))
+    assert(scrub.proposal?.position == 510, "Fast drag uses the existing fourfold gain")
+    scrub.click(by: 5000)
+    assert(scrub.proposal?.position == 1000)
+    scrub.click(by: -5000)
+    assert(scrub.proposal?.position == 0)
+    let duringDrag = scrub.commit()!
+    assert(duringDrag == TouchScrubSession.Commit(position: 0, requiresSeek: true))
+    assert(scrub.proposal == nil && scrub.commit() == nil)
+    print("PASS: pan preview, gain, click accumulation, clamps and mid-pan commit without per-sample seeks")
+
+    let releaseToken = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.update(token: releaseToken, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: releaseToken) == 200)
+    assert(scrub.proposal?.isPanning == false)
+    assert(!scrub.update(token: releaseToken, translationX: 100, velocityX: 0), "Released drag ignores late movement")
+    assert(scrub.commit() == TouchScrubSession.Commit(position: 200, requiresSeek: false),
+           "Select/Play after release does not seek twice")
+    let second = scrub.begin(position: 100, duration: 1000)!
+    assert(scrub.update(token: second, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: second) == 200)
+    let third = scrub.begin(position: 200, duration: 1000)!
+    assert(scrub.proposal?.origin == 100, "Consecutive drags retain the original pause point")
+    assert(scrub.update(token: third, translationX: 50, velocityX: 0))
+    assert(scrub.release(token: third) == 300)
+    assert(scrub.cancel() == 100 && scrub.proposal == nil)
+    assert(scrub.cancel() == nil)
+    print("PASS: release stays pending for confirmation, seeks once, consecutive drags and Back restore the paused origin")
+
+    for interruption in ["phone relative seek", "phone absolute seek", "new item", "error", "teardown"] {
+        let old = scrub.begin(position: 100, duration: 1000)!
+        assert(scrub.update(token: old, translationX: 50, velocityX: 0))
+        scrub.discard()
+        scrub.click(by: TransportScrub.clickSkipSeconds)
+        assert(scrub.proposal == nil, "A pending click cannot revive a discarded gesture")
+        assert(!scrub.update(token: old, translationX: 200, velocityX: 2000), interruption)
+        assert(scrub.release(token: old) == nil && scrub.cancel() == nil, interruption)
+        let fresh = scrub.begin(position: 115, duration: 1000)!
+        assert(fresh != old)
+        assert(!scrub.update(token: old, translationX: 200, velocityX: 2000))
+        assert(scrub.release(token: old) == nil)
+        assert(scrub.proposal?.position == 115, "A late callback cannot override the phone's winning seek")
+        scrub.discard()
+    }
+    var invalid = TouchScrubSession()
+    assert(invalid.begin(position: .nan, duration: 1000) == nil)
+    assert(invalid.begin(position: 100, duration: 0) == nil)
+    print("PASS: phone seeks, item/error/teardown discard touch transactions and fence old pan callbacks")
+}

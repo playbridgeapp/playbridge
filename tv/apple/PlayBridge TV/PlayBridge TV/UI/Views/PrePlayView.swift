@@ -154,31 +154,17 @@ struct PrePlayView: View {
     @ViewBuilder
     private var backdrop: some View {
         GeometryReader { proxy in
-            let imageUrl: String? = metadata.hasBackdropURL ? metadata.backdropURL
-                : (metadata.hasPosterURL ? metadata.posterURL : nil)
-            if let urlString = imageUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .clipped()
-                            .blur(radius: 2)
-                            .saturation(1.15)
-                            .onAppear { backdropLoaded = true }
-                    default:
-                        Color.black
-                            .onAppear {
-                                // failure or empty — don't block on this image
-                                if case .failure(_) = phase { backdropLoaded = true }
-                            }
-                    }
-                }
-            } else {
+            // Sharp, full-resolution backdrop as on Android TV; the scrim keeps text legible.
+            let urls = metadata.hasBackdropURL ? ArtworkURL.candidates(metadata.backdropURL, kind: .backdrop)
+                : (metadata.hasPosterURL ? ArtworkURL.candidates(metadata.posterURL, kind: .poster) : [])
+            ArtworkImage(urls: urls, onResult: { _ in backdropLoaded = true }) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+            } placeholder: {
                 Color.black
-                    .onAppear { backdropLoaded = true }
             }
         }
         .ignoresSafeArea()
@@ -186,40 +172,19 @@ struct PrePlayView: View {
 
     // MARK: - Scrim
 
+    /// Android TV's scrim: one left-to-right fade (98% → clear at ~73% width),
+    /// no top/bottom vignettes, so the backdrop reads as clearly as on Android.
     private var scrim: some View {
-        ZStack {
-            // Left-to-right fade (content legibility)
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.97), location: 0.0),
-                    .init(color: .black.opacity(0.85), location: 0.35),
-                    .init(color: .black.opacity(0.55), location: 0.65),
-                    .init(color: .black.opacity(0.20), location: 1.0)
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-
-            // Bottom vignette
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.6), location: 0.0),
-                    .init(color: .clear, location: 0.4)
-                ],
-                startPoint: .bottom,
-                endPoint: .top
-            )
-
-            // Top vignette
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.5), location: 0.0),
-                    .init(color: .clear, location: 0.3)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
+        LinearGradient(
+            stops: [
+                .init(color: .black.opacity(0.98), location: 0.0),
+                .init(color: .black.opacity(0.90), location: 0.243),
+                .init(color: .black.opacity(0.60), location: 0.486),
+                .init(color: .clear, location: 0.729)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
         .ignoresSafeArea()
     }
 
@@ -230,17 +195,15 @@ struct PrePlayView: View {
             Spacer()
 
             // Logo or Title
-            if metadata.hasLogoURL, let url = URL(string: metadata.logoURL) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 520, maxHeight: 140)
-                            .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
-                    } else {
-                        titleText
-                    }
+            if metadata.hasLogoURL, !ArtworkURL.candidates(metadata.logoURL, kind: .logo).isEmpty {
+                ArtworkImage(urls: ArtworkURL.candidates(metadata.logoURL, kind: .logo)) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 520, maxHeight: 140)
+                        .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
+                } placeholder: {
+                    titleText
                 }
             } else {
                 titleText
@@ -356,29 +319,23 @@ struct PrePlayView: View {
 
     @ViewBuilder
     private var posterColumn: some View {
-        if metadata.hasPosterURL, let url = URL(string: metadata.posterURL) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(2 / 3, contentMode: .fill)
-                        .frame(width: 360, height: 540)
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                        .shadow(color: .black.opacity(0.7), radius: 40, x: -10, y: 20)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                        .onAppear { posterLoaded = true }
-                default:
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(0.05))
-                        .frame(width: 360, height: 540)
-                        .onAppear {
-                            if case .failure(_) = phase { posterLoaded = true }
-                        }
-                }
+        if metadata.hasPosterURL {
+            ArtworkImage(urls: ArtworkURL.candidates(metadata.posterURL, kind: .poster),
+                         onResult: { _ in posterLoaded = true }) { image in
+                image
+                    .resizable()
+                    .aspectRatio(2 / 3, contentMode: .fill)
+                    .frame(width: 360, height: 540)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .shadow(color: .black.opacity(0.7), radius: 40, x: -10, y: 20)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            } placeholder: {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(width: 360, height: 540)
             }
             .padding(.trailing, 90)
         }

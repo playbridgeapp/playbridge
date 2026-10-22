@@ -8,15 +8,16 @@ struct TimelineChapter: Equatable {
 
 /// The `timeline` receiver frame and `status.buffered`, with the same bounds as the
 /// Android TV and desktop receivers (`Timeline` in protocol/asyncapi.yaml). Hand-written
-/// JSON, not a generated protobuf model. This receiver has no skip segments yet.
+/// JSON, not a generated protobuf model.
 enum TimelineReport {
+    nonisolated static let maxSegments = 16
     static let maxChapters = 256
     static let maxTitleLength = 200
     /// mpv's placeholder for a chapter without a title (Matroska).
     private static let mpvUnnamedChapter = "(unnamed)"
 
     /// The frame body; the server adds `playbackId` and `currentItemId`.
-    static func frame(chapters: [TimelineChapter]) -> [String: Any] {
+    static func frame(chapters: [TimelineChapter], segments: [SkipSegment] = []) -> [String: Any] {
         let sorted = chapters.filter { $0.startMs >= 0 }.sorted { $0.startMs < $1.startMs }
         return [
             "type": "timeline",
@@ -25,7 +26,11 @@ enum TimelineReport {
                 if let title = title(chapter.title) { entry["title"] = title }
                 return entry
             },
-            "segments": [[String: Any]](),
+            "segments": segments.filter(\.isValid).sorted { $0.startMs < $1.startMs }
+                .prefix(maxSegments).map { segment -> [String: Any] in
+                    ["type": segment.type, "startMs": segment.startMs,
+                     "endMs": segment.endMs.map { $0 as Any } ?? NSNull()]
+                },
         ]
     }
 

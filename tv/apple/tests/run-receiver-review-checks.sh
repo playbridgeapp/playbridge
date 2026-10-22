@@ -10,11 +10,18 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Data/HistoryStore.swift" \
   "$source_root/Player/PlaybackTime.swift" \
   "$source_root/Player/TimelineReport.swift" \
+  "$source_root/Player/ChapterNavigation.swift" \
+  "$source_root/Player/SkipSegmentFetcher.swift" \
   "$source_root/Player/PlaybackUIUpdateGate.swift" \
   "$source_root/Player/PlaybackPauseCommand.swift" \
   "$source_root/Player/PlaybackEngine.swift" \
   "$source_root/Player/PlayerRemoteNavigation.swift" \
+  "$source_root/Player/TransportChrome.swift" \
+  "$source_root/Player/ArtworkURL.swift" \
+  "$source_root/Player/TouchScrub.swift" \
   "$source_root/Player/PlayerPlaybackReport.swift" \
+  "$source_root/Player/PlayerTuning.swift" \
+  "$source_root/Player/PlayerSettingsMenu.swift" \
   "$source_root/Player/PlayerAppVolume.swift" \
   "$source_root/Network/PlaybackProgressWebhook.swift" \
   "$source_root/Player/MPVHTTPHeaders.swift" \

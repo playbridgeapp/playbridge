@@ -1,10 +1,11 @@
 import SwiftUI
 
 struct SettingsView: View {
-    private enum FocusedSetting: Hashable { case reminderInterval, responseTime }
+    private enum FocusedSetting: Hashable { case skipProvider, reminderInterval, responseTime }
 
     @EnvironmentObject var server: WebSocketServer
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage("skip_segments_provider") var skipProvider: String = "both"
     @AppStorage("enable_history") var enableHistory: Bool = true
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
     @AppStorage("still_watching_threshold_min") var stillWatchingThreshold: Int = StillWatchingController.defaultThreshold
@@ -35,6 +36,20 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    // A Picker here is not focusable on tvOS without a navigation stack;
+                    // cycle on each press like the reminder rows below.
+                    Button(action: selectNextSkipProvider) {
+                        HStack {
+                            Text("Skip Segments Provider")
+                                .foregroundColor(focusedSetting == .skipProvider ? .black : .primary)
+                            Spacer()
+                            Text(skipProviderLabel)
+                                .foregroundColor(focusedSetting == .skipProvider ? .black : Theme.secondaryText)
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(focusedSetting == .skipProvider ? .black : Theme.accent)
+                        }
+                    }
+                    .focused($focusedSetting, equals: .skipProvider)
                     Toggle("Save Cast History", isOn: $enableHistory)
                     Toggle("Still Watching Reminder", isOn: $stillWatchingEnabled)
                     Button(action: selectNextStillWatchingThreshold) {
@@ -129,6 +144,16 @@ struct SettingsView: View {
 
     private var stillWatchingThresholdLabel: String {
         "\(stillWatchingThreshold) minutes"
+    }
+
+    private var skipProviderLabel: String {
+        (SkipSegmentProvider(rawValue: skipProvider) ?? .both).title
+    }
+
+    private func selectNextSkipProvider() {
+        let values = SkipSegmentProvider.allCases
+        let index = values.firstIndex { $0.rawValue == skipProvider } ?? 0
+        skipProvider = values[(index + 1) % values.count].rawValue
     }
 
     private func selectNextStillWatchingThreshold() {

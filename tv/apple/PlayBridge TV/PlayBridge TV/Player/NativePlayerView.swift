@@ -2,7 +2,10 @@ import SwiftUI
 import AVKit
 
 final class ActivityAVPlayerViewController: AVPlayerViewController {
+    var onPhysicalActivity: (() -> Void)?
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        onPhysicalActivity?()
         if StillWatchingGate.isPrompting {
             NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
             return
@@ -17,6 +20,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let subtitles: [String]?
+    let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let isPreBuffering: Bool
     let title: String?
@@ -33,11 +37,35 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let appMuted: Bool
     let mediaIdentity: Int
     let engineChrome: PlayerEngineChrome
+    /// More than one queue item; a one-item queue hides the Playlist menu item.
+    let hasPlaylist: Bool
+    let playbackSpeed: Double
+    let subtitleOffsetMs: Int
+    let scaling: PlayerScaling
+    let onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
+    /// Speed / Scaling / Subtitle Sync menu choices. `PlayerView.applyTuning` is
+    /// the only writer; applied values return as `playbackSpeed` etc.
+    let onLocalTuning: (PlayerTuning.Command) -> Void
+
+    private var tuning: PlayerTuning {
+        PlayerTuning(speed: playbackSpeed, subtitleOffsetMs: subtitleOffsetMs, scaling: scaling)
+    }
+
+    private func gravity(_ scaling: PlayerScaling) -> AVLayerVideoGravity {
+        switch scaling {
+        case .fit: return .resizeAspect
+        case .zoom: return .resizeAspectFill
+        case .fill: return .resize
+        }
+    }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
         let controller = ActivityAVPlayerViewController()
         controller.delegate = context.coordinator
+        controller.onPhysicalActivity = { [weak coordinator = context.coordinator] in
+            coordinator?.restoreRemoteControls()
+        }
 
         // Setup Audio Session for TV output
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -61,6 +89,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         let player = AVPlayer(playerItem: playerItem)
+        playerItem.audioTimePitchAlgorithm = .timeDomain
+        player.defaultRate = Float(playbackSpeed)
 
         // Seek to initial time if context switching occurred
         if initialTime > 0 {
@@ -68,6 +98,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         controller.player = player
+        controller.videoGravity = gravity(scaling)
+        // PlayerTuning is the single speed owner; our Speed menu replaces AVKit's.
+        controller.speeds = []
         controller.allowsPictureInPicturePlayback = true
         controller.loadViewIfNeeded()
         context.coordinator.attachSubtitleOverlay(to: controller)
@@ -113,20 +146,35 @@ struct NativePlayerView: UIViewControllerRepresentable {
             title: "External Subtitles",
             image: UIImage(systemName: "captions.bubble"),
             children: [subtitleOffAction] + subtitleOptions.compactMap { subtitleActions[$0.id] })
-        controller.transportBarCustomMenuItems = subtitleOptions.isEmpty
-            ? [loopAction, switchMenu, playlistAction]
-            : [loopAction, externalSubtitleMenu, switchMenu, playlistAction]
+        context.coordinator.configureTransportMenu(
+            controller: controller,
+            leading: subtitleOptions.isEmpty ? [loopAction] : [loopAction, externalSubtitleMenu],
+            trailing: [switchMenu],
+            playlist: playlistAction, hasPlaylist: hasPlaylist)
 
         player.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         player.isMuted = isPreBuffering || appMuted
         context.coordinator.attach(player: player)
         context.coordinator.bindEngineChrome(
             engineChrome, controller: controller, isPreBuffering: isPreBuffering)
+        context.coordinator.startSkipSegments(skipMetadata)
         player.play()
         return controller
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        context.coordinator.setHasPlaylist(hasPlaylist)
+        if let player = uiViewController.player, player.defaultRate != Float(playbackSpeed) {
+            let wasPlaying = player.rate != 0
+            player.defaultRate = Float(playbackSpeed)
+            if wasPlaying { player.rate = Float(playbackSpeed) }
+        }
+        uiViewController.videoGravity = gravity(scaling)
+        context.coordinator.onSidecarOverlayChanged = onSidecarOverlayChanged
+        context.coordinator.subtitleOffsetMs = subtitleOffsetMs
+        context.coordinator.onLocalTuning = onLocalTuning
+        context.coordinator.setTuning(tuning)
+        context.coordinator.refreshExternalSubtitle()
         uiViewController.player?.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         uiViewController.player?.isMuted = isPreBuffering || appMuted
         context.coordinator.bindEngineChrome(
@@ -140,7 +188,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch,
                     headers: headers, subtitles: subtitles, onBroadcast: onBroadcast,
                     onLoopChanged: onLoopChanged, onEndOfFile: onEndOfFile,
-                    initialLoop: initialLoop, mediaIdentity: mediaIdentity)
+                    initialLoop: initialLoop, mediaIdentity: mediaIdentity,
+                    subtitleOffsetMs: subtitleOffsetMs, onSidecarOverlayChanged: onSidecarOverlayChanged,
+                    tuning: tuning, onLocalTuning: onLocalTuning)
     }
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
@@ -161,11 +211,86 @@ struct NativePlayerView: UIViewControllerRepresentable {
         var onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
         var onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
         var mediaIdentity: Int
+        var subtitleOffsetMs: Int
+        var onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
         var loopAction: UIAction?
+        var onLocalTuning: (PlayerTuning.Command) -> Void
+        private var tuning: PlayerTuning
+        /// Mirrors the reporter's availability: Subtitle Sync only moves the overlay.
+        private var sidecarOverlayActive = false
+        private var transportMenuLeading: [UIMenuElement] = []
+        private var transportMenuTrailing: [UIMenuElement] = []
+        private var playlistMenuItem: UIMenuElement?
+        private var hasPlaylist = false
+
+        func configureTransportMenu(controller: AVPlayerViewController, leading: [UIMenuElement],
+                                    trailing: [UIMenuElement], playlist: UIMenuElement, hasPlaylist: Bool) {
+            transportMenuLeading = leading
+            transportMenuTrailing = trailing
+            playlistMenuItem = playlist
+            self.hasPlaylist = hasPlaylist
+            applyTransportMenu(controller)
+        }
+
+        /// Applied values from PlayerView. Menus are rebuilt only when they change.
+        func setTuning(_ value: PlayerTuning) {
+            guard value != tuning else { return }
+            tuning = value
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func setSidecarOverlay(_ active: Bool) {
+            onSidecarOverlayChanged(active, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
+            guard active != sidecarOverlayActive else { return }
+            sidecarOverlayActive = active
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func tuningMenus() -> [UIMenuElement] {
+            let availability = PlayerSettingsAvailability.forEngine(
+                PlaybackEngine.avplayer.rawValue, sidecarOverlayActive: sidecarOverlayActive)
+            return PlayerSettingsItem.sections(availability: availability).map { section in
+                UIMenu(title: section.rawValue,
+                       subtitle: PlayerSettingsItem.currentLabel(section, tuning: tuning),
+                       image: UIImage(systemName: section.symbol),
+                       children: PlayerSettingsItem.items(in: section).map { item in
+                           let id = item.id
+                           return UIAction(title: item.title,
+                                           identifier: UIAction.Identifier("playbridge.tuning." + id),
+                                           state: item.isSelected(tuning) ? .on : .off) { [weak self] _ in
+                               self?.selectTuning(id)
+                           }
+                       })
+            }
+        }
+
+        private func selectTuning(_ id: String) {
+            guard let command = PlayerSettingsItem.command(id: id, currentOffsetMs: tuning.subtitleOffsetMs)
+            else { return }
+            onLocalTuning(command)
+        }
+
+        /// The queue can grow mid-item (queue_add), so the Playlist item follows it.
+        func setHasPlaylist(_ value: Bool) {
+            guard value != hasPlaylist else { return }
+            hasPlaylist = value
+            if let controller = playerController { applyTransportMenu(controller) }
+        }
+
+        private func applyTransportMenu(_ controller: AVPlayerViewController) {
+            controller.transportBarCustomMenuItems = transportMenuLeading + tuningMenus() + transportMenuTrailing
+                + (hasPlaylist ? playlistMenuItem.map { [$0] } ?? [] : [])
+        }
 
         private var timeObserver: Any?
         private var subtitleTimeObserver: Any?
         private var timeControlObservation: NSKeyValueObservation?
+        /// AVPlayer cannot open some containers (MKV, WebM, AVI). If the item fails
+        /// before it was ever ready, hand the same position to mpv once, like the
+        /// Android TV engine fallback. Later failures stay here.
+        private var itemStatusObservation: NSKeyValueObservation?
+        private var itemWasReady = false
+        private var didFallBack = false
         private weak var playerController: AVPlayerViewController?
         private weak var subtitleCaptionView: UIView?
         private weak var subtitleLabel: UILabel?
@@ -180,8 +305,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var didBroadcastTracks = false
         /// Chapter markers of the current item, loaded once it is ready to play.
         private var chapters: [TimelineChapter] = []
-        /// Network Back hides the system transport. Later SwiftUI updates keep it hidden
-        /// until this player view is recreated for the next item.
+        private let skipLoader = SkipSegmentLoader()
+        private var activeSkipSegment: SkipSegment?
+        /// Phone Back hides the transport until a physical remote press restores it.
         private var remoteControlsHidden = false
         private var controlsSuppressedByPreplay = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
@@ -195,7 +321,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
              onBroadcast: @escaping ([String: Any]) -> Void,
              onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
              onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
-             initialLoop: Bool, mediaIdentity: Int) {
+             initialLoop: Bool, mediaIdentity: Int,
+             subtitleOffsetMs: Int, onSidecarOverlayChanged: @escaping (Bool, PlayerReportIdentity) -> Void,
+             tuning: PlayerTuning, onLocalTuning: @escaping (PlayerTuning.Command) -> Void) {
             self.title = title
             self.onDismiss = onDismiss
             self.onExit = onExit
@@ -206,6 +334,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.onLoopChanged = onLoopChanged
             self.onEndOfFile = onEndOfFile
             self.mediaIdentity = mediaIdentity
+            self.subtitleOffsetMs = subtitleOffsetMs
+            self.onSidecarOverlayChanged = onSidecarOverlayChanged
+            self.tuning = tuning
+            self.onLocalTuning = onLocalTuning
             self.isLooping = initialLoop
             super.init()
 
@@ -239,9 +371,29 @@ struct NativePlayerView: UIViewControllerRepresentable {
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main
             ) { [weak self] _ in self?.broadcastStatus() }
+            itemStatusObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) {
+                [weak self] item, _ in
+                let status = item.status
+                DispatchQueue.main.async { self?.itemStatusChanged(status) }
+            }
+        }
+
+        private func itemStatusChanged(_ status: AVPlayerItem.Status) {
+            switch status {
+            case .readyToPlay:
+                itemWasReady = true
+            case .failed where !itemWasReady && !didFallBack:
+                didFallBack = true
+                let position = player?.currentTime().seconds ?? 0
+                onSwitch(.mpv, position.isFinite ? position : 0)
+            default:
+                break
+            }
         }
 
         func teardown() {
+            skipLoader.cancel()
+            playerController?.contextualActions = []
             lateSubtitleDownload?.cancel()
             lateSubtitleDownload = nil
             subtitleDownloadTask?.cancel()
@@ -251,6 +403,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             subtitleCaptionView?.removeFromSuperview()
             timeControlObservation?.invalidate()
             timeControlObservation = nil
+            itemStatusObservation?.invalidate()
+            itemStatusObservation = nil
             if let token = timeObserver { player?.removeTimeObserver(token); timeObserver = nil }
             NotificationCenter.default.removeObserver(self)
             player?.pause()
@@ -377,6 +531,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             subtitleRequestID = nil
             selectedExternalSubtitleID = nil
             externalCues = nil
+            setSidecarOverlay(false)
             if let token = subtitleTimeObserver { player?.removeTimeObserver(token); subtitleTimeObserver = nil }
             subtitleLabel?.text = nil
             subtitleCaptionView?.isHidden = true
@@ -401,6 +556,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case .success(let cues):
                 selectedExternalSubtitleID = option.id
                 externalCues = cues
+                setSidecarOverlay(true)
                 if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
                 TrackPreferences.shared.subtitlesOff = false
                 TrackPreferences.shared.subtitleLanguage = nil
@@ -423,8 +579,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             }
         }
 
-        private func refreshExternalSubtitle() {
-            let text = externalCues?.text(at: player?.currentTime().seconds ?? .nan)
+        func refreshExternalSubtitle() {
+            let time = PlayerTuning.overlayCueTime(position: player?.currentTime().seconds ?? .nan,
+                                                  offsetMs: subtitleOffsetMs)
+            let text = externalCues?.text(at: time)
             if subtitleLabel?.text != text { subtitleLabel?.text = text }
             subtitleCaptionView?.isHidden = text == nil
         }
@@ -472,19 +630,28 @@ struct NativePlayerView: UIViewControllerRepresentable {
         func playerViewController(_ playerViewController: AVPlayerViewController,
                                   didSelect mediaSelectionOption: AVMediaSelectionOption?,
                                   in mediaSelectionGroup: AVMediaSelectionGroup) {
+            let prefs = TrackPreferences.shared
+            if let audioGroup, mediaSelectionGroup == audioGroup {
+                prefs.audioLanguage = mediaSelectionOption?.locale?.identifier
+                    ?? mediaSelectionOption?.extendedLanguageTag
+                prefs.audioName = mediaSelectionOption?.displayName
+                broadcastTracks()
+                return
+            }
             guard let subtitleGroup, mediaSelectionGroup == subtitleGroup else { return }
             clearExternalSubtitle(explicitOff: false)
-            let prefs = TrackPreferences.shared
             prefs.subtitlesOff = mediaSelectionOption == nil
             prefs.subtitleLanguage = mediaSelectionOption?.locale?.identifier
                 ?? mediaSelectionOption?.extendedLanguageTag
             prefs.subtitleName = mediaSelectionOption?.displayName
+            broadcastTracks()
         }
 
         // MARK: - Phone Now-Playing Sync
 
         private func broadcastStatus() {
             guard let player else { return }
+            updateSkipAction()
             let pos = player.currentTime().seconds
             let durRaw = player.currentItem?.duration.seconds ?? 0
             let dur = durRaw.isFinite ? durRaw : 0
@@ -542,22 +709,88 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func broadcastTimeline() {
-            onBroadcast(TimelineReport.frame(chapters: chapters))
+            onBroadcast(TimelineReport.frame(chapters: chapters, segments: skipLoader.segments))
+        }
+
+        /// Feeds the system Chapters tab of the Info panel. tvOS shows only the first
+        /// group, which with a nil title is the chapter list. No custom press handling.
+        private func applyNavigationMarkers(_ chapters: [TimelineChapter]) {
+            guard let item = player?.currentItem else { return }
+            let seconds = item.duration.seconds
+            let durationMs = seconds.isFinite && seconds > 0 ? PlaybackTime.milliseconds(seconds) : nil
+            let markers = ChapterNavigation.navigationMarkers(chapters: chapters, durationMs: durationMs)
+            guard !markers.isEmpty else {
+                item.navigationMarkerGroups = []
+                return
+            }
+            func time(_ ms: Int) -> CMTime { CMTime(value: CMTimeValue(ms), timescale: 1000) }
+            let groups = markers.map { marker -> AVTimedMetadataGroup in
+                let title = AVMutableMetadataItem()
+                title.identifier = .commonIdentifierTitle
+                title.value = marker.title as NSString
+                title.extendedLanguageTag = "und"
+                let start = time(marker.startMs)
+                let range = marker.endMs.map { CMTimeRange(start: start, end: time($0)) }
+                    ?? CMTimeRange(start: start, duration: .positiveInfinity)
+                return AVTimedMetadataGroup(items: [title], timeRange: range)
+            }
+            item.navigationMarkerGroups = [AVNavigationMarkersGroup(title: nil, timedNavigationMarkers: groups)]
+        }
+
+        func startSkipSegments(_ metadata: SkipSegmentMetadata) {
+            let identity = mediaIdentity
+            skipLoader.start(metadata) { [weak self] in
+                guard let self, self.player != nil, self.mediaIdentity == identity else { return }
+                self.updateSkipAction()
+                self.broadcastTimeline()
+            }
+            broadcastTimeline()
+        }
+
+        private func updateSkipAction() {
+            guard let player, let controller = playerController else { return }
+            let duration = player.currentItem?.duration.seconds ?? 0
+            let segment = controlsSuppressedByPreplay || StillWatchingGate.isPrompting ? nil : skipLoader.segments.first {
+                $0.contains(seconds: player.currentTime().seconds) && $0.targetSeconds(duration: duration) != nil
+            }
+            guard segment != activeSkipSegment else { return }
+            activeSkipSegment = segment
+            guard let segment else { controller.contextualActions = []; return }
+            let identity = mediaIdentity
+            controller.contextualActions = [UIAction(title: segment.buttonTitle) { [weak self] _ in
+                guard let self, self.mediaIdentity == identity, !self.controlsSuppressedByPreplay,
+                      !StillWatchingGate.isPrompting, let player = self.player,
+                      self.skipLoader.segments.contains(segment),
+                      segment.contains(seconds: player.currentTime().seconds),
+                      let target = segment.targetSeconds(duration: player.currentItem?.duration.seconds ?? 0) else { return }
+                NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+                self.activeSkipSegment = nil
+                self.playerController?.contextualActions = []
+                if segment.endsPlayback(duration: player.currentItem?.duration.seconds ?? 0) {
+                    self.broadcastStatus()
+                    self.onDismiss()
+                    return
+                }
+                self.seek(to: target)
+            }]
         }
 
         private func loadSelectionGroupsAndBroadcast(asset: AVAsset) {
             if #available(tvOS 16, *) {
                 Task { [weak self] in
                     guard let self else { return }
+                    let identity = self.mediaIdentity
                     let audio = (try? await asset.loadMediaSelectionGroup(for: .audible)) ?? nil
                     let sub = (try? await asset.loadMediaSelectionGroup(for: .legible)) ?? nil
                     let chapters = await self.loadChapters(asset: asset)
                     await MainActor.run {
+                        guard self.mediaIdentity == identity, self.player?.currentItem?.asset === asset else { return }
                         self.audioGroup = audio
                         self.subtitleGroup = sub
                         self.applyPreferredTracks()
                         self.broadcastTracks()
                         self.chapters = chapters
+                        self.applyNavigationMarkers(chapters)
                         self.broadcastTimeline()
                     }
                 }
@@ -689,7 +922,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                     invokeSwitch(to: target)
                 }
             default:
-                break  // speed/scaling/filter/audio_boost/sub_offset: not supported on AVPlayer
+                break  // Tuning is owned by PlayerView; filter/audio_boost remain unsupported.
             }
             broadcastStatus()
         }
@@ -750,6 +983,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
             remoteControlsHidden = true
             playerController?.showsPlaybackControls = false
             return true
+        }
+
+        func restoreRemoteControls() {
+            guard remoteControlsHidden else { return }
+            remoteControlsHidden = false
+            playerController?.showsPlaybackControls = !controlsSuppressedByPreplay
         }
 
         @objc private func onStillWatchingPause() { player?.pause(); broadcastStatus() }

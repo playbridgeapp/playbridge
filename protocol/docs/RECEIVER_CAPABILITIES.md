@@ -134,6 +134,19 @@ avoids changing old required fields or making every existing consumer guess whet
 snapshot replaced or merged previous settings. New player-settings protobuf helper fields are
 optional implementation fields; AsyncAPI still enforces the complete WSS snapshot.
 
+Apple TV advertises `loop`, `engine`, `speed`, `scaling`, and `subtitle_offset` in
+separate settings lists for `mpv` and `avplayer`. Both engines support speed 0.25–2.0
+and Fit/Zoom/Fill scaling. Subtitle offsets accumulate signed millisecond deltas,
+clamped to ±120000 ms; positive delays subtitles. mpv applies the offset to its
+embedded and sidecar subtitles. AVPlayer reports `subtitleOffsetAvailable: true`
+only while a PlayBridge external subtitle overlay is selected. Selecting a native
+subtitle track or disabling the overlay reports false and a neutral offset of 0;
+the session's stored offset is retained. Unsupported offset commands are ignored.
+Complete snapshots are sent on initial sync, tuning/overlay changes, item/engine
+changes, and `context_query`. Tuning survives engine switches and playlist advances
+within a cast session; a new session starts with defaults. Audio boost and quality
+capping remain unavailable.
+
 Desktop's `internal_mpv` advertises `speed`, `loop`, `scaling`, and `subtitle_offset`,
 and reports a complete `player_settings` snapshot on authenticated sync, settings changes,
 new items, and `context_query`. It does not advertise quality capping, engine switching,

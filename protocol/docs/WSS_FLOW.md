@@ -293,7 +293,7 @@ advertised capabilities.
 | User scripts / user agents | Sends | No | No | Handles | No | No |
 | `context`, `status`, `playlist_status` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `tracks` | Receives | Receives | Receives | Sends | Sends | Sends |
-| `player_settings` | Receives | Receives | Receives | Sends | Not currently sent | Not currently sent |
+| `player_settings` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `timeline`, `status.buffered` | Receives | No | No | No | No | Sends |
 | WebRTC screen mirror (`screenMirrorWebRtc` + v1 `protocolVersion`) | Sends | No | No | Handles | No | Handles |
 
@@ -334,8 +334,10 @@ or replacement by a new connection.
   return the token, and senders must ignore it if present, retaining the token they already hold.
 - Apple TV still accepts the legacy `command/play` action for compatibility. Canonical senders
   emit a one-item `playlist` instead.
-- Only Android TV currently emits `player_settings` and implements receiver-browser/user-script
-  actions. Capability negotiation and tolerant unknown-message handling are therefore required.
+- Android TV, Apple TV and Desktop emit complete `player_settings` snapshots. Apple TV
+  advertises tuning per engine and restricts AVPlayer subtitle offset to its external subtitle
+  overlay at runtime. Only Android TV implements receiver-browser/user-script actions.
+  Capability negotiation and tolerant unknown-message handling are therefore required.
 - There is no overall protocol-version field negotiated on the wire today. The optional native
   descriptor's `version` governs only that descriptor and is not a WSS/SAS version. `asyncapi.yaml` versioning,
   additive evolution, capability arrays, and tolerant readers are the current compatibility

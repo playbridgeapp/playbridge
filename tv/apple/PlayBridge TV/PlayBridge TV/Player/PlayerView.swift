@@ -43,6 +43,7 @@ struct PlayerView: View {
     @State private var mediaGeneration = 0
     @State private var engineChrome = PlayerEngineChrome()
     @State private var exitGate = PlayerRemoteExitGate()
+    @State private var tuning = PlayerTuning()
     @State private var settingsReporter = PlayerSettingsReporter(engine: "avplayer", generation: 0)
     /// App volume for this playback session. A new player screen starts at full
     /// level, unmuted. Engine switches and playlist moves keep the stored level.
@@ -104,6 +105,13 @@ struct PlayerView: View {
         return decision
     }
 
+    private func applyTuning(_ command: PlayerTuning.Command) {
+        let identity = liveVolumeIdentity()
+        guard let frame = settingsReporter.apply(command, identity: identity) else { return }
+        tuning = settingsReporter.tuning
+        emit(frame, engine: identity.engine)
+    }
+
     private func liveVolumeIdentity() -> PlayerReportIdentity {
         PlayerReportIdentity(engine: exitGate.liveEngine.rawValue, generation: exitGate.liveGeneration)
     }
@@ -140,8 +148,17 @@ struct PlayerView: View {
         mediaGeneration == generation && effectiveEngine(for: playlistStore.currentItem ?? payload) == engine
     }
 
-    /// Initial seek for `item` (seconds): an engine-switch resume wins; otherwise honor
-    /// the phone's `start_position_ms` resume point seeded from its resume store.
+    /// Preserve protobuf presence: season/episode zero can identify specials.
+    private func skipMetadata(for item: Playbridge_PlayPayload) -> SkipSegmentMetadata {
+        let metadata = item.visualMetadata
+        return SkipSegmentMetadata(
+            imdbID: metadata.hasImdbID ? metadata.imdbID : nil,
+            tmdbID: metadata.hasTmdbID ? metadata.tmdbID : nil,
+            season: metadata.hasSeason ? Int(metadata.season) : nil,
+            episode: metadata.hasEpisode ? Int(metadata.episode) : nil)
+    }
+
+    /// Initial seek: an engine-switch resume wins over the sender's start position.
     private func initialSeekTime(for item: Playbridge_PlayPayload) -> Double {
         if resumeTime > 0 { return resumeTime }
         if item.hasStartPositionMs, item.startPositionMs > 0 {
@@ -246,6 +263,7 @@ struct PlayerView: View {
     }
 
     private func handleRemoteNavigation(_ key: String) {
+        if !stillWatching.isPrompting, !isPreBuffering, engineChrome.handleFailureKey(key) { return }
         let engine = exitGate.liveEngine
         let generation = exitGate.liveGeneration
         let chrome = engineChrome.snapshot().chrome(
@@ -275,7 +293,7 @@ struct PlayerView: View {
         case .moveHighlight, .activateHighlight:
             if engineChrome.apply(effect) { break }
             applyPlaylistHighlight(effect)
-        case .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
+        case .dismissInfoPanel, .dismissEngineMenu,
              .dismissSettingsSheet, .dismissScrub, .dismissControls,
              .togglePlayback, .seekBackward, .seekForward,
              .scrubBackward, .scrubForward, .commitScrub:
@@ -285,6 +303,19 @@ struct PlayerView: View {
         case .toggleAppMute:
             publishAppVolume(appVolume.toggleMute(identity: liveVolumeIdentity()))
         }
+    }
+
+    private func transportMetadata(for payload: Playbridge_PlayPayload) -> TransportMetadata {
+        guard payload.hasVisualMetadata else { return TransportMetadata() }
+        let metadata = payload.visualMetadata
+        return TransportMetadata(subtitle: TransportTimeLabels.metadataSubtitle(
+            year: metadata.hasYear ? metadata.year : nil,
+            season: metadata.hasSeason ? Int(metadata.season) : nil,
+            episode: metadata.hasEpisode ? Int(metadata.episode) : nil,
+            episodeTitle: metadata.hasEpisodeTitle ? metadata.episodeTitle : nil),
+            year: metadata.year, rating: metadata.rating, runtime: metadata.runtime,
+            overview: metadata.overview, genres: metadata.genres,
+            posterURL: metadata.hasPosterURL ? metadata.posterURL : "")
     }
 
     private func applyPlaylistHighlight(_ effect: PlayerRemoteEffect) {
@@ -324,20 +355,34 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
+                        skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         mediaIdentity: mediaGeneration,
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
                         onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
+                        onBack: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleRemoteNavigation("back") } },
                         onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
+                        onBroadcast: { frame in
+                            guard isCurrentPlayback(currentEngine, generation: currentGeneration) else { return }
+                            if frame["state"] as? String == "error" { showPlaylist = false }
+                            broadcast(frame, for: currentRequest)
+                        },
                         onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
                         onEndOfFile: { identity in emitEnd(identity) },
                         initialLoop: settingsReporter.loop,
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
-                        engineChrome: engineChrome
+                        engineChrome: engineChrome,
+                        hasPlaylist: playlistStore.items.count > 1,
+                        playbackSpeed: tuning.speed,
+                        subtitleOffsetMs: tuning.subtitleOffsetMs,
+                        scaling: tuning.scaling,
+                        hasNextItem: playlistStore.hasNext,
+                        metadata: transportMetadata(for: currentRequest),
+                        playlistVisible: showPlaylist,
+                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -351,6 +396,7 @@ struct PlayerView: View {
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
+                        skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
@@ -364,7 +410,17 @@ struct PlayerView: View {
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
                         mediaIdentity: currentGeneration,
-                        engineChrome: engineChrome
+                        engineChrome: engineChrome,
+                        hasPlaylist: playlistStore.items.count > 1,
+                        playbackSpeed: tuning.speed,
+                        subtitleOffsetMs: tuning.subtitleOffsetMs,
+                        scaling: tuning.scaling,
+                        onSidecarOverlayChanged: { active, identity in
+                            if let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
+                                emit(frame, engine: identity.engine)
+                            }
+                        },
+                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -470,6 +526,7 @@ struct PlayerView: View {
             guard !stillWatching.isPrompting else { return }
             if !showPlaylist {
                 playlistHighlight = playlistStore.currentIndex
+                _ = engineChrome.apply(.dismissInfoPanel)
             }
             withAnimation { showPlaylist.toggle() }
         }
@@ -487,6 +544,10 @@ struct PlayerView: View {
             stillWatching.onUserActivity()
         }
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.controlCommand)) { note in
+            if let command = note.userInfo?["command"] as? String, let parsed = PlayerTuning.parse(command) {
+                applyTuning(parsed)
+                return
+            }
             guard stillWatching.isPrompting,
                   let command = note.userInfo?["command"] as? String else { return }
             switch command {
