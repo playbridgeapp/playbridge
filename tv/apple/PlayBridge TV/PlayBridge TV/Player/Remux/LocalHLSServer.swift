@@ -113,7 +113,16 @@ final class LocalHLSServer {
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: queue)
         _ = ready.wait(timeout: .now() + 2)
-        guard let bound = listener.port, listener.state == .ready else { listener.cancel(); return nil }
+        guard let bound = listener.port, listener.state == .ready else {
+            #if DEBUG
+            print("[Remux] server failed to start: \(listener.state)")
+            #endif
+            listener.cancel()
+            return nil
+        }
+        #if DEBUG
+        print("[Remux] server listening on 127.0.0.1:\(bound.rawValue)")
+        #endif
         listener.stateUpdateHandler = nil
         queue.sync {
             self.listener = listener
@@ -125,6 +134,10 @@ final class LocalHLSServer {
     // MARK: HTTP
 
     private func accept(_ connection: NWConnection) {
+        #if DEBUG
+        print("[Remux] accept")
+        connection.stateUpdateHandler = { state in print("[Remux] connection \(state)") }
+        #endif
         connection.start(queue: queue)
         receiveHead(connection, buffer: Data())
     }
@@ -134,6 +147,9 @@ final class LocalHLSServer {
             guard let self else { connection.cancel(); return }
             var buffer = buffer
             if let data { buffer.append(data) }
+            #if DEBUG
+            print("[Remux] received \(data?.count ?? 0) bytes complete=\(complete) error=\(String(describing: error))")
+            #endif
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
                 let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
                 self.handle(head, on: connection)
@@ -156,7 +172,10 @@ final class LocalHLSServer {
         }
         let headOnly = parts[0] == "HEAD"
         #if DEBUG
-        if case .segment = route.resource {} else { print("[Remux] request \(route.resource)") }
+        if case .segment = route.resource {} else {
+            let variant = parts[1].split(separator: "?").dropFirst().first.map { " ?\($0)" } ?? ""
+            print("[Remux] request \(route.resource)\(variant)")
+        }
         #endif
         session.work.async { [weak self] in
             guard let self else { return }

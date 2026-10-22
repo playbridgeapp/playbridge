@@ -84,6 +84,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             assetURL = local.url
             options = [:]
             context.coordinator.remuxToken = local.token
+            #if DEBUG
+            print("[Remux] AVPlayer uses the local remux")
+            #endif
             context.coordinator.remuxMediaURL = local.url.deletingLastPathComponent().appendingPathComponent("index.m3u8")
             context.coordinator.remuxInitialTime = initialTime
         }

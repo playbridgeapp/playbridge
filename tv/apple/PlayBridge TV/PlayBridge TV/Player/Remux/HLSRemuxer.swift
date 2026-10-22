@@ -254,13 +254,16 @@ final class HLSRemuxer {
                           "VIDEO-RANGE=\(range)"]
         if fps > 0 { attributes.append(String(format: "FRAME-RATE=%.3f", fps)) }
         var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
-        // Dolby Vision first, then the same stream as its base layer (HDR10/HLG):
-        // a player that can't take the Dolby Vision variant still plays.
+        // SPIKE: the same stream four times with fewer attributes each (v=1..4), so
+        // the variant tvOS picks shows which attribute made it reject the rest.
+        let bandwidth = attributes[0], codecList = attributes[1], videoRange = attributes[3]
         if let supplemental {
             lines += ["#EXT-X-STREAM-INF:" + (attributes + ["SUPPLEMENTAL-CODECS=\"\(supplemental)\""])
-                .joined(separator: ","), "index.m3u8"]
+                .joined(separator: ","), "index.m3u8?v=1"]
         }
-        lines += ["#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8"]
+        lines += ["#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8?v=2"]
+        lines += ["#EXT-X-STREAM-INF:" + [bandwidth, codecList, videoRange].joined(separator: ","), "index.m3u8?v=3"]
+        lines += ["#EXT-X-STREAM-INF:" + [bandwidth, codecList].joined(separator: ","), "index.m3u8?v=4"]
         return lines.joined(separator: "\n") + "\n"
     }
 
