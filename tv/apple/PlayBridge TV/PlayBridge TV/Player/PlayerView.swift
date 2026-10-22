@@ -380,7 +380,8 @@ struct PlayerView: View {
                         scaling: tuning.scaling,
                         hasNextItem: playlistStore.hasNext,
                         metadata: transportMetadata(for: currentRequest),
-                        playlistVisible: showPlaylist
+                        playlistVisible: showPlaylist,
+                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -417,7 +418,8 @@ struct PlayerView: View {
                             if let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
                                 emit(frame, engine: identity.engine)
                             }
-                        }
+                        },
+                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)

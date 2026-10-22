@@ -42,10 +42,14 @@ class PlayerControlsData: ObservableObject {
     @Published var feedbackSymbol: String?
     @Published var transportActionFocused = false
     @Published var skipPillFocused = false
+    /// Mirror of `PlayerView`'s session tuning; the Settings tab only reads it.
+    @Published var tuning = PlayerTuning()
+    let settingsAvailability = PlayerSettingsAvailability.forEngine(PlaybackEngine.mpv.rawValue,
+        sidecarOverlayActive: false)
     var menuOpen: Bool { showInfoPanel || showEngineMenu }
 
     var panelTabs: [InfoPanelTab] {
-        InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: false)
+        InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: settingsAvailability.any)
     }
 
     var panelRows: [InfoPanelRow] {
@@ -61,7 +65,7 @@ class PlayerControlsData: ObservableObject {
                 + (subtitleTracks + externalSubtitleTracks).map {
                     InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentSubtitleIndex)
                 }
-        case .settings: return []
+        case .settings: return PlayerSettingsItem.rows(tuning: tuning, availability: settingsAvailability)
         }
     }
 
@@ -408,6 +412,11 @@ private struct PlaybackInfoPanel: View {
                                 Text("No tracks available").foregroundStyle(.white.opacity(0.7))
                             }
                             ForEach(Array(data.panelRows.enumerated()), id: \.offset) { index, row in
+                                if let section = row.section {
+                                    Text(section).font(.system(size: 22, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.6))
+                                        .padding(.top, index == 0 ? 0 : 12).padding(.leading, 20)
+                                }
                                 panelRow(index: index, row: row)
                             }
                         }

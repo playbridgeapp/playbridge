@@ -19,6 +19,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Player/TransportChrome.swift" \
   "$source_root/Player/PlayerPlaybackReport.swift" \
   "$source_root/Player/PlayerTuning.swift" \
+  "$source_root/Player/PlayerSettingsMenu.swift" \
   "$source_root/Player/PlayerAppVolume.swift" \
   "$source_root/Network/PlaybackProgressWebhook.swift" \
   "$source_root/Player/MPVHTTPHeaders.swift" \
