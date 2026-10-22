@@ -63,6 +63,10 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     @Volatile
     override var isTransitioning = false
 
+    // Read/written by the serialized native event thread, except explicit stop/release intent.
+    private var fileLoaded = false
+    @Volatile private var stopRequested = false
+
 
     private val _audioTracks = MutableStateFlow<List<Track>>(emptyList())
     override val audioTracks: StateFlow<List<Track>> = _audioTracks.asStateFlow()
@@ -222,7 +226,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         // during repeated 4K decoder replacement.
         MPVLib.setOptionString("demuxer-max-bytes", "64M")
         MPVLib.setOptionString("demuxer-max-back-bytes", "16M")
-        MPVLib.setOptionString("ytdl", "yes") // Support non-direct URLs if encountered
+        MPVLib.setOptionString("ytdl", "no") // No youtube-dl binary is bundled; URLs are resolved by senders.
         MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
         // Subtitles (Nuvio-style styling for premium look)
@@ -402,17 +406,29 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         if (controlQueue.isUnhealthy) return
 
         when (eventId) {
-            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> _state.value = PlaybackState.Buffering
-            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> _state.value = PlaybackState.Ready
+            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
+                fileLoaded = false
+                stopRequested = false
+                isTransitioning = false // The outgoing END_FILE precedes the incoming START_FILE.
+                _position.value = 0L
+                _duration.value = -1L
+                _bufferAhead.value = 0L
+                _state.value = PlaybackState.Buffering
+            }
+            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+                fileLoaded = true
+                _state.value = PlaybackState.Ready
+            }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
                 _state.value = if (isPaused) PlaybackState.Paused else PlaybackState.Playing
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
-                if (!isTransitioning) {
-                    _state.value = PlaybackState.Ended
-                } else {
-                    logger.d(TAG, "Ignoring END_FILE state change while isTransitioning=true")
-                }
+                MpvEndFilePolicy.classify(
+                    fileLoaded = fileLoaded,
+                    transitioning = isTransitioning || stopRequested || releaseRequested.get(),
+                    positionMs = _position.value,
+                    durationMs = _duration.value,
+                )?.let { _state.value = it }
             }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> _state.value = PlaybackState.Idle
         }
@@ -553,6 +569,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             // Be explicit about replacement semantics. Android TV callers wait for any prior
             // stop/decoder release before invoking load(), while other consumers still replace
             // rather than append if they load over an active file.
+            isTransitioning = true
             MPVLib.command("loadfile", payload.url, "replace")
         }
     }
@@ -575,6 +592,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun stop() {
         logger.d(TAG, "stop() queued")
+        stopRequested = true
         enqueueControl("stop") {
             MPVLib.command("stop")
         }

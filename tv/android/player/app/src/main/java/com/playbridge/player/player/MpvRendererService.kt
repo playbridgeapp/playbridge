@@ -108,6 +108,8 @@ class MpvRendererService : Service() {
             if (request == null || requestedSessionId <= sessionId) return@onMain
             clearPendingExternalSubtitle()
             externalSubtitleTrackIds.clear()
+            // Fence outgoing END_FILE before assigning the replacement's session identity.
+            engine?.isTransitioning = true
             sessionId = requestedSessionId
             firstFrameSession = 0L
             playWhenReady = false
@@ -319,7 +321,7 @@ class MpvRendererService : Service() {
                                 sendEvent(RendererProtocol.EVENT_FIRST_FRAME)
                             }
                         }
-                        is PlaybackState.Error -> sendError(state.msg)
+                        is PlaybackState.Error -> sendError(state.code)
                         PlaybackState.Ended -> {
                             // loadfile replacement reports END_FILE for the outgoing file after
                             // prepare() has already assigned the incoming session id. Only let an
