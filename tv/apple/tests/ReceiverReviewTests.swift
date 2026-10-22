@@ -292,6 +292,7 @@ struct ReceiverReviewTests {
         runRemoteNavigationTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
+        runPlayerTuningTests()
         runAppVolumeTests()
         runTimelineReportTests()
         runSkipSegmentTests()
@@ -783,7 +784,8 @@ private func runPlayerSettingsTests() {
 
     let expectedTransport = ["play", "pause", "toggle", "stop", "seek_absolute", "seek_relative"]
     let expectedKeys = ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"]
-    let expectedSettings = ["loop", "engine"]
+    let expectedSettings = ["avplayer": ["loop", "engine", "speed", "scaling", "subtitle_offset"],
+                            "mpv": ["loop", "engine", "speed", "scaling", "subtitle_offset"]]
     let expectedTracks = ["audio_select", "subtitle_select", "subtitle_url_add", "subtitle_resource_add"]
     let expectedQueue = ["replace", "append", "jump_index", "jump_item", "remove", "move", "clear"]
     let expectedReporting = ["status", "context", "tracks", "playlist_status", "player_settings", "timeline", "buffered"]
@@ -795,7 +797,7 @@ private func runPlayerSettingsTests() {
         }
         assert(engineCaps["transport"] as? [String] == expectedTransport, "Transport operations match")
         assert(engineCaps["keys"] as? [String] == expectedKeys, "Key operations match")
-        assert(engineCaps["settings"] as? [String] == expectedSettings, "Settings operations match")
+        assert(engineCaps["settings"] as? [String] == expectedSettings[engineName], "Settings operations match")
         assert(engineCaps["tracks"] as? [String] == expectedTracks, "Track operations match")
         assert(engineCaps["queue"] as? [String] == expectedQueue, "Queue operations match")
         assert(engineCaps["reporting"] as? [String] == expectedReporting, "Reporting operations match")
@@ -1002,6 +1004,107 @@ private func runAppVolumeTests() {
     assert(fresh.level == 1 && fresh.muted == false, "A new session starts unattenuated and unmuted")
 
     print("PASS: app volume step, absolute, mute, clamp, engine switch, and stale volume_state")
+}
+
+private func runPlayerTuningTests() {
+    assert(PlayerTuning.parse("speed:1.25") == .speed(1.25))
+    assert(PlayerTuning.parse("speed:1.0") == .speed(1))
+    assert(PlayerTuning.parse("speed:1") == .speed(1))
+    assert(PlayerTuning.parse("sub_offset:-100") == .subtitleOffsetDelta(-100))
+    assert(PlayerTuning.parse("sub_offset:+100") == .subtitleOffsetDelta(100))
+    assert(PlayerTuning.parse("scaling:Zoom") == .scaling(.zoom))
+    for invalid in ["speed:nan", "speed:inf", "speed:-inf", "speed:1e999", "speed:abc", "speed:",
+                    "sub_offset:1.5", "sub_offset:9223372036854775808", "sub_offset:",
+                    "scaling:zoom", "scaling:16:9", "scaling:", "audio_boost", "video_quality:auto"] {
+        assert(PlayerTuning.parse(invalid) == nil, "Unsupported or malformed tuning must be ignored")
+    }
+    var tuning = PlayerTuning()
+    assert(!tuning.apply(.speed(.nan)) && !tuning.apply(.speed(.infinity)))
+    assert(!tuning.apply(.speed(1)))
+    assert(tuning.apply(PlayerTuning.parse("speed:9")!) && tuning.speed == 2)
+    assert(tuning.apply(PlayerTuning.parse("speed:0.1")!) && tuning.speed == 0.25)
+    assert(!tuning.apply(.speed(-1)) && tuning.speed == 0.25)
+    assert(tuning.apply(.subtitleOffsetDelta(100)))
+    assert(tuning.apply(.subtitleOffsetDelta(500)) && tuning.subtitleOffsetMs == 600)
+    assert(tuning.apply(.subtitleOffsetDelta(-100)) && tuning.subtitleOffsetMs == 500)
+    assert(tuning.apply(.subtitleOffsetDelta(-tuning.subtitleOffsetMs)) && tuning.subtitleOffsetMs == 0)
+    assert(!tuning.apply(.subtitleOffsetDelta(0)))
+    assert(tuning.apply(.subtitleOffsetDelta(100)))
+    assert(tuning.apply(PlayerTuning.parse("sub_offset:9223372036854775807")!) && tuning.subtitleOffsetMs == 120_000)
+    assert(!tuning.apply(.subtitleOffsetDelta(Int.max)))
+    assert(tuning.apply(.subtitleOffsetDelta(-240_000)) && tuning.subtitleOffsetMs == -120_000)
+    assert(!tuning.apply(.subtitleOffsetDelta(Int.min)))
+    assert(tuning.apply(.subtitleOffsetDelta(-tuning.subtitleOffsetMs)) && tuning.subtitleOffsetMs == 0)
+    assert(tuning.apply(.scaling(.fill)) && !tuning.apply(.scaling(.fill)))
+    print("PASS: tuning command parsing, speed bounds, accumulated signed subtitle deltas, overflow saturation and Reset")
+
+    assert(PlayerTuning.mpvNumber(1.25) == "1.25")
+    assert(PlayerTuning.mpvSubDelay(ms: 250) == "0.25")
+    assert(PlayerTuning.mpvSubDelay(ms: -500) == "-0.5")
+    for (mode, aspect, panscan) in [(PlayerScaling.fit, "yes", "0"), (.zoom, "yes", "1.0"), (.fill, "no", "0")] {
+        let properties = Dictionary(uniqueKeysWithValues: PlayerTuning.mpvScalingProperties(mode))
+        assert(properties == ["video-unscaled": "no", "keepaspect": aspect, "panscan": panscan])
+    }
+    assert(PlayerTuning.overlayCueTime(position: 10, offsetMs: 500) == 9.5)
+    assert(PlayerTuning.overlayCueTime(position: 10, offsetMs: -500) == 10.5)
+    assert(PlayerTuning.overlayCueTime(position: .nan, offsetMs: 500).isNaN)
+    let cues = ExternalSubtitleCues(data: Data("1\n00:00:01,000 --> 00:00:02,000\nHello\n".utf8))!
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 1.1, offsetMs: 500)) == nil)
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 2.1, offsetMs: 500)) == "Hello")
+    assert(cues.text(at: PlayerTuning.overlayCueTime(position: 0.6, offsetMs: -500)) == "Hello")
+    print("PASS: mpv number/scaling mappings and positive-later external subtitle cue timing")
+
+    let fixtures = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+    let reporter = PlayerSettingsReporter(engine: "mpv", generation: 4)
+    let mpv = PlayerReportIdentity(engine: "mpv", generation: 4)
+    func checked(_ frame: [String: Any]?) -> [String: Any] {
+        guard let frame else { fatalError("Expected a changed settings snapshot") }
+        assert(PlayerPlaybackReport.isValidSnapshot(frame))
+        return frame
+    }
+    _ = checked(reporter.apply(.speed(1.5), identity: mpv))
+    _ = checked(reporter.apply(.scaling(.zoom), identity: mpv))
+    let mpvFrame = checked(reporter.apply(.subtitleOffsetDelta(250), identity: mpv))
+    assert(canonicalJSON(mpvFrame) == canonicalJSON(jsonObject(at: fixtures.appendingPathComponent("apple-tv-player-settings-mpv.json"))))
+    assert(reporter.apply(.speed(1.5), identity: mpv) == nil)
+    let retained = reporter.tuning
+    let stale = PlayerReportIdentity(engine: "mpv", generation: 3)
+    assert(reporter.apply(.subtitleOffsetDelta(100), identity: stale) == nil && reporter.tuning == retained)
+    assert(reporter.setSidecarOverlay(true, identity: stale) == nil && !reporter.sidecarOverlayActive)
+    _ = checked(reporter.switchEngine(from: mpv, to: "avplayer"))
+    let avplayer = PlayerReportIdentity(engine: "avplayer", generation: 4)
+    assert(reporter.tuning == retained && !reporter.sidecarOverlayActive)
+    assert(reporter.apply(.subtitleOffsetDelta(100), identity: avplayer) == nil && reporter.tuning == retained)
+    assert(reporter.apply(.speed(2), identity: mpv) == nil)
+    _ = checked(reporter.apply(.speed(1.25), identity: avplayer))
+    let avFrame = checked(reporter.apply(.scaling(.fill), identity: avplayer))
+    assert(canonicalJSON(avFrame) == canonicalJSON(jsonObject(at: fixtures.appendingPathComponent("apple-tv-player-settings-avplayer.json"))))
+    let active = checked(reporter.setSidecarOverlay(true, identity: avplayer))
+    assert(active["subtitleOffsetAvailable"] as? Bool == true && active["subtitleOffsetMs"] as? Int == 250)
+    assert(reporter.setSidecarOverlay(true, identity: avplayer) == nil)
+    reporter.note(engine: "avplayer", generation: 4) // body renders must not withdraw overlay availability
+    assert(reporter.sidecarOverlayActive)
+    _ = checked(reporter.apply(.subtitleOffsetDelta(-100), identity: avplayer))
+    let inactive = checked(reporter.setSidecarOverlay(false, identity: avplayer))
+    assert(inactive["subtitleOffsetAvailable"] as? Bool == false && inactive["subtitleOffsetMs"] as? Int == 0)
+    assert(reporter.tuning.subtitleOffsetMs == 150)
+    _ = checked(reporter.setSidecarOverlay(true, identity: avplayer))
+    let nextTuning = reporter.tuning
+    reporter.note(engine: "avplayer", generation: 5)
+    assert(!reporter.sidecarOverlayActive && reporter.tuning == nextTuning)
+    assert(reporter.setSidecarOverlay(true, identity: avplayer) == nil)
+    let nextItem = PlayerReportIdentity(engine: "avplayer", generation: 5)
+    let nextFrame = checked(reporter.resync(identity: nextItem))
+    assert(nextFrame["speed"] as? Double == 1.25 && nextFrame["scaling"] as? String == "Fill")
+    _ = checked(reporter.setSidecarOverlay(true, identity: nextItem))
+    _ = checked(reporter.switchEngine(from: nextItem, to: "mpv"))
+    assert(!reporter.sidecarOverlayActive && reporter.tuning == nextTuning)
+    let newSession = PlayerSettingsReporter(engine: "mpv", generation: 0)
+    assert(newSession.tuning == PlayerTuning())
+    assert(PlayerSettingsAvailability.forEngine("unknown", sidecarOverlayActive: true) == .none)
+    let unknown = PlayerSettingsReporter(engine: "unknown", generation: 0)
+    assert(unknown.apply(.speed(1.5), identity: PlayerReportIdentity(engine: "unknown", generation: 0)) == nil)
+    print("PASS: tuning snapshots match protocol fixtures, engine/overlay availability, session carry/reset, resync and stale-result fencing")
 }
 
 private func runTimelineReportTests() {

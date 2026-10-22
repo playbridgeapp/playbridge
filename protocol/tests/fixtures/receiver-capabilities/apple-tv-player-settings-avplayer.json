@@ -1,0 +1,16 @@
+{
+  "type": "player_settings",
+  "speed": 1.25,
+  "scaling": "Fill",
+  "audioBoost": false,
+  "subtitleOffsetMs": 0,
+  "engine": "avplayer",
+  "speedAvailable": true,
+  "scalingAvailable": true,
+  "audioBoostAvailable": false,
+  "qualityAvailable": false,
+  "subtitleOffsetAvailable": false,
+  "loopAvailable": true,
+  "engineAvailable": true,
+  "loop": false
+}

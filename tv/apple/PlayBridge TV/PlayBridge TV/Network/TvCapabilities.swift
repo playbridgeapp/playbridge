@@ -30,11 +30,6 @@ enum TvCapabilities {
         "home",
     ]
 
-    private static let playerSettings = [
-        "loop",
-        "engine",
-    ]
-
     private static let playerTracks = [
         "audio_select",
         "subtitle_select",
@@ -76,13 +71,18 @@ enum TvCapabilities {
         "step": PlayerAppVolume.step,
     ]
 
-    /// Builds the capability set for an engine. Both avplayer and mpv share the same
-    /// base operations at this revision; per-engine differences are factored here.
+    /// Each engine owns its settings list. AVPlayer restricts subtitle_offset at
+    /// runtime to the PlayBridge sidecar overlay via subtitleOffsetAvailable.
     private static func buildPlayerEngineCapabilities(for engine: PlaybackEngine) -> [String: Any] {
-        [
+        let settings: [String]
+        switch engine {
+        case .mpv: settings = ["loop", "engine", "speed", "scaling", "subtitle_offset"]
+        case .avplayer: settings = ["loop", "engine", "speed", "scaling", "subtitle_offset"]
+        }
+        return [
             "transport": playerTransport,
             "keys": playerKeys,
-            "settings": playerSettings,
+            "settings": settings,
             "tracks": playerTracks,
             "queue": playerQueue,
             "reporting": playerReporting,

@@ -43,6 +43,7 @@ struct PlayerView: View {
     @State private var mediaGeneration = 0
     @State private var engineChrome = PlayerEngineChrome()
     @State private var exitGate = PlayerRemoteExitGate()
+    @State private var tuning = PlayerTuning()
     @State private var settingsReporter = PlayerSettingsReporter(engine: "avplayer", generation: 0)
     /// App volume for this playback session. A new player screen starts at full
     /// level, unmuted. Engine switches and playlist moves keep the stored level.
@@ -102,6 +103,13 @@ struct PlayerView: View {
         let (decision, frame) = settingsReporter.endOfFile(identity: identity)
         if let frame { emit(frame, engine: identity.engine) }
         return decision
+    }
+
+    private func applyTuning(_ command: PlayerTuning.Command) {
+        let identity = liveVolumeIdentity()
+        guard let frame = settingsReporter.apply(command, identity: identity) else { return }
+        tuning = settingsReporter.tuning
+        emit(frame, engine: identity.engine)
     }
 
     private func liveVolumeIdentity() -> PlayerReportIdentity {
@@ -349,7 +357,10 @@ struct PlayerView: View {
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
                         engineChrome: engineChrome,
-                        hasPlaylist: playlistStore.items.count > 1
+                        hasPlaylist: playlistStore.items.count > 1,
+                        playbackSpeed: tuning.speed,
+                        subtitleOffsetMs: tuning.subtitleOffsetMs,
+                        scaling: tuning.scaling
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -378,7 +389,15 @@ struct PlayerView: View {
                         appMuted: appVolume.muted,
                         mediaIdentity: currentGeneration,
                         engineChrome: engineChrome,
-                        hasPlaylist: playlistStore.items.count > 1
+                        hasPlaylist: playlistStore.items.count > 1,
+                        playbackSpeed: tuning.speed,
+                        subtitleOffsetMs: tuning.subtitleOffsetMs,
+                        scaling: tuning.scaling,
+                        onSidecarOverlayChanged: { active, identity in
+                            if let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
+                                emit(frame, engine: identity.engine)
+                            }
+                        }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -501,6 +520,10 @@ struct PlayerView: View {
             stillWatching.onUserActivity()
         }
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.controlCommand)) { note in
+            if let command = note.userInfo?["command"] as? String, let parsed = PlayerTuning.parse(command) {
+                applyTuning(parsed)
+                return
+            }
             guard stillWatching.isPrompting,
                   let command = note.userInfo?["command"] as? String else { return }
             switch command {

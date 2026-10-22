@@ -26,13 +26,23 @@ struct ReceiverRemotePolicyTests {
         precondition(androidPlayer.volumeLabel == "Volume" && androidPlayer.allowsKey("mute"))
         precondition(!androidPlayer.hasVolume("absolute") && !androidPlayer.hasPointer)
         let applePlayer = resolve(apple)
-        precondition(applePlayer.keys.count == 7 && applePlayer.settings == ["loop", "engine"])
+        precondition(applePlayer.keys.count == 7 && applePlayer.settings == ["loop", "engine", "speed", "scaling", "subtitle_offset"])
         precondition(applePlayer.playerEngines == ["avplayer", "mpv"] && applePlayer.volumeLabel == "App volume")
         precondition(applePlayer.allowsAbsoluteVolume(scope: "app", level: 0.35))
         precondition(!applePlayer.allowsAbsoluteVolume(scope: "system", level: 0.35))
         precondition(!applePlayer.allowsAbsoluteVolume(scope: "app", level: .nan))
         precondition(!applePlayer.allowsAbsoluteVolume(scope: "app", level: 35))
-        precondition(!applePlayer.allowsControl("speed:1.5") && !applePlayer.hasPointer)
+        precondition(applePlayer.allowsControl("speed:1.5") && applePlayer.allowsControl("scaling:Zoom") && !applePlayer.hasPointer)
+        precondition(applePlayer.allowsControl("sub_offset:+100"))
+        state.contextEngine = "avplayer"
+        state.availability = ["subtitle_offset": false]
+        let appleWithoutOverlay = resolve(apple)
+        precondition(!appleWithoutOverlay.settings.contains("subtitle_offset") && !appleWithoutOverlay.allowsControl("sub_offset:100"))
+        precondition(appleWithoutOverlay.allowsControl("speed:1.5") && appleWithoutOverlay.allowsControl("scaling:Fill"))
+        state.availability = ["subtitle_offset": true]
+        precondition(resolve(apple).allowsControl("sub_offset:-100"))
+        state.contextEngine = nil
+        state.availability = [:]
         precondition(applePlayer.allowsControl("audio_track:audio-1") && !applePlayer.allowsControl("audio_track:stale"))
         let desktopPlayer = resolve(desktop)
         precondition(desktopPlayer.keys.isEmpty && desktopPlayer.settings == ["speed", "loop", "scaling", "subtitle_offset"] && !desktopPlayer.hasPointer)

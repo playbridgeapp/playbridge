@@ -30,6 +30,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let engineChrome: PlayerEngineChrome
     /// More than one queue item; a one-item queue hides the Playlist button.
     let hasPlaylist: Bool
+    let playbackSpeed: Double
+    let subtitleOffsetMs: Int
+    let scaling: PlayerScaling
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -53,6 +56,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.appMuted = appMuted
         vc.bindEngineChrome(engineChrome)
         vc.hasPlaylist = hasPlaylist
+        vc.playbackSpeed = playbackSpeed
+        vc.subtitleOffsetMs = subtitleOffsetMs
+        vc.scaling = scaling
         return vc
     }
 
@@ -70,6 +76,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.appMuted = appMuted
         uiViewController.bindEngineChrome(engineChrome)
         uiViewController.hasPlaylist = hasPlaylist
+        uiViewController.playbackSpeed = playbackSpeed
+        uiViewController.subtitleOffsetMs = subtitleOffsetMs
+        uiViewController.scaling = scaling
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
@@ -144,6 +153,24 @@ class MPVViewController: UIViewController {
     }
     var appMuted: Bool = false {
         didSet { if appMuted != oldValue { applyAudibleMute() } }
+    }
+
+    var playbackSpeed = 1.0 {
+        didSet {
+            if playbackSpeed != oldValue { setPropertyAsync("speed", value: PlayerTuning.mpvNumber(playbackSpeed)) }
+        }
+    }
+    var subtitleOffsetMs = 0 {
+        didSet {
+            if subtitleOffsetMs != oldValue { setPropertyAsync("sub-delay", value: PlayerTuning.mpvSubDelay(ms: subtitleOffsetMs)) }
+        }
+    }
+    var scaling = PlayerScaling.fit {
+        didSet {
+            if scaling != oldValue {
+                for (name, value) in PlayerTuning.mpvScalingProperties(scaling) { setPropertyAsync(name, value: value) }
+            }
+        }
     }
 
     // MARK: MPV
@@ -348,6 +375,13 @@ class MPVViewController: UIViewController {
         guard audioOutputStatus >= 0 else {
             initializationFailed(operation: "ao", code: audioOutputStatus)
             return
+        }
+
+        // Session tuning applies before initialization and survives loadfile replace.
+        mpv_set_option_string(handle, "speed", PlayerTuning.mpvNumber(playbackSpeed))
+        mpv_set_option_string(handle, "sub-delay", PlayerTuning.mpvSubDelay(ms: subtitleOffsetMs))
+        for (name, value) in PlayerTuning.mpvScalingProperties(scaling) {
+            mpv_set_option_string(handle, name, value)
         }
 
         // Subtitle defaults
@@ -1609,7 +1643,7 @@ class MPVViewController: UIViewController {
     }
 
     /// Map a phone `control` command to the player. Runs on main (posted from the WS server).
-    /// Speed/scaling/filter/audio_boost/sub_offset are not yet supported on Apple MPV → ignored.
+    /// Session speed/scaling/subtitle offset are handled by PlayerView; filter/audio_boost remain unsupported.
     private func handleControlCommand(_ cmd: String) {
         if let paused = PlaybackPauseCommand.targetPaused(
             for: cmd, isPlaying: playbackState.isPlaying) {

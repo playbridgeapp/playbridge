@@ -175,6 +175,16 @@
     "valid": true
   },
   {
+    "file": "apple-tv-player-settings-mpv.json",
+    "schema": "PlayerSettings",
+    "valid": true
+  },
+  {
+    "file": "apple-tv-player-settings-avplayer.json",
+    "schema": "PlayerSettings",
+    "valid": true
+  },
+  {
     "file": "future-apple-complete-settings.json",
     "schema": "ReceiverFrame",
     "valid": true

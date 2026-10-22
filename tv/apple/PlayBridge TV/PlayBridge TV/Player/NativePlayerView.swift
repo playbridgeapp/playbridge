@@ -39,6 +39,18 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let engineChrome: PlayerEngineChrome
     /// More than one queue item; a one-item queue hides the Playlist menu item.
     let hasPlaylist: Bool
+    let playbackSpeed: Double
+    let subtitleOffsetMs: Int
+    let scaling: PlayerScaling
+    let onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
+
+    private func gravity(_ scaling: PlayerScaling) -> AVLayerVideoGravity {
+        switch scaling {
+        case .fit: return .resizeAspect
+        case .zoom: return .resizeAspectFill
+        case .fill: return .resize
+        }
+    }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
@@ -70,6 +82,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         let player = AVPlayer(playerItem: playerItem)
+        playerItem.audioTimePitchAlgorithm = .timeDomain
+        player.defaultRate = Float(playbackSpeed)
 
         // Seek to initial time if context switching occurred
         if initialTime > 0 {
@@ -77,6 +91,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         controller.player = player
+        controller.videoGravity = gravity(scaling)
+        // Phase 1 has one tuning owner (PlayerView), controlled from the phone.
+        controller.speeds = []
         controller.allowsPictureInPicturePlayback = true
         controller.loadViewIfNeeded()
         context.coordinator.attachSubtitleOverlay(to: controller)
@@ -141,6 +158,15 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
         context.coordinator.setHasPlaylist(hasPlaylist)
+        if let player = uiViewController.player, player.defaultRate != Float(playbackSpeed) {
+            let wasPlaying = player.rate != 0
+            player.defaultRate = Float(playbackSpeed)
+            if wasPlaying { player.rate = Float(playbackSpeed) }
+        }
+        uiViewController.videoGravity = gravity(scaling)
+        context.coordinator.onSidecarOverlayChanged = onSidecarOverlayChanged
+        context.coordinator.subtitleOffsetMs = subtitleOffsetMs
+        context.coordinator.refreshExternalSubtitle()
         uiViewController.player?.volume = PlayerAppVolume.avPlayerVolume(appLevel)
         uiViewController.player?.isMuted = isPreBuffering || appMuted
         context.coordinator.bindEngineChrome(
@@ -154,7 +180,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch,
                     headers: headers, subtitles: subtitles, onBroadcast: onBroadcast,
                     onLoopChanged: onLoopChanged, onEndOfFile: onEndOfFile,
-                    initialLoop: initialLoop, mediaIdentity: mediaIdentity)
+                    initialLoop: initialLoop, mediaIdentity: mediaIdentity,
+                    subtitleOffsetMs: subtitleOffsetMs, onSidecarOverlayChanged: onSidecarOverlayChanged)
     }
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
@@ -175,6 +202,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         var onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
         var onEndOfFile: (PlayerReportIdentity) -> PlayerEndDecision
         var mediaIdentity: Int
+        var subtitleOffsetMs: Int
+        var onSidecarOverlayChanged: (Bool, PlayerReportIdentity) -> Void
         var loopAction: UIAction?
         private var transportMenuBase: [UIMenuElement] = []
         private var playlistMenuItem: UIMenuElement?
@@ -239,7 +268,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
              onBroadcast: @escaping ([String: Any]) -> Void,
              onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
              onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
-             initialLoop: Bool, mediaIdentity: Int) {
+             initialLoop: Bool, mediaIdentity: Int,
+             subtitleOffsetMs: Int, onSidecarOverlayChanged: @escaping (Bool, PlayerReportIdentity) -> Void) {
             self.title = title
             self.onDismiss = onDismiss
             self.onExit = onExit
@@ -250,6 +280,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.onLoopChanged = onLoopChanged
             self.onEndOfFile = onEndOfFile
             self.mediaIdentity = mediaIdentity
+            self.subtitleOffsetMs = subtitleOffsetMs
+            self.onSidecarOverlayChanged = onSidecarOverlayChanged
             self.isLooping = initialLoop
             super.init()
 
@@ -443,6 +475,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             subtitleRequestID = nil
             selectedExternalSubtitleID = nil
             externalCues = nil
+            onSidecarOverlayChanged(false, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
             if let token = subtitleTimeObserver { player?.removeTimeObserver(token); subtitleTimeObserver = nil }
             subtitleLabel?.text = nil
             subtitleCaptionView?.isHidden = true
@@ -467,6 +500,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case .success(let cues):
                 selectedExternalSubtitleID = option.id
                 externalCues = cues
+                onSidecarOverlayChanged(true, PlayerReportIdentity(engine: "avplayer", generation: mediaIdentity))
                 if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
                 TrackPreferences.shared.subtitlesOff = false
                 TrackPreferences.shared.subtitleLanguage = nil
@@ -489,8 +523,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             }
         }
 
-        private func refreshExternalSubtitle() {
-            let text = externalCues?.text(at: player?.currentTime().seconds ?? .nan)
+        func refreshExternalSubtitle() {
+            let time = PlayerTuning.overlayCueTime(position: player?.currentTime().seconds ?? .nan,
+                                                  offsetMs: subtitleOffsetMs)
+            let text = externalCues?.text(at: time)
             if subtitleLabel?.text != text { subtitleLabel?.text = text }
             subtitleCaptionView?.isHidden = text == nil
         }
@@ -804,7 +840,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                     invokeSwitch(to: target)
                 }
             default:
-                break  // speed/scaling/filter/audio_boost/sub_offset: not supported on AVPlayer
+                break  // Tuning is owned by PlayerView; filter/audio_boost remain unsupported.
             }
             broadcastStatus()
         }
