@@ -63,8 +63,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     @Volatile
     override var isTransitioning = false
 
-    // Read/written by the serialized native event thread, except explicit stop/release intent.
-    private var fileLoaded = false
+    // FILE_LOADED persists independently of the brief, conflatable Ready transition.
+    private val _fileLoaded = MutableStateFlow(false)
+    val fileLoaded: StateFlow<Boolean> = _fileLoaded.asStateFlow()
     @Volatile private var stopRequested = false
 
 
@@ -407,7 +408,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
-                fileLoaded = false
+                _fileLoaded.value = false
                 stopRequested = false
                 isTransitioning = false // The outgoing END_FILE precedes the incoming START_FILE.
                 _position.value = 0L
@@ -416,7 +417,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 _state.value = PlaybackState.Buffering
             }
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
-                fileLoaded = true
+                _fileLoaded.value = true
                 _state.value = PlaybackState.Ready
             }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
@@ -424,7 +425,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
                 MpvEndFilePolicy.classify(
-                    fileLoaded = fileLoaded,
+                    fileLoaded = _fileLoaded.value,
                     transitioning = isTransitioning || stopRequested || releaseRequested.get(),
                     positionMs = _position.value,
                     durationMs = _duration.value,
