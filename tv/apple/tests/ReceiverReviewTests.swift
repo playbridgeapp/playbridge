@@ -149,6 +149,7 @@ struct ReceiverReviewTests {
         assert(PlaybackEngine.allCases.map(\.name) == ["AVPlayer", "MPV"])
         assert(PlaybackEngine.allCases.map(\.menuID) == [0, 2])
         assert(PlaybackEngine.capabilityPlayers == ["avplayer", "mpv"])
+        assert(PlaybackEngine.defaultEngine == .mpv, "mpv plays the widest range; AVPlayer stays selectable")
         assert(PlaybackEngine.menuOrder(current: .avplayer) == [.avplayer, .mpv])
         assert(PlaybackEngine.menuOrder(current: .mpv) == [.mpv, .avplayer])
         assert(PlaybackEngine(command: "native") == .avplayer)
