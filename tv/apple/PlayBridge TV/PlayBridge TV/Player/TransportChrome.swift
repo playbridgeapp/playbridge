@@ -287,14 +287,40 @@ enum PlaybackSurfaceState: String {
 }
 
 enum PlaybackFailureMessage {
-    /// Stable libmpv client ABI values. Keep this model independent of Libmpv.
-    /// Option (-5...-7) and property (-8...-11) failures can occur during init;
-    /// -13 is MPV_ERROR_LOADING_FAILED. No decoder/error text is interpolated.
-    static func sentence(forMpvCode code: Int32) -> String {
-        switch code {
-        case -13, -11 ... -5: return "The video couldn't be opened."
-        default: return "This video couldn't be played."
+    enum Category: Equatable {
+        case generic, unsupported, network, stall, decoder
+        case http(Int)
+    }
+
+    static func sentence(for category: Category) -> String {
+        switch category {
+        case .unsupported: return "This video format isn't supported"
+        case .network: return "The TV couldn't reach the video server"
+        case .stall: return "The video stopped loading"
+        case .decoder: return "The TV couldn't decode this video"
+        case .http(let status) where status == 401 || status == 403: return "The link was refused (HTTP \(status))"
+        case .http(let status) where status == 404 || status == 410: return "The video wasn't found (HTTP \(status))"
+        case .http(let status) where (100...599).contains(status): return "The media couldn't be loaded (HTTP \(status))"
+        default: return "The media couldn't be loaded"
         }
+    }
+
+    /// Stable libmpv ABI codes: -13 is generic loading failure, not evidence of an expired link.
+    static func sentence(forMpvCode code: Int32, category: Category? = nil) -> String {
+        if [-17, -16, -18].contains(code) { return sentence(for: .unsupported) }
+        return sentence(for: category ?? .generic)
+    }
+
+    /// Raw decoder logs remain transient. Only this enum survives to END_FILE.
+    static func category(prefix: String, text: String) -> Category? {
+        guard prefix == "cplayer" || prefix == "ffmpeg" || prefix.hasPrefix("ffmpeg/") else { return nil }
+        if let regex = try? NSRegularExpression(pattern: "\\bHTTP error ([1-5][0-9]{2})\\b"),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range(at: 1), in: text), let status = Int(text[range]) { return .http(status) }
+        if text.hasPrefix("Failed to recognize file format") || text.hasPrefix("Unrecognized file format") { return .unsupported }
+        if text.hasPrefix("Failed to initialize a decoder") || text.hasPrefix("Error while decoding frame") { return .decoder }
+        if ["Failed to resolve hostname", "Connection timed out", "TLS handshake failed", "Connection refused", "Network is unreachable"].contains(where: text.hasPrefix) { return .network }
+        return nil
     }
 }
 
@@ -316,7 +342,7 @@ enum PlaybackFailureModel {
     }
 
     enum Event {
-        case presented(mpvCode: Int32)
+        case presented(mpvCode: Int32, category: PlaybackFailureMessage.Category? = nil)
         case tryAgain, next, close, phoneStop, autoClose
         case stalled
     }
@@ -331,7 +357,7 @@ enum PlaybackFailureModel {
     /// Close, phone Stop and timeout all close the error screen and return idle.
     static func phoneReport(for event: Event) -> PhoneReport? {
         switch event {
-        case .presented(let code): return .errorStatus(reason: PlaybackFailureMessage.sentence(forMpvCode: code))
+        case .presented(let code, let category): return .errorStatus(reason: PlaybackFailureMessage.sentence(forMpvCode: code, category: category))
         case .close, .phoneStop, .autoClose: return .idleContext
         case .tryAgain, .next: return nil
         case .stalled: return .errorStatus(reason: PlaybackStallDetector.sentence)
@@ -356,9 +382,9 @@ struct PlaybackFailureSession {
 
     func matches(_ token: UUID) -> Bool { token == attempt && !closed }
 
-    mutating func present(code: Int32, attempt token: UUID) -> Bool {
+    mutating func present(code: Int32, category: PlaybackFailureMessage.Category? = nil, attempt token: UUID) -> Bool {
         guard matches(token), sentence == nil,
-              case .errorStatus(let reason) = PlaybackFailureModel.phoneReport(for: .presented(mpvCode: code)) else { return false }
+              case .errorStatus(let reason) = PlaybackFailureModel.phoneReport(for: .presented(mpvCode: code, category: category)) else { return false }
         sentence = reason
         return true
     }

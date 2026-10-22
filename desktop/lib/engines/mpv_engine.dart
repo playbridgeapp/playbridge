@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import '../mpv_failure_category.dart';
 import '../subtitle_delay.dart';
 import '../video_scaling.dart';
 import 'hls_master_resolver.dart';
@@ -78,6 +79,7 @@ class MpvEngine extends PlayerEngine {
   StreamProxyLease? _proxyLease;
   int _proxyLeaseGeneration = 0;
   bool _pageMedia = false;
+  String? _lastFailureCode;
   MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
@@ -99,11 +101,16 @@ class MpvEngine extends PlayerEngine {
       }),
       player.stream.tracks.listen((_) => notifyListeners()),
       player.stream.track.listen((_) => notifyListeners()),
+      player.stream.log.listen((event) {
+        if (event.level != 'error' && event.level != 'fatal') return;
+        final code = mpvFailureCategory(event.prefix, event.text);
+        if (code != null) _lastFailureCode = code;
+      }),
       player.stream.error.listen((e) {
         debugPrint(_pageMedia
             ? '[mpv] website playback failed'
             : '[mpv] playback error');
-        onError?.call(e);
+        onError?.call(_lastFailureCode ?? e);
         notifyListeners();
       }),
       // Headphone unplug / output route change: pause so audio doesn't jump to
@@ -466,6 +473,7 @@ class MpvEngine extends PlayerEngine {
     int startIndex, {
     bool play = true,
   }) async {
+    _lastFailureCode = null;
     // Ensure demuxer/network tuning is live before the first open (race fix).
     _pageMedia = items.any((item) => item.enforcePageNetworkPolicy);
     await _configured;

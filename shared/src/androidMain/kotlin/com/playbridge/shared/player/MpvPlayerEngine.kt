@@ -51,6 +51,19 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val releaseRequested = AtomicBoolean(false)
     private val observerRegistrations = ConcurrentHashMap<MPVLib.EventObserver, ObserverProxy>()
 
+    private val _failureCode = MutableStateFlow<String?>(null)
+    val failureCode: StateFlow<String?> = _failureCode.asStateFlow()
+    private var lastLogFailureCode: String? = null
+    @Volatile private var acceptFailureLogs = false
+    private val failureLogObserver = object : MPVLib.LogObserver {
+        override fun logMessage(prefix: String, level: Int, text: String) {
+            if (!acceptFailureLogs || isTransitioning || releaseRequested.get()) return
+            val code = MpvFailureLogPolicy.classify(prefix, level, text) ?: return
+            if (code != "mpv_load_failed" || lastLogFailureCode == null) lastLogFailureCode = code
+            if (MpvFailureLogPolicy.isTerminal(prefix, text)) _failureCode.value = lastLogFailureCode
+        }
+    }
+
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
@@ -245,6 +258,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
         MPVLib.init()
         MPVLib.addObserver(this)
+        MPVLib.addLogObserver(failureLogObserver)
         observerRegistered = true
 
         // Register properties to observe
@@ -275,6 +289,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private fun cleanupFailedInitialization(): Boolean {
         if (observerRegistered) {
             runCatchingLogged(TAG, "Failed to remove MPV observer during cleanup") {
+                MPVLib.removeLogObserver(failureLogObserver)
                 MPVLib.removeObserver(this)
             }
             observerRegistered = false
@@ -407,6 +422,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         logger.d(TAG, "MPV Event: $eventName")
         if (controlQueue.isUnhealthy) return
 
+        if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) {
+            _failureCode.value = null
+            lastLogFailureCode = null
+            acceptFailureLogs = true
+        }
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
                 _fileLoaded.value = false
@@ -591,6 +611,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     }
 
     override fun stop() {
+        acceptFailureLogs = false
         logger.d(TAG, "stop() queued")
         stopRequested = true
         enqueueControl("stop") {
@@ -734,6 +755,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 }
                 if (observerRegistered) {
                     runCatchingLogged(TAG, "Failed to remove MPV observer during release") {
+                        MPVLib.removeLogObserver(failureLogObserver)
                         MPVLib.removeObserver(this)
                     }
                     observerRegistered = false
