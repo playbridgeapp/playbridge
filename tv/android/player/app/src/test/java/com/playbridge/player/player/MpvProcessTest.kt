@@ -1,5 +1,6 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.PlaybackState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -22,5 +23,33 @@ class MpvProcessTest {
             findAddedSubtitleTrackId(tracks, setOf("1", "2"), "request-marker"),
         )
         assertNull(findAddedSubtitleTrackId(tracks, setOf("1", "2"), "other-marker"))
+    }
+
+    @Test
+    fun `mpvReportedStateName keeps paused state when seek restart arrives while paused`() {
+        assertEquals(
+            "paused",
+            mpvReportedStateName(
+                state = PlaybackState.Playing,
+                playWhenReady = false,
+                isFileReady = true,
+            ),
+        )
+        assertEquals(
+            "playing",
+            mpvReportedStateName(
+                state = PlaybackState.Playing,
+                playWhenReady = true,
+                isFileReady = true,
+            ),
+        )
+        assertEquals(
+            "buffering",
+            mpvReportedStateName(
+                state = PlaybackState.Playing,
+                playWhenReady = true,
+                isFileReady = false,
+            ),
+        )
     }
 }

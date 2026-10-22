@@ -272,7 +272,8 @@ fun PlayerControlsOverlay(
                                 onSwitchPlayer = onSwitchPlayer,
                                 hasChapters = state.hasSelectableChapters(mediaKind),
                                 onChapters = onChapters,
-                                isVisible = state.isVisible
+                                isVisible = state.isVisible,
+                                initialFocusTarget = state.controlActionFocusTarget(mediaKind),
                             )
                         }
                     }

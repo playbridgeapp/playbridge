@@ -10,6 +10,15 @@ enum class ActiveOverlay {
     NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, CHAPTERS, SWITCH_PLAYER
 }
 
+enum class ControlActionFocusTarget {
+    PLAY_PAUSE,
+    PLAYLIST,
+    CHAPTERS,
+    SUBTITLES,
+    SWITCH_PLAYER,
+    SETTINGS,
+}
+
 @Immutable
 data class UnifiedTrack(
     val id: String,
@@ -61,6 +70,7 @@ data class PlayerControlsState(
     
     // Unified Overlay State
     val activeOverlay: ActiveOverlay = ActiveOverlay.NONE,
+    val lastClosedOverlay: ActiveOverlay = ActiveOverlay.NONE,
     
     // Media Settings Panel State (used when activeOverlay == SETTINGS)
     val activeSettingsTab: SettingsTab = SettingsTab.AUDIO,
@@ -99,4 +109,30 @@ internal fun PlayerControlsState.hasSelectableChapters(mediaKind: String = "vide
         !capabilities.isLive &&
         capabilities.isSeekable &&
         chapters.size >= 2
+
+internal fun PlayerControlsState.controlActionFocusTarget(
+    mediaKind: String = "video",
+): ControlActionFocusTarget = when (lastClosedOverlay) {
+    ActiveOverlay.PLAYLIST_PICKER ->
+        if (hasPlaylist) ControlActionFocusTarget.PLAYLIST else ControlActionFocusTarget.PLAY_PAUSE
+    ActiveOverlay.CHAPTERS ->
+        if (hasSelectableChapters(mediaKind)) ControlActionFocusTarget.CHAPTERS else ControlActionFocusTarget.PLAY_PAUSE
+    ActiveOverlay.SUBTITLES ->
+        if (mediaKind == "video") ControlActionFocusTarget.SUBTITLES else ControlActionFocusTarget.PLAY_PAUSE
+    ActiveOverlay.SWITCH_PLAYER ->
+        if (canSwitchPlayer && mediaKind != "image") ControlActionFocusTarget.SWITCH_PLAYER else ControlActionFocusTarget.PLAY_PAUSE
+    ActiveOverlay.SETTINGS ->
+        if (mediaKind != "image") ControlActionFocusTarget.SETTINGS else ControlActionFocusTarget.PLAY_PAUSE
+    ActiveOverlay.NONE -> ControlActionFocusTarget.PLAY_PAUSE
+}
+
+/**
+ * Controls may auto-hide only when visible, no overlay/panel is open, and either the
+ * lightweight seek strip is up or playback is actively running.
+ */
+internal fun PlayerControlsState.shouldAutoHideControls(): Boolean =
+    isVisible &&
+        activeOverlay == ActiveOverlay.NONE &&
+        (!isFullControlsVisible || isPlaying)
+
 

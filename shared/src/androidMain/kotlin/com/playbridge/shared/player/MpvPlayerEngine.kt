@@ -94,6 +94,8 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private var ownsProcessMpv = false
     private var surfaceAttached = false
     @Volatile
+    private var isPaused = false
+    @Volatile
     private var playbackSpeed = 1.0f
 
     init {
@@ -402,7 +404,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> _state.value = PlaybackState.Buffering
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> _state.value = PlaybackState.Ready
-            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> _state.value = PlaybackState.Playing
+            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
+                _state.value = if (isPaused) PlaybackState.Paused else PlaybackState.Playing
+            }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
                 if (!isTransitioning) {
                     _state.value = PlaybackState.Ended
@@ -418,6 +422,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         logger.d(TAG, "MPV Property changed: $property = $value")
         if (controlQueue.isUnhealthy) return
         if (property == "pause") {
+            isPaused = value
             _state.value = if (value) PlaybackState.Paused else PlaybackState.Playing
         }
     }
@@ -524,6 +529,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override suspend fun load(payload: PlayPayload) {
         logger.i(TAG, "load() queued for ${redactUrlForLog(payload.url)}")
+        isPaused = false
         enqueueControl("load") {
             var userAgentSet = false
             payload.headers.forEach { (k, v) ->
@@ -553,6 +559,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun play() {
         logger.d(TAG, "play() queued")
+        isPaused = false
         enqueueControl("play") {
             MPVLib.setPropertyBoolean("pause", false)
         }
@@ -560,6 +567,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun pause() {
         logger.d(TAG, "pause() queued")
+        isPaused = true
         enqueueControl("pause") {
             MPVLib.setPropertyBoolean("pause", true)
         }

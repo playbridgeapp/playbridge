@@ -3,6 +3,7 @@ package com.playbridge.player.ui.player
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.playbridge.player.player.PlayerEngineAdapter
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,7 +28,12 @@ internal fun skipTargetMs(segment: SkipSegment, durationMs: Long): Long = when {
     else -> segment.endMs + 1_000L
 }
 
-class PlayerControlsViewModel : ViewModel() {
+class PlayerControlsViewModel @JvmOverloads constructor(
+    private val injectedScope: CoroutineScope? = null,
+) : ViewModel() {
+    private val scope: CoroutineScope
+        get() = injectedScope ?: viewModelScope
+
     private val _controlsState = MutableStateFlow(PlayerControlsState())
     val controlsState = _controlsState.asStateFlow()
 
@@ -54,7 +60,7 @@ class PlayerControlsViewModel : ViewModel() {
     fun preloadSubtitleCues(urls: List<String>) {
         urls.forEach { url ->
             if (SubtitleCueLoader.cached(url) != null || SubtitleCueLoader.isLoading(url)) return@forEach
-            viewModelScope.launch {
+            scope.launch {
                 SubtitleCueLoader.load(
                     url,
                     subtitleRequestHeadersByUrl[url] ?: subtitleRequestHeaders,
@@ -80,11 +86,13 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun showControls(full: Boolean = true, playing: Boolean? = null) {
-        _controlsState.update { 
+        _controlsState.update {
+            val hasActiveOverlay = it.activeOverlay != ActiveOverlay.NONE
             it.copy(
-                isVisible = true, 
-                isFullControlsVisible = full,
-                isPlaying = playing ?: engine?.isPlaying ?: false,
+                isVisible = true,
+                isFullControlsVisible = full || hasActiveOverlay,
+                isPlaying = playing ?: engine?.isPlaying ?: it.isPlaying,
+                lastClosedOverlay = if (hasActiveOverlay) it.lastClosedOverlay else ActiveOverlay.NONE,
                 title = it.title // Keep title
             )
         }
@@ -92,15 +100,21 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun showSeekUI() {
-        showControls(full = false)
+        val current = _controlsState.value
+        val keepFullControls = (current.isVisible && current.isFullControlsVisible) ||
+            current.activeOverlay != ActiveOverlay.NONE
+        showControls(full = keepFullControls)
     }
 
     fun hideControls() {
-        if (_controlsState.value.activeOverlay != ActiveOverlay.NONE) {
-            hideOverlay()
-        }
-        _controlsState.update { it.copy(isVisible = false) }
         autoHideJob?.cancel()
+        _controlsState.update {
+            it.copy(
+                isVisible = false,
+                activeOverlay = ActiveOverlay.NONE,
+                lastClosedOverlay = ActiveOverlay.NONE,
+            )
+        }
     }
 
     fun togglePlayPause() {
@@ -206,6 +220,7 @@ class PlayerControlsViewModel : ViewModel() {
                 isVisible = false,
                 isFullControlsVisible = false,
                 activeOverlay = ActiveOverlay.NONE,
+                lastClosedOverlay = ActiveOverlay.NONE,
                 activeSkipSegment = null,
                 isSkipButtonFocused = false,
             )
@@ -255,7 +270,7 @@ class PlayerControlsViewModel : ViewModel() {
     fun showChapterOsd(text: String) {
         chapterOsdJob?.cancel()
         _controlsState.update { it.copy(chapterOsd = text) }
-        chapterOsdJob = viewModelScope.launch {
+        chapterOsdJob = scope.launch {
             delay(2_000L)
             _controlsState.update { it.copy(chapterOsd = null) }
         }
@@ -398,7 +413,8 @@ class PlayerControlsViewModel : ViewModel() {
                     // playback and left to its own auto-hide timer, so it's excluded here.
                     val cs = _controlsState.value
                     if (it.isPlaying && !isScrubbing &&
-                        (cs.isFullControlsVisible || cs.activeOverlay != ActiveOverlay.NONE)) {
+                        cs.activeOverlay == ActiveOverlay.NONE &&
+                        cs.isFullControlsVisible) {
                         hideControls()
                     }
 
@@ -481,16 +497,12 @@ class PlayerControlsViewModel : ViewModel() {
 
     fun resetAutoHideTimer(durationMs: Long = 5000) {
         autoHideJob?.cancel()
-        val state = _controlsState.value
-        // Hide if:
-        // 1. It's just the seek UI (not full)
-        // 2. OR it's full controls and we're playing
-        val shouldHide = !state.isFullControlsVisible || state.isPlaying
-        
-        if (shouldHide) {
-            autoHideJob = viewModelScope.launch {
+        if (_controlsState.value.shouldAutoHideControls()) {
+            autoHideJob = scope.launch {
                 delay(durationMs)
-                hideControls()
+                if (_controlsState.value.shouldAutoHideControls()) {
+                    hideControls()
+                }
             }
         }
     }
@@ -547,7 +559,8 @@ class PlayerControlsViewModel : ViewModel() {
     private fun showOverlay(overlay: ActiveOverlay) {
         _controlsState.update { 
             it.copy(
-                activeOverlay = overlay, 
+                activeOverlay = overlay,
+                lastClosedOverlay = ActiveOverlay.NONE,
                 isVisible = true, 
                 isFullControlsVisible = true 
             ) 
@@ -556,7 +569,15 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun hideOverlay() {
-        _controlsState.update { it.copy(activeOverlay = ActiveOverlay.NONE) }
+        _controlsState.update {
+            val closed = it.activeOverlay
+            it.copy(
+                activeOverlay = ActiveOverlay.NONE,
+                lastClosedOverlay = if (closed != ActiveOverlay.NONE) closed else it.lastClosedOverlay,
+                isVisible = true,
+                isFullControlsVisible = true,
+            )
+        }
         resetAutoHideTimer()
     }
 

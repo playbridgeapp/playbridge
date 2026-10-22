@@ -3006,8 +3006,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val currentSession = session ?: return
         val state = controlsViewModel.controlsState.value
         val chapter = state.chapters.getOrNull(index) ?: return
+        val target = ChapterTarget(index + 1, chapter)
+        seekForSession(target.chapter.startMs, currentSession.sessionId)
         controlsViewModel.hideOverlay()
-        seekToChapterTarget(ChapterTarget(index + 1, chapter), currentSession.sessionId)
+        controlsViewModel.showChapterOsd(chapterLabel(target))
     }
 
     private fun seekToChapterTarget(target: ChapterTarget, sessionId: Long) {
