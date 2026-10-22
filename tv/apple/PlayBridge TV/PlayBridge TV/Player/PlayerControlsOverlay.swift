@@ -64,6 +64,13 @@ class PlayerControlsData: ObservableObject {
     /// The Subtitles button appears with the first embedded or sidecar track.
     var hasSubtitles: Bool { !subtitleTracks.isEmpty || !externalSubtitleTracks.isEmpty }
 
+    /// The Audio button appears only when there is a track to switch to.
+    var hasAudioChoice: Bool { audioTracks.count >= 2 }
+
+    var availableActions: [TransportAction] {
+        TransportAction.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles, hasAudioChoice: hasAudioChoice)
+    }
+
     /// Metadata line under the title, dropped when the title already carries it.
     var displaySubtitle: String { TransportTimeLabels.distinctSubtitle(metadata.subtitle, title: title) }
 
@@ -246,7 +253,8 @@ struct PlayerControlsOverlay: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            if data.showUI {
+            // The playlist sheet takes the bottom of the screen while it is open.
+            if data.showUI && !data.playlistVisible {
                 LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
                     .frame(height: 420).ignoresSafeArea().allowsHitTesting(false)
                 VStack(spacing: 24) {
@@ -388,7 +396,9 @@ struct PlayerControlsOverlay: View {
                             onOpenMenu(.subtitles)
                         }
                     }
-                    action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
+                    if data.hasAudioChoice {
+                        action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
+                    }
                     if data.hasPlaylist {
                         action("Playlist", icon: "list.bullet", control: .playlist) {
                             data.showInfoPanel = false
@@ -864,28 +874,16 @@ private struct SeekTimeLabels: View {
                     if paused { Image(systemName: "pause.circle") }
                 }
                 .fixedSize()
-                .background(GeometryReader { Color.clear.preference(key: LabelWidth.self, value: $0.size.width) })
-                .onPreferenceChange(LabelWidth.self) { elapsedWidth = Double($0) }
+                .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { elapsedWidth = $0 }
                 .offset(x: layout.x)
                 Text(remaining)
                     .fixedSize()
-                    .background(GeometryReader { Color.clear.preference(key: RemainingWidth.self, value: $0.size.width) })
-                    .onPreferenceChange(RemainingWidth.self) { remainingWidth = Double($0) }
+                    .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { remainingWidth = $0 }
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .opacity(layout.showsRemaining ? 1 : 0)
             }
         }
         .frame(height: 30)
-    }
-
-    private struct LabelWidth: PreferenceKey {
-        static let defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-    }
-
-    private struct RemainingWidth: PreferenceKey {
-        static let defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
     }
 }
 

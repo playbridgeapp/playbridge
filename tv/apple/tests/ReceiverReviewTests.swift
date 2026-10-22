@@ -1463,22 +1463,26 @@ private func runTransportChromeTests() {
     func proposal(_ translation: Double, velocity: Double = 0, duration: Double = 1000) -> Double {
         TransportScrub.proposal(origin: 500, translationX: translation, velocityX: velocity, duration: duration)
     }
+    // 1000 s item: a full 1920 pt swipe spans the 600 s cap (0.3125 s per point).
     assert(proposal(0) == 500)
-    assert(proposal(10) == 520 && proposal(-10) == 480)
-    assert(proposal(10, velocity: 299) == 520 && proposal(10, velocity: -299) == 520)
-    assert(proposal(10, velocity: 300) == 520)
-    assert(proposal(10, velocity: 1150) == 550)
-    assert(proposal(10, velocity: 2000) == 580 && proposal(10, velocity: -2000) == 580)
-    assert(proposal(10, velocity: 10000) == 580, "Gain caps at 4x")
-    assert(proposal(-1000) == 0 && proposal(1000) == 1000)
+    assert(proposal(192) == 560 && proposal(-192) == 440)
+    assert(proposal(192, velocity: 299) == 560 && proposal(192, velocity: -299) == 560)
+    assert(proposal(192, velocity: 300) == 560)
+    assert(proposal(192, velocity: 1150) == 590)
+    assert(proposal(192, velocity: 2000) == 620 && proposal(192, velocity: -2000) == 620)
+    assert(proposal(192, velocity: 10000) == 620, "Gain caps at 2x")
+    assert(proposal(1920) == 1000 && proposal(-1920) == 0, "Full swipe covers the capped span")
     assert(proposal(.greatestFiniteMagnitude) == 1000 && proposal(-.greatestFiniteMagnitude) == 0)
     for invalid in [Double.nan, .infinity, -.infinity] {
         assert(proposal(invalid) == 500)
-        assert(proposal(10, velocity: invalid) == 520)
-        assert(proposal(10, duration: invalid) == 500)
+        assert(proposal(192, velocity: invalid) == 560)
+        assert(proposal(192, duration: invalid) == 500)
     }
-    assert(proposal(10, duration: 0) == 500 && proposal(10, duration: -1) == 500)
-    assert(TransportScrub.proposal(origin: 5, translationX: 50, velocityX: 0, duration: 10) == 10)
+    assert(proposal(192, duration: 0) == 500 && proposal(192, duration: -1) == 500)
+    // A 42-minute episode: a 300 pt swipe moves ~94 s, not to either end.
+    assert(abs(TransportScrub.proposal(origin: 1000, translationX: 300, velocityX: 0, duration: 2520) - 1093.75) < 0.001)
+    // Short items: the whole item per full swipe (60 s minimum span).
+    assert(TransportScrub.proposal(origin: 5, translationX: 1920, velocityX: 0, duration: 10) == 10)
     assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
     print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
 
@@ -1649,6 +1653,12 @@ private func runTransportChromeTests() {
         == [.loop, .speed, .switchEngine, .subtitles, .audio, .playlist])
     assert(TransportAction.switchEngine.moving(1, hasPlaylist: false, hasSubtitles: true) == .subtitles)
     assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true) == .audio)
+    // One audio track: no Audio button; Right from the last button stays put.
+    assert(TransportAction.available(hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false)
+        == [.loop, .speed, .switchEngine, .subtitles])
+    assert(TransportAction.available(hasPlaylist: true, hasAudioChoice: false) == [.loop, .speed, .switchEngine, .playlist])
+    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false) == .subtitles)
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: true, hasAudioChoice: false) == .playlist)
     assert(TransportAction.subtitles.menu == .subtitles)
     let subtitleRows = TransportMenuModel.subtitleRows(tracks: [(id: 3, name: "English"), (id: 4, name: "SDH")], current: 4)
     assert(subtitleRows.map(\.id) == [-1, 3, 4] && subtitleRows.map(\.title).first == "Off")
@@ -1666,6 +1676,17 @@ private func runTransportChromeTests() {
     let posterArt = ArtworkURL.candidates("https://image.tmdb.org/t/p/w342/p.jpg", kind: .poster)
     assert(posterArt.map(\.absoluteString).first == "https://image.tmdb.org/t/p/w780/p.jpg" && posterArt.count == 2)
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w1280/p.jpg", kind: .poster).count == 1, "Never shrinks")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w300/b.jpg", kind: .card).first?.absoluteString
+        == "https://image.tmdb.org/t/p/w780/b.jpg")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w780/b.jpg", kind: .card).count == 1)
+    // Playlist card text: episode lines, else the item title, else a numbered fallback.
+    let episodeCard = PlaylistCardText.lines(title: "Below", season: 1, episode: 6, episodeTitle: "The Tide", index: 1)
+    assert(episodeCard.eyebrow == "S1 · E6" && episodeCard.title == "The Tide")
+    assert(PlaylistCardText.lines(title: "Below", season: 1, episode: 6, episodeTitle: " ", index: 1).title == "Below")
+    assert(PlaylistCardText.lines(title: nil, season: 2, episode: 3, episodeTitle: nil, index: 0).title == "Episode 3")
+    let movieCard = PlaylistCardText.lines(title: "Heat", season: nil, episode: nil, episodeTitle: nil, index: 0)
+    assert(movieCard.eyebrow.isEmpty && movieCard.title == "Heat")
+    assert(PlaylistCardText.lines(title: "", season: nil, episode: 4, episodeTitle: "x", index: 2).title == "Item 3")
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/original/b.jpg", kind: .backdrop).count == 1)
     assert(ArtworkURL.candidates("https://images.metahub.space/background/medium/tt1/img", kind: .backdrop).count == 1)
     assert(ArtworkURL.candidates("https://image.tmdb.org/other/w780/b.jpg", kind: .backdrop).count == 1)
@@ -1917,17 +1938,18 @@ private func runTouchScrubTests() {
     }
     print("PASS: paused pan gates, horizontal slop, vertical swipe ownership, button/list/Skip focus and invalid durations")
 
+    // 1000 s item: 320 pt of touchpad travel is 100 s (600 s per 1920 pt).
     var scrub = TouchScrubSession()
     let token = scrub.begin(position: 100, duration: 1000)!
     assert(scrub.begin(position: 100, duration: 1000) == nil, "Cannot begin another live pan")
-    assert(scrub.update(token: token, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: token, translationX: 320, velocityX: 0))
     assert(scrub.proposal?.position == 200 && scrub.proposal?.origin == 100)
     scrub.click(by: TransportScrub.clickSkipSeconds)
     assert(scrub.proposal?.position == 210)
-    assert(scrub.update(token: token, translationX: 75, velocityX: 0))
+    assert(scrub.update(token: token, translationX: 480, velocityX: 0))
     assert(scrub.proposal?.position == 260, "Later pan samples preserve click adjustments")
-    assert(scrub.update(token: token, translationX: 50, velocityX: 2000))
-    assert(scrub.proposal?.position == 510, "Fast drag uses the existing fourfold gain")
+    assert(scrub.update(token: token, translationX: 320, velocityX: 2000))
+    assert(scrub.proposal?.position == 310, "Fast drag uses the twofold gain")
     scrub.click(by: 5000)
     assert(scrub.proposal?.position == 1000)
     scrub.click(by: -5000)
@@ -1938,18 +1960,18 @@ private func runTouchScrubTests() {
     print("PASS: pan preview, gain, click accumulation, clamps and mid-pan commit without per-sample seeks")
 
     let releaseToken = scrub.begin(position: 100, duration: 1000)!
-    assert(scrub.update(token: releaseToken, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: releaseToken, translationX: 320, velocityX: 0))
     assert(scrub.release(token: releaseToken) == 200)
     assert(scrub.proposal?.isPanning == false)
-    assert(!scrub.update(token: releaseToken, translationX: 100, velocityX: 0), "Released drag ignores late movement")
+    assert(!scrub.update(token: releaseToken, translationX: 640, velocityX: 0), "Released drag ignores late movement")
     assert(scrub.commit() == TouchScrubSession.Commit(position: 200, requiresSeek: false),
            "Select/Play after release does not seek twice")
     let second = scrub.begin(position: 100, duration: 1000)!
-    assert(scrub.update(token: second, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: second, translationX: 320, velocityX: 0))
     assert(scrub.release(token: second) == 200)
     let third = scrub.begin(position: 200, duration: 1000)!
     assert(scrub.proposal?.origin == 100, "Consecutive drags retain the original pause point")
-    assert(scrub.update(token: third, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: third, translationX: 320, velocityX: 0))
     assert(scrub.release(token: third) == 300)
     assert(scrub.cancel() == 100 && scrub.proposal == nil)
     assert(scrub.cancel() == nil)

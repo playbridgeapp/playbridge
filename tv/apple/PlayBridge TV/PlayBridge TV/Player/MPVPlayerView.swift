@@ -269,6 +269,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.playbackState.playlistVisible = self.playlistVisible
                 if self.playlistVisible { self.closeInfoPanel() }
                 self.showUI()
+                self.updateSubtitlePosition()
             }
         }
     }
@@ -1281,7 +1282,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Called on main for chrome/layout changes only. All libmpv work is
     /// serialized with loadfile/event handling, never the rendering path.
     private func updateSubtitlePosition() {
-        let position = TransportSubtitlePlacement.position(occludedHeight: subtitleClearancePoints,
+        // The playlist sheet (drawn by PlayerView) replaces the transport while open.
+        let occluded = playlistVisible ? TransportBarMetrics.playlistSheetHeight : subtitleClearancePoints
+        let position = TransportSubtitlePlacement.position(occludedHeight: occluded,
             viewportHeight: Double(view.bounds.height))
         guard position != subtitlePosition else { return }
         subtitlePosition = position
@@ -1307,8 +1310,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             if self.touchScrub.proposal != nil && (self.playbackState.menuOpen || self.playlistVisible) {
                 self.cancelTouchScrub()
             }
+            // Only a hidden-to-shown change moves focus into the controls. Forcing a
+            // focus update on every touch would pull a swipe-up from the actions
+            // straight back to the seek bar.
+            let wasHidden = !self.playbackState.showUI
             self.playbackState.showUI = true
-            self.setNeedsFocusUpdate()
+            if wasHidden { self.setNeedsFocusUpdate() }
             self.hideControlsTimer?.invalidate()
             guard autoHide, self.canAutoHide else { return }
             self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: TransportVisibility.autoHideSeconds,
@@ -1679,6 +1686,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         clickDirection = nil
         if let target { playbackState.transportActionHighlight = target }
         else if !playbackState.transportActionFocused { playbackState.transportActionHighlight = .loop }
+        // Subtitles and Audio come and go with the track list.
+        if !playbackState.availableActions.contains(playbackState.transportActionHighlight) {
+            playbackState.transportActionHighlight = .loop
+        }
         playbackState.transportActionFocused = true
         playbackState.transportActionFocusRevision += 1
         showUI(autoHide: false)
@@ -1789,7 +1800,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 consumedTransportDirection = type
                 let delta = type == .rightArrow ? 1 : -1
                 focusTransportActions(playbackState.transportActionHighlight.moving(delta,
-                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles))
+                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles,
+                    hasAudioChoice: playbackState.hasAudioChoice))
                 return
             }
             let forward = type == .rightArrow

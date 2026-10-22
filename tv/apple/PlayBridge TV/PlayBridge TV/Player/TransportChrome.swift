@@ -16,6 +16,25 @@ enum TransportBarMetrics {
     static let playheadWidth = 3.0
     static let playheadOverhang = 5.0
     static let timeLabelGap = 24.0
+    /// The playlist sheet's height; subtitles clear it while it is open.
+    static let playlistSheetHeight = 500.0
+}
+
+/// Text for a playlist card; payloads stay outside the host-tested model.
+enum PlaylistCardText {
+    /// Eyebrow ("S1 · E6") and title: the episode title for episodes, else the
+    /// item title, else a numbered fallback.
+    static func lines(title: String?, season: Int?, episode: Int?, episodeTitle: String?,
+                      index: Int) -> (eyebrow: String, title: String) {
+        func clean(_ text: String?) -> String? {
+            guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return text
+        }
+        if let season, let episode {
+            return ("S\(season) · E\(episode)", clean(episodeTitle) ?? clean(title) ?? "Episode \(episode)")
+        }
+        return ("", clean(title) ?? "Item \(index + 1)")
+    }
 }
 
 enum TransportTimeLabels {
@@ -97,11 +116,15 @@ enum TransportScrub {
     static let clickSkipSeconds = 10.0
     static let remoteSkipSeconds = 15.0
     static let holdThreshold = 0.5
-    static let translationSpanPoints = 500.0
+    /// A full-width swipe on the Siri Remote touchpad (~1920 pt of translation)
+    /// covers the whole item, at most `maximumSpanSeconds`: fine control on long
+    /// episodes and films instead of flying to either end.
+    static let translationSpanPoints = 1920.0
     static let minimumSpanSeconds = 60.0
+    static let maximumSpanSeconds = 600.0
     static let gainThresholdVelocity = 300.0
     static let maximumGainVelocity = 2000.0
-    static let maximumGain = 4.0
+    static let maximumGain = 2.0
 
     /// A proposed time only; the caller commits or cancels without seeking on
     /// every gesture update. Unknown/live duration disables touch scrubbing.
@@ -114,7 +137,7 @@ enum TransportScrub {
         let fraction = min(max((velocity - gainThresholdVelocity)
             / (maximumGainVelocity - gainThresholdVelocity), 0), 1)
         let gain = 1 + (maximumGain - 1) * fraction
-        let span = max(duration, minimumSpanSeconds)
+        let span = min(max(duration, minimumSpanSeconds), maximumSpanSeconds)
         let delta = (translationX / translationSpanPoints) * span * gain
         return min(max(anchor + delta, 0), duration)
     }
@@ -346,15 +369,15 @@ struct PlaybackFailureSession {
 }
 
 /// Physical transport focus order, matching AVPlayer's transport row (Loop,
-/// Speed, Switch, Subtitles, Audio). Subtitles needs a track; Playlist is
-/// absent for a one-item queue.
+/// Speed, Switch, Subtitles, Audio). Subtitles needs a track, Audio a choice
+/// of two tracks; Playlist is absent for a one-item queue.
 enum TransportAction: CaseIterable {
     case loop, speed, switchEngine, subtitles, audio, playlist
 
-    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false) -> [Self] {
+    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> [Self] {
         var actions: [Self] = [.loop, .speed, .switchEngine]
         if hasSubtitles { actions.append(.subtitles) }
-        actions.append(.audio)
+        if hasAudioChoice { actions.append(.audio) }
         if hasPlaylist { actions.append(.playlist) }
         return actions
     }
@@ -371,8 +394,9 @@ enum TransportAction: CaseIterable {
         }
     }
 
-    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false) -> Self {
-        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles)
+    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> Self {
+        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles,
+                                     hasAudioChoice: hasAudioChoice)
         let index = actions.firstIndex(of: self) ?? 0
         return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
     }
