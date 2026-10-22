@@ -6,13 +6,14 @@ import Foundation
 /// are used as sent.
 enum ArtworkURL {
     enum Kind {
-        case backdrop, poster, logo
+        /// `card` is a landscape image shown at card size (playlist, ~400 pt).
+        case backdrop, poster, logo, card
 
         /// TMDB size path segment: full-screen backdrops and logos use the source.
         var tmdbSize: String {
             switch self {
             case .backdrop, .logo: return "original"
-            case .poster: return "w780"
+            case .poster, .card: return "w780"
             }
         }
     }
@@ -35,7 +36,7 @@ enum ArtworkURL {
         guard size == "original" || (size.first == "w" && Int(size.dropFirst()) != nil) else { return nil }
         // Never shrink: keep a larger size than the target (or the source itself).
         if size == "original" { return nil }
-        if kind == .poster, let width = Int(size.dropFirst()), width >= 780 { return nil }
+        if kind == .poster || kind == .card, let width = Int(size.dropFirst()), width >= 780 { return nil }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         components?.path = "/t/p/\(kind.tmdbSize)/" + parts[3...].joined(separator: "/")
         return components?.url

@@ -1679,6 +1679,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         clickDirection = nil
         if let target { playbackState.transportActionHighlight = target }
         else if !playbackState.transportActionFocused { playbackState.transportActionHighlight = .loop }
+        // Subtitles and Audio come and go with the track list.
+        if !playbackState.availableActions.contains(playbackState.transportActionHighlight) {
+            playbackState.transportActionHighlight = .loop
+        }
         playbackState.transportActionFocused = true
         playbackState.transportActionFocusRevision += 1
         showUI(autoHide: false)
@@ -1789,7 +1793,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 consumedTransportDirection = type
                 let delta = type == .rightArrow ? 1 : -1
                 focusTransportActions(playbackState.transportActionHighlight.moving(delta,
-                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles))
+                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles,
+                    hasAudioChoice: playbackState.hasAudioChoice))
                 return
             }
             let forward = type == .rightArrow

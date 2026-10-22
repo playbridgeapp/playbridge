@@ -64,6 +64,13 @@ class PlayerControlsData: ObservableObject {
     /// The Subtitles button appears with the first embedded or sidecar track.
     var hasSubtitles: Bool { !subtitleTracks.isEmpty || !externalSubtitleTracks.isEmpty }
 
+    /// The Audio button appears only when there is a track to switch to.
+    var hasAudioChoice: Bool { audioTracks.count >= 2 }
+
+    var availableActions: [TransportAction] {
+        TransportAction.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles, hasAudioChoice: hasAudioChoice)
+    }
+
     /// Metadata line under the title, dropped when the title already carries it.
     var displaySubtitle: String { TransportTimeLabels.distinctSubtitle(metadata.subtitle, title: title) }
 
@@ -388,7 +395,9 @@ struct PlayerControlsOverlay: View {
                             onOpenMenu(.subtitles)
                         }
                     }
-                    action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
+                    if data.hasAudioChoice {
+                        action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
+                    }
                     if data.hasPlaylist {
                         action("Playlist", icon: "list.bullet", control: .playlist) {
                             data.showInfoPanel = false

@@ -18,6 +18,23 @@ enum TransportBarMetrics {
     static let timeLabelGap = 24.0
 }
 
+/// Text for a playlist card; payloads stay outside the host-tested model.
+enum PlaylistCardText {
+    /// Eyebrow ("S1 · E6") and title: the episode title for episodes, else the
+    /// item title, else a numbered fallback.
+    static func lines(title: String?, season: Int?, episode: Int?, episodeTitle: String?,
+                      index: Int) -> (eyebrow: String, title: String) {
+        func clean(_ text: String?) -> String? {
+            guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return text
+        }
+        if let season, let episode {
+            return ("S\(season) · E\(episode)", clean(episodeTitle) ?? clean(title) ?? "Episode \(episode)")
+        }
+        return ("", clean(title) ?? "Item \(index + 1)")
+    }
+}
+
 enum TransportTimeLabels {
     /// The line under the title, unless the title already says it
     /// ("Below · S1E5 · Little Pot Rock" over "S1 E5 · Little Pot Rock").
@@ -346,15 +363,15 @@ struct PlaybackFailureSession {
 }
 
 /// Physical transport focus order, matching AVPlayer's transport row (Loop,
-/// Speed, Switch, Subtitles, Audio). Subtitles needs a track; Playlist is
-/// absent for a one-item queue.
+/// Speed, Switch, Subtitles, Audio). Subtitles needs a track, Audio a choice
+/// of two tracks; Playlist is absent for a one-item queue.
 enum TransportAction: CaseIterable {
     case loop, speed, switchEngine, subtitles, audio, playlist
 
-    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false) -> [Self] {
+    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> [Self] {
         var actions: [Self] = [.loop, .speed, .switchEngine]
         if hasSubtitles { actions.append(.subtitles) }
-        actions.append(.audio)
+        if hasAudioChoice { actions.append(.audio) }
         if hasPlaylist { actions.append(.playlist) }
         return actions
     }
@@ -371,8 +388,9 @@ enum TransportAction: CaseIterable {
         }
     }
 
-    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false) -> Self {
-        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles)
+    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> Self {
+        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles,
+                                     hasAudioChoice: hasAudioChoice)
         let index = actions.firstIndex(of: self) ?? 0
         return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
     }
