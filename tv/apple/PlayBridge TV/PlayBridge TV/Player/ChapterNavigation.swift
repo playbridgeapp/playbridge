@@ -28,8 +28,6 @@ enum ChapterNavigation {
     static let toastSeconds = 2.0
     /// Toast when "next" has nowhere to go.
     static let lastChapterLabel = "Last chapter"
-    /// Up/Down hint on the seek strip.
-    static let hint = "▲▼ Chapters"
 
     /// Same filter and order as the `timeline` frame.
     static func sorted(_ chapters: [TimelineChapter]) -> [TimelineChapter] {
@@ -37,7 +35,7 @@ enum ChapterNavigation {
             .prefix(TimelineReport.maxChapters))
     }
 
-    /// Up/Down jump chapters only with two or more of them.
+    /// Chapter navigation is available with two or more markers.
     static func canJump(_ chapters: [TimelineChapter]) -> Bool { chapters.count >= 2 }
 
     /// Where "next" (`forward`) or "previous" goes from `positionMs`. Nil with

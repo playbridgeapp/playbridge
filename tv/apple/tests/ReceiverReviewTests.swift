@@ -312,31 +312,24 @@ private func pumpMain() {
 }
 
 private func runPlayerControlsAuditTests() {
-    // The Siri Play/Pause key never becomes a focused-button activation, even
-    // when paused or inside a menu. A live scrub is committed before toggling.
-    for paused in [false, true] {
-        for menu in [false, true] {
-            assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-                for: .playPause, userPaused: paused, scrubbing: false, menuOpen: menu) == .togglePlayback)
-            assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-                for: .playPause, userPaused: paused, scrubbing: true, menuOpen: menu) == .commitScrub)
-        }
+    // HUD visibility and pause state do not delegate Select; only a focused
+    // Skip/action button or a list does. Play/Pause always controls playback.
+    for owned in [false, true] {
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .playPause,
+            scrubbing: false, selectActivatesFocusedControl: owned) == .togglePlayback)
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .playPause,
+            scrubbing: true, selectActivatesFocusedControl: owned) == .commitScrub)
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select,
+            scrubbing: false, selectActivatesFocusedControl: owned) == (owned ? .ignored : .togglePlayback))
+        assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select,
+            scrubbing: true, selectActivatesFocusedControl: owned) == (owned ? .ignored : .commitScrub))
     }
-    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-        for: .select, userPaused: true, scrubbing: false, menuOpen: false) == .ignored)
-    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-        for: .select, userPaused: false, scrubbing: false, menuOpen: false) == .togglePlayback)
-    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-        for: .select, userPaused: true, scrubbing: true, menuOpen: false) == .commitScrub)
-    assert(PlayerRemoteNavigation.physicalPlaybackEffect(
-        for: .select, userPaused: false, scrubbing: false, menuOpen: true) == .ignored)
-    print("PASS: physical Play/Pause toggles while paused/in menus, commits scrub first, and Select keeps focus activation")
+    print("PASS: Select toggles on the video/seek bar, focused buttons retain Select, and hold-scrub commits")
 
     // Both physical MPV Back and phone Back now enter this same policy. The
     // playlist belongs to the player screen and must precede the engine HUD.
-    var chrome = PlayerChromeState(sessionMatches: true, subtitleMenu: true,
-                                   scrubbing: true, playlist: true, controlsVisible: true)
-    for expected: PlayerRemoteEffect in [.dismissSubtitleMenu, .dismissScrub, .dismissPlaylist, .dismissControls] {
+    var chrome = PlayerChromeState(sessionMatches: true, scrubbing: true, playlist: true, controlsVisible: true, infoPanel: true)
+    for expected: PlayerRemoteEffect in [.dismissInfoPanel, .dismissScrub, .dismissPlaylist, .dismissControls] {
         let effect = PlayerRemoteNavigation.effect(for: "back", chrome: chrome)
         assert(effect == expected)
         PlayerRemoteNavigation.closing(effect, in: &chrome)
@@ -353,8 +346,7 @@ private func runPlayerControlsAuditTests() {
 private func runRemoteNavigationTests() {
     let overlays: [(String, WritableKeyPath<PlayerChromeState, Bool>, PlayerRemoteEffect)] = [
         ("still watching", \.stillWatching, .dismissStillWatching),
-        ("subtitle menu", \.subtitleMenu, .dismissSubtitleMenu),
-        ("audio menu", \.audioMenu, .dismissAudioMenu),
+        ("info panel", \.infoPanel, .dismissInfoPanel),
         ("engine menu", \.engineMenu, .dismissEngineMenu),
         ("settings sheet", \.settingsSheet, .dismissSettingsSheet),
         ("scrub", \.scrubbing, .dismissScrub),
@@ -380,13 +372,12 @@ private func runRemoteNavigationTests() {
         var stacked = PlayerChromeState(
             sessionMatches: true,
             stillWatching: true,
-            subtitleMenu: true,
-            audioMenu: true,
             engineMenu: true,
             settingsSheet: true,
             scrubbing: true,
             playlist: true,
-            controlsVisible: true
+            controlsVisible: true,
+            infoPanel: true
         )
         stacked[keyPath: path] = false
         // The highest remaining overlay is the one Back closes.
@@ -399,13 +390,12 @@ private func runRemoteNavigationTests() {
     let everything = PlayerChromeState(
         sessionMatches: true,
         stillWatching: true,
-        subtitleMenu: true,
-        audioMenu: true,
         engineMenu: true,
         settingsSheet: true,
         scrubbing: true,
         playlist: true,
-        controlsVisible: true
+        controlsVisible: true,
+        infoPanel: true
     )
     var walk = everything
     for (_, path, expected) in overlays {
@@ -525,7 +515,7 @@ private func runRemoteDirectionTests() {
         assert(effect("mute", chrome) == .toggleAppMute, "\(name) mute toggles app mute")
     }
 
-    let menu = PlayerChromeState(sessionMatches: true, subtitleMenu: true)
+    let menu = PlayerChromeState(sessionMatches: true, infoPanel: true)
     assert(effect("dpad_up", menu) == .moveHighlight(delta: -1))
     assert(effect("dpad_down", menu) == .moveHighlight(delta: 1))
     assert(effect("dpad_center", menu) == .activateHighlight)
@@ -545,11 +535,11 @@ private func runRemoteDirectionTests() {
     for key in ["Back", "Home", ""] {
         assert(effect(key, menu) == .ignored, "\(key) stays ignored while a menu is open")
     }
-    assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, audioMenu: true)) == .moveHighlight(delta: -1))
+    assert(effect("dpad_up", PlayerChromeState(sessionMatches: true, engineMenu: true)) == .moveHighlight(delta: -1))
     assert(effect("dpad_center", PlayerChromeState(sessionMatches: true, engineMenu: true)) == .activateHighlight)
 
-    var menuAndPlaylist = PlayerChromeState(sessionMatches: true, subtitleMenu: true, playlist: true)
-    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .subtitleMenu)
+    var menuAndPlaylist = PlayerChromeState(sessionMatches: true, playlist: true, infoPanel: true)
+    assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .infoPanel)
     assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
     assert(effect("dpad_center", menuAndPlaylist) == .activateHighlight)
     var playlistRows = PlayerHighlightList(count: 5, index: 2)
@@ -559,7 +549,7 @@ private func runRemoteDirectionTests() {
         playlistRows = playlistRows.moving(delta)
     }
     assert(playlistRows == playlistBefore, "An open menu keeps the playlist highlight where it is")
-    menuAndPlaylist.subtitleMenu = false
+    menuAndPlaylist.infoPanel = false
     assert(PlayerRemoteNavigation.listOwner(in: menuAndPlaylist) == .playlist)
     assert(effect("dpad_up", menuAndPlaylist) == .moveHighlight(delta: -1))
     assert(effect("dpad_down", menuAndPlaylist) == .moveHighlight(delta: 1))
@@ -601,8 +591,8 @@ private func runRemoteDirectionTests() {
     assert(effect("dpad_left", scrub) == .scrubBackward)
     assert(effect("dpad_right", scrub) == .scrubForward)
     assert(effect("dpad_center", scrub) == .commitScrub)
-    assert(effect("dpad_up", scrub) == .ignored)
-    assert(effect("dpad_down", scrub) == .ignored)
+    assert(effect("dpad_up", scrub) == .adjustAppVolume(steps: 1))
+    assert(effect("dpad_down", scrub) == .adjustAppVolume(steps: -1))
     assert(effect("volume_down", scrub) == .adjustAppVolume(steps: -1), "Scrub leaves Up and Down alone")
     assert(effect("back", scrub) == .dismissScrub)
 
@@ -615,7 +605,7 @@ private func runRemoteDirectionTests() {
     assert(effect("home", sheet) == .exitPlayback)
 
     var staleList = PlayerHighlightList(count: 4, index: 1)
-    let staleMenu = PlayerChromeState(sessionMatches: false, subtitleMenu: true, playlist: true, controlsVisible: true)
+    let staleMenu = PlayerChromeState(sessionMatches: false, playlist: true, controlsVisible: true, infoPanel: true)
     for key in ["dpad_up", "dpad_down", "dpad_center", "dpad_left", "dpad_right", "back", "home",
                 "volume_up", "volume_down", "mute"] {
         let staleEffect = effect(key, staleMenu)
@@ -1403,49 +1393,25 @@ private func runChapterNavigationTests() {
 }
 
 private func runChapterRemoteTests() {
-    func effect(_ key: String, _ chrome: PlayerChromeState) -> PlayerRemoteEffect {
-        PlayerRemoteNavigation.effect(for: key, chrome: chrome)
+    for scrubbing in [false, true] {
+        for visible in [false, true] {
+            let chrome = PlayerChromeState(sessionMatches: true, scrubbing: scrubbing, controlsVisible: visible)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: chrome) == .adjustAppVolume(steps: 1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: chrome) == .adjustAppVolume(steps: -1))
+            var panel = chrome
+            panel.infoPanel = true
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: panel) == .moveHighlight(delta: -1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: panel) == .moveHighlight(delta: 1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_center", chrome: panel) == .activateHighlight)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_left", chrome: panel) == .seekBackward)
+            assert(PlayerRemoteNavigation.effect(for: "dpad_right", chrome: panel) == .seekForward)
+            var playlist = chrome
+            playlist.playlist = true
+            assert(PlayerRemoteNavigation.effect(for: "dpad_up", chrome: playlist) == .moveHighlight(delta: -1))
+            assert(PlayerRemoteNavigation.effect(for: "dpad_down", chrome: playlist) == .moveHighlight(delta: 1))
+        }
     }
-    for count in [0, 1, 3] {
-        let jumps = count >= 2
-        let strip = PlayerChromeState(sessionMatches: true, controlsVisible: true,
-                                      chapterCount: count, seekStripVisible: true)
-        assert(effect("dpad_up", strip) == (jumps ? .chapterNext : .adjustAppVolume(steps: 1)))
-        assert(effect("dpad_down", strip) == (jumps ? .chapterPrevious : .adjustAppVolume(steps: -1)))
-        assert(effect("dpad_left", strip) == .seekBackward && effect("dpad_right", strip) == .seekForward)
-        assert(effect("dpad_center", strip) == .togglePlayback)
-        assert(effect("volume_up", strip) == .adjustAppVolume(steps: 1), "Phone volume keys stay volume")
-
-        let shown = PlayerChromeState(sessionMatches: true, controlsVisible: true, chapterCount: count)
-        assert(effect("dpad_up", shown) == .adjustAppVolume(steps: 1), "Controls without a seek keep volume")
-        assert(effect("dpad_down", PlayerChromeState(sessionMatches: true, chapterCount: count))
-               == .adjustAppVolume(steps: -1), "Hidden controls keep volume")
-
-        let scrub = PlayerChromeState(sessionMatches: true, scrubbing: true, controlsVisible: true, chapterCount: count)
-        assert(effect("dpad_up", scrub) == (jumps ? .chapterNext : .ignored), "Scrub Up moves the ghost")
-        assert(effect("dpad_down", scrub) == (jumps ? .chapterPrevious : .ignored))
-        assert(effect("dpad_center", scrub) == .commitScrub)
-
-        var menu = strip
-        menu.subtitleMenu = true
-        assert(effect("dpad_up", menu) == .moveHighlight(delta: -1), "A menu keeps Up/Down")
-        var playlist = strip
-        playlist.playlist = true
-        assert(effect("dpad_down", playlist) == .moveHighlight(delta: 1), "The playlist keeps Up/Down")
-        var prompt = strip
-        prompt.stillWatching = true
-        assert(effect("dpad_up", prompt) == .resumeStillWatching)
-        var sheet = strip
-        sheet.settingsSheet = true
-        assert(effect("dpad_up", sheet) == .ignored)
-        var stale = strip
-        stale.sessionMatches = false
-        assert(effect("dpad_up", stale) == .ignored)
-    }
-    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, chapterCount: 4, seekStripVisible: true)
-    let chrome = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
-    assert(chrome.chapterCount == 4 && chrome.seekStripVisible, "The snapshot carries the chapter flags")
-    print("PASS: Up/Down jump chapters only in the seek strip or scrub with two or more chapters")
+    print("PASS: network Up/Down adjust volume outside lists, including hold-scrub, and panel rows own highlight/activation")
 }
 
 private func runTransportChromeTests() {
@@ -1508,19 +1474,55 @@ private func runTransportChromeTests() {
     assert(InfoPanelModel.visibleTabs(chapterCount: -1, settingsAvailable: false).contains(.audio))
     print("PASS: info-panel tab ordering, chapter threshold, optional settings and unconditional audio/subtitles")
 
+    let chapterRows = InfoPanelModel.chapterRows(chapters: [
+        TimelineChapter(startMs: 60000, title: "Chapter 02"),
+        TimelineChapter(startMs: 0, title: nil),
+        TimelineChapter(startMs: 120000, title: "The Heist")], durationMs: 180000, positionMs: 70000)
+    assert(chapterRows.map(\.title) == ["Chapter 1", "Chapter 2", "Chapter 3 · The Heist"])
+    assert(chapterRows.map(\.id) == [0, 60000, 120000])
+    assert(chapterRows.map(\.trailingText) == ["0:00", "1:00", "2:00"])
+    let longChapterRows = InfoPanelModel.chapterRows(chapters: [
+        TimelineChapter(startMs: 0), TimelineChapter(startMs: 3_723_500)],
+        durationMs: 5_000_000, positionMs: 3_800_000)
+    assert(longChapterRows.map(\.trailingText) == ["0:00", "1:02:03"])
+    assert(longChapterRows.last?.selected == true)
+    assert(InfoPanelRow(id: 1, title: "Audio").trailingText == nil)
+    assert(InfoPanelModel.initialHighlight(rows: chapterRows) == 1)
+    assert(InfoPanelModel.initialHighlight(rows: []) == 0)
+    assert(InfoPanelModel.chapterRows(chapters: [], durationMs: 0, positionMs: 0).isEmpty)
+    let tabs = InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false)
+    assert(InfoPanelModel.movingTab(.info, delta: -1, tabs: tabs) == .info)
+    assert(InfoPanelModel.movingTab(.info, delta: 1, tabs: tabs) == .chapters)
+    assert(InfoPanelModel.movingTab(.subtitles, delta: 1, tabs: tabs) == .subtitles)
+    assert(InfoPanelModel.movingTab(.settings, delta: 1, tabs: []) == .info)
+    assert(TransportBarMetrics.skipVisibleInset == 240 && TransportBarMetrics.skipHiddenInset == 80)
+    assert(TransportVisibility.autoHideSeconds == 5 && TransportVisibility.feedbackSeconds == 0.8)
+    assert(TransportVisibility.canAutoHide(userPaused: false, scrubbing: false, panel: false,
+        engineMenu: false, playlist: false, prebuffering: false))
+    for gate in 0..<6 {
+        assert(!TransportVisibility.canAutoHide(userPaused: gate == 0, scrubbing: gate == 1,
+            panel: gate == 2, engineMenu: gate == 3, playlist: gate == 4, prebuffering: gate == 5))
+    }
+    let firstRow = InfoPanelFocus()
+    let tabsFocus = firstRow.moving(-1, rowCount: 3, physical: true)
+    assert(tabsFocus == InfoPanelFocus(row: 0, tabBar: true))
+    assert(tabsFocus.moving(1, rowCount: 3, physical: true) == firstRow)
+    assert(firstRow.moving(1, rowCount: 3, physical: true).row == 1)
+    assert(firstRow.moving(-1, rowCount: 3, physical: false) == firstRow)
+    assert(InfoPanelFocus(row: 2).moving(1, rowCount: 3, physical: false).row == 2)
+    assert(firstRow.moving(1, rowCount: 0, physical: true).tabBar)
+    print("PASS: panel chapter labels/targets/checks, selected-row focus, tab clamps, Skip clearance and auto-hide gates")
+
     var stack = PlayerChromeState(sessionMatches: true, engineMenu: true, scrubbing: true,
-                                  playlist: true, controlsVisible: true, chapterCount: 3,
-                                  seekStripVisible: true, infoPanel: true)
+                                  playlist: true, controlsVisible: true, infoPanel: true)
     for expected: PlayerRemoteEffect in [.dismissInfoPanel, .dismissEngineMenu, .dismissScrub,
                                         .dismissPlaylist, .dismissControls, .exitPlayback] {
         let effect = PlayerRemoteNavigation.effect(for: "back", chrome: stack)
         assert(effect == expected)
-        let before = stack
         PlayerRemoteNavigation.closing(effect, in: &stack)
         if effect == .dismissInfoPanel {
             assert(!stack.infoPanel && stack.engineMenu && stack.scrubbing && stack.playlist && stack.controlsVisible)
         }
-        assert(stack.chapterCount == before.chapterCount && stack.seekStripVisible == before.seekStripVisible)
     }
     var panel = PlayerChromeState(sessionMatches: true, engineMenu: true, playlist: true,
                                  controlsVisible: true, infoPanel: true)
@@ -1537,13 +1539,12 @@ private func runTransportChromeTests() {
     assert(firstBack == .dismissControls)
     PlayerRemoteNavigation.closing(firstBack, in: &transport)
     assert(PlayerRemoteNavigation.effect(for: "back", chrome: transport) == .exitPlayback)
-    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, chapterCount: 4,
-                                              seekStripVisible: true, infoPanel: true)
+    let snapshot = PlayerEngineChromeSnapshot(controlsVisible: true, infoPanel: true)
     let copied = snapshot.chrome(sessionMatches: true, stillWatching: false, playlist: false)
-    assert(copied.infoPanel && copied.chapterCount == 4 && copied.seekStripVisible)
-    // Existing subtitle/audio menus remain until the later view replacement.
+    assert(copied.infoPanel && copied.controlsVisible)
+    // Panel ownership replaces the old subtitle/audio menus.
     assert(PlayerRemoteNavigation.effect(for: "back", chrome: PlayerChromeState(
-        sessionMatches: true, subtitleMenu: true, audioMenu: true, infoPanel: true)) == .dismissInfoPanel)
+        sessionMatches: true, engineMenu: true, infoPanel: true)) == .dismissInfoPanel)
     print("PASS: info-panel Back/list priority, shared snapshot flags, paused-HUD exit levels, Home and stale keys")
 
     func route(_ up: Bool, _ chrome: TransportChrome) -> TransportKeyRoute {
@@ -1551,16 +1552,13 @@ private func runTransportChromeTests() {
     }
     var chrome = TransportChrome()
     assert(route(false, chrome) == .openPanel && route(true, chrome) == .showTransport)
-    // The old chapter flags still exist in the shared state until PR 3. None
-    // of them, nor pause/hold-scrub/Skip focus, may steal Down from Info here.
+    // Pause, hold-scrub and Skip focus do not steal Down from Info.
     for visible in [false, true] {
         for paused in [false, true] {
             for scrubbing in [false, true] {
                 for skipFocused in [false, true] {
                     chrome.navigation.controlsVisible = visible
                     chrome.navigation.scrubbing = scrubbing
-                    chrome.navigation.chapterCount = 3
-                    chrome.navigation.seekStripVisible = true
                     chrome.userPaused = paused
                     chrome.skipPillFocused = skipFocused
                     assert(route(false, chrome) == .openPanel)
@@ -1574,7 +1572,7 @@ private func runTransportChromeTests() {
     chrome.panelTabBarFocused = true
     assert(route(true, chrome) == .closePanel && route(false, chrome) == .moveInPanel)
     chrome.navigation.infoPanel = false
-    for path in [\PlayerChromeState.subtitleMenu, \.audioMenu, \.engineMenu, \.settingsSheet, \.playlist] {
+    for path in [\PlayerChromeState.engineMenu, \.settingsSheet, \.playlist] {
         var menu = TransportChrome()
         menu.navigation[keyPath: path] = true
         // An open list owns Up and Down; Down only opens Info outside lists.
@@ -1591,7 +1589,7 @@ private func runTransportChromeTests() {
     }
     for path in [\TransportChrome.prebuffering, \.hasFailure, \.skipPillFocused,
                  \.navigation.stillWatching, \.navigation.infoPanel, \.navigation.engineMenu,
-                 \.navigation.playlist, \.navigation.subtitleMenu, \.navigation.audioMenu,
+                 \.navigation.playlist,
                  \.navigation.settingsSheet, \.navigation.scrubbing] {
         var blocked = ready
         blocked[keyPath: path] = true
@@ -1601,6 +1599,19 @@ private func runTransportChromeTests() {
     playing.userPaused = false
     assert(!TransportKeyRoute.canTouchScrub(chrome: playing))
     print("PASS: Down always opens Info, Up keeps focus/reveal, panel tab movement and touch-scrub gates")
+
+    let placement = TransportSubtitlePlacement.position
+    assert(placement(0, 1080) == 100)
+    assert(placement(360, 1080) < 70)
+    assert(placement(880, 1080) < placement(360, 1080))
+    assert(placement(360, 1080) == placement(720 + 24, 2160))
+    assert(placement(2000, 1080) == TransportSubtitlePlacement.minimumPosition)
+    for invalid in [0.0, -1, .nan, .infinity] {
+        assert(placement(360, invalid) == 100)
+        assert(placement(invalid, 1080) == 100)
+    }
+    assert(placement(0, 1080) == TransportSubtitlePlacement.normalPosition, "Hiding chrome restores subtitles")
+    print("PASS: subtitle placement clears transport/panel, scales by viewport, clamps and restores when hidden")
 
     for cache in [false, true] {
         for enginePaused in [false, true] {
