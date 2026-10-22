@@ -32,6 +32,12 @@ final class LocalHLSServer {
                 let opened = try HLSRemuxer(url: path, headers: headers)
                 #if DEBUG
                 print("[Remux] opened: \(opened.summary)")
+                print("[Remux] master playlist:\n\(opened.masterPlaylist)")
+                let durations = opened.segments.map(\.duration)
+                print(String(format: "[Remux] segments: count=%d min=%.2f max=%.2f over10=%d over20=%d", durations.count,
+                             durations.min() ?? 0, durations.max() ?? 0, durations.filter { $0 > 10 }.count,
+                             durations.filter { $0 > 20 }.count))
+                print("[Remux] media head: \(opened.mediaPlaylist.split(separator: "\n").prefix(10).joined(separator: " | "))")
                 #endif
                 remuxer = opened
                 return opened
@@ -121,6 +127,9 @@ final class LocalHLSServer {
             return
         }
         let headOnly = parts[0] == "HEAD"
+        #if DEBUG
+        if case .segment = route.resource {} else { print("[Remux] request \(route.resource)") }
+        #endif
         session.work.async { [weak self] in
             guard let self else { return }
             do {

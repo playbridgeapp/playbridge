@@ -84,6 +84,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             assetURL = local.url
             options = [:]
             context.coordinator.remuxToken = local.token
+            context.coordinator.remuxMediaURL = local.url.deletingLastPathComponent().appendingPathComponent("index.m3u8")
+            context.coordinator.remuxInitialTime = initialTime
         }
         let asset = AVURLAsset(url: assetURL, options: options)
         let playerItem = AVPlayerItem(asset: asset)
@@ -301,6 +303,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var itemWasReady = false
         /// Loopback HLS session of an experimental Matroska remux.
         var remuxToken: String?
+        /// The remux's media playlist: retried once when tvOS finds no variant of the
+        /// master playlist compatible with the display (AVError -11868).
+        var remuxMediaURL: URL?
+        var remuxInitialTime = 0.0
         private var didFallBack = false
         private weak var playerController: AVPlayerViewController?
         private weak var subtitleCaptionView: UIView?
@@ -394,7 +400,39 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case .readyToPlay:
                 itemWasReady = true
             case .failed where !itemWasReady && !didFallBack:
+                #if DEBUG
+                print("[AVPlayer] HDR eligible=\(AVPlayer.eligibleForHDRPlayback) modes=\(AVPlayer.availableHDRModes.rawValue)"
+                    + " screen=\(Int(UIScreen.main.nativeBounds.width))x\(Int(UIScreen.main.nativeBounds.height))")
+                #endif
+                if let mediaURL = remuxMediaURL, let player,
+                   (player.currentItem?.error as NSError?)?.code == AVError.Code.noCompatibleAlternatesForExternalDisplay.rawValue {
+                    remuxMediaURL = nil
+                    #if DEBUG
+                    print("[AVPlayer] retrying the remux with its media playlist")
+                    #endif
+                    let item = AVPlayerItem(url: mediaURL)
+                    item.externalMetadata = player.currentItem?.externalMetadata ?? []
+                    item.audioTimePitchAlgorithm = .timeDomain
+                    player.replaceCurrentItem(with: item)
+                    if remuxInitialTime > 0 { player.seek(to: CMTime(seconds: remuxInitialTime, preferredTimescale: 600)) }
+                    itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+                        let status = item.status
+                        DispatchQueue.main.async { self?.itemStatusChanged(status) }
+                    }
+                    return
+                }
                 didFallBack = true
+                #if DEBUG
+                // Codes only: the error log can carry request URIs.
+                if let error = player?.currentItem?.error as NSError? {
+                    let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+                    print("[AVPlayer] item failed: \(error.domain) \(error.code)"
+                        + (underlying.map { " underlying \($0.domain) \($0.code)" } ?? ""))
+                }
+                for event in player?.currentItem?.errorLog()?.events ?? [] {
+                    print("[AVPlayer] error log: \(event.errorDomain) \(event.errorStatusCode)")
+                }
+                #endif
                 let position = player?.currentTime().seconds ?? 0
                 onSwitch(.mpv, position.isFinite ? position : 0)
             default:

@@ -31,7 +31,9 @@ final class HLSRemuxer {
         var duration: Double  // seconds
     }
 
-    static let targetSegmentSeconds = 6.0
+    /// Minimum segment length; a segment ends at the first keyframe past it, so
+    /// sparse-keyframe sources stay near one GOP per segment.
+    static let targetSegmentSeconds = 4.0
     private static let copyAudio: Set<AVCodecID> = [AV_CODEC_ID_AAC, AV_CODEC_ID_AC3, AV_CODEC_ID_EAC3, AV_CODEC_ID_ALAC]
 
     private var input: UnsafeMutablePointer<AVFormatContext>?
@@ -251,9 +253,15 @@ final class HLSRemuxer {
                           "RESOLUTION=\(video.pointee.width)x\(video.pointee.height)",
                           "VIDEO-RANGE=\(range)"]
         if fps > 0 { attributes.append(String(format: "FRAME-RATE=%.3f", fps)) }
-        if let supplemental { attributes.append("SUPPLEMENTAL-CODECS=\"\(supplemental)\"") }
-        return ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS",
-                "#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8"].joined(separator: "\n") + "\n"
+        var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
+        // Dolby Vision first, then the same stream as its base layer (HDR10/HLG):
+        // a player that can't take the Dolby Vision variant still plays.
+        if let supplemental {
+            lines += ["#EXT-X-STREAM-INF:" + (attributes + ["SUPPLEMENTAL-CODECS=\"\(supplemental)\""])
+                .joined(separator: ","), "index.m3u8"]
+        }
+        lines += ["#EXT-X-STREAM-INF:" + attributes.joined(separator: ","), "index.m3u8"]
+        return lines.joined(separator: "\n") + "\n"
     }
 
     // MARK: Muxing
