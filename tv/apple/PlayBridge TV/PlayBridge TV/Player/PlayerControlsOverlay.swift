@@ -567,10 +567,21 @@ private struct PlaybackFailureOverlay: View {
     let onAction: (PlaybackFailureAction) -> Void
     @FocusState private var focused: PlaybackFailureAction?
 
+    private static func icon(_ action: PlaybackFailureAction) -> String {
+        switch action {
+        case .tryAgain: return "arrow.clockwise"
+        case .next: return "forward.end.fill"
+        case .close: return "xmark"
+        }
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 32) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 64))
+                    .foregroundColor(.white.opacity(0.8))
                 if !title.isEmpty {
                     Text(title).font(.system(size: 36, weight: .semibold)).lineLimit(1)
                 }
@@ -578,10 +589,18 @@ private struct PlaybackFailureOverlay: View {
                 HStack(spacing: 32) {
                     ForEach(PlaybackFailureModel.actions(hasNextItem: hasNextItem), id: \.self) { action in
                         Button { onAction(action) } label: {
-                            Text(action.rawValue).foregroundStyle(focused == action ? .black : .white)
+                            HStack(spacing: 12) {
+                                Image(systemName: Self.icon(action))
+                                    .font(.system(size: 24, weight: .semibold))
+                                Text(action.rawValue)
+                                    .font(.system(size: 26, weight: .semibold))
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
                         }
-                            .buttonStyle(.card)
-                            .focused($focused, equals: action)
+                        // Same pill as Skip Intro: no tvOS card platter around a tight label.
+                        .buttonStyle(SkipPillStyle(focused: focused == action))
+                        .focused($focused, equals: action)
                     }
                 }
                 .padding(.top, 16)
