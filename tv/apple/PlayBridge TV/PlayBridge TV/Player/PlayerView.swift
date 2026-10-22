@@ -293,17 +293,28 @@ struct PlayerView: View {
         case .moveHighlight, .activateHighlight:
             if engineChrome.apply(effect) { break }
             applyPlaylistHighlight(effect)
-        case .dismissInfoPanel, .dismissSubtitleMenu, .dismissAudioMenu, .dismissEngineMenu,
+        case .dismissInfoPanel, .dismissEngineMenu,
              .dismissSettingsSheet, .dismissScrub, .dismissControls,
              .togglePlayback, .seekBackward, .seekForward,
-             .scrubBackward, .scrubForward, .commitScrub,
-             .chapterNext, .chapterPrevious:
+             .scrubBackward, .scrubForward, .commitScrub:
             _ = engineChrome.apply(effect)
         case .adjustAppVolume(let steps):
             publishAppVolume(appVolume.step(steps, identity: liveVolumeIdentity()))
         case .toggleAppMute:
             publishAppVolume(appVolume.toggleMute(identity: liveVolumeIdentity()))
         }
+    }
+
+    private func transportMetadata(for payload: Playbridge_PlayPayload) -> TransportMetadata {
+        guard payload.hasVisualMetadata else { return TransportMetadata() }
+        let metadata = payload.visualMetadata
+        return TransportMetadata(subtitle: TransportTimeLabels.metadataSubtitle(
+            year: metadata.hasYear ? metadata.year : nil,
+            season: metadata.hasSeason ? Int(metadata.season) : nil,
+            episode: metadata.hasEpisode ? Int(metadata.episode) : nil,
+            episodeTitle: metadata.hasEpisodeTitle ? metadata.episodeTitle : nil),
+            year: metadata.year, rating: metadata.rating, runtime: metadata.runtime,
+            overview: metadata.overview, genres: metadata.genres)
     }
 
     private func applyPlaylistHighlight(_ effect: PlayerRemoteEffect) {
@@ -367,7 +378,9 @@ struct PlayerView: View {
                         playbackSpeed: tuning.speed,
                         subtitleOffsetMs: tuning.subtitleOffsetMs,
                         scaling: tuning.scaling,
-                        hasNextItem: playlistStore.hasNext
+                        hasNextItem: playlistStore.hasNext,
+                        metadata: transportMetadata(for: currentRequest),
+                        playlistVisible: showPlaylist
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -510,6 +523,7 @@ struct PlayerView: View {
             guard !stillWatching.isPrompting else { return }
             if !showPlaylist {
                 playlistHighlight = playlistStore.currentIndex
+                _ = engineChrome.apply(.dismissInfoPanel)
             }
             withAnimation { showPlaylist.toggle() }
         }

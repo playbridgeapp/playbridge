@@ -5,18 +5,11 @@ import Foundation
 struct PlayerChromeState: Equatable {
     var sessionMatches = false
     var stillWatching = false
-    var subtitleMenu = false
-    var audioMenu = false
     var engineMenu = false
     var settingsSheet = false
     var scrubbing = false
     var playlist = false
     var controlsVisible = false
-    /// Chapters of the open item. Up/Down jump them only with two or more.
-    var chapterCount = 0
-    /// The transport strip a Left/Right seek opened is still showing while
-    /// playing, with no menu open.
-    var seekStripVisible = false
     var infoPanel = false
 }
 
@@ -25,8 +18,6 @@ struct PlayerChromeState: Equatable {
 enum PlayerRemoteListOwner: Equatable {
     case stillWatching
     case infoPanel
-    case subtitleMenu
-    case audioMenu
     case engineMenu
     case playlist
     case none
@@ -48,8 +39,6 @@ enum PlayerRemoteEffect: Equatable {
     case ignored
     case dismissStillWatching
     case dismissInfoPanel
-    case dismissSubtitleMenu
-    case dismissAudioMenu
     case dismissEngineMenu
     case dismissSettingsSheet
     case dismissScrub
@@ -65,9 +54,6 @@ enum PlayerRemoteEffect: Equatable {
     case scrubBackward
     case scrubForward
     case commitScrub
-    /// Jump to the next or previous chapter start; during a scrub, move the ghost there.
-    case chapterNext
-    case chapterPrevious
     /// One relative app-volume step. Positive raises playback attenuation.
     case adjustAppVolume(steps: Int)
     case toggleAppMute
@@ -75,29 +61,21 @@ enum PlayerRemoteEffect: Equatable {
 
 /// Live flags read from the engine that is on screen.
 struct PlayerEngineChromeSnapshot: Equatable {
-    var subtitleMenu = false
-    var audioMenu = false
     var engineMenu = false
     var settingsSheet = false
     var scrubbing = false
     var controlsVisible = false
-    var chapterCount = 0
-    var seekStripVisible = false
     var infoPanel = false
 
     func chrome(sessionMatches: Bool, stillWatching: Bool, playlist: Bool) -> PlayerChromeState {
         PlayerChromeState(
             sessionMatches: sessionMatches,
             stillWatching: stillWatching,
-            subtitleMenu: subtitleMenu,
-            audioMenu: audioMenu,
             engineMenu: engineMenu,
             settingsSheet: settingsSheet,
             scrubbing: scrubbing,
             playlist: playlist,
             controlsVisible: controlsVisible,
-            chapterCount: chapterCount,
-            seekStripVisible: seekStripVisible,
             infoPanel: infoPanel
         )
     }
@@ -173,18 +151,17 @@ final class PlayerRemoteExitGate {
 }
 
 enum PlayerRemoteNavigation {
-    /// Play/Pause always toggles (or commits a scrub), including inside a track
-    /// menu. Select keeps activating the focused button while paused or in a menu.
+    /// Select on the video/seek bar toggles in both pause states. Only an
+    /// actual focused button or list owns Select; HUD visibility alone does not.
+    /// Play/Pause always commits a scrub or toggles, even inside a menu.
     static func physicalPlaybackEffect(
         for press: PlayerPlaybackPress,
-        userPaused: Bool,
         scrubbing: Bool,
-        menuOpen: Bool
+        selectActivatesFocusedControl: Bool
     ) -> PlayerRemoteEffect {
-        if press == .select && menuOpen { return .ignored }
+        if press == .select && selectActivatesFocusedControl { return .ignored }
         if scrubbing { return .commitScrub }
-        if press == .playPause || !userPaused { return .togglePlayback }
-        return .ignored
+        return .togglePlayback
     }
 
     private struct Level {
@@ -212,8 +189,6 @@ enum PlayerRemoteNavigation {
     private static let backLevels: [Level] = [
         Level(effect: .dismissStillWatching, isOpen: { $0.stillWatching }, close: { $0.stillWatching = false }),
         Level(effect: .dismissInfoPanel, isOpen: { $0.infoPanel }, close: { $0.infoPanel = false }),
-        Level(effect: .dismissSubtitleMenu, isOpen: { $0.subtitleMenu }, close: { $0.subtitleMenu = false }),
-        Level(effect: .dismissAudioMenu, isOpen: { $0.audioMenu }, close: { $0.audioMenu = false }),
         Level(effect: .dismissEngineMenu, isOpen: { $0.engineMenu }, close: { $0.engineMenu = false }),
         Level(effect: .dismissSettingsSheet, isOpen: { $0.settingsSheet }, close: { $0.settingsSheet = false }),
         Level(effect: .dismissScrub, isOpen: { $0.scrubbing }, close: { $0.scrubbing = false }),
@@ -264,8 +239,6 @@ enum PlayerRemoteNavigation {
     static func listOwner(in chrome: PlayerChromeState) -> PlayerRemoteListOwner {
         if chrome.stillWatching { return .stillWatching }
         if chrome.infoPanel { return .infoPanel }
-        if chrome.subtitleMenu { return .subtitleMenu }
-        if chrome.audioMenu { return .audioMenu }
         if chrome.engineMenu { return .engineMenu }
         if chrome.playlist { return .playlist }
         return .none
@@ -282,27 +255,23 @@ enum PlayerRemoteNavigation {
     ) -> PlayerRemoteEffect {
         if chrome.stillWatching { return .resumeStillWatching }
         if chrome.settingsSheet { return .ignored }
-        if chrome.subtitleMenu || chrome.audioMenu || chrome.engineMenu {
+        if chrome.infoPanel || chrome.engineMenu {
             return verticalList(direction)
         }
+        if chrome.playlist { return verticalList(direction) }
         if chrome.scrubbing {
             switch direction {
             case .left: return .scrubBackward
             case .right: return .scrubForward
             case .center: return .commitScrub
-            case .up: return chrome.chapterCount >= 2 ? .chapterNext : .ignored
-            case .down: return chrome.chapterCount >= 2 ? .chapterPrevious : .ignored
+            case .up: return .adjustAppVolume(steps: 1)
+            case .down: return .adjustAppVolume(steps: -1)
             }
         }
-        if chrome.playlist { return verticalList(direction) }
-        // Playing, paused, and pre-play, with the transport showing or hidden.
-        // Up and Down step app volume, except that they jump chapters while the
-        // strip a seek opened is showing. Menus, the playlist, scrub, and a
-        // presented sheet never reach this branch.
-        let chapterKeys = chrome.seekStripVisible && chrome.chapterCount >= 2
+        // Outside lists, network Up/Down always adjust app volume.
         switch direction {
-        case .up: return chapterKeys ? .chapterNext : .adjustAppVolume(steps: 1)
-        case .down: return chapterKeys ? .chapterPrevious : .adjustAppVolume(steps: -1)
+        case .up: return .adjustAppVolume(steps: 1)
+        case .down: return .adjustAppVolume(steps: -1)
         case .center: return .togglePlayback
         case .left: return .seekBackward
         case .right: return .seekForward

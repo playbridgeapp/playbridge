@@ -4,9 +4,12 @@ import Foundation
 enum TransportBarMetrics {
     static let horizontalInset = 80.0
     static let bottomInset = 60.0
+    static let skipVisibleInset = 240.0
+    static let skipHiddenInset = 80.0
     static let frameHeight = 14.0
     static let lineHeight = 6.0
     static let thumbDiameter = 16.0
+    static let focusedThumbDiameter = 24.0
 }
 
 enum TransportTimeLabels {
@@ -84,6 +87,88 @@ enum InfoPanelModel {
         tabs += [.audio, .subtitles]
         if settingsAvailable { tabs.append(.settings) }
         return tabs
+    }
+}
+
+/// Display-only metadata; generated protobufs stay outside the host-tested model.
+struct TransportMetadata: Equatable {
+    var subtitle = ""
+    var year = ""
+    var rating = ""
+    var runtime = ""
+    var overview = ""
+    var genres: [String] = []
+}
+
+struct InfoPanelRow: Equatable {
+    var id: Int
+    var title: String
+    var selected: Bool = false
+    var trailingText: String? = nil
+}
+
+extension InfoPanelModel {
+    static func chapterRows(chapters: [TimelineChapter], durationMs: Int, positionMs: Int) -> [InfoPanelRow] {
+        let markers = ChapterNavigation.navigationMarkers(chapters: chapters, durationMs: durationMs)
+        let current = markers.lastIndex { $0.startMs <= positionMs }
+        return markers.enumerated().map { index, marker in
+            InfoPanelRow(id: marker.startMs,
+                title: ChapterNavigation.label(ChapterJumpTarget(number: index + 1,
+                    chapter: TimelineChapter(startMs: marker.startMs, title: marker.title))),
+                selected: index == current,
+                trailingText: TransportTimeLabels.elapsed(Double(marker.startMs) / 1000))
+        }
+    }
+
+    static func initialHighlight(rows: [InfoPanelRow]) -> Int {
+        rows.firstIndex { $0.selected } ?? 0
+    }
+
+    static func movingTab(_ tab: InfoPanelTab, delta: Int, tabs: [InfoPanelTab]) -> InfoPanelTab {
+        guard !tabs.isEmpty else { return .info }
+        let index = tabs.firstIndex(of: tab) ?? 0
+        return tabs[PlayerHighlightList(count: tabs.count, index: index).moving(delta).index]
+    }
+}
+
+/// Physical Up can reach the tabs; network directions stay within the rows.
+struct InfoPanelFocus: Equatable {
+    var row = 0
+    var tabBar = false
+
+    func moving(_ delta: Int, rowCount: Int, physical: Bool) -> Self {
+        if physical && tabBar {
+            return delta > 0 ? Self(row: row, tabBar: rowCount == 0) : self
+        }
+        if physical && delta < 0 && row == 0 { return Self(row: 0, tabBar: true) }
+        return Self(row: PlayerHighlightList(count: rowCount, index: row).moving(delta).index,
+                    tabBar: rowCount == 0)
+    }
+}
+
+enum TransportVisibility {
+    static let autoHideSeconds = 5.0
+    static let feedbackSeconds = 0.8
+
+    static func canAutoHide(userPaused: Bool, scrubbing: Bool, panel: Bool,
+                           engineMenu: Bool, playlist: Bool, prebuffering: Bool) -> Bool {
+        !userPaused && !scrubbing && !panel && !engineMenu && !playlist && !prebuffering
+    }
+}
+
+/// mpv sub-pos is a percentage of screen height (100 is its normal placement).
+/// Keep the subtitle's lower edge above the entire visible chrome, including
+/// the panel, without changing subtitle styles or the stored subtitle delay.
+enum TransportSubtitlePlacement {
+    static let normalPosition = 100.0
+    static let minimumPosition = 5.0
+    static let clearancePoints = 24.0
+
+    static func position(occludedHeight: Double, viewportHeight: Double) -> Double {
+        guard viewportHeight.isFinite, viewportHeight > 0,
+              occludedHeight.isFinite, occludedHeight > 0 else { return normalPosition }
+        let fraction = min((occludedHeight + clearancePoints) / viewportHeight, 1)
+        return max(minimumPosition, normalPosition * (1 - fraction))
     }
 }
 
@@ -209,7 +294,7 @@ enum TransportKeyRoute: Equatable {
             return up && chrome.panelTabBarFocused ? .closePanel : .moveInPanel
         }
         // An open list owns both directions; Down only opens Info outside lists.
-        if state.subtitleMenu || state.audioMenu || state.engineMenu || state.settingsSheet || state.playlist {
+        if state.engineMenu || state.settingsSheet || state.playlist {
             return .moveFocus
         }
         if !up { return .openPanel }
@@ -222,7 +307,7 @@ enum TransportKeyRoute: Equatable {
         let state = chrome.navigation
         return chrome.userPaused && chrome.duration.isFinite && chrome.duration > 0
             && !chrome.prebuffering && !chrome.hasFailure && !state.stillWatching
-            && !state.infoPanel && !state.subtitleMenu && !state.audioMenu && !state.engineMenu
+            && !state.infoPanel && !state.engineMenu
             && !state.settingsSheet && !state.playlist && !state.scrubbing && !chrome.skipPillFocused
     }
 }

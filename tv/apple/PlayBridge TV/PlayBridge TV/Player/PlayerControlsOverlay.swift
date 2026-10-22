@@ -25,26 +25,52 @@ class PlayerControlsData: ObservableObject {
     @Published var showUI: Bool = true
     @Published var isLooping: Bool = false
     @Published var hasPlaylist = false
+    @Published var playlistVisible = false
     @Published var activeSkipSegment: SkipSegment?
     @Published var skipControlsEnabled = true
     /// Sorted chapter markers of the open item (`ChapterNavigation.sorted`).
     @Published var chapters: [TimelineChapter] = []
     /// Skip segments drawn as bands on the seek bar.
     @Published var skipSegments: [SkipSegment] = []
-    /// Jump toast ("Chapter 3 · The Heist", "Last chapter"); replaces the caption briefly.
-    @Published var chapterToast: String?
-    /// The HUD is showing because of a Left/Right seek or a chapter jump. Up/Down
-    /// jump chapters only then (and during a scrub).
-    @Published var seekStripActive = false
+    @Published var metadata = TransportMetadata()
+    @Published var showInfoPanel = false
+    @Published var panelTab = InfoPanelTab.info
+    @Published var panelHighlight = 0
+    @Published var panelTabBarFocused = false
+    @Published var panelFocusRevision = 0
+    @Published var transportFocusRevision = 0
+    @Published var feedbackSymbol: String?
+    @Published var transportActionFocused = false
+    @Published var skipPillFocused = false
+    var menuOpen: Bool { showInfoPanel || showEngineMenu }
 
-    var menuOpen: Bool { showSubtitleMenu || showAudioMenu || showEngineMenu }
-
-    /// Up/Down jump chapters (or move the scrub ghost to one) right now.
-    var chapterKeysActive: Bool {
-        guard ChapterNavigation.canJump(chapters), !menuOpen else { return false }
-        return isVirtualScrubbing || (seekStripActive && showUI && !userPaused)
+    var panelTabs: [InfoPanelTab] {
+        InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: false)
     }
-    
+
+    var panelRows: [InfoPanelRow] {
+        switch panelTab {
+        case .info: return [InfoPanelRow(id: 0, title: "Play from Beginning")]
+        case .chapters:
+            return InfoPanelModel.chapterRows(chapters: chapters,
+                durationMs: PlaybackTime.milliseconds(duration), positionMs: PlaybackTime.milliseconds(currentTime))
+        case .audio:
+            return audioTracks.map { InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentAudioIndex) }
+        case .subtitles:
+            return [InfoPanelRow(id: -1, title: "Off", selected: currentSubtitleIndex == -1)]
+                + (subtitleTracks + externalSubtitleTracks).map {
+                    InfoPanelRow(id: $0.id, title: $0.name, selected: $0.id == currentSubtitleIndex)
+                }
+        case .settings: return []
+        }
+    }
+
+    func focusPanelSelection() {
+        panelHighlight = InfoPanelModel.initialHighlight(rows: panelRows)
+        panelTabBarFocused = false
+        panelFocusRevision += 1
+    }
+
     // Virtual Scrubbing Ghost HUD
     @Published var isVirtualScrubbing: Bool = false
     @Published var scrubMultiplier: Int = 0
@@ -54,17 +80,13 @@ class PlayerControlsData: ObservableObject {
     @Published var subtitleTracks: [(id: Int, name: String)] = []
     @Published var externalSubtitleTracks: [(id: Int, name: String)] = []
     @Published var currentSubtitleIndex: Int = -1
-    @Published var showSubtitleMenu: Bool = false
 
     // Audio Tracks
     @Published var audioTracks: [(id: Int, name: String)] = []
     @Published var currentAudioIndex: Int = -1
-    @Published var showAudioMenu: Bool = false
     @Published var showEngineMenu: Bool = false
 
     /// Row index inside the open menu. The network remote and the focus ring share it.
-    @Published var subtitleHighlight: Int = 0
-    @Published var audioHighlight: Int = 0
     @Published var engineHighlight: Int = 0
 }
 
@@ -176,291 +198,69 @@ struct PlayerControlsOverlay: View {
     let onLoopToggle: () -> Void
     let onSkipSegment: () -> Void
     let onFailureAction: (PlaybackFailureAction) -> Void
-    /// Active playback engine, also shown in the controls badge.
+    let onPanelActivate: () -> Void
+    let onChromeActivity: () -> Void
+    let onPanelDirection: (MoveCommandDirection) -> Void
+    let onSubtitleClearanceChange: (Double) -> Void
     let engine: PlaybackEngine
+    private enum Control: Hashable { case scrubber, loop, engine, playlist }
+    @FocusState private var focused: Control?
+    @State private var transportHeight: CGFloat = 0
+
+    private var displayTime: Double { data.isVirtualScrubbing ? data.virtualTime : data.currentTime }
+    private var durationMs: Int { PlaybackTime.milliseconds(data.duration) }
 
     var body: some View {
-        ZStack {
-            // MARK: - Main Controls HUD
+        ZStack(alignment: .bottom) {
             if data.showUI {
-                // Full-screen dim when user paused
-                if data.userPaused {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-                }
-
-                // Top bar: title (leading) + active-player badge (trailing)
-                VStack {
-                    HStack(alignment: .top, spacing: 24) {
-                        if !data.title.isEmpty {
-                            Text(data.title)
-                                .font(.system(size: 32, weight: .semibold))
-                                .foregroundColor(.white)
-                                .lineLimit(2)
-                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
-                        }
-                        Spacer(minLength: 0)
-                        playerBadge
+                LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 420).ignoresSafeArea().allowsHitTesting(false)
+                VStack(spacing: 24) {
+                    transport
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: TransportHeightPreference.self, value: geometry.size.height)
+                        })
+                        .disabled(data.menuOpen || data.playlistVisible)
+                    if data.showInfoPanel {
+                        PlaybackInfoPanel(data: data, onActivate: onPanelActivate, onDirection: onPanelDirection)
                     }
-                    .padding(.top, 50)
-                    .padding(.horizontal, 60)
-                    Spacer()
                 }
-                .transition(.opacity)
-
-                VStack(spacing: 0) {
-                    Spacer()
-
-                    // Center action indicator (pause icon or fast-forward scrub indicator)
-                    if data.isVirtualScrubbing {
-                        HStack(spacing: 12) {
-                            Image(systemName: data.scrubMultiplier > 0 ? "forward.fill" : "backward.fill")
-                            Text("\(abs(data.scrubMultiplier))x")
-                        }
-                        .font(.system(size: 72, weight: .bold))
-                        .foregroundColor(.white)
-                        .transition(.scale.combined(with: .opacity))
-                        .padding(.bottom, 60)
-                    } else if data.userPaused {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 72, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
-                            .transition(.scale.combined(with: .opacity))
-                            .padding(.bottom, 60)
-                    }
-
-                    Spacer()
-
-                    // Bottom control bar
-                    VStack(spacing: 24) {
-                        let displayTime = data.isVirtualScrubbing ? data.virtualTime : data.currentTime
-                        VStack(spacing: 10) {
-                            // Progress bar
-                            HStack(spacing: 16) {
-                                Text(formatTime(displayTime))
-                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.8))
-
-                                SeekTrack(
-                                    progress: data.duration > 0 ? displayTime / data.duration : 0,
-                                    buffered: data.duration > 0 && data.bufferedTime > displayTime
-                                        ? min(data.bufferedTime / data.duration, 1.0) : nil,
-                                    chapterFractions: ChapterNavigation.chapterFractions(
-                                        chapters: data.chapters, durationMs: durationMs),
-                                    segmentRanges: ChapterNavigation.segmentRanges(
-                                        segments: data.skipSegments, durationMs: durationMs))
-                                    .frame(height: SeekTrack.height)
-
-                                Text(formatTime(data.duration))
-                                    .font(.system(size: 22, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-
-                            if hasCaptionRow {
-                                HStack(spacing: 16) {
-                                    if let toast = data.chapterToast {
-                                        Text(toast)
-                                            .font(.system(size: 22, weight: .semibold))
-                                            .foregroundColor(.white)
-                                            .lineLimit(1)
-                                    } else if let caption = caption(at: displayTime) {
-                                        Text(caption)
-                                            .font(.system(size: 20, weight: .medium))
-                                            .foregroundColor(.white.opacity(0.75))
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                    if data.chapterKeysActive {
-                                        Text(ChapterNavigation.hint)
-                                            .font(.system(size: 18, weight: .medium))
-                                            .foregroundColor(.white.opacity(0.6))
-                                    }
-                                }
-                                .frame(height: Self.captionRowHeight)
-                            }
-                        }
-                        .padding(.horizontal, 80)
-
-                        // Action buttons row (only when user explicitly paused)
-                        if data.userPaused {
-                            HStack(spacing: 40) {
-                                // Play/Resume button (center, prominent)
-                                Button(action: { onTogglePlayPause() }) {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "play.fill")
-                                            .font(.system(size: 26))
-                                        Text("Resume")
-                                            .font(.system(size: 22, weight: .semibold))
-                                    }
-                                    .padding(.horizontal, 36)
-                                    .padding(.vertical, 16)
-                                }
-                                .buttonStyle(.card)
-
-                                // Subtitles button
-                                if !data.subtitleTracks.isEmpty || !data.externalSubtitleTracks.isEmpty {
-                                    Button(action: {
-                                        data.subtitleHighlight = subtitleRowIndex
-                                        data.showSubtitleMenu.toggle()
-                                        data.showAudioMenu = false
-                                        data.showEngineMenu = false
-                                    }) {
-                                        VStack(spacing: 6) {
-                                            Image(systemName: "captions.bubble.fill")
-                                                .font(.system(size: 26))
-                                            Text("Subtitles")
-                                                .font(.system(size: 16, weight: .medium))
-                                        }
-                                        .frame(width: 100, height: 70)
-                                    }
-                                    .buttonStyle(.card)
-                                }
-
-                                // Audio tracks button
-                                if data.audioTracks.count > 1 {
-                                    Button(action: {
-                                        data.audioHighlight = audioRowIndex
-                                        data.showAudioMenu.toggle()
-                                        data.showSubtitleMenu = false
-                                        data.showEngineMenu = false
-                                    }) {
-                                        VStack(spacing: 6) {
-                                            Image(systemName: "waveform")
-                                                .font(.system(size: 26))
-                                            Text("Audio")
-                                                .font(.system(size: 16, weight: .medium))
-                                        }
-                                        .frame(width: 100, height: 70)
-                                    }
-                                    .buttonStyle(.card)
-                                }
-
-                                // Loop button
-                                Button(action: onLoopToggle) {
-                                    VStack(spacing: 6) {
-                                        Image(systemName: "repeat")
-                                            .font(.system(size: 26))
-                                            .foregroundColor(data.isLooping ? Theme.accent : .white)
-                                        Text("Loop")
-                                            .font(.system(size: 16, weight: .medium))
-                                            .foregroundColor(data.isLooping ? Theme.accent : .white)
-                                    }
-                                    .frame(width: 100, height: 70)
-                                }
-                                .buttonStyle(.card)
-                                
-                                // Switch Engine button
-                                Button(action: {
-                                    data.engineHighlight = engineRowIndex
-                                    data.showEngineMenu.toggle()
-                                    data.showSubtitleMenu = false
-                                    data.showAudioMenu = false
-                                }) {
-                                    VStack(spacing: 6) {
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                            .font(.system(size: 26))
-                                        Text("Switch")
-                                            .font(.system(size: 16, weight: .medium))
-                                    }
-                                    .frame(width: 100, height: 70)
-                                }
-                                .buttonStyle(.card)
-                                
-                                if data.hasPlaylist {
-                                    // Playlist button
-                                    Button(action: { onTogglePlaylist() }) {
-                                        VStack(spacing: 6) {
-                                            Image(systemName: "list.bullet")
-                                                .font(.system(size: 26))
-                                            Text("Playlist")
-                                                .font(.system(size: 16, weight: .medium))
-                                        }
-                                        .frame(width: 100, height: 70)
-                                    }
-                                    .buttonStyle(.card)
-                                }
-                            }
-                            .disabled(data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                    }
-                    .padding(.bottom, 60)
-                }
+                .padding(.horizontal, TransportBarMetrics.horizontalInset)
+                .padding(.bottom, TransportBarMetrics.bottomInset)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: SubtitleClearancePreference.self, value: geometry.size.height)
+                })
                 .transition(.opacity)
             }
 
             if data.skipControlsEnabled, let segment = data.activeSkipSegment,
-               !data.isVirtualScrubbing, !data.showSubtitleMenu, !data.showAudioMenu, !data.showEngineMenu {
-                VStack {
+               !data.isVirtualScrubbing, !data.menuOpen, !data.playlistVisible {
+                HStack {
                     Spacer()
-                    HStack {
-                        Spacer()
-                        SkipSegmentButton(
-                            title: segment.buttonTitle, claimsFocus: !data.userPaused,
-                            action: onSkipSegment)
-                    }
-                    .padding(.horizontal, 80)
-                    .padding(.bottom, skipButtonBottomPadding)
+                    SkipSegmentButton(title: segment.buttonTitle,
+                        claimsFocus: !data.transportActionFocused,
+                        focused: $data.skipPillFocused, action: onSkipSegment)
                 }
-            }
-
-            // MARK: - Track Picker Popups
-            if data.showSubtitleMenu {
-                Color.black.opacity(0.6).ignoresSafeArea()
-                    .transition(.opacity)
-
-                TrackMenuView(
-                    title: "Subtitles",
-                    icon: "captions.bubble.fill",
-                    tracks: data.subtitleTracks + data.externalSubtitleTracks,
-                    currentId: data.currentSubtitleIndex,
-                    includeOff: true,
-                    highlightedIndex: $data.subtitleHighlight
-                ) { id in
-                    onSelectSubtitle(id)
-                    data.showSubtitleMenu = false
-                }
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
-            }
-
-            if data.showAudioMenu {
-                Color.black.opacity(0.6).ignoresSafeArea()
-                    .transition(.opacity)
-
-                TrackMenuView(
-                    title: "Audio Track",
-                    icon: "waveform",
-                    tracks: data.audioTracks,
-                    currentId: data.currentAudioIndex,
-                    includeOff: false,
-                    highlightedIndex: $data.audioHighlight
-                ) { id in
-                    onSelectAudio(id)
-                    data.showAudioMenu = false
-                }
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
+                .padding(.horizontal, TransportBarMetrics.horizontalInset)
+                .padding(.bottom, data.showUI
+                    ? max(TransportBarMetrics.skipVisibleInset,
+                          transportHeight + TransportBarMetrics.bottomInset + 24)
+                    : TransportBarMetrics.skipHiddenInset)
             }
 
             if data.showEngineMenu {
                 Color.black.opacity(0.6).ignoresSafeArea()
-                    .transition(.opacity)
-
-                TrackMenuView(
-                    title: "Switch Player",
-                    icon: "arrow.triangle.2.circlepath",
+                TrackMenuView(title: "Switch Player", icon: "arrow.triangle.2.circlepath",
                     tracks: PlaybackEngine.menuOrder(current: engine).map { ($0.menuID, $0.name) },
-                    currentId: engine.menuID,
-                    includeOff: false,
-                    showCurrentLabel: true,
-                    highlightedIndex: $data.engineHighlight
-                ) { id in
-                    data.showEngineMenu = false
-                    if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != engine {
-                        onSwitchEngine(target)
+                    currentId: engine.menuID, includeOff: false, showCurrentLabel: true,
+                    highlightedIndex: $data.engineHighlight) { id in
+                        data.showEngineMenu = false
+                        onChromeActivity()
+                        if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != engine {
+                            onSwitchEngine(target)
+                        }
                     }
-                }
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if !data.prebuffering {
@@ -468,95 +268,274 @@ struct PlayerControlsOverlay: View {
                     PlaybackFailureOverlay(title: data.title, sentence: sentence,
                         hasNextItem: data.failureHasNextItem, highlighted: $data.failureHighlight,
                         onAction: onFailureAction)
-                } else if data.surfaceState.showsSpinner {
-                    ProgressView()
-                        .tint(.white)
-                        .scaleEffect(2)
-                        .frame(width: 64, height: 64)
-                        .accessibilityLabel("Buffering")
-                        .allowsHitTesting(false)
+                } else {
+                    Group {
+                        if data.surfaceState.showsSpinner {
+                            ProgressView().tint(.white).scaleEffect(2).frame(width: 64, height: 64)
+                                .accessibilityLabel("Buffering")
+                        } else if data.isVirtualScrubbing {
+                            Text("\(abs(data.scrubMultiplier))×")
+                                .font(.system(size: 64, weight: .semibold))
+                        } else if let symbol = data.feedbackSymbol {
+                            Image(systemName: symbol).font(.system(size: 64, weight: .semibold)).transition(.opacity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .foregroundStyle(.white).allowsHitTesting(false)
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: data.showUI)
-        .animation(.easeInOut(duration: 0.3), value: data.userPaused)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showSubtitleMenu)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showAudioMenu)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showEngineMenu)
-        .allowsHitTesting(data.failureSentence != nil || data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
-    }
-
-    private static let captionRowHeight: CGFloat = 28
-
-    private var durationMs: Int { PlaybackTime.milliseconds(data.duration) }
-
-    private func caption(at seconds: Double) -> String? {
-        ChapterNavigation.timelineCaption(
-            chapters: data.chapters, segments: data.skipSegments,
-            positionMs: PlaybackTime.milliseconds(seconds), durationMs: durationMs)
-    }
-
-    /// The row under the bar holds the jump toast, the playhead caption, or the hint.
-    private var hasCaptionRow: Bool {
-        !data.chapters.isEmpty || !data.skipSegments.isEmpty || data.chapterToast != nil
-    }
-
-    /// Keeps the Skip pill clear of the bottom bar, which grows by the caption row.
-    private var skipButtonBottomPadding: CGFloat {
-        guard data.showUI else { return 80 }
-        let base: CGFloat = data.userPaused ? 300 : 140
-        return hasCaptionRow ? base + Self.captionRowHeight + 10 : base
-    }
-
-    private var subtitleRowIndex: Int {
-        let ids = PlayerRemoteNavigation.menuRowIDs(
-            trackIDs: data.subtitleTracks.map(\.id) + data.externalSubtitleTracks.map(\.id),
-            includeOff: true
-        )
-        return ids.firstIndex(of: data.currentSubtitleIndex) ?? 0
-    }
-
-    private var audioRowIndex: Int {
-        let ids = PlayerRemoteNavigation.menuRowIDs(trackIDs: data.audioTracks.map(\.id), includeOff: false)
-        return ids.firstIndex(of: data.currentAudioIndex) ?? 0
-    }
-
-    private var engineRowIndex: Int {
-        let ids = PlayerRemoteNavigation.menuRowIDs(
-            trackIDs: PlaybackEngine.menuOrder(current: engine).map(\.menuID),
-            includeOff: false
-        )
-        return ids.firstIndex(of: engine.menuID) ?? 0
-    }
-
-    private var playerBadge: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "play.rectangle.fill")
-                .font(.system(size: 18))
-            Text(engine.name)
-                .font(.system(size: 18, weight: .semibold))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.25), value: data.showUI)
+        .animation(.easeInOut(duration: 0.25), value: data.showInfoPanel)
+        .animation(.easeOut(duration: 0.2), value: data.feedbackSymbol)
+        .onPreferenceChange(SubtitleClearancePreference.self) { onSubtitleClearanceChange(Double($0)) }
+        .onPreferenceChange(TransportHeightPreference.self) { transportHeight = $0 }
+        .onChange(of: data.transportFocusRevision) { _, _ in focused = .scrubber }
+        .onChange(of: focused) { _, value in
+            data.transportActionFocused = value != nil && value != .scrubber
+            if value != nil { onChromeActivity() }
         }
-        .foregroundColor(.white.opacity(0.9))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .overlay(
-            Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
+        .allowsHitTesting(data.failureSentence != nil || data.showUI || data.menuOpen || data.activeSkipSegment != nil)
     }
 
-    private func formatTime(_ seconds: Double) -> String {
-        let sec = PlaybackTime.seconds(seconds)
-        let h = sec / 3600
-        let m = (sec % 3600) / 60
-        let s = sec % 60
-        if h > 0 {
-            return String(format: "%d:%02d:%02d", h, m, s)
-        } else {
-            return String(format: "%d:%02d", m, s)
+    private var transport: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(data.title).font(.system(size: 38, weight: .semibold)).lineLimit(1)
+                Spacer()
+                Text(engine.name).font(.system(size: 18, weight: .semibold))
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            if !data.metadata.subtitle.isEmpty {
+                Text(data.metadata.subtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+            }
+            HStack(alignment: .bottom) {
+                Text(ChapterNavigation.timelineCaption(chapters: data.chapters, segments: data.skipSegments,
+                    positionMs: PlaybackTime.milliseconds(displayTime), durationMs: durationMs) ?? "")
+                    .font(.system(size: 24, weight: .medium)).lineLimit(1).frame(height: 32)
+                Spacer()
+                HStack(spacing: 24) {
+                    action("Loop", icon: "repeat", control: .loop, tint: data.isLooping ? Theme.accent : .white,
+                           perform: onLoopToggle)
+                    action("Switch", icon: "arrow.triangle.2.circlepath", control: .engine) {
+                        data.showInfoPanel = false
+                        data.engineHighlight = PlaybackEngine.menuOrder(current: engine).firstIndex(of: engine) ?? 0
+                        data.showEngineMenu = true
+                        onChromeActivity()
+                    }
+                    if data.hasPlaylist {
+                        action("Playlist", icon: "list.bullet", control: .playlist) {
+                            data.showInfoPanel = false
+                            onTogglePlaylist()
+                        }
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            // Reserve space for the complete action labels and focus expansion
+            // above the scrubber, independently of the seek button's hit area.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+            Button(action: onTogglePlayPause) {
+                HStack(spacing: 24) {
+                    Text(TransportTimeLabels.elapsed(displayTime))
+                    SeekTrack(progress: data.duration > 0 ? displayTime / data.duration : 0,
+                        buffered: data.duration > 0 ? data.bufferedTime / data.duration : nil,
+                        chapterFractions: ChapterNavigation.chapterFractions(chapters: data.chapters, durationMs: durationMs),
+                        segmentRanges: ChapterNavigation.segmentRanges(segments: data.skipSegments, durationMs: durationMs),
+                        focused: focused == .scrubber)
+                        .frame(height: TransportBarMetrics.focusedThumbDiameter)
+                    Text(TransportTimeLabels.remaining(displayTime, duration: data.duration))
+                }
+                .font(.system(size: 29, weight: .medium, design: .monospaced))
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(TransportSeekStyle())
+            .focused($focused, equals: .scrubber)
+            .accessibilityLabel("Playback, \(TransportTimeLabels.elapsed(displayTime)) elapsed, \(TransportTimeLabels.remaining(displayTime, duration: data.duration)) remaining")
+            .onAppear {
+                if !data.menuOpen && data.activeSkipSegment == nil { focused = .scrubber }
+            }
+        }
+        .foregroundStyle(.white)
+    }
+
+    private func action(_ title: String, icon: String, control: Control, tint: Color = .white,
+                        perform: @escaping () -> Void) -> some View {
+        Button { perform(); onChromeActivity() } label: {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 26)).frame(width: 66, height: 56)
+                Text(title).font(.system(size: 22))
+            }.foregroundStyle(focused == control ? .black : tint)
+        }
+        .buttonStyle(TransportActionStyle(focused: focused == control))
+        .focused($focused, equals: control)
+    }
+}
+
+private struct PlaybackInfoPanel: View {
+    @ObservedObject var data: PlayerControlsData
+    let onActivate: () -> Void
+    let onDirection: (MoveCommandDirection) -> Void
+    private enum Target: Hashable { case tab(InfoPanelTab), row(Int) }
+    @FocusState private var focused: Target?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 32) {
+                ForEach(data.panelTabs, id: \.self) { tab in
+                    Button(tab.rawValue) { selectTab(tab) }
+                        .buttonStyle(InfoPanelTabStyle(selected: data.panelTab == tab,
+                            focused: focused == .tab(tab)))
+                        .focused($focused, equals: .tab(tab))
+                }
+            }.font(.system(size: 28, weight: .semibold))
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if data.panelTab == .info {
+                            HStack(alignment: .bottom, spacing: 32) {
+                                info.frame(maxWidth: .infinity, alignment: .leading)
+                                panelRow(index: 0, row: data.panelRows[0]).frame(width: 340)
+                            }
+                        } else {
+                            if data.panelRows.isEmpty {
+                                Text("No tracks available").foregroundStyle(.white.opacity(0.7))
+                            }
+                            ForEach(Array(data.panelRows.enumerated()), id: \.offset) { index, row in
+                                panelRow(index: index, row: row)
+                            }
+                        }
+                    }.padding(12)
+                }
+                .onChange(of: data.panelFocusRevision) { _, _ in
+                    focused = data.panelTabBarFocused || data.panelRows.isEmpty
+                        ? .tab(data.panelTab) : .row(data.panelHighlight)
+                    proxy.scrollTo(data.panelHighlight, anchor: .center)
+                }
+            }
+        }
+        .padding(32).frame(height: 520)
+        .background(.ultraThinMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28))
+        .font(.system(size: 26)).foregroundStyle(.white)
+        .onChange(of: data.panelRows.map(\.id)) { _, _ in data.focusPanelSelection() }
+        .onMoveCommand(perform: onDirection)
+        .onAppear { focused = data.panelRows.isEmpty ? .tab(data.panelTab) : .row(data.panelHighlight) }
+        .onChange(of: focused) { _, target in
+            switch target {
+            case .tab(let tab):
+                data.panelTabBarFocused = true
+                if data.panelTab != tab { data.panelTab = tab }
+            case .row(let index):
+                data.panelTabBarFocused = false
+                data.panelHighlight = index
+            case nil: break
+            }
         }
     }
+
+    private func panelRow(index: Int, row: InfoPanelRow) -> some View {
+        Button {
+            data.panelHighlight = index
+            onActivate()
+        } label: {
+            HStack {
+                Text(row.title).lineLimit(1)
+                Spacer()
+                if let trailingText = row.trailingText {
+                    Text(trailingText).monospacedDigit().opacity(0.8)
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Theme.accent)
+                        .opacity(row.selected ? 1 : 0)
+                        .frame(width: 28)
+                } else if row.selected {
+                    Image(systemName: "checkmark").foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .foregroundStyle(focused == .row(index) ? .black : .white)
+        }
+        .buttonStyle(.card).focused($focused, equals: .row(index)).id(index)
+    }
+
+    private func selectTab(_ tab: InfoPanelTab) {
+        data.panelTab = tab
+        data.focusPanelSelection()
+    }
+
+    private var info: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(data.title).font(.system(size: 32, weight: .semibold)).lineLimit(1)
+            if !data.metadata.subtitle.isEmpty { Text(data.metadata.subtitle).foregroundStyle(.white.opacity(0.72)) }
+            HStack(spacing: 16) {
+                ForEach([data.metadata.year, data.metadata.rating, data.metadata.runtime].filter { !$0.isEmpty }, id: \.self) { text in
+                    Text(text).font(.system(size: 22)).padding(8).background(.white.opacity(0.1), in: Capsule())
+                }
+            }
+            if !data.metadata.overview.isEmpty { Text(data.metadata.overview).lineLimit(4).font(.system(size: 24)) }
+            if !data.metadata.genres.isEmpty {
+                Text(data.metadata.genres.joined(separator: " · ")).font(.system(size: 22)).foregroundStyle(.white.opacity(0.7))
+            }
+        }
+    }
+}
+
+/// Unlike tvOS's plain style, this never supplies a focus platter. The track
+/// and thumb draw the seek control's focus indication inside its own bounds.
+private struct TransportSeekStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
+private struct TransportActionStyle: ButtonStyle {
+    let focused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 16)
+                .fill(focused ? Color.white : Color.white.opacity(0.12)))
+            .scaleEffect(configuration.isPressed ? 0.97 : (focused ? 1.06 : 1))
+            .animation(.easeOut(duration: 0.15), value: focused)
+    }
+}
+
+/// The selected-tab pill remains visible while focus moves into that tab's
+/// rows. UIKit focus memory must not leave a separate pill on an old tab.
+private struct InfoPanelTabStyle: ButtonStyle {
+    let selected: Bool
+    let focused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(selected ? Color.black : Color.white.opacity(0.7))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(selected ? Color.white : Color.clear))
+            .overlay(Capsule().stroke(Color.white.opacity(selected && focused ? 0.9 : 0), lineWidth: 2))
+            .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
+/// The named Skip inset is a minimum: metadata can make the cluster taller.
+/// Measure it so the pill also clears large text and the action focus platter.
+private struct SubtitleClearancePreference: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct TransportHeightPreference: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct PlaybackFailureOverlay: View {
@@ -620,14 +599,14 @@ private struct PlaybackFailureOverlay: View {
 /// buffered range, and the played range, with chapter gaps cleared through all
 /// of them (the phone remote's draw order, scaled for the TV).
 private struct SeekTrack: View {
-    static let height: CGFloat = 16
-    static let lineHeight: CGFloat = 8
+    static let lineHeight: CGFloat = TransportBarMetrics.lineHeight
     static let gapWidth: CGFloat = 4
 
     let progress: Double
     let buffered: Double?
     let chapterFractions: [Double]
     let segmentRanges: [ClosedRange<Double>]
+    let focused: Bool
 
     var body: some View {
         Canvas { context, size in
@@ -641,21 +620,23 @@ private struct SeekTrack: View {
             }
 
             for range in segmentRanges {
-                context.fill(capsule(from: range.lowerBound, to: range.upperBound, height: size.height),
+                context.fill(capsule(from: range.lowerBound, to: range.upperBound, height: TransportBarMetrics.frameHeight),
                              with: .color(Theme.segment.opacity(0.35)))
             }
-            context.fill(capsule(from: 0, to: 1, height: Self.lineHeight), with: .color(.white.opacity(0.2)))
+            context.fill(capsule(from: 0, to: 1, height: Self.lineHeight), with: .color(.white.opacity(focused ? 0.3 : 0.2)))
             if let buffered, buffered > progress {
                 context.fill(capsule(from: 0, to: buffered, height: Self.lineHeight),
                              with: .color(.white.opacity(0.35)))
             }
             if progress > 0 {
                 let played = capsule(from: 0, to: progress, height: Self.lineHeight)
-                context.fill(played, with: .linearGradient(
-                    Gradient(colors: [Theme.accent, Theme.accent.opacity(0.7)]),
-                    startPoint: CGPoint(x: 0, y: midY),
-                    endPoint: CGPoint(x: width * CGFloat(min(progress, 1)), y: midY)))
+                context.fill(played, with: .color(.white))
             }
+
+            let thumbX = width * CGFloat(min(max(progress, 0), 1))
+            let diameter = focused ? TransportBarMetrics.focusedThumbDiameter : TransportBarMetrics.thumbDiameter
+            context.fill(Path(ellipseIn: CGRect(x: thumbX - diameter / 2, y: midY - diameter / 2,
+                width: diameter, height: diameter)), with: .color(.white))
 
             context.blendMode = .clear
             for fraction in chapterFractions {
@@ -666,16 +647,18 @@ private struct SeekTrack: View {
             }
         }
         .compositingGroup()
+        .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 
-/// Skip Intro / Credits pill. Bright when focused so Select's target is obvious; while
-/// playing it takes focus as it appears (the overlay has no other focusable control).
+/// Skip Intro / Credits pill. It takes focus as it appears unless the transport
+/// actions already own focus, keeping Select on the active Skip action.
 private struct SkipSegmentButton: View {
     let title: String
     let claimsFocus: Bool
+    @Binding var focused: Bool
     let action: () -> Void
-    @FocusState private var focused: Bool
+    @FocusState private var hasFocus: Bool
 
     var body: some View {
         Button(action: action) {
@@ -691,8 +674,10 @@ private struct SkipSegmentButton: View {
         // A custom style replaces tvOS's plain-button focus platter, which would
         // otherwise draw a second rounded outline around the pill.
         .buttonStyle(SkipPillStyle(focused: focused))
-        .focused($focused)
-        .onAppear { if claimsFocus { focused = true } }
+        .focused($hasFocus)
+        .onAppear { if claimsFocus { hasFocus = true } }
+        .onChange(of: hasFocus) { _, value in focused = value }
+        .onDisappear { focused = false }
     }
 }
 
@@ -704,7 +689,7 @@ private struct SkipPillStyle: ButtonStyle {
             .foregroundColor(focused ? .black : .white)
             .padding(.horizontal, 32)
             .padding(.vertical, 18)
-            .background(Capsule().fill(focused ? Color.white : Color.black.opacity(0.55)))
+            .background(Capsule().fill(focused ? Theme.accent : Color.black.opacity(0.55)))
             .overlay(Capsule().stroke(Color.white.opacity(focused ? 0 : 0.35), lineWidth: 2))
             .scaleEffect(configuration.isPressed ? 0.97 : (focused ? 1.08 : 1.0))
             .shadow(color: .black.opacity(0.4), radius: focused ? 16 : 6, y: 6)
