@@ -1310,8 +1310,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             if self.touchScrub.proposal != nil && (self.playbackState.menuOpen || self.playlistVisible) {
                 self.cancelTouchScrub()
             }
+            // Only a hidden-to-shown change moves focus into the controls. Forcing a
+            // focus update on every touch would pull a swipe-up from the actions
+            // straight back to the seek bar.
+            let wasHidden = !self.playbackState.showUI
             self.playbackState.showUI = true
-            self.setNeedsFocusUpdate()
+            if wasHidden { self.setNeedsFocusUpdate() }
             self.hideControlsTimer?.invalidate()
             guard autoHide, self.canAutoHide else { return }
             self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: TransportVisibility.autoHideSeconds,

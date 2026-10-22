@@ -116,11 +116,15 @@ enum TransportScrub {
     static let clickSkipSeconds = 10.0
     static let remoteSkipSeconds = 15.0
     static let holdThreshold = 0.5
-    static let translationSpanPoints = 500.0
+    /// A full-width swipe on the Siri Remote touchpad (~1920 pt of translation)
+    /// covers the whole item, at most `maximumSpanSeconds`: fine control on long
+    /// episodes and films instead of flying to either end.
+    static let translationSpanPoints = 1920.0
     static let minimumSpanSeconds = 60.0
+    static let maximumSpanSeconds = 600.0
     static let gainThresholdVelocity = 300.0
     static let maximumGainVelocity = 2000.0
-    static let maximumGain = 4.0
+    static let maximumGain = 2.0
 
     /// A proposed time only; the caller commits or cancels without seeking on
     /// every gesture update. Unknown/live duration disables touch scrubbing.
@@ -133,7 +137,7 @@ enum TransportScrub {
         let fraction = min(max((velocity - gainThresholdVelocity)
             / (maximumGainVelocity - gainThresholdVelocity), 0), 1)
         let gain = 1 + (maximumGain - 1) * fraction
-        let span = max(duration, minimumSpanSeconds)
+        let span = min(max(duration, minimumSpanSeconds), maximumSpanSeconds)
         let delta = (translationX / translationSpanPoints) * span * gain
         return min(max(anchor + delta, 0), duration)
     }
