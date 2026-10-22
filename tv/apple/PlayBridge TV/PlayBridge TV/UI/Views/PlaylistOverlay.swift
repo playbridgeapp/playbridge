@@ -35,6 +35,8 @@ struct PlaylistOverlay: View {
                         .padding(.horizontal, 80)
                         .padding(.vertical, 28)
                     }
+                    // A horizontal ScrollView takes all offered height; size it to the cards.
+                    .fixedSize(horizontal: false, vertical: true)
                     .onAppear {
                         let start = max(playlistStore.currentIndex, 0)
                         if highlightedIndex != start { highlightedIndex = start }
@@ -48,6 +50,7 @@ struct PlaylistOverlay: View {
                 }
             }
             .padding(.top, 32)
+            .padding(.bottom, 48)
             .foregroundStyle(.white)
             .background(
                 LinearGradient(colors: [.black.opacity(0), .black.opacity(0.75), .black.opacity(0.9)],
@@ -56,6 +59,8 @@ struct PlaylistOverlay: View {
                     .ignoresSafeArea()
             )
         }
+        // The host's container may be content-sized; pin the sheet to the bottom.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .ignoresSafeArea()
         .onChange(of: focusedIndex) { _, index in
             guard let index, highlightedIndex != index else { return }

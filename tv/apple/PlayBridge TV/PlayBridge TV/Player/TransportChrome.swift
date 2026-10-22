@@ -16,6 +16,8 @@ enum TransportBarMetrics {
     static let playheadWidth = 3.0
     static let playheadOverhang = 5.0
     static let timeLabelGap = 24.0
+    /// The playlist sheet's height; subtitles clear it while it is open.
+    static let playlistSheetHeight = 500.0
 }
 
 /// Text for a playlist card; payloads stay outside the host-tested model.

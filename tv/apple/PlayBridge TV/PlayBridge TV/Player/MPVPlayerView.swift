@@ -269,6 +269,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.playbackState.playlistVisible = self.playlistVisible
                 if self.playlistVisible { self.closeInfoPanel() }
                 self.showUI()
+                self.updateSubtitlePosition()
             }
         }
     }
@@ -1281,7 +1282,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Called on main for chrome/layout changes only. All libmpv work is
     /// serialized with loadfile/event handling, never the rendering path.
     private func updateSubtitlePosition() {
-        let position = TransportSubtitlePlacement.position(occludedHeight: subtitleClearancePoints,
+        // The playlist sheet (drawn by PlayerView) replaces the transport while open.
+        let occluded = playlistVisible ? TransportBarMetrics.playlistSheetHeight : subtitleClearancePoints
+        let position = TransportSubtitlePlacement.position(occludedHeight: occluded,
             viewportHeight: Double(view.bounds.height))
         guard position != subtitlePosition else { return }
         subtitlePosition = position
