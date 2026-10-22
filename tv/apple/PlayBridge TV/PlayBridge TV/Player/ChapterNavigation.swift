@@ -30,8 +30,12 @@ enum ChapterNavigation {
     static let lastChapterLabel = "Last chapter"
 
     /// Same filter and order as the `timeline` frame.
+    /// Ascending, one chapter per start time (the first wins): MP4 muxers can
+    /// write the same chapter twice, and AVPlayer lists it once.
     static func sorted(_ chapters: [TimelineChapter]) -> [TimelineChapter] {
-        Array(chapters.filter { $0.startMs >= 0 }.sorted { $0.startMs < $1.startMs }
+        var seen = Set<Int>()
+        return Array(chapters.filter { $0.startMs >= 0 }.sorted { $0.startMs < $1.startMs }
+            .filter { seen.insert($0.startMs).inserted }
             .prefix(TimelineReport.maxChapters))
     }
 
@@ -128,6 +132,21 @@ enum ChapterNavigation {
             let start = min(max(Double(segment.startMs) / duration, 0), 1)
             let end = min(max(Double(segment.endMs ?? durationMs) / duration, 0), 1)
             return end > start ? start...end : nil
+        }
+    }
+
+    /// The mpv chapter cards fetch at most this many frames per item.
+    static let maxThumbnails = 40
+    /// How far into a chapter its card frame is taken; openings often fade in from black.
+    static let thumbnailLeadMs = 10_000
+
+    /// Frame times for the mpv chapter cards, keyed by chapter start (the panel row id).
+    /// A quarter of the way into a short chapter, never past its end.
+    static func thumbnailTimes(chapters: [TimelineChapter], durationMs: Int?) -> [(startMs: Int, seconds: Double)] {
+        navigationMarkers(chapters: chapters, durationMs: durationMs).prefix(maxThumbnails).map { marker in
+            let length = marker.endMs.map { $0 - marker.startMs } ?? thumbnailLeadMs * 4
+            let lead = min(thumbnailLeadMs, max(length / 4, 0))
+            return (marker.startMs, Double(marker.startMs + lead) / 1000)
         }
     }
 

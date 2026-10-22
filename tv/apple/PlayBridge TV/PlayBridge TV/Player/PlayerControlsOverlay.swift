@@ -30,6 +30,8 @@ class PlayerControlsData: ObservableObject {
     @Published var skipControlsEnabled = true
     /// Sorted chapter markers of the open item (`ChapterNavigation.sorted`).
     @Published var chapters: [TimelineChapter] = []
+    /// Chapter card frames keyed by chapter start (ms); missing ones show a placeholder.
+    @Published var chapterThumbnails: [Int: UIImage] = [:]
     /// Skip segments drawn as bands on the seek bar.
     @Published var skipSegments: [SkipSegment] = []
     @Published var metadata = TransportMetadata()
@@ -38,6 +40,9 @@ class PlayerControlsData: ObservableObject {
     @Published var panelHighlight = 0
     @Published var panelTabBarFocused = false
     @Published var panelFocusRevision = 0
+    /// When the panel last applied a move. The Simulator's keyboard can report
+    /// one key press as two move commands.
+    var panelMovedAt = Date.distantPast
     @Published var transportFocusRevision = 0
     @Published var feedbackSymbol: String?
     @Published var transportActionFocused = false
@@ -51,7 +56,9 @@ class PlayerControlsData: ObservableObject {
     var menuOpen: Bool { showInfoPanel || showEngineMenu }
 
     var panelTabs: [InfoPanelTab] {
-        InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: settingsAvailability.any)
+        InfoPanelModel.visibleTabs(chapterCount: chapters.count, settingsAvailable: settingsAvailability.any,
+            hasInfo: !metadata.isEmpty, audioTrackCount: audioTracks.count,
+            subtitleTrackCount: subtitleTracks.count + externalSubtitleTracks.count)
     }
 
     var panelRows: [InfoPanelRow] {
@@ -71,9 +78,11 @@ class PlayerControlsData: ObservableObject {
         }
     }
 
-    func focusPanelSelection() {
+    /// Highlights the tab's selected row. `keepTabBar` leaves the highlight on the
+    /// tab bar while the user moves along the tabs.
+    func focusPanelSelection(keepTabBar: Bool = false) {
         panelHighlight = InfoPanelModel.initialHighlight(rows: panelRows)
-        panelTabBarFocused = false
+        panelTabBarFocused = keepTabBar && panelTabBarFocused
         panelFocusRevision += 1
     }
 
@@ -94,7 +103,17 @@ class PlayerControlsData: ObservableObject {
     // Audio Tracks
     @Published var audioTracks: [(id: Int, name: String)] = []
     @Published var currentAudioIndex: Int = -1
+    /// A transport pop-up menu is open; `transportMenu` says which.
     @Published var showEngineMenu: Bool = false
+    @Published var transportMenu = TransportMenu.engine
+
+    func transportMenuRows(engine: PlaybackEngine) -> [TransportMenuRow] {
+        switch transportMenu {
+        case .engine: return TransportMenuModel.engineRows(current: engine)
+        case .speed: return TransportMenuModel.speedRows(current: tuning.speed)
+        case .audio: return TransportMenuModel.audioRows(tracks: audioTracks, current: currentAudioIndex)
+        }
+    }
 
     /// Row index inside the open menu. The network remote and the focus ring share it.
     @Published var engineHighlight: Int = 0
@@ -203,7 +222,8 @@ struct PlayerControlsOverlay: View {
     let onSelectSubtitle: (Int) -> Void
     let onSelectAudio: (Int) -> Void
     let onTogglePlayPause: () -> Void
-    let onSwitchEngine: (PlaybackEngine) -> Void
+    let onOpenMenu: (TransportMenu) -> Void
+    let onMenuSelect: (TransportMenu, Int) -> Void
     let onTogglePlaylist: () -> Void
     let onLoopToggle: () -> Void
     let onSkipSegment: () -> Void
@@ -213,7 +233,7 @@ struct PlayerControlsOverlay: View {
     let onPanelDirection: (MoveCommandDirection) -> Void
     let onSubtitleClearanceChange: (Double) -> Void
     let engine: PlaybackEngine
-    private enum Control: Hashable { case scrubber, loop, engine, playlist }
+    private enum Control: Hashable { case scrubber, loop, speed, engine, audio, playlist }
     @FocusState private var focused: Control?
     @Namespace private var transportActionsScope
     @Environment(\.resetFocus) private var resetTransportFocus
@@ -261,18 +281,24 @@ struct PlayerControlsOverlay: View {
             }
 
             if data.showEngineMenu {
-                Color.black.opacity(0.6).ignoresSafeArea()
-                TrackMenuView(title: "Switch Player", icon: "arrow.triangle.2.circlepath",
-                    tracks: PlaybackEngine.menuOrder(current: engine).map { ($0.menuID, $0.name) },
-                    currentId: engine.menuID, includeOff: false, showCurrentLabel: true,
+                // Pop-up above the action row, as AVPlayer's contextual menus.
+                let menu = data.transportMenu
+                let rows = data.transportMenuRows(engine: engine)
+                TrackMenuView(title: menu.title, icon: menu.icon,
+                    tracks: rows.map { ($0.id, $0.title) },
+                    currentId: rows.first(where: \.selected)?.id ?? Int.min, includeOff: false,
+                    showCurrentLabel: menu == .engine,
                     highlightedIndex: $data.engineHighlight) { id in
                         data.showEngineMenu = false
                         onChromeActivity()
-                        if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != engine {
-                            onSwitchEngine(target)
-                        }
+                        onMenuSelect(menu, id)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(menu)
+                    .frame(width: 540)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, TransportBarMetrics.horizontalInset)
+                    .padding(.bottom, transportHeight + TransportBarMetrics.bottomInset - 40)
+                    .transition(.opacity)
             }
 
             if !data.prebuffering {
@@ -306,20 +332,13 @@ struct PlayerControlsOverlay: View {
         .onPreferenceChange(TransportHeightPreference.self) { transportHeight = $0 }
         .onChange(of: data.transportFocusRevision) { _, _ in focused = .scrubber }
         .onChange(of: data.transportActionFocusRevision) { _, _ in
-            switch data.transportActionHighlight {
-            case .loop: focused = .loop
-            case .switchEngine: focused = .engine
-            case .playlist: focused = .playlist
-            }
+            focused = Self.control(for: data.transportActionHighlight)
             resetTransportFocus(in: transportActionsScope)
         }
         .onChange(of: focused) { _, value in
             data.transportActionFocused = value != nil && value != .scrubber
-            switch value {
-            case .loop: data.transportActionHighlight = .loop
-            case .engine: data.transportActionHighlight = .switchEngine
-            case .playlist: data.transportActionHighlight = .playlist
-            default: break
+            if let action = TransportAction.allCases.first(where: { Self.control(for: $0) == value }) {
+                data.transportActionHighlight = action
             }
             if value != nil { onChromeActivity() }
         }
@@ -327,6 +346,16 @@ struct PlayerControlsOverlay: View {
     }
 
     private var transport: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // With the panel open only the seek row stays, so the panel reads
+            // as a light sheet under the timeline (AVPlayer's info layout).
+            if !data.showInfoPanel { header }
+            seekRow
+        }
+        .foregroundStyle(.white)
+    }
+
+    private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(data.title).font(.system(size: 38, weight: .semibold)).lineLimit(1)
@@ -346,12 +375,9 @@ struct PlayerControlsOverlay: View {
                 HStack(spacing: 24) {
                     action("Loop", icon: "repeat", control: .loop, tint: data.isLooping ? Theme.accent : .white,
                            perform: onLoopToggle)
-                    action("Switch", icon: "arrow.triangle.2.circlepath", control: .engine) {
-                        data.showInfoPanel = false
-                        data.engineHighlight = PlaybackEngine.menuOrder(current: engine).firstIndex(of: engine) ?? 0
-                        data.showEngineMenu = true
-                        onChromeActivity()
-                    }
+                    action("Speed", icon: TransportMenu.speed.icon, control: .speed) { onOpenMenu(.speed) }
+                    action("Switch", icon: TransportMenu.engine.icon, control: .engine) { onOpenMenu(.engine) }
+                    action("Audio", icon: TransportMenu.audio.icon, control: .audio) { onOpenMenu(.audio) }
                     if data.hasPlaylist {
                         action("Playlist", icon: "list.bullet", control: .playlist) {
                             data.showInfoPanel = false
@@ -370,6 +396,10 @@ struct PlayerControlsOverlay: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 12)
             .padding(.bottom, 24)
+        }
+    }
+
+    private var seekRow: some View {
             Button(action: onTogglePlayPause) {
                 HStack(spacing: 24) {
                     Text(TransportTimeLabels.elapsed(displayTime))
@@ -390,126 +420,154 @@ struct PlayerControlsOverlay: View {
             .onAppear {
                 if !data.menuOpen && data.activeSkipSegment == nil { focused = .scrubber }
             }
+    }
+
+    private static func control(for action: TransportAction) -> Control {
+        switch action {
+        case .loop: return .loop
+        case .speed: return .speed
+        case .switchEngine: return .engine
+        case .audio: return .audio
+        case .playlist: return .playlist
         }
-        .foregroundStyle(.white)
     }
 
     private func isPreferredAction(_ control: Control) -> Bool {
-        switch data.transportActionHighlight {
-        case .loop: return control == .loop
-        case .switchEngine: return control == .engine
-        case .playlist: return control == .playlist
-        }
+        Self.control(for: data.transportActionHighlight) == control
     }
 
     private func action(_ title: String, icon: String, control: Control, tint: Color = .white,
                         perform: @escaping () -> Void) -> some View {
+        // AVPlayer's transport actions: icon-only circles; the name is for VoiceOver.
         Button { perform(); onChromeActivity() } label: {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 26)).frame(width: 66, height: 56)
-                Text(title).font(.system(size: 22))
-            }.foregroundStyle(control == .loop && data.isLooping ? Theme.accent : (focused == control ? .black : tint))
+            Image(systemName: icon).font(.system(size: 28, weight: .medium))
+                .frame(width: TransportActionStyle.diameter, height: TransportActionStyle.diameter)
+                .foregroundStyle(control == .loop && data.isLooping ? Theme.accent : (focused == control ? .black : tint))
         }
         .buttonStyle(TransportActionStyle(focused: focused == control))
+        .accessibilityLabel(title)
         .focused($focused, equals: control)
         .prefersDefaultFocus(data.transportActionFocused && isPreferredAction(control), in: transportActionsScope)
     }
 }
 
+/// One focusable surface. Tabs, rows and chapter cards are drawn from the model
+/// highlight and every direction arrives through onMoveCommand, so UIKit focus
+/// never moves inside the panel on its own (no double or reverted moves).
 private struct PlaybackInfoPanel: View {
     @ObservedObject var data: PlayerControlsData
     let onActivate: () -> Void
     let onDirection: (MoveCommandDirection) -> Void
-    private enum Target: Hashable { case tab(InfoPanelTab), row(Int) }
-    @FocusState private var focused: Target?
+    @FocusState private var surfaceFocused: Bool
+
+    private func highlighted(_ index: Int) -> Bool {
+        !data.panelTabBarFocused && data.panelHighlight == index
+    }
 
     var body: some View {
+        Button(action: onActivate) { content }
+            .buttonStyle(InfoPanelSurfaceStyle())
+            .focused($surfaceFocused)
+            .onMoveCommand(perform: onDirection)
+            .onAppear { surfaceFocused = true }
+            .onChange(of: data.panelFocusRevision) { _, _ in surfaceFocused = true }
+            .onChange(of: data.panelRows.map(\.id)) { _, _ in data.focusPanelSelection(keepTabBar: true) }
+            // Tracks arrive after the panel opens; a tab can appear or go away.
+            .onChange(of: data.panelTabs) { _, tabs in
+                let tab = InfoPanelModel.validTab(data.panelTab, tabs: tabs)
+                guard tab != data.panelTab else { return }
+                data.panelTab = tab
+                data.focusPanelSelection(keepTabBar: true)
+            }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 32) {
                 ForEach(data.panelTabs, id: \.self) { tab in
-                    Button(tab.rawValue) { selectTab(tab) }
-                        .buttonStyle(InfoPanelTabStyle(selected: data.panelTab == tab,
-                            focused: focused == .tab(tab)))
-                        .focused($focused, equals: .tab(tab))
+                    Text(tab.rawValue)
+                        .modifier(InfoPanelTabLook(selected: data.panelTab == tab,
+                            focused: data.panelTabBarFocused && data.panelTab == tab))
                 }
             }.font(.system(size: 28, weight: .semibold))
             Divider()
             ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if data.panelTab == .info {
-                            HStack(alignment: .bottom, spacing: 32) {
-                                info.frame(maxWidth: .infinity, alignment: .leading)
-                                panelRow(index: 0, row: data.panelRows[0]).frame(width: 340)
-                            }
-                        } else {
-                            if data.panelRows.isEmpty {
-                                Text("No tracks available").foregroundStyle(.white.opacity(0.7))
-                            }
-                            ForEach(Array(data.panelRows.enumerated()), id: \.offset) { index, row in
-                                if let section = row.section {
-                                    Text(section).font(.system(size: 22, weight: .semibold))
-                                        .foregroundStyle(.white.opacity(0.6))
-                                        .padding(.top, index == 0 ? 0 : 12).padding(.leading, 20)
+                ScrollView(data.panelTab == .chapters ? .horizontal : .vertical, showsIndicators: false) {
+                    if data.panelTab == .chapters {
+                        chapterCards
+                    } else {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if data.panelTab == .info {
+                                HStack(alignment: .bottom, spacing: 32) {
+                                    info.frame(maxWidth: .infinity, alignment: .leading)
+                                    panelRow(index: 0, row: data.panelRows[0]).frame(width: 340)
                                 }
-                                panelRow(index: index, row: row)
+                            } else {
+                                if data.panelRows.isEmpty {
+                                    Text("No tracks available").foregroundStyle(.white.opacity(0.7))
+                                }
+                                ForEach(Array(data.panelRows.enumerated()), id: \.offset) { index, row in
+                                    if let section = row.section {
+                                        Text(section).font(.system(size: 22, weight: .semibold))
+                                            .foregroundStyle(.white.opacity(0.6))
+                                            .padding(.top, index == 0 ? 0 : 12).padding(.leading, 20)
+                                    }
+                                    panelRow(index: index, row: row)
+                                }
                             }
-                        }
-                    }.padding(12)
+                        }.padding(12)
+                    }
                 }
+                // A new tab (or a freshly opened panel) starts on its selected row.
+                .id(data.panelTab)
+                .onAppear { DispatchQueue.main.async { proxy.scrollTo(data.panelHighlight, anchor: .center) } }
                 .onChange(of: data.panelFocusRevision) { _, _ in
-                    focused = data.panelTabBarFocused || data.panelRows.isEmpty
-                        ? .tab(data.panelTab) : .row(data.panelHighlight)
-                    proxy.scrollTo(data.panelHighlight, anchor: .center)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(data.panelHighlight, anchor: .center)
+                    }
                 }
             }
         }
-        .padding(32).frame(height: 520)
+        .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: data.panelTab == .chapters ? 400 : 380)
         .background(.ultraThinMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28))
         .font(.system(size: 26)).foregroundStyle(.white)
-        .onChange(of: data.panelRows.map(\.id)) { _, _ in data.focusPanelSelection() }
-        .onMoveCommand(perform: onDirection)
-        .onAppear { focused = data.panelRows.isEmpty ? .tab(data.panelTab) : .row(data.panelHighlight) }
-        .onChange(of: focused) { _, target in
-            switch target {
-            case .tab(let tab):
-                data.panelTabBarFocused = true
-                if data.panelTab != tab { data.panelTab = tab }
-            case .row(let index):
-                data.panelTabBarFocused = false
-                data.panelHighlight = index
-            case nil: break
-            }
-        }
     }
 
     private func panelRow(index: Int, row: InfoPanelRow) -> some View {
-        Button {
-            data.panelHighlight = index
-            onActivate()
-        } label: {
-            HStack {
-                Text(row.title).lineLimit(1)
-                Spacer()
-                if let trailingText = row.trailingText {
-                    Text(trailingText).monospacedDigit().opacity(0.8)
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(Theme.accent)
-                        .opacity(row.selected ? 1 : 0)
-                        .frame(width: 28)
-                } else if row.selected {
-                    Image(systemName: "checkmark").foregroundStyle(Theme.accent)
-                }
+        let lit = highlighted(index)
+        return HStack {
+            Text(row.title).lineLimit(1)
+            Spacer()
+            if let trailingText = row.trailingText {
+                Text(trailingText).monospacedDigit().opacity(0.8)
+                Image(systemName: "checkmark")
+                    .foregroundStyle(lit ? .black : Theme.accent)
+                    .opacity(row.selected ? 1 : 0)
+                    .frame(width: 28)
+            } else if row.selected {
+                Image(systemName: "checkmark").foregroundStyle(lit ? .black : Theme.accent)
             }
-            .padding(.horizontal, 20).padding(.vertical, 12)
-            .foregroundStyle(focused == .row(index) ? .black : .white)
         }
-        .buttonStyle(.card).focused($focused, equals: .row(index)).id(index)
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .foregroundStyle(lit ? .black : .white)
+        .background(RoundedRectangle(cornerRadius: 12).fill(lit ? Color.white : Color.white.opacity(0.06)))
+        .scaleEffect(lit ? 1.02 : 1)
+        .animation(.easeOut(duration: 0.15), value: lit)
+        .id(index)
     }
 
-    private func selectTab(_ tab: InfoPanelTab) {
-        data.panelTab = tab
-        data.focusPanelSelection()
+    /// AVPlayer-style chapter strip: frame, "WATCHING" on the current chapter,
+    /// title and start time. Left/Right move along the strip.
+    private var chapterCards: some View {
+        HStack(spacing: 40) {
+            ForEach(Array(data.panelRows.enumerated()), id: \.offset) { index, row in
+                ChapterCard(row: row, thumbnail: data.chapterThumbnails[row.id], focused: highlighted(index))
+                    .id(index)
+            }
+        }
+        .padding(.vertical, 24).padding(.horizontal, 24)
     }
 
     private var info: some View {
@@ -529,6 +587,52 @@ private struct PlaybackInfoPanel: View {
     }
 }
 
+/// The panel surface draws no focus platter; its highlight is the lit row or tab.
+private struct InfoPanelSurfaceStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.9 : 1)
+    }
+}
+
+private struct ChapterCard: View {
+    static let size = CGSize(width: 400, height: 225)
+    let row: InfoPanelRow
+    let thumbnail: UIImage?
+    let focused: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Group {
+                if let thumbnail {
+                    Image(uiImage: thumbnail).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    LinearGradient(colors: [.white.opacity(0.18), .white.opacity(0.06)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .overlay(Image(systemName: "film").font(.system(size: 44)).opacity(0.35))
+                }
+            }
+            .frame(width: Self.size.width, height: Self.size.height).clipped()
+            LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 2) {
+                if row.selected {
+                    Text("WATCHING").font(.system(size: 16, weight: .semibold)).opacity(0.85)
+                }
+                Text(row.title).font(.system(size: 24, weight: .semibold)).lineLimit(1)
+                if let time = row.trailingText {
+                    Text(time).font(.system(size: 20).monospacedDigit()).opacity(0.75)
+                }
+            }
+            .foregroundStyle(.white).padding(16)
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white, lineWidth: focused ? 4 : 0))
+        .scaleEffect(focused ? 1.08 : 1)
+        .shadow(color: .black.opacity(focused ? 0.5 : 0.2), radius: focused ? 18 : 6, y: focused ? 10 : 4)
+        .animation(.easeOut(duration: 0.15), value: focused)
+    }
+}
+
 /// Unlike tvOS's plain style, this never supplies a focus platter. The track
 /// and thumb draw the seek control's focus indication inside its own bounds.
 private struct TransportSeekStyle: ButtonStyle {
@@ -540,33 +644,37 @@ private struct TransportSeekStyle: ButtonStyle {
 }
 
 private struct TransportActionStyle: ButtonStyle {
+    static let diameter: CGFloat = 72
     let focused: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 16)
-                .fill(focused ? Color.white : Color.white.opacity(0.12)))
-            .scaleEffect(configuration.isPressed ? 0.97 : (focused ? 1.06 : 1))
+            .background {
+                if focused { Circle().fill(Color.white) }
+                else { Circle().fill(.ultraThinMaterial) }
+            }
+            .clipShape(Circle())
+            .shadow(color: .black.opacity(focused ? 0.35 : 0), radius: 10, y: 4)
+            .scaleEffect(configuration.isPressed ? 0.95 : (focused ? 1.12 : 1))
             .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 
-/// The selected-tab pill remains visible while focus moves into that tab's
-/// rows. UIKit focus memory must not leave a separate pill on an old tab.
-private struct InfoPanelTabStyle: ButtonStyle {
+/// The selected tab keeps its pill while the rows are highlighted; a ring marks
+/// the tab bar itself as the highlight.
+private struct InfoPanelTabLook: ViewModifier {
     let selected: Bool
     let focused: Bool
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+    func body(content: Content) -> some View {
+        content
             .foregroundStyle(selected ? Color.black : Color.white.opacity(0.7))
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
             .background(Capsule().fill(selected ? Color.white : Color.clear))
-            .overlay(Capsule().stroke(Color.white.opacity(selected && focused ? 0.9 : 0), lineWidth: 2))
-            .opacity(configuration.isPressed ? 0.8 : 1)
+            .overlay(Capsule().stroke(Theme.accent, lineWidth: focused ? 3 : 0).padding(-4))
+            .scaleEffect(focused ? 1.06 : 1)
+            .animation(.easeOut(duration: 0.15), value: focused)
     }
 }
 

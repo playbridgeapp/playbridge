@@ -81,12 +81,23 @@ enum InfoPanelTab: String, CaseIterable {
 }
 
 enum InfoPanelModel {
-    static func visibleTabs(chapterCount: Int, settingsAvailable: Bool) -> [InfoPanelTab] {
-        var tabs: [InfoPanelTab] = [.info]
+    /// Only tabs with something to show, as AVPlayer's info panel: Info needs
+    /// metadata beyond the title, Audio a choice of two tracks, Subtitles any track.
+    /// Never empty; a bare item still gets Info.
+    static func visibleTabs(chapterCount: Int, settingsAvailable: Bool, hasInfo: Bool = true,
+                            audioTrackCount: Int = 2, subtitleTrackCount: Int = 1) -> [InfoPanelTab] {
+        var tabs: [InfoPanelTab] = []
+        if hasInfo { tabs.append(.info) }
         if chapterCount >= 2 { tabs.append(.chapters) }
-        tabs += [.audio, .subtitles]
+        if audioTrackCount >= 2 { tabs.append(.audio) }
+        if subtitleTrackCount >= 1 { tabs.append(.subtitles) }
         if settingsAvailable { tabs.append(.settings) }
-        return tabs
+        return tabs.isEmpty ? [.info] : tabs
+    }
+
+    /// The tab to show: the current one while it is still visible, else the first.
+    static func validTab(_ tab: InfoPanelTab, tabs: [InfoPanelTab]) -> InfoPanelTab {
+        tabs.contains(tab) ? tab : (tabs.first ?? .info)
     }
 }
 
@@ -98,6 +109,11 @@ struct TransportMetadata: Equatable {
     var runtime = ""
     var overview = ""
     var genres: [String] = []
+
+    /// Nothing for the Info tab to show besides the title.
+    var isEmpty: Bool {
+        [subtitle, year, rating, runtime, overview].allSatisfy(\.isEmpty) && genres.isEmpty
+    }
 }
 
 struct InfoPanelRow: Equatable {
@@ -114,9 +130,8 @@ extension InfoPanelModel {
         let markers = ChapterNavigation.navigationMarkers(chapters: chapters, durationMs: durationMs)
         let current = markers.lastIndex { $0.startMs <= positionMs }
         return markers.enumerated().map { index, marker in
-            InfoPanelRow(id: marker.startMs,
-                title: ChapterNavigation.label(ChapterJumpTarget(number: index + 1,
-                    chapter: TimelineChapter(startMs: marker.startMs, title: marker.title))),
+            // The cards show the title alone, as AVPlayer does ("Chapter N" when untitled).
+            InfoPanelRow(id: marker.startMs, title: marker.title,
                 selected: index == current,
                 trailingText: TransportTimeLabels.elapsed(Double(marker.startMs) / 1000))
         }
@@ -124,6 +139,21 @@ extension InfoPanelModel {
 
     static func initialHighlight(rows: [InfoPanelRow]) -> Int {
         rows.firstIndex { $0.selected } ?? 0
+    }
+
+    /// Physical Left/Right switches tabs, except on the chapter cards where
+    /// it moves between cards (AVPlayer's chapter strip).
+    static func horizontalMovesRows(tab: InfoPanelTab, tabBarFocused: Bool) -> Bool {
+        tab == .chapters && !tabBarFocused
+    }
+
+    /// A second move command this soon after the last applied one is the same key
+    /// press reported twice (Simulator keyboard), never a deliberate second press.
+    static let moveEchoSeconds = 0.08
+
+    static func isMoveEcho(focusMovedAt: Date, now: Date) -> Bool {
+        let elapsed = now.timeIntervalSince(focusMovedAt)
+        return elapsed >= 0 && elapsed < moveEchoSeconds
     }
 
     static func movingTab(_ tab: InfoPanelTab, delta: Int, tabs: [InfoPanelTab]) -> InfoPanelTab {
@@ -134,14 +164,17 @@ extension InfoPanelModel {
 }
 
 /// Physical Up can reach the tabs; network directions stay within the rows.
+/// Chapters are a horizontal card row: Up from any card reaches the tabs and
+/// Down stays on the cards.
 struct InfoPanelFocus: Equatable {
     var row = 0
     var tabBar = false
 
-    func moving(_ delta: Int, rowCount: Int, physical: Bool) -> Self {
+    func moving(_ delta: Int, rowCount: Int, physical: Bool, horizontalRows: Bool = false) -> Self {
         if physical && tabBar {
             return delta > 0 ? Self(row: row, tabBar: rowCount == 0) : self
         }
+        if physical && horizontalRows { return delta < 0 ? Self(row: row, tabBar: true) : self }
         if physical && delta < 0 && row == 0 { return Self(row: 0, tabBar: true) }
         return Self(row: PlayerHighlightList(count: rowCount, index: row).moving(delta).index,
                     tabBar: rowCount == 0)
@@ -269,18 +302,85 @@ struct PlaybackFailureSession {
     }
 }
 
-/// Physical transport focus order; Playlist is absent for a one-item queue.
+/// Physical transport focus order, matching AVPlayer's transport row (Loop,
+/// Speed, Switch, Audio). Playlist is absent for a one-item queue.
 enum TransportAction: CaseIterable {
-    case loop, switchEngine, playlist
+    case loop, speed, switchEngine, audio, playlist
 
     static func available(hasPlaylist: Bool) -> [Self] {
-        hasPlaylist ? [.loop, .switchEngine, .playlist] : [.loop, .switchEngine]
+        let actions: [Self] = [.loop, .speed, .switchEngine, .audio]
+        return hasPlaylist ? actions + [.playlist] : actions
+    }
+
+    /// Switch, Speed and Audio open a pop-up menu above the row (AVPlayer's
+    /// contextual menus); Loop and Playlist act directly.
+    var menu: TransportMenu? {
+        switch self {
+        case .speed: return .speed
+        case .switchEngine: return .engine
+        case .audio: return .audio
+        case .loop, .playlist: return nil
+        }
     }
 
     func moving(_ delta: Int, hasPlaylist: Bool) -> Self {
         let actions = Self.available(hasPlaylist: hasPlaylist)
         let index = actions.firstIndex(of: self) ?? 0
         return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
+    }
+}
+
+enum TransportMenu: Equatable {
+    case engine, speed, audio
+
+    var title: String {
+        switch self {
+        case .engine: return "Switch Player"
+        case .speed: return "Playback Speed"
+        case .audio: return "Audio"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .engine: return "arrow.triangle.2.circlepath"
+        case .speed: return "speedometer"
+        case .audio: return "waveform"
+        }
+    }
+}
+
+struct TransportMenuRow: Equatable {
+    var id: Int
+    var title: String
+    var selected = false
+}
+
+enum TransportMenuModel {
+    /// Row ids index `PlayerSettingsItem.speeds`.
+    static func speedRows(current: Double) -> [TransportMenuRow] {
+        PlayerSettingsItem.speeds.enumerated().map { index, value in
+            TransportMenuRow(id: index, title: PlayerSettingsItem.speedLabel(value), selected: value == current)
+        }
+    }
+
+    static func speed(forRow id: Int) -> Double? {
+        PlayerSettingsItem.speeds.indices.contains(id) ? PlayerSettingsItem.speeds[id] : nil
+    }
+
+    static func audioRows(tracks: [(id: Int, name: String)], current: Int) -> [TransportMenuRow] {
+        tracks.map { TransportMenuRow(id: $0.id, title: $0.name, selected: $0.id == current) }
+    }
+
+    static func engineRows(current: PlaybackEngine) -> [TransportMenuRow] {
+        PlaybackEngine.menuOrder(current: current).map {
+            TransportMenuRow(id: $0.menuID, title: $0.name, selected: $0 == current)
+        }
+    }
+
+    /// Opens on the selected row, like the Info panel.
+    static func initialHighlight(rows: [TransportMenuRow]) -> Int {
+        rows.firstIndex { $0.selected } ?? 0
     }
 }
 
