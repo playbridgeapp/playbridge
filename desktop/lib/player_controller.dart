@@ -53,9 +53,7 @@ class PlaybackFailure {
 int? extractHttpStatus(Object? error) {
   if (error == null) return null;
   if (error is int) {
-    {
-      return (error >= 100 && error <= 599) ? error : null;
-    }
+    return (error >= 100 && error <= 599) ? error : null;
   }
   if (error is num) {
     final code = error.toInt();
@@ -72,9 +70,7 @@ int? extractHttpStatus(Object? error) {
   final text = error.toString();
   final httpMatch = RegExp(r'\bHTTP error ([1-5][0-9]{2})\b').firstMatch(text);
   if (httpMatch != null) {
-    {
-      return int.tryParse(httpMatch.group(1)!);
-    }
+    return int.tryParse(httpMatch.group(1)!);
   }
 
   return null;

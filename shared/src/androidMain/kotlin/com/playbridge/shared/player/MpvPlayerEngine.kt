@@ -51,16 +51,13 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val releaseRequested = AtomicBoolean(false)
     private val observerRegistrations = ConcurrentHashMap<MPVLib.EventObserver, ObserverProxy>()
 
-    private val _failureCode = MutableStateFlow<String?>(null)
-    val failureCode: StateFlow<String?> = _failureCode.asStateFlow()
-    private var lastLogFailureCode: String? = null
+    private val failureLogs = MpvFailureLogState()
+    val failureCode: StateFlow<String?> = failureLogs.failureCode
     @Volatile private var acceptFailureLogs = false
     private val failureLogObserver = object : MPVLib.LogObserver {
         override fun logMessage(prefix: String, level: Int, text: String) {
             if (!acceptFailureLogs || isTransitioning || releaseRequested.get()) return
-            val code = MpvFailureLogPolicy.classify(prefix, level, text) ?: return
-            if (code != "mpv_load_failed" || lastLogFailureCode == null) lastLogFailureCode = code
-            if (MpvFailureLogPolicy.isTerminal(prefix, text)) _failureCode.value = lastLogFailureCode
+            failureLogs.record(prefix, level, text)
         }
     }
 
@@ -423,8 +420,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         if (controlQueue.isUnhealthy) return
 
         if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) {
-            _failureCode.value = null
-            lastLogFailureCode = null
+            failureLogs.beginFile()
             acceptFailureLogs = true
         }
         when (eventId) {
@@ -442,6 +438,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 _state.value = PlaybackState.Ready
             }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
+                failureLogs.playbackHealthy()
                 _state.value = playbackSignals.playbackRestarted()
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
@@ -460,6 +457,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         logger.d(TAG, "MPV Property changed: $property = $value")
         val nextState = playbackSignals.propertyChanged(property, value, _state.value)
         if (controlQueue.isUnhealthy) return
+        if (nextState == PlaybackState.Playing && failureCode.value == null) failureLogs.playbackHealthy()
         nextState?.let { _state.value = it }
     }
 
@@ -473,7 +471,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
-            "time-pos" -> _position.value = (value * 1000).toLong()
+            "time-pos" -> {
+                val positionMs = (value * 1000).toLong()
+                failureLogs.positionChanged(positionMs, playing = _state.value == PlaybackState.Playing)
+                _position.value = positionMs
+            }
             "duration" -> _duration.value = (value * 1000).toLong()
             "demuxer-cache-time" -> _bufferAhead.value = (value * 1000).toLong()
         }

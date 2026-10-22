@@ -311,16 +311,40 @@ enum PlaybackFailureMessage {
         return sentence(for: category ?? .generic)
     }
 
-    /// Raw decoder logs remain transient. Only this enum survives to END_FILE.
+    /// Raw native logs remain transient. Only this enum survives to END_FILE.
     static func category(prefix: String, text: String) -> Category? {
         guard prefix == "cplayer" || prefix == "ffmpeg" || prefix.hasPrefix("ffmpeg/") else { return nil }
         if let regex = try? NSRegularExpression(pattern: "\\bHTTP error ([1-5][0-9]{2})\\b"),
            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
            let range = Range(match.range(at: 1), in: text), let status = Int(text[range]) { return .http(status) }
         if text.hasPrefix("Failed to recognize file format") || text.hasPrefix("Unrecognized file format") { return .unsupported }
-        if text.hasPrefix("Failed to initialize a decoder") || text.hasPrefix("Error while decoding frame") { return .decoder }
         if ["Failed to resolve hostname", "Connection timed out", "TLS handshake failed", "Connection refused", "Network is unreachable"].contains(where: text.hasPrefix) { return .network }
         return nil
+    }
+}
+
+/// A recovered subtitle/segment error must not label a later unrelated failure.
+struct PlaybackFailureLogState {
+    private(set) var category: PlaybackFailureMessage.Category?
+    private var lastPosition = 0.0
+
+    mutating func record(prefix: String, level: Int, text: String) {
+        guard (10...20).contains(level),
+              let category = PlaybackFailureMessage.category(prefix: prefix, text: text) else { return }
+        self.category = category
+    }
+
+    mutating func beginFile() {
+        playbackHealthy()
+        lastPosition = 0
+    }
+
+    mutating func playbackHealthy() { category = nil }
+
+    mutating func positionChanged(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        if seconds > lastPosition { playbackHealthy() }
+        lastPosition = seconds
     }
 }
 

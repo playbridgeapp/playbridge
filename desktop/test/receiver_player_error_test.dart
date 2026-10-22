@@ -113,6 +113,9 @@ void main() {
       'The video stopped loading': 'The video stopped loading',
       'playback_stalled': 'The video stopped loading',
       'unknown https://private.example/token': "The media couldn't be loaded",
+      'Failed to initialize a decoder for codec':
+          "The media couldn't be loaded",
+      'Error while decoding frame!': "The media couldn't be loaded",
       'mpv_http_401': 'The link was refused (HTTP 401)',
       'mpv_http_403': 'The link was refused (HTTP 403)',
       'mpv_http_404': "The video wasn't found (HTTP 404)",
@@ -127,8 +130,14 @@ void main() {
         isNull);
     expect(mpvFailureCategory('ffmpeg/https', 'HTTP error 403 Forbidden'),
         'mpv_http_403');
-    expect(mpvFailureCategory('cplayer', 'Failed to initialize a decoder'),
-        'mpv_decoder_failure');
+    for (final prefix in ['vd', 'ad', 'cplayer', 'ffmpeg', 'ffmpeg/video']) {
+      for (final text in [
+        'Failed to initialize a decoder for codec',
+        'Error while decoding frame!'
+      ]) {
+        expect(mpvFailureCategory(prefix, text), isNull);
+      }
+    }
     expect(
         mpvFailureCategory(
             'ffmpeg/tcp', 'Connection timed out private.example'),

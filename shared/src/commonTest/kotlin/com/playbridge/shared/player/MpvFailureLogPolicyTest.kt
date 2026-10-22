@@ -13,7 +13,6 @@ class MpvFailureLogPolicyTest {
             "Failed to open https://private.example/token" to "mpv_load_failed",
             "HTTP error 403 Forbidden https://private.example/token" to "mpv_http_403",
             "Failed to resolve hostname private.example" to "mpv_network_failed",
-            "Failed to initialize a decoder private-token" to "mpv_decoder_failure",
         )
         for ((text, code) in cases) assertEquals(code, MpvFailureLogPolicy.classify("cplayer", 20, text))
         assertTrue(MpvFailureLogPolicy.isTerminal("cplayer", "Failed to recognize file format"))
@@ -23,5 +22,16 @@ class MpvFailureLogPolicyTest {
         assertNull(MpvFailureLogPolicy.classify("cplayer", 30, "Failed to recognize file format"))
         assertNull(MpvFailureLogPolicy.classify("sub", 20, "Failed to open subtitle"))
         assertNull(MpvFailureLogPolicy.classify("cplayer", 20, "https://private.example/http_403"))
+    }
+
+    @Test fun decoderLogsAreNeitherCategoriesNorTerminalFailures() {
+        for (prefix in listOf("vd", "ad", "cplayer", "ffmpeg", "ffmpeg/video")) {
+            for (text in listOf("Failed to initialize a decoder for codec", "Error while decoding frame!")) {
+                for (level in listOf(10, 20, 30)) {
+                    assertNull(MpvFailureLogPolicy.classify(prefix, level, text))
+                }
+                assertFalse(MpvFailureLogPolicy.isTerminal(prefix, text))
+            }
+        }
     }
 }

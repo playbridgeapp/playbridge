@@ -8,7 +8,6 @@ object MpvFailureLogPolicy {
         http.find(text)?.groupValues?.get(1)?.let { return "mpv_http_$it" }
         return when {
             text.startsWith("Failed to recognize file format") || text.startsWith("Unrecognized file format") -> "mpv_unsupported_format"
-            text.startsWith("Failed to initialize a decoder") || text.startsWith("Error while decoding frame") -> "mpv_decoder_failure"
             listOf("Failed to resolve hostname", "Connection timed out", "TLS handshake failed", "Connection refused", "Network is unreachable").any(text::startsWith) -> "mpv_network_failed"
             prefix == "cplayer" && text.startsWith("Failed to open ") -> "mpv_load_failed"
             else -> null
@@ -16,6 +15,5 @@ object MpvFailureLogPolicy {
     }
 
     fun isTerminal(prefix: String, text: String): Boolean = prefix == "cplayer" &&
-        (text.startsWith("Failed to recognize file format") || text.startsWith("Failed to open ") ||
-            text.startsWith("Failed to initialize a decoder"))
+        (text.startsWith("Failed to recognize file format") || text.startsWith("Failed to open "))
 }

@@ -11,10 +11,6 @@ String? mpvFailureCategory(String prefix, String text) {
       text.startsWith('Unrecognized file format')) {
     return 'mpv_unsupported_format';
   }
-  if (text.startsWith('Failed to initialize a decoder') ||
-      text.startsWith('Error while decoding frame')) {
-    return 'mpv_decoder_failure';
-  }
   if ([
     'Failed to resolve hostname',
     'Connection timed out',
@@ -25,4 +21,29 @@ String? mpvFailureCategory(String prefix, String text) {
     return 'mpv_network_failed';
   }
   return null;
+}
+
+/// Retain only categories observed since the last healthy playback point.
+class MpvFailureLogState {
+  String? code;
+  Duration _lastPosition = Duration.zero;
+
+  void record(String prefix, String level, String text) {
+    if (level != 'error' && level != 'fatal') return;
+    final category = mpvFailureCategory(prefix, text);
+    if (category != null) code = category;
+  }
+
+  void playbackHealthy() => code = null;
+
+  void beginFile() {
+    playbackHealthy();
+    _lastPosition = Duration.zero;
+  }
+
+  void positionChanged(Duration position,
+      {required bool playing, required bool buffering}) {
+    if (playing && !buffering && position > _lastPosition) playbackHealthy();
+    _lastPosition = position;
+  }
 }
