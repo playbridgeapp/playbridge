@@ -28,6 +28,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let appLevel: Double
     let appMuted: Bool
     let engineChrome: PlayerEngineChrome
+    /// More than one queue item; a one-item queue hides the Playlist button.
+    let hasPlaylist: Bool
 
     func makeUIViewController(context: Context) -> MPVViewController {
         let vc = MPVViewController()
@@ -50,6 +52,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.appLevel = appLevel
         vc.appMuted = appMuted
         vc.bindEngineChrome(engineChrome)
+        vc.hasPlaylist = hasPlaylist
         return vc
     }
 
@@ -66,6 +69,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.appLevel = appLevel
         uiViewController.appMuted = appMuted
         uiViewController.bindEngineChrome(engineChrome)
+        uiViewController.hasPlaylist = hasPlaylist
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
@@ -134,6 +138,9 @@ class MPVViewController: UIViewController {
     /// burst of steps cannot interleave a read-modify-write on the core.
     var appLevel: Double = PlayerAppVolume.defaultLevel {
         didSet { if appLevel != oldValue { applyAppVolumeProperty() } }
+    }
+    var hasPlaylist = false {
+        didSet { if hasPlaylist != oldValue { playbackState.hasPlaylist = hasPlaylist } }
     }
     var appMuted: Bool = false {
         didSet { if appMuted != oldValue { applyAudibleMute() } }

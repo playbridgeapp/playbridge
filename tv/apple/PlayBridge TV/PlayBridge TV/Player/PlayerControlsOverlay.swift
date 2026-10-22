@@ -14,6 +14,7 @@ class PlayerControlsData: ObservableObject {
     @Published var bufferedTime: Double = 0
     @Published var showUI: Bool = true
     @Published var isLooping: Bool = false
+    @Published var hasPlaylist = false
     @Published var activeSkipSegment: SkipSegment?
     @Published var skipControlsEnabled = true
     
@@ -330,17 +331,19 @@ struct PlayerControlsOverlay: View {
                                 }
                                 .buttonStyle(.card)
                                 
-                                // Playlist button
-                                Button(action: { onTogglePlaylist() }) {
-                                    VStack(spacing: 6) {
-                                        Image(systemName: "list.bullet")
-                                            .font(.system(size: 26))
-                                        Text("Playlist")
-                                            .font(.system(size: 16, weight: .medium))
+                                if data.hasPlaylist {
+                                    // Playlist button
+                                    Button(action: { onTogglePlaylist() }) {
+                                        VStack(spacing: 6) {
+                                            Image(systemName: "list.bullet")
+                                                .font(.system(size: 26))
+                                            Text("Playlist")
+                                                .font(.system(size: 16, weight: .medium))
+                                        }
+                                        .frame(width: 100, height: 70)
                                     }
-                                    .frame(width: 100, height: 70)
+                                    .buttonStyle(.card)
                                 }
-                                .buttonStyle(.card)
                             }
                             .disabled(data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
