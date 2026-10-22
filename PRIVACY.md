@@ -1,6 +1,6 @@
 # PlayBridge Privacy Policy
 
-**Last updated: 21 October 2026**
+**Last updated: 22 October 2026**
 
 This file mirrors the policy published at <https://playbridge.app/privacy>. If the
 two differ, the website version is current. The browser extension also has its
@@ -12,17 +12,18 @@ stay local. Browsing the web, searching, updating filter lists, and using a
 remote receiver or proxy can send data outside your local network.
 
 A few other things also leave your network: update checks to playbridge.app, and
-lookups for library metadata, subtitles, and skip-intro times. Each app's section
+lookups for subtitles and skip-intro times. Each app's section
 below lists them.
 
 This policy covers the Android phone app, the Android TV / Fire TV receiver and
 its GeckoView browser plugin, PlayBridge Desktop, the browser extension, the CLI,
-casting to DLNA / UPnP TVs, and the pre-release iPhone and Apple TV apps.
+casting to DLNA / UPnP TVs, and the iPhone, iPad, and Apple TV apps (TestFlight
+beta).
 
 ## In every app
 
 - There is no PlayBridge account and no PlayBridge server that stores your
-  browsing, library, or casting history. What the apps save stays on your devices.
+  browsing or casting history. What the apps save stays on your devices.
 - None of the apps include an analytics, advertising, or crash-reporting SDK. The
   Android apps write crash and diagnostic logs to the device only. A log leaves
   the device only if you choose to share it.
@@ -38,9 +39,8 @@ casting to DLNA / UPnP TVs, and the pre-release iPhone and Apple TV apps.
 ## Android phone (sender)
 
 **On the phone.** Browsing history, bookmarks, open tabs, downloads, cast history,
-library and watchlist entries, watch progress and resume positions, installed
-add-ons, settings, saved receivers, and any keys you enter (for example TMDB,
-OMDb, debrid, or backup credentials). Receiver tokens are encrypted with a key
+watch progress and resume positions, settings, saved receivers, and any API keys
+or account details you enter for optional features or backups. Receiver tokens are encrypted with a key
 held in the Android Keystore. Clear history from the History screen and remove
 receivers from the Connection screen. Android's own backup can include this app
 data, depending on your device settings.
@@ -56,15 +56,15 @@ data, depending on your device settings.
   downloads its own filter lists.
 - On launch, the app asks playbridge.app whether a newer version exists (see
   [Update checks](#update-checks)).
-- The library uses the Cinemeta add-on (installed by default) and any add-ons you
-  add. It also uses TMDB and OMDb when you enter an API key for them, OpenSubtitles
-  (through its Stremio add-on) for subtitles, and Kitsu to match anime titles.
-  Those services receive the titles and IDs you look up.
-- The **Library** tile on the dashboard opens streams.playbridge.app, a website
-  that runs in the in-app browser.
-- GitHub builds only: debrid services (Real-Debrid, AllDebrid, Premiumize,
-  TorBox) when you add an account, and device plugins, which are off until you
-  turn them on.
+- The older built-in library, which is deprecated and will be removed, looks up
+  title details from public metadata services while you browse it. Those
+  services receive the titles and IDs you look up.
+- Optional services you set up yourself, with your own API key or account,
+  receive the requests you make through them. Nothing is sent to them until you
+  set them up.
+- **Bridged apps** are websites that open in the in-app browser and can cast
+  through PlayBridge. The app adds one, streams.playbridge.app, on first launch,
+  and you can remove it. Each bridged app handles data under its own policy.
 - If you turn on automatic backup, the app uploads its export file to the
   S3-compatible storage you configure.
 - Subtitle language detection uses Google ML Kit's on-device language ID. The text
@@ -93,9 +93,9 @@ settings.
 - Media, subtitles, and artwork from the addresses a sender supplies, with the
   request headers it supplies.
 - When a cast includes an IMDb or TMDB ID, the receiver looks up subtitles from
-  OpenSubtitles (through its Stremio add-on) and skip-intro times from IntroDB and
-  TheIntroDB. These services receive the ID and, for episodes, the season and
-  episode numbers. You can choose which skip-intro provider to use, or set your
+  a public OpenSubtitles index (opensubtitles-v3.strem.io) and skip-intro times
+  from IntroDB and TheIntroDB. These services receive the ID and, for episodes,
+  the season and episode numbers. You can choose which skip-intro provider to use, or set your
   own address for each.
 - The built-in browser blocks ads with EasyList filter lists, downloaded at most
   once a day.
@@ -172,7 +172,7 @@ endpoints do not log who asked. Updates download from GitHub Releases. Google
 Play builds point you to the Play Store, which installs the update. The extension
 updates through your browser's add-on store.
 
-## iPhone (sender, pre-release)
+## iPhone and iPad (sender, TestFlight beta)
 
 The iPhone sender stores browser history, bookmarks, downloads, cast history,
 settings, and saved receiver details on your device. Receiver pairing credentials
@@ -182,7 +182,7 @@ blocker downloads filter lists from their publishers (EasyList, uBlock Origin's
 lists on GitHub, and a short PlayBridge list on playbridge.app). Tab icons come
 from Google's favicon service.
 
-## Apple TV (receiver, pre-release)
+## Apple TV (receiver, TestFlight beta)
 
 The Apple TV receiver stores cast history and favorites on the Apple TV,
 including media addresses, titles, request headers sent with a cast, and playback
@@ -210,8 +210,8 @@ search terms. Ad-blocking list publishers receive a request when a list
 downloads. Those sites and publishers handle data under their own policies.
 
 When you cast, the selected receiver receives the media address and information
-needed to play it, such as request headers. If you configure a remote proxy,
-add-on, debrid account, or another third-party service, requests and media
+needed to play it, such as request headers. If you configure a remote proxy, a
+bridged app, or another third-party service, requests and media
 information also pass through that service. Review its privacy policy before
 using it.
 
@@ -219,7 +219,7 @@ using it.
 
 Information kept by PlayBridge apps stays on your devices until you clear it or
 remove the app, subject to your device's storage and backup settings. External
-websites, search providers, add-ons, receivers, and services control their own
+websites, search providers, bridged apps, receivers, and services control their own
 retention. Operating-system and app-store diagnostics are controlled by your
 device settings.
 

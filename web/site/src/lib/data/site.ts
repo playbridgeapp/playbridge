@@ -4,7 +4,7 @@ export const SITE = {
   /** Document title for the homepage (H1 stays `tagline`). */
   title: 'PlayBridge app — Cast your phone to your TV',
   description:
-    'Open-source PlayBridge app: browse on your phone, watch on Android TV, Apple TV, Desktop, or a DLNA TV. Local network, no account.',
+    'Open-source PlayBridge app: browse on your Android phone or iPhone, watch on Android TV, Apple TV, Desktop, or a DLNA TV. Local network, no account.',
   url: 'https://playbridge.app',
   ogImage: '/og.png',
   twitter: '@playbridge',
@@ -61,6 +61,12 @@ export const SENDERS: Platform[] = [
     href: '/senders#android'
   },
   {
+    icon: 'apple',
+    name: 'iPhone & iPad',
+    desc: 'Browser with video detection, pairing, and the remote. TestFlight beta.',
+    href: '/senders#iphone'
+  },
+  {
     icon: 'firefox',
     name: 'Browser extension',
     desc: 'Detect and cast media from Firefox or Chrome / Edge / Brave tabs.',
@@ -90,7 +96,7 @@ export const RECEIVERS: Platform[] = [
   {
     icon: 'apple',
     name: 'Apple TV',
-    desc: 'Native tvOS receiver with AVPlayer (build from source).',
+    desc: 'Native tvOS receiver with AVPlayer, VLC, or MPV. TestFlight beta.',
     href: '/receivers#appletv'
   },
   {
@@ -365,6 +371,26 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     }
   },
   {
+    id: 'iphone',
+    label: 'iPhone',
+    icon: 'apple',
+    sender: {
+      title: 'iPhone & iPad (sender)',
+      steps: [
+        ['Join the beta', 'Open the TestFlight invite on your iPhone or iPad and install PlayBridge.'],
+        ['Pair', 'Pick a PlayBridge receiver on your Wi‑Fi and type the 6-digit code it shows.'],
+        ['Browse & cast', 'Open a video in the built-in browser and cast it. The Cast tab is your remote.']
+      ],
+      cmd: 'https://github.com/playbridgeapp/PlayBridge/tree/main/mobile/apple',
+      downloadUrl: 'https://testflight.apple.com/join/W4mM7jkd',
+      meta: [
+        ['role', 'sender'],
+        ['store', 'TestFlight beta'],
+        ['min', 'iOS 16']
+      ]
+    }
+  },
+  {
     id: 'extension',
     label: 'Extension',
     icon: 'firefox',
@@ -507,19 +533,20 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     receiver: {
       title: 'Apple TV (receiver)',
       steps: [
-        ['Clone repository', 'git clone the PlayBridge monorepo.'],
-        ['Open Xcode', 'Open the tv/apple target folder in Xcode.'],
-        ['Run on Apple TV', 'Select your Apple TV as the run destination.']
+        ['Join the beta', 'Open the TestFlight invite on an iPhone or Mac signed in to the same Apple ID as the Apple TV.'],
+        ['Install on Apple TV', 'Open TestFlight on the Apple TV and install PlayBridge.'],
+        ['Pair senders', 'A phone connecting for the first time shows a 6-digit code on the TV. Type it on the phone.']
       ],
-      cmd: 'git clone https://github.com/playbridgeapp/PlayBridge.git',
+      cmd: 'https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple',
+      downloadUrl: 'https://testflight.apple.com/join/WgjHrskB',
       meta: [
         ['role', 'receiver'],
-        ['install', 'Build from source'],
-        ['platform', 'tvOS 16.0+']
+        ['store', 'TestFlight beta'],
+        ['min', 'tvOS 17']
       ],
       notice: {
-        badge: 'Pre-release',
-        text: 'Not yet on TestFlight. Developers and testers can build from source with Xcode.'
+        badge: 'Beta',
+        text: 'Developers can also build it from source in Xcode (tv/apple).'
       }
     }
   },

@@ -17,7 +17,7 @@
   <div class="prose">
     <h3 id="report">Report a vulnerability</h3>
     <p>Found a vulnerability? Please email <a href="mailto:{SITE.email}">{SITE.email}</a> rather than filing a public issue. Include the app, its version, your platform, and steps to reproduce.</p>
-    <p>We confirm receipt within 72 hours and aim to ship a fix within 14 days for high-severity issues. Credits go in the release notes unless you ask otherwise.</p>
+    <p>PlayBridge is a small open-source project, so there is no fixed response time. Fixes ship in the next release of the affected app, and credits go in the release notes unless you ask otherwise.</p>
     <p>Machine-readable contact details are in <a href="/.well-known/security.txt" data-sveltekit-reload>/.well-known/security.txt</a>.</p>
 
     <h3 id="scope">Scope</h3>
@@ -27,10 +27,10 @@
       <li>PlayBridge Desktop for macOS, Windows, and Linux</li>
       <li>PlayBridge Video Detector browser extension (Chrome and Firefox)</li>
       <li>The <code>playbridge</code> CLI and its installers</li>
-      <li>The iPhone and Apple TV apps (pre-release, built from source)</li>
+      <li>The iPhone, iPad, and Apple TV apps (TestFlight beta)</li>
       <li>playbridge.app, including its download and update endpoints</li>
     </ul>
-    <p>Problems in third-party websites, add-ons, debrid services, or a TV's own DLNA software belong with their operators. The design does not try to protect secrets on a device whose operating system is already compromised (rooted or jailbroken).</p>
+    <p>Problems in third-party websites, bridged apps, services you connect yourself, or a TV's own DLNA software belong with their operators. The design does not try to protect secrets on a device whose operating system is already compromised (rooted or jailbroken).</p>
 
     <h3 id="versions">Supported versions</h3>
     <p>PlayBridge ships 0.x Alpha releases, versioned separately for each app. Security fixes go into the latest release of each app and the <code>main</code> branch. Older releases do not get backports, so update to the latest release.</p>

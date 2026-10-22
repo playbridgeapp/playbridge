@@ -245,6 +245,7 @@
     if (host === 'chromewebstore.google.com') return 'Chrome Web Store';
     if (host === 'addons.mozilla.org') return 'Firefox Add-ons';
     if (host === 'play.google.com') return 'Google Play';
+    if (host === 'testflight.apple.com') return 'TestFlight';
     return '';
   }
 
@@ -425,15 +426,6 @@
         <div class="cta-row">
           {#if product.id === 'dlna'}
             <a href="/senders#android" class="btn btn--primary">Get the Android sender</a>
-          {:else if product.id === 'appletv'}
-            <a
-              href="https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn--primary"
-            >
-              <Icon name="github" size={13} /> View tvOS source
-            </a>
           {:else}
             {#if playStoreUrl}
               <a
@@ -454,12 +446,16 @@
                 class:btn--primary={!playStoreUrl}
               >
                 {#if downloadStore}
-                  {#if downloadStore === 'Firefox Add-ons'}
-                    <Icon name="firefox" size={13} />
+                  {#if downloadStore === 'TestFlight'}
+                    <Icon name="apple" size={13} /> Join the TestFlight beta
                   {:else}
-                    <Icon name="link" size={13} stroke={2.0} />
+                    {#if downloadStore === 'Firefox Add-ons'}
+                      <Icon name="firefox" size={13} />
+                    {:else}
+                      <Icon name="link" size={13} stroke={2.0} />
+                    {/if}
+                    Get it on {downloadStore}
                   {/if}
-                  Get it on {downloadStore}
                 {:else if playStoreUrl}
                   <Icon name="download" size={13} stroke={2.0} /> Download APK
                 {:else}
