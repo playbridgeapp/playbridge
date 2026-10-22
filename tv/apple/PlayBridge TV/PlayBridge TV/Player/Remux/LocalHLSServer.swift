@@ -38,8 +38,10 @@ final class LocalHLSServer {
         private func prefetchNext(_ remuxer: HLSRemuxer) {
             prefetching = false
             guard latestRequested >= 0, ready.values.reduce(0, { $0 + $1.count }) < Self.aheadBytes else { return }
-            let window = (latestRequested + 1)...min(latestRequested + Self.aheadSegments, remuxer.segments.count - 1)
-            guard !window.isEmpty, let next = window.first(where: { ready[$0] == nil }),
+            // Empty once the last segment has been requested (lower > upper would trap).
+            let first = latestRequested + 1
+            let last = min(latestRequested + Self.aheadSegments, remuxer.segments.count - 1)
+            guard first <= last, let next = (first...last).first(where: { ready[$0] == nil }),
                   let data = try? remuxer.segment(next) else { return }
             ready[next] = data
             schedulePrefetch(remuxer)
