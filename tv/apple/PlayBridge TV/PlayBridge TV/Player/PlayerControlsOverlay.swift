@@ -359,21 +359,25 @@ struct PlayerControlsOverlay: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(data.title).font(.system(size: 38, weight: .semibold)).lineLimit(1)
-                Spacer()
-                Text(engine.name).font(.system(size: 18, weight: .semibold))
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            if !data.displaySubtitle.isEmpty {
-                Text(data.displaySubtitle).font(.system(size: 29)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
-            }
+            // AVPlayer's title block: a large bold title with the action row level
+            // with it. The Switch menu names the engine, so no engine badge here.
             HStack(alignment: .bottom) {
-                Text(ChapterNavigation.timelineCaption(chapters: data.chapters, segments: data.skipSegments,
-                    positionMs: PlaybackTime.milliseconds(displayTime), durationMs: durationMs) ?? "")
-                    .font(.system(size: 24, weight: .medium)).lineLimit(1).frame(height: 32)
-                Spacer()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(data.title).font(.system(size: 48, weight: .bold)).lineLimit(1)
+                        .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+                    if !data.displaySubtitle.isEmpty {
+                        Text(data.displaySubtitle).font(.system(size: 28, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                    }
+                    let caption = ChapterNavigation.timelineCaption(chapters: data.chapters, segments: data.skipSegments,
+                        positionMs: PlaybackTime.milliseconds(displayTime), durationMs: durationMs) ?? ""
+                    if !caption.isEmpty {
+                        Text(caption).font(.system(size: 24, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                    }
+                }
+                .layoutPriority(1)
+                Spacer(minLength: 32)
                 HStack(spacing: 24) {
                     action("Loop", icon: "repeat", control: .loop, tint: data.isLooping ? Theme.accent : .white,
                            perform: onLoopToggle)
@@ -514,6 +518,7 @@ private struct PlaybackInfoPanel: View {
                         VStack(alignment: .leading, spacing: 14) {
                             if data.panelTab == .info {
                                 HStack(alignment: .bottom, spacing: 32) {
+                                    poster
                                     info.frame(maxWidth: .infinity, alignment: .leading)
                                     panelRow(index: 0, row: data.panelRows[0]).frame(width: 340)
                                 }
@@ -545,7 +550,8 @@ private struct PlaybackInfoPanel: View {
         }
         .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: data.panelTab == .chapters ? 400 : 380)
+        // Info fits its poster and synopsis; Chapters its cards.
+        .frame(height: data.panelTab == .settings ? 380 : 420)
         .background(.ultraThinMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28))
         .font(.system(size: 26)).foregroundStyle(.white)
     }
@@ -585,9 +591,25 @@ private struct PlaybackInfoPanel: View {
         .padding(.vertical, 24).padding(.horizontal, 24)
     }
 
+    /// AVPlayer's Info artwork: the poster beside the title and synopsis.
+    @ViewBuilder
+    private var poster: some View {
+        let urls = ArtworkURL.candidates(data.metadata.posterURL, kind: .poster)
+        if !urls.isEmpty {
+            ArtworkImage(urls: urls) { image in
+                image.resizable().aspectRatio(2 / 3, contentMode: .fill)
+            } placeholder: {
+                Color.white.opacity(0.06)
+            }
+            .frame(width: 160, height: 240)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.4), radius: 12, y: 6)
+        }
+    }
+
     private var info: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(data.title).font(.system(size: 32, weight: .semibold)).lineLimit(1)
+            Text(data.title).font(.system(size: 32, weight: .semibold)).lineLimit(2)
             if !data.displaySubtitle.isEmpty { Text(data.displaySubtitle).foregroundStyle(.white.opacity(0.72)) }
             HStack(spacing: 16) {
                 ForEach([data.metadata.year, data.metadata.rating, data.metadata.runtime].filter { !$0.isEmpty }, id: \.self) { text in

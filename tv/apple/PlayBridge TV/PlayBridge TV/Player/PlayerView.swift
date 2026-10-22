@@ -314,7 +314,8 @@ struct PlayerView: View {
             episode: metadata.hasEpisode ? Int(metadata.episode) : nil,
             episodeTitle: metadata.hasEpisodeTitle ? metadata.episodeTitle : nil),
             year: metadata.year, rating: metadata.rating, runtime: metadata.runtime,
-            overview: metadata.overview, genres: metadata.genres)
+            overview: metadata.overview, genres: metadata.genres,
+            posterURL: metadata.hasPosterURL ? metadata.posterURL : "")
     }
 
     private func applyPlaylistHighlight(_ effect: PlayerRemoteEffect) {
