@@ -183,6 +183,9 @@ class MpvEngine extends PlayerEngine {
   }
 
   @override
+  bool get playbackRequested => player.state.playing;
+
+  @override
   String get state {
     if (player.state.completed) return 'ended';
     if (player.state.buffering) return 'buffering';

@@ -294,6 +294,7 @@ struct ReceiverReviewTests {
         runTransportChromeTests()
         runTouchScrubTests()
         runPlaybackFailureSessionTests()
+        runPlaybackStallTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runPlayerTuningTests()
@@ -1997,4 +1998,34 @@ private func runTouchScrubTests() {
     assert(invalid.begin(position: .nan, duration: 1000) == nil)
     assert(invalid.begin(position: 100, duration: 0) == nil)
     print("PASS: phone seeks, item/error/teardown discard touch transactions and fence old pan callbacks")
+}
+
+private func runPlaybackStallTests() {
+    for firstFrame in [false, true] {
+        var d = PlaybackStallDetector()
+        let timeout = firstFrame ? 45.0 : 30.0
+        assert(!d.sample(now: 0, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(!d.sample(now: timeout - 0.01, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(d.sample(now: timeout, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(!d.sample(now: timeout + 1, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+    }
+    for reason in ["position", "buffer", "pause", "seek", "playing"] {
+        var d = PlaybackStallDetector()
+        _ = d.sample(now: 0, buffering: true, playbackRequested: true, hasFirstFrame: false, position: 0, bufferedAhead: 0)
+        let p = reason == "position" ? 1.0 : 0
+        let b = reason == "buffer" ? 1.0 : 0
+        assert(!d.sample(now: 29, buffering: reason != "playing", playbackRequested: reason != "pause", hasFirstFrame: false,
+                         position: p, bufferedAhead: b, seeking: reason == "seek"))
+        assert(!d.sample(now: 30, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+        assert(!d.sample(now: 58.99, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+        assert(d.sample(now: 60, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+    }
+    var session = PlaybackFailureSession()
+    let attempt = session.attempt
+    assert(session.presentStall(attempt: attempt))
+    assert(session.sentence == "The video stopped loading")
+    assert(!session.presentStall(attempt: attempt))
+    assert(session.close(attempt: attempt))
+    assert(!session.presentStall(attempt: attempt))
+    print("PASS: stall startup/mid-play budgets, pause/seek/progress/buffer resets and failure fencing")
 }

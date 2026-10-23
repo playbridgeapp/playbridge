@@ -33,7 +33,7 @@ internal class RendererFailureReporter {
             mediaKind = mediaKind,
             playbackId = playbackId,
             currentItemId = currentItemId,
-            error = userMessage(message),
+            error = if (message == PlaybackStallDetector.MESSAGE) message else userMessage(message),
         ))
         return null
     }

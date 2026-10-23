@@ -17,6 +17,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Player/PlaybackEngine.swift" \
   "$source_root/Player/PlayerRemoteNavigation.swift" \
   "$source_root/Player/TransportChrome.swift" \
+  "$source_root/Player/PlaybackStallDetector.swift" \
   "$source_root/Player/ArtworkURL.swift" \
   "$source_root/Player/TouchScrub.swift" \
   "$source_root/Player/PlayerPlaybackReport.swift" \
