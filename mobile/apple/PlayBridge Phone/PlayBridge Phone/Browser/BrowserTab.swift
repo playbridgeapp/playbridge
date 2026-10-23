@@ -475,6 +475,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if isBridgedApp {
             cc.addUserScript(WKUserScript(source: BrowserMoviFullscreenScript.source,
                 injectionTime: .atDocumentStart, forMainFrameOnly: true, in: BrowserMoviFullscreenScript.world))
+            #if DEBUG
+            cc.addUserScript(WKUserScript(source: BridgedAppStartupTiming.paintScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+            #endif
         }
         if networkCaptureEnabled {
             cc.addUserScript(WKUserScript(source: BrowserNetworkScript.source,
@@ -518,8 +522,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             cc.add(handler, contentWorld: BrowserMoviFullscreenScript.world, name: "moviFullscreen")
             #if DEBUG
             cc.add(handler, contentWorld: .defaultClient, name: "startupPaint")
-            cc.addUserScript(WKUserScript(source: BridgedAppStartupTiming.paintScript,
-                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
             #endif
         }
 

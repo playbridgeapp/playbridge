@@ -4,6 +4,7 @@ Browser rule readiness (macOS host only; no simulator or phone):
 
 ```sh
 bash mobile/apple/tests/run-browser-readiness-checks.sh
+node --test mobile/apple/tests/BridgedAppStartupPaintTests.js
 ```
 
 Checks ordinary versus bridged initial loads, pending/empty/installed cached rules,
