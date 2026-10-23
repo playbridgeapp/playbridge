@@ -51,6 +51,9 @@ jobs:
       - name: Bridged-app declarations
         run: bash mobile/apple/tests/run-bridged-app-declaration-checks.sh
 
+      - name: Browser startup readiness
+        run: bash mobile/apple/tests/run-browser-readiness-checks.sh
+
       - name: Page cast model
         run: bash mobile/apple/tests/run-page-cast-model-checks.sh
 
@@ -100,7 +103,7 @@ jobs:
         run: bash mobile/apple/tests/run-apple-upstream-checks.sh
 
       - name: Page cast and detection scripts
-        run: node --test mobile/apple/tests/PageCastScriptTests.js mobile/apple/tests/DetectionScriptTests.js
+        run: node --test mobile/apple/tests/PageCastScriptTests.js mobile/apple/tests/DetectionScriptTests.js mobile/apple/tests/BridgedAppStartupPaintTests.js
 
       - name: TV progress webhook
         run: bash tv/apple/tests/run-progress-webhook-checks.sh
