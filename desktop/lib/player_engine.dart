@@ -212,6 +212,9 @@ abstract class PlayerEngine extends ChangeNotifier {
   VoidCallback? onCompleted;
   void Function(String)? onError;
 
+  /// Native pause intent, independent of buffering. Null lets test/alternate engines use the controller intent.
+  bool? get playbackRequested => null;
+
   String get state; // idle | buffering | playing | paused | ended
   int get positionMs;
   int get durationMs;

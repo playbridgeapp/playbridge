@@ -149,6 +149,7 @@ struct ReceiverReviewTests {
         assert(PlaybackEngine.allCases.map(\.name) == ["AVPlayer", "MPV"])
         assert(PlaybackEngine.allCases.map(\.menuID) == [0, 2])
         assert(PlaybackEngine.capabilityPlayers == ["avplayer", "mpv"])
+        assert(PlaybackEngine.defaultEngine == .mpv, "mpv plays the widest range; AVPlayer stays selectable")
         assert(PlaybackEngine.menuOrder(current: .avplayer) == [.avplayer, .mpv])
         assert(PlaybackEngine.menuOrder(current: .mpv) == [.mpv, .avplayer])
         assert(PlaybackEngine(command: "native") == .avplayer)
@@ -293,6 +294,7 @@ struct ReceiverReviewTests {
         runTransportChromeTests()
         runTouchScrubTests()
         runPlaybackFailureSessionTests()
+        runPlaybackStallTests()
         runPlayerControlsAuditTests()
         runPlayerSettingsTests()
         runPlayerTuningTests()
@@ -1463,22 +1465,26 @@ private func runTransportChromeTests() {
     func proposal(_ translation: Double, velocity: Double = 0, duration: Double = 1000) -> Double {
         TransportScrub.proposal(origin: 500, translationX: translation, velocityX: velocity, duration: duration)
     }
+    // 1000 s item: a full 1920 pt swipe spans the 600 s cap (0.3125 s per point).
     assert(proposal(0) == 500)
-    assert(proposal(10) == 520 && proposal(-10) == 480)
-    assert(proposal(10, velocity: 299) == 520 && proposal(10, velocity: -299) == 520)
-    assert(proposal(10, velocity: 300) == 520)
-    assert(proposal(10, velocity: 1150) == 550)
-    assert(proposal(10, velocity: 2000) == 580 && proposal(10, velocity: -2000) == 580)
-    assert(proposal(10, velocity: 10000) == 580, "Gain caps at 4x")
-    assert(proposal(-1000) == 0 && proposal(1000) == 1000)
+    assert(proposal(192) == 560 && proposal(-192) == 440)
+    assert(proposal(192, velocity: 299) == 560 && proposal(192, velocity: -299) == 560)
+    assert(proposal(192, velocity: 300) == 560)
+    assert(proposal(192, velocity: 1150) == 590)
+    assert(proposal(192, velocity: 2000) == 620 && proposal(192, velocity: -2000) == 620)
+    assert(proposal(192, velocity: 10000) == 620, "Gain caps at 2x")
+    assert(proposal(1920) == 1000 && proposal(-1920) == 0, "Full swipe covers the capped span")
     assert(proposal(.greatestFiniteMagnitude) == 1000 && proposal(-.greatestFiniteMagnitude) == 0)
     for invalid in [Double.nan, .infinity, -.infinity] {
         assert(proposal(invalid) == 500)
-        assert(proposal(10, velocity: invalid) == 520)
-        assert(proposal(10, duration: invalid) == 500)
+        assert(proposal(192, velocity: invalid) == 560)
+        assert(proposal(192, duration: invalid) == 500)
     }
-    assert(proposal(10, duration: 0) == 500 && proposal(10, duration: -1) == 500)
-    assert(TransportScrub.proposal(origin: 5, translationX: 50, velocityX: 0, duration: 10) == 10)
+    assert(proposal(192, duration: 0) == 500 && proposal(192, duration: -1) == 500)
+    // A 42-minute episode: a 300 pt swipe moves ~94 s, not to either end.
+    assert(abs(TransportScrub.proposal(origin: 1000, translationX: 300, velocityX: 0, duration: 2520) - 1093.75) < 0.001)
+    // Short items: the whole item per full swipe (60 s minimum span).
+    assert(TransportScrub.proposal(origin: 5, translationX: 1920, velocityX: 0, duration: 10) == 10)
     assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
     print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
 
@@ -1649,6 +1655,12 @@ private func runTransportChromeTests() {
         == [.loop, .speed, .switchEngine, .subtitles, .audio, .playlist])
     assert(TransportAction.switchEngine.moving(1, hasPlaylist: false, hasSubtitles: true) == .subtitles)
     assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true) == .audio)
+    // One audio track: no Audio button; Right from the last button stays put.
+    assert(TransportAction.available(hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false)
+        == [.loop, .speed, .switchEngine, .subtitles])
+    assert(TransportAction.available(hasPlaylist: true, hasAudioChoice: false) == [.loop, .speed, .switchEngine, .playlist])
+    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false) == .subtitles)
+    assert(TransportAction.switchEngine.moving(1, hasPlaylist: true, hasAudioChoice: false) == .playlist)
     assert(TransportAction.subtitles.menu == .subtitles)
     let subtitleRows = TransportMenuModel.subtitleRows(tracks: [(id: 3, name: "English"), (id: 4, name: "SDH")], current: 4)
     assert(subtitleRows.map(\.id) == [-1, 3, 4] && subtitleRows.map(\.title).first == "Off")
@@ -1666,6 +1678,17 @@ private func runTransportChromeTests() {
     let posterArt = ArtworkURL.candidates("https://image.tmdb.org/t/p/w342/p.jpg", kind: .poster)
     assert(posterArt.map(\.absoluteString).first == "https://image.tmdb.org/t/p/w780/p.jpg" && posterArt.count == 2)
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w1280/p.jpg", kind: .poster).count == 1, "Never shrinks")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w300/b.jpg", kind: .card).first?.absoluteString
+        == "https://image.tmdb.org/t/p/w780/b.jpg")
+    assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/w780/b.jpg", kind: .card).count == 1)
+    // Playlist card text: episode lines, else the item title, else a numbered fallback.
+    let episodeCard = PlaylistCardText.lines(title: "Below", season: 1, episode: 6, episodeTitle: "The Tide", index: 1)
+    assert(episodeCard.eyebrow == "S1 · E6" && episodeCard.title == "The Tide")
+    assert(PlaylistCardText.lines(title: "Below", season: 1, episode: 6, episodeTitle: " ", index: 1).title == "Below")
+    assert(PlaylistCardText.lines(title: nil, season: 2, episode: 3, episodeTitle: nil, index: 0).title == "Episode 3")
+    let movieCard = PlaylistCardText.lines(title: "Heat", season: nil, episode: nil, episodeTitle: nil, index: 0)
+    assert(movieCard.eyebrow.isEmpty && movieCard.title == "Heat")
+    assert(PlaylistCardText.lines(title: "", season: nil, episode: 4, episodeTitle: "x", index: 2).title == "Item 3")
     assert(ArtworkURL.candidates("https://image.tmdb.org/t/p/original/b.jpg", kind: .backdrop).count == 1)
     assert(ArtworkURL.candidates("https://images.metahub.space/background/medium/tt1/img", kind: .backdrop).count == 1)
     assert(ArtworkURL.candidates("https://image.tmdb.org/other/w780/b.jpg", kind: .backdrop).count == 1)
@@ -1749,15 +1772,63 @@ private func runTransportChromeTests() {
     assert(PlaybackSurfaceState.buffering.rawValue == "buffering")
     print("PASS: playback surface reduction, user-pause/pre-play precedence and spinner visibility")
 
-    let open = "The video couldn't be opened."
-    let generic = "This video couldn't be played."
+    let open = "The media couldn't be loaded"
+    let generic = "The media couldn't be loaded"
     assert(PlaybackFailureMessage.sentence(forMpvCode: -13) == open)
     for code: Int32 in -11 ... -5 { assert(PlaybackFailureMessage.sentence(forMpvCode: code) == open) }
-    for code: Int32 in [0, -1, -4, -12, -14, -16, Int32.min, Int32.max] {
+    for code: Int32 in [0, -1, -4, -12, -14, Int32.min, Int32.max] {
         assert(PlaybackFailureMessage.sentence(forMpvCode: code) == generic)
     }
     for sentence in [open, generic] { assert(!sentence.contains("://") && !sentence.contains("//")) }
-    print("PASS: fixed playback failure sentences for mpv loading/init codes and unknown errors")
+    let cases: [(PlaybackFailureMessage.Category, String)] = [
+        (.unsupported, "This video format isn't supported"),
+        (.http(401), "The link was refused (HTTP 401)"), (.http(403), "The link was refused (HTTP 403)"),
+        (.http(404), "The video wasn't found (HTTP 404)"), (.http(410), "The video wasn't found (HTTP 410)"),
+        (.http(503), "The media couldn't be loaded (HTTP 503)"), (.http(999), generic),
+        (.network, "The TV couldn't reach the video server"), (.stall, "The video stopped loading"),
+        (.decoder, "The TV couldn't decode this video"), (.generic, generic),
+    ]
+    for (category, sentence) in cases {
+        assert(PlaybackFailureMessage.sentence(for: category) == sentence)
+        assert(PlaybackFailureMessage.sentence(forMpvCode: -13, category: category) == sentence)
+        var attempt = PlaybackFailureSession()
+        assert(attempt.present(code: -13, category: category, attempt: attempt.attempt))
+        assert(attempt.sentence == sentence)
+    }
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -17) == "This video format isn't supported")
+    let logs: [(String, PlaybackFailureMessage.Category)] = [
+        ("HTTP error 403 Forbidden https://private.example/token", .http(403)),
+        ("Failed to resolve hostname private.example", .network),
+        ("Failed to recognize file format https://private.example/token", .unsupported),
+    ]
+    for (text, category) in logs { assert(PlaybackFailureMessage.category(prefix: "cplayer", text: text) == category) }
+    assert(PlaybackFailureMessage.category(prefix: "sub", text: "Failed to open subtitle") == nil)
+    assert(PlaybackFailureMessage.category(prefix: "cplayer", text: "https://private.example/http_403") == nil)
+    for prefix in ["vd", "ad", "cplayer", "ffmpeg", "ffmpeg/video"] {
+        for text in ["Failed to initialize a decoder for codec", "Error while decoding frame!"] {
+            assert(PlaybackFailureMessage.category(prefix: prefix, text: text) == nil)
+        }
+    }
+    var failureLogs = PlaybackFailureLogState()
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 404 subtitle missing")
+    assert(failureLogs.category == .http(404))
+    failureLogs.playbackHealthy() // First frame / PLAYBACK_RESTART.
+    assert(failureLogs.category == nil)
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -13, category: failureLogs.category) == generic)
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 404 segment missing")
+    failureLogs.positionChanged(1)
+    assert(failureLogs.category == nil, "Progress after a recovered HLS error clears the category")
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 403 expired")
+    failureLogs.positionChanged(1)
+    assert(failureLogs.category == .http(403), "Frozen samples preserve current failure evidence")
+    failureLogs.record(prefix: "ffmpeg/https", level: 30, text: "HTTP error 404 warning")
+    assert(failureLogs.category == .http(403), "Debug warnings never classify failures")
+    failureLogs.beginFile()
+    assert(failureLogs.category == nil)
+    failureLogs.record(prefix: "ffmpeg/tcp", level: 20, text: "Connection timed out private.example")
+    assert(failureLogs.category == .network)
+    print("PASS: recovered HTTP errors, native restart/progress resets and error-only classification")
+    print("PASS: safe playback category, HTTP, mpv code, log classification and on-screen/session sentences")
 
     assert(PlaybackFailureModel.actions(hasNextItem: false) == [.tryAgain, .close])
     assert(PlaybackFailureModel.actions(hasNextItem: true) == [.tryAgain, .next, .close])
@@ -1917,17 +1988,18 @@ private func runTouchScrubTests() {
     }
     print("PASS: paused pan gates, horizontal slop, vertical swipe ownership, button/list/Skip focus and invalid durations")
 
+    // 1000 s item: 320 pt of touchpad travel is 100 s (600 s per 1920 pt).
     var scrub = TouchScrubSession()
     let token = scrub.begin(position: 100, duration: 1000)!
     assert(scrub.begin(position: 100, duration: 1000) == nil, "Cannot begin another live pan")
-    assert(scrub.update(token: token, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: token, translationX: 320, velocityX: 0))
     assert(scrub.proposal?.position == 200 && scrub.proposal?.origin == 100)
     scrub.click(by: TransportScrub.clickSkipSeconds)
     assert(scrub.proposal?.position == 210)
-    assert(scrub.update(token: token, translationX: 75, velocityX: 0))
+    assert(scrub.update(token: token, translationX: 480, velocityX: 0))
     assert(scrub.proposal?.position == 260, "Later pan samples preserve click adjustments")
-    assert(scrub.update(token: token, translationX: 50, velocityX: 2000))
-    assert(scrub.proposal?.position == 510, "Fast drag uses the existing fourfold gain")
+    assert(scrub.update(token: token, translationX: 320, velocityX: 2000))
+    assert(scrub.proposal?.position == 310, "Fast drag uses the twofold gain")
     scrub.click(by: 5000)
     assert(scrub.proposal?.position == 1000)
     scrub.click(by: -5000)
@@ -1938,18 +2010,18 @@ private func runTouchScrubTests() {
     print("PASS: pan preview, gain, click accumulation, clamps and mid-pan commit without per-sample seeks")
 
     let releaseToken = scrub.begin(position: 100, duration: 1000)!
-    assert(scrub.update(token: releaseToken, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: releaseToken, translationX: 320, velocityX: 0))
     assert(scrub.release(token: releaseToken) == 200)
     assert(scrub.proposal?.isPanning == false)
-    assert(!scrub.update(token: releaseToken, translationX: 100, velocityX: 0), "Released drag ignores late movement")
+    assert(!scrub.update(token: releaseToken, translationX: 640, velocityX: 0), "Released drag ignores late movement")
     assert(scrub.commit() == TouchScrubSession.Commit(position: 200, requiresSeek: false),
            "Select/Play after release does not seek twice")
     let second = scrub.begin(position: 100, duration: 1000)!
-    assert(scrub.update(token: second, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: second, translationX: 320, velocityX: 0))
     assert(scrub.release(token: second) == 200)
     let third = scrub.begin(position: 200, duration: 1000)!
     assert(scrub.proposal?.origin == 100, "Consecutive drags retain the original pause point")
-    assert(scrub.update(token: third, translationX: 50, velocityX: 0))
+    assert(scrub.update(token: third, translationX: 320, velocityX: 0))
     assert(scrub.release(token: third) == 300)
     assert(scrub.cancel() == 100 && scrub.proposal == nil)
     assert(scrub.cancel() == nil)
@@ -1974,4 +2046,34 @@ private func runTouchScrubTests() {
     assert(invalid.begin(position: .nan, duration: 1000) == nil)
     assert(invalid.begin(position: 100, duration: 0) == nil)
     print("PASS: phone seeks, item/error/teardown discard touch transactions and fence old pan callbacks")
+}
+
+private func runPlaybackStallTests() {
+    for firstFrame in [false, true] {
+        var d = PlaybackStallDetector()
+        let timeout = firstFrame ? 45.0 : 30.0
+        assert(!d.sample(now: 0, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(!d.sample(now: timeout - 0.01, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(d.sample(now: timeout, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+        assert(!d.sample(now: timeout + 1, buffering: true, playbackRequested: true, hasFirstFrame: firstFrame, position: 0, bufferedAhead: 0))
+    }
+    for reason in ["position", "buffer", "pause", "seek", "playing"] {
+        var d = PlaybackStallDetector()
+        _ = d.sample(now: 0, buffering: true, playbackRequested: true, hasFirstFrame: false, position: 0, bufferedAhead: 0)
+        let p = reason == "position" ? 1.0 : 0
+        let b = reason == "buffer" ? 1.0 : 0
+        assert(!d.sample(now: 29, buffering: reason != "playing", playbackRequested: reason != "pause", hasFirstFrame: false,
+                         position: p, bufferedAhead: b, seeking: reason == "seek"))
+        assert(!d.sample(now: 30, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+        assert(!d.sample(now: 58.99, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+        assert(d.sample(now: 60, buffering: true, playbackRequested: true, hasFirstFrame: false, position: p, bufferedAhead: b))
+    }
+    var session = PlaybackFailureSession()
+    let attempt = session.attempt
+    assert(session.presentStall(attempt: attempt))
+    assert(session.sentence == "The video stopped loading")
+    assert(!session.presentStall(attempt: attempt))
+    assert(session.close(attempt: attempt))
+    assert(!session.presentStall(attempt: attempt))
+    print("PASS: stall startup/mid-play budgets, pause/seek/progress/buffer resets and failure fencing")
 }

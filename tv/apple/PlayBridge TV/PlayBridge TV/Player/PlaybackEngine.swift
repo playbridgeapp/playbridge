@@ -20,6 +20,12 @@ enum PlaybackEngine: String, CaseIterable {
 
     static let capabilityPlayers = allCases.map(\.rawValue)
 
+    /// The engine when neither the sender nor Settings picks one. mpv plays the
+    /// widest range of sources (Matroska, AV1, DTS/TrueHD, image subtitles and
+    /// files AVPlayer rejects); AVPlayer stays selectable, and mpv takes over
+    /// whenever AVPlayer fails.
+    static let defaultEngine = PlaybackEngine.mpv
+
     static func migrateLegacyPreference(in defaults: UserDefaults) {
         guard defaults.string(forKey: "preferredPlayer")?.lowercased() == "vlc" else { return }
         defaults.set(PlaybackEngine.mpv.rawValue, forKey: "preferredPlayer")

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import '../mpv_failure_category.dart';
 import '../subtitle_delay.dart';
 import '../video_scaling.dart';
 import 'hls_master_resolver.dart';
@@ -78,19 +79,28 @@ class MpvEngine extends PlayerEngine {
   StreamProxyLease? _proxyLease;
   int _proxyLeaseGeneration = 0;
   bool _pageMedia = false;
+  final _failureLogs = MpvFailureLogState();
   MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
-        if (playing) _maybeArmAudioRoute();
+        if (playing) {
+          _failureLogs.playbackHealthy();
+          _maybeArmAudioRoute();
+        }
         notifyListeners();
       }),
-      player.stream.position.listen((_) {
+      player.stream.position.listen((position) {
+        _failureLogs.positionChanged(position,
+            playing: player.state.playing, buffering: player.state.buffering);
         _maybeArmAudioRoute();
         _emitThrottled();
       }),
       player.stream.duration.listen((_) => notifyListeners()),
       player.stream.height.listen((_) => notifyListeners()),
-      player.stream.buffering.listen((_) => notifyListeners()),
+      player.stream.buffering.listen((buffering) {
+        if (!buffering && player.state.playing) _failureLogs.playbackHealthy();
+        notifyListeners();
+      }),
       player.stream.volume.listen((_) => notifyListeners()),
       player.stream.rate.listen((_) => notifyListeners()),
       player.stream.completed.listen((done) {
@@ -99,11 +109,14 @@ class MpvEngine extends PlayerEngine {
       }),
       player.stream.tracks.listen((_) => notifyListeners()),
       player.stream.track.listen((_) => notifyListeners()),
+      player.stream.log.listen((event) {
+        _failureLogs.record(event.prefix, event.level, event.text);
+      }),
       player.stream.error.listen((e) {
         debugPrint(_pageMedia
             ? '[mpv] website playback failed'
             : '[mpv] playback error');
-        onError?.call(e);
+        onError?.call(_failureLogs.code ?? e);
         notifyListeners();
       }),
       // Headphone unplug / output route change: pause so audio doesn't jump to
@@ -181,6 +194,9 @@ class MpvEngine extends PlayerEngine {
     debugPrint('[mpv] audio device removed (${cur.name}); pausing');
     unawaited(player.pause());
   }
+
+  @override
+  bool get playbackRequested => player.state.playing;
 
   @override
   String get state {
@@ -463,6 +479,7 @@ class MpvEngine extends PlayerEngine {
     int startIndex, {
     bool play = true,
   }) async {
+    _failureLogs.beginFile();
     // Ensure demuxer/network tuning is live before the first open (race fix).
     _pageMedia = items.any((item) => item.enforcePageNetworkPolicy);
     await _configured;

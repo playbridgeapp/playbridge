@@ -173,9 +173,15 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Item generation of the file mpv has actually opened. Touched only on `mpvQueue`.
     /// Stays at the previous item until START_FILE, so a late EOF cannot adopt the next item.
     private var loadedIdentity = -1
+    private var failureLogs = PlaybackFailureLogState()
     private var pendingLoadedIdentity = -1
     private var engineChrome: PlayerEngineChrome?
     private var statusTimer: Timer?
+    private var stallDetector = PlaybackStallDetector()
+    private var stallHasFirstFrame = false
+    private var stallPlaybackRequested = true
+    private var stallCoreIdle = false
+    private var stallBufferEnd = 0.0
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
     }
@@ -269,6 +275,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.playbackState.playlistVisible = self.playlistVisible
                 if self.playlistVisible { self.closeInfoPanel() }
                 self.showUI()
+                self.updateSubtitlePosition()
             }
         }
     }
@@ -485,12 +492,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpv_set_option_string(handle, "subs-match-os-language", "yes")
         mpv_set_option_string(handle, "subs-fallback", "yes")
 
+        // Error logs are classified in memory and discarded, including in release builds.
         #if DEBUG
-        // Verbose scaler/frame logs are delivered even when handleEvent discards them.
-        // Keep Debug playback lightweight; errors and warnings remain available.
         mpv_request_log_messages(handle, "warn")
         #else
-        mpv_request_log_messages(handle, "no")
+        mpv_request_log_messages(handle, "error")
         #endif
 
         let initializeStatus = mpv_initialize(handle)
@@ -507,6 +513,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         // tracks are discovered or a sub is added, unlike the indexed "track-list/count".
         mpv_observe_property(handle, 0, "track-list", MPV_FORMAT_NONE)
         mpv_observe_property(handle, 0, "paused-for-cache", MPV_FORMAT_FLAG)
+        mpv_observe_property(handle, 0, "core-idle", MPV_FORMAT_FLAG)
+        mpv_observe_property(handle, 0, "demuxer-cache-time", MPV_FORMAT_DOUBLE)
         // Re-assert the audio session the moment mpv's audio output actually comes up.
         mpv_observe_property(handle, 0, "current-ao", MPV_FORMAT_STRING)
         // Which decoder mpv actually selected ("videotoolbox" = HW, "no"/empty = software).
@@ -557,10 +565,21 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.failureHighlight = PlaybackFailureModel.defaultAction
     }
 
-    private func presentFailure(code: Int32, generation: Int, attempt: UUID) {
+    private func presentFailure(code: Int32, category: PlaybackFailureMessage.Category? = nil, generation: Int, attempt: UUID) {
         guard !isMpvStopped, generation == mediaIdentity,
-              failureSession.present(code: code, attempt: attempt) else { return }
+              failureSession.present(code: code, category: category, attempt: attempt) else { return }
         discardTouchScrub()
+        showFailureScreen(generation: generation, attempt: attempt)
+    }
+
+    private func presentStall(generation: Int, attempt: UUID) {
+        guard !isMpvStopped, generation == mediaIdentity,
+              failureSession.presentStall(attempt: attempt) else { return }
+        discardTouchScrub()
+        showFailureScreen(generation: generation, attempt: attempt)
+    }
+
+    private func showFailureScreen(generation: Int, attempt: UUID) {
         hideControlsTimer?.invalidate()
         holdTimer?.invalidate()
         virtualScrubTickTimer?.invalidate()
@@ -741,6 +760,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func loadFile(_ url: URL, fromStart: Bool = false) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         clearFailure()
+        stallDetector.reset()
+        stallHasFirstFrame = false
+        stallPlaybackRequested = true
+        stallCoreIdle = false
+        stallBufferEnd = 0
         let attempt = failureSession.attempt
         pendingExternalSubtitles = subtitles ?? []
         timelineUpdateGate.reset()
@@ -820,8 +844,19 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func handleEvent(_ event: mpv_event) {
         switch event.event_id {
         case MPV_EVENT_START_FILE:
+            failureLogs.beginFile()
             loadedIdentity = pendingLoadedIdentity
             loadedAttempt = pendingLoadedAttempt
+
+        case MPV_EVENT_PLAYBACK_RESTART:
+            failureLogs.playbackHealthy()
+            let generation = loadedIdentity
+            let attempt = loadedAttempt
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.mediaIdentity == generation, let attempt,
+                      self.failureSession.matches(attempt) else { return }
+                self.stallHasFirstFrame = true
+            }
 
         case MPV_EVENT_FILE_LOADED:
             onFileLoaded()
@@ -833,16 +868,19 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                   let attempt = loadedAttempt else { break }
             let reason = end.reason
             let code = end.error
+            let category = failureLogs.category
             let generation = loadedIdentity
             let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: generation)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                       self.failureSession.matches(attempt) else { return }
                 if reason == MPV_END_FILE_REASON_ERROR {
-                    self.presentFailure(code: code, generation: generation, attempt: attempt)
+                    self.presentFailure(code: code, category: category, generation: generation, attempt: attempt)
                     return
                 }
                 guard reason == MPV_END_FILE_REASON_EOF, self.playbackState.failureSentence == nil else { return }
+                self.stallPlaybackRequested = false
+                self.stallDetector.reset()
                 switch self.onEndOfFile?(identity) ?? .ignored {
                 case .repeatCurrentItem:
                     if let url = self.url { self.loadFile(url, fromStart: true) }
@@ -857,14 +895,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             handlePropertyChange(name: String(cString: nameCStr), prop: propPtr.pointee)
 
         case MPV_EVENT_LOG_MESSAGE:
+            guard let log = event.data?.assumingMemoryBound(to: mpv_event_log_message.self).pointee else { break }
+            let text = String(cString: log.text)
+            failureLogs.record(prefix: String(cString: log.prefix), level: Int(log.log_level.rawValue), text: text)
             #if DEBUG
-            if let logPtr = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) {
-                let text = String(cString: logPtr.pointee.text)
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                // Drop the per-frame software-scaler flood so cache/audio events stay readable.
-                if !trimmed.isEmpty, !trimmed.contains("swscaler") {
-                    print("[MPV] \(text)", terminator: "")
-                }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Keep debug warnings without the per-frame software-scaler flood.
+            if !trimmed.isEmpty, !trimmed.contains("swscaler") {
+                print("[MPV] \(text)", terminator: "")
             }
             #endif
 
@@ -919,6 +957,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         case "time-pos":
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
+            failureLogs.positionChanged(val)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                       let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil,
@@ -959,6 +998,25 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.cacheAheadSec = val
             }
 
+        case "core-idle":
+            guard prop.format == MPV_FORMAT_FLAG,
+                  let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
+            let idle = val != 0
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.mediaIdentity == generation, let attempt,
+                      self.failureSession.matches(attempt) else { return }
+                self.stallCoreIdle = idle
+            }
+
+        case "demuxer-cache-time":
+            guard prop.format == MPV_FORMAT_DOUBLE,
+                  let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.mediaIdentity == generation, let attempt,
+                      self.failureSession.matches(attempt) else { return }
+                self.stallBufferEnd = val.isFinite ? val : 0
+            }
+
         case "paused-for-cache":
             guard prop.format == MPV_FORMAT_FLAG,
                   let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
@@ -989,6 +1047,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                       let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
                 self.playbackState.isPlaying = !isPaused
+                self.stallPlaybackRequested = !isPaused
                 self.broadcastStatus()
             }
 
@@ -1281,7 +1340,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Called on main for chrome/layout changes only. All libmpv work is
     /// serialized with loadfile/event handling, never the rendering path.
     private func updateSubtitlePosition() {
-        let position = TransportSubtitlePlacement.position(occludedHeight: subtitleClearancePoints,
+        // The playlist sheet (drawn by PlayerView) replaces the transport while open.
+        let occluded = playlistVisible ? TransportBarMetrics.playlistSheetHeight : subtitleClearancePoints
+        let position = TransportSubtitlePlacement.position(occludedHeight: occluded,
             viewportHeight: Double(view.bounds.height))
         guard position != subtitlePosition else { return }
         subtitlePosition = position
@@ -1307,8 +1368,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             if self.touchScrub.proposal != nil && (self.playbackState.menuOpen || self.playlistVisible) {
                 self.cancelTouchScrub()
             }
+            // Only a hidden-to-shown change moves focus into the controls. Forcing a
+            // focus update on every touch would pull a swipe-up from the actions
+            // straight back to the seek bar.
+            let wasHidden = !self.playbackState.showUI
             self.playbackState.showUI = true
-            self.setNeedsFocusUpdate()
+            if wasHidden { self.setNeedsFocusUpdate() }
             self.hideControlsTimer?.invalidate()
             guard autoHide, self.canAutoHide else { return }
             self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: TransportVisibility.autoHideSeconds,
@@ -1516,6 +1581,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func seekAsync(to seconds: Double) {
+        stallDetector.reset()
         guard seconds.isFinite, let handle = mpv else { return }
         let pos = String(format: "%.2f", max(0, seconds))
         mpvQueue.async { self.mpvCommand(handle, ["seek", pos, "absolute"]) }
@@ -1679,6 +1745,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         clickDirection = nil
         if let target { playbackState.transportActionHighlight = target }
         else if !playbackState.transportActionFocused { playbackState.transportActionHighlight = .loop }
+        // Subtitles and Audio come and go with the track list.
+        if !playbackState.availableActions.contains(playbackState.transportActionHighlight) {
+            playbackState.transportActionHighlight = .loop
+        }
         playbackState.transportActionFocused = true
         playbackState.transportActionFocusRevision += 1
         showUI(autoHide: false)
@@ -1789,7 +1859,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 consumedTransportDirection = type
                 let delta = type == .rightArrow ? 1 : -1
                 focusTransportActions(playbackState.transportActionHighlight.moving(delta,
-                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles))
+                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles,
+                    hasAudioChoice: playbackState.hasAudioChoice))
                 return
             }
             let forward = type == .rightArrow
@@ -1868,6 +1939,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - MPV Helpers
 
     private func setPropertyAsync(_ name: String, value: String) {
+        if name == "pause" {
+            stallPlaybackRequested = value == "no"
+            stallDetector.reset()
+        }
         guard let handle = mpv else { return }
         mpvQueue.async { mpv_set_property_string(handle, name, value) }
     }
@@ -1937,6 +2012,15 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         // Periodic status (covers live position) — 1s cadence matches the Android receiver.
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, self.playbackState.failureSentence == nil else { return }
+            if !self.isMpvStopped, self.stallDetector.sample(now: ProcessInfo.processInfo.systemUptime,
+                buffering: !self.stallHasFirstFrame || self.playbackState.cacheStalled || self.stallCoreIdle,
+                playbackRequested: self.stallPlaybackRequested && !self.isPreBuffering && !StillWatchingGate.isPrompting,
+                hasFirstFrame: self.stallHasFirstFrame, position: self.playbackState.currentTime,
+                bufferedAhead: max(0, self.stallBufferEnd - self.playbackState.currentTime),
+                seeking: Date() <= self.ignoreTimeUpdatesUntil) {
+                self.presentStall(generation: self.mediaIdentity, attempt: self.failureSession.attempt)
+                return
+            }
             self.broadcastStatus()
         }
     }

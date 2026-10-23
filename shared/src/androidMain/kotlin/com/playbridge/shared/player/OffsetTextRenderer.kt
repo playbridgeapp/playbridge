@@ -19,9 +19,9 @@ import java.io.IOException
 /**
  * Wraps Media3's final [TextRenderer] so subtitle timing can be offset at render time.
  *
- * Sign convention matches TV SubtitleManager / phone remote UI preview:
- * `effectivePosition = playbackPosition + delayMs` — a positive delay advances subtitles
- * relative to video (looks ahead in the subtitle timeline).
+ * Sign convention matches mpv's `sub-delay` and every other PlayBridge receiver:
+ * `effectivePosition = playbackPosition - delayMs` — a positive delay shows subtitles later,
+ * a negative one earlier.
  *
  * Only [render] shifts the query clock; stream attachment stays on the true media timeline.
  */
@@ -119,7 +119,7 @@ internal class OffsetTextRenderer(
     @Throws(ExoPlaybackException::class)
     override fun render(positionUs: Long, elapsedRealtimeUs: Long) {
         val offsetUs = delayMsProvider().coerceIn(MIN_DELAY_MS, MAX_DELAY_MS) * 1_000L
-        delegate.render(positionUs + offsetUs, elapsedRealtimeUs)
+        delegate.render(positionUs - offsetUs, elapsedRealtimeUs)
     }
 
     override fun isReady(): Boolean = delegate.isReady

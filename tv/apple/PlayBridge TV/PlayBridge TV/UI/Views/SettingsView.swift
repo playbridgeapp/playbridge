@@ -4,7 +4,7 @@ struct SettingsView: View {
     private enum FocusedSetting: Hashable { case skipProvider, reminderInterval, responseTime }
 
     @EnvironmentObject var server: WebSocketServer
-    @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
+    @AppStorage("preferredPlayer") var preferredPlayer: String = PlaybackEngine.defaultEngine.rawValue
     @AppStorage("skip_segments_provider") var skipProvider: String = "both"
     @AppStorage("enable_history") var enableHistory: Bool = true
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
@@ -18,20 +18,20 @@ struct SettingsView: View {
             Text("Settings").font(.system(size: 50, weight: .black)).padding([.leading, .top], 60)
             List {
                 Section(header: Text("Playback Settings")) {
+                    Button(action: { preferredPlayer = "mpv" }) {
+                        HStack {
+                            Text("MPV Player (Recommended)")
+                            Spacer()
+                            if preferredPlayer == "mpv" {
+                                Image(systemName: "checkmark").foregroundColor(Theme.accent)
+                            }
+                        }
+                    }
                     Button(action: { preferredPlayer = "avplayer" }) {
                         HStack {
                             Text("Native (AVPlayer)")
                             Spacer()
                             if preferredPlayer == "avplayer" {
-                                Image(systemName: "checkmark").foregroundColor(Theme.accent)
-                            }
-                        }
-                    }
-                    Button(action: { preferredPlayer = "mpv" }) {
-                        HStack {
-                            Text("MPV Player")
-                            Spacer()
-                            if preferredPlayer == "mpv" {
                                 Image(systemName: "checkmark").foregroundColor(Theme.accent)
                             }
                         }

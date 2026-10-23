@@ -1,4 +1,7 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:playbridge_desktop/mpv_failure_category.dart';
 import 'package:playbridge_desktop/engines/playback_request_preparer.dart';
 import 'package:playbridge_desktop/media_kind.dart';
 import 'package:playbridge_desktop/pairing_store.dart';
@@ -93,6 +96,54 @@ class _HttpStatusCarrier {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('category sentences match TV receivers and never echo native log text',
+      () {
+    final cases = <Object, String>{
+      'mpv_unsupported_format': "This video format isn't supported",
+      'Failed to recognize file format https://private.example/token':
+          "This video format isn't supported",
+      'mpv_decoder_failure': "The TV couldn't decode this video",
+      'mpv_network_failed': "The TV couldn't reach the video server",
+      const SocketException('private.example token'):
+          "The TV couldn't reach the video server",
+      const HandshakeException('private.example token'):
+          "The TV couldn't reach the video server",
+      TimeoutException('private.example token'):
+          "The TV couldn't reach the video server",
+      'The video stopped loading': 'The video stopped loading',
+      'playback_stalled': 'The video stopped loading',
+      'unknown https://private.example/token': "The media couldn't be loaded",
+      'Failed to initialize a decoder for codec':
+          "The media couldn't be loaded",
+      'Error while decoding frame!': "The media couldn't be loaded",
+      'mpv_http_401': 'The link was refused (HTTP 401)',
+      'mpv_http_403': 'The link was refused (HTTP 403)',
+      'mpv_http_404': "The video wasn't found (HTTP 404)",
+      'mpv_http_410': "The video wasn't found (HTTP 410)",
+      'mpv_http_503': "The media couldn't be loaded (HTTP 503)",
+    };
+    for (final entry in cases.entries) {
+      expect(formatPlaybackErrorMessage(entry.key), entry.value);
+    }
+    expect(mpvFailureCategory('sub', 'Failed to open subtitle'), isNull);
+    expect(mpvFailureCategory('cplayer', 'https://private.example/http_403'),
+        isNull);
+    expect(mpvFailureCategory('ffmpeg/https', 'HTTP error 403 Forbidden'),
+        'mpv_http_403');
+    for (final prefix in ['vd', 'ad', 'cplayer', 'ffmpeg', 'ffmpeg/video']) {
+      for (final text in [
+        'Failed to initialize a decoder for codec',
+        'Error while decoding frame!'
+      ]) {
+        expect(mpvFailureCategory(prefix, text), isNull);
+      }
+    }
+    expect(
+        mpvFailureCategory(
+            'ffmpeg/tcp', 'Connection timed out private.example'),
+        'mpv_network_failed');
+  });
+
   group('extractHttpStatus and formatPlaybackErrorMessage', () {
     test('extracts HTTP status from integers and structured statusCode', () {
       expect(extractHttpStatus(403), 403);
@@ -155,7 +206,7 @@ void main() {
       const secretUrlError =
           'Failed to open https://token:xyz123@cdn.example.com/stream.m3u8: HTTP error 403 Forbidden';
       final msgWithStatus = formatPlaybackErrorMessage(secretUrlError);
-      expect(msgWithStatus, "The media couldn't be loaded (HTTP 403)");
+      expect(msgWithStatus, "The link was refused (HTTP 403)");
       expect(msgWithStatus.contains('token'), isFalse);
       expect(msgWithStatus.contains('example.com'), isFalse);
       expect(msgWithStatus.contains('https'), isFalse);
@@ -227,7 +278,7 @@ void main() {
       expect(reportedFailure, isNotNull);
       expect(
         reportedFailure!.error,
-        "The media couldn't be loaded (HTTP 403)",
+        "The link was refused (HTTP 403)",
       );
       expect(reportedFailure!.title, 'Secret Video');
       expect(reportedFailure!.mediaKind, MediaKind.video);
@@ -267,7 +318,7 @@ void main() {
       expect(reportedFailure!.currentItemId, activeItemId);
       expect(
         reportedFailure!.error,
-        "The media couldn't be loaded (HTTP 404)",
+        "The video wasn't found (HTTP 404)",
       );
 
       expect(controller.state, 'idle');
@@ -391,7 +442,7 @@ void main() {
       expect(errorFrame['title'], 'Target Movie');
       expect(
         errorFrame['error'],
-        "The media couldn't be loaded (HTTP 403)",
+        "The link was refused (HTTP 403)",
       );
 
       // Sanity check: no URL or secret in any broadcast frame
@@ -453,8 +504,29 @@ void main() {
       expect(errorFramesSecond.length, 1);
       expect(
         errorFramesSecond.first['error'],
-        "The media couldn't be loaded (HTTP 403)",
+        "The link was refused (HTTP 403)",
       );
     });
+  });
+  testWidgets(
+      'frozen buffering reports a terminal stall without more engine events',
+      (tester) async {
+    final engine = _FakeEngine();
+    var now = 0;
+    final controller = PlayerController(
+        engineForTest: engine, monotonicMilliseconds: () => now);
+    PlaybackFailure? failure;
+    controller.onTerminalError = (value) => failure = value;
+    await controller.playItem(
+        QueueItem(url: 'https://example.test/video.mp4', title: 'Video'));
+    engine.setStateForTest('buffering');
+    await tester.pump(const Duration(seconds: 1));
+    now = 29999;
+    await tester.pump(const Duration(seconds: 1));
+    expect(failure, isNull);
+    now = 30000;
+    await tester.pump(const Duration(seconds: 1));
+    expect(failure?.error, 'The video stopped loading');
+    await controller.dispose();
   });
 }

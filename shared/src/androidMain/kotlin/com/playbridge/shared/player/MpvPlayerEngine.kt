@@ -51,6 +51,16 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val releaseRequested = AtomicBoolean(false)
     private val observerRegistrations = ConcurrentHashMap<MPVLib.EventObserver, ObserverProxy>()
 
+    private val failureLogs = MpvFailureLogState()
+    val failureCode: StateFlow<String?> = failureLogs.failureCode
+    @Volatile private var acceptFailureLogs = false
+    private val failureLogObserver = object : MPVLib.LogObserver {
+        override fun logMessage(prefix: String, level: Int, text: String) {
+            if (!acceptFailureLogs || isTransitioning || releaseRequested.get()) return
+            failureLogs.record(prefix, level, text)
+        }
+    }
+
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
@@ -62,6 +72,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     @Volatile
     override var isTransitioning = false
+
+    // FILE_LOADED persists independently of the brief, conflatable Ready transition.
+    private val _fileLoaded = MutableStateFlow(false)
+    val fileLoaded: StateFlow<Boolean> = _fileLoaded.asStateFlow()
+    @Volatile private var stopRequested = false
 
 
     private val _audioTracks = MutableStateFlow<List<Track>>(emptyList())
@@ -93,6 +108,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private var observerRegistered = false
     private var ownsProcessMpv = false
     private var surfaceAttached = false
+    private val playbackSignals = MpvPlaybackSignals()
     @Volatile
     private var playbackSpeed = 1.0f
 
@@ -220,7 +236,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         // during repeated 4K decoder replacement.
         MPVLib.setOptionString("demuxer-max-bytes", "64M")
         MPVLib.setOptionString("demuxer-max-back-bytes", "16M")
-        MPVLib.setOptionString("ytdl", "yes") // Support non-direct URLs if encountered
+        MPVLib.setOptionString("ytdl", "no") // No youtube-dl binary is bundled; URLs are resolved by senders.
         MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
         // Subtitles (Nuvio-style styling for premium look)
@@ -239,9 +255,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
         MPVLib.init()
         MPVLib.addObserver(this)
+        MPVLib.addLogObserver(failureLogObserver)
         observerRegistered = true
 
         // Register properties to observe
+        MPVLib.observeProperty("paused-for-cache", 3)
         MPVLib.observeProperty("pause",               3) // Boolean
         MPVLib.observeProperty("time-pos",            5) // Double (seconds)
         MPVLib.observeProperty("duration",            4) // Long (seconds)
@@ -268,6 +286,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private fun cleanupFailedInitialization(): Boolean {
         if (observerRegistered) {
             runCatchingLogged(TAG, "Failed to remove MPV observer during cleanup") {
+                MPVLib.removeLogObserver(failureLogObserver)
                 MPVLib.removeObserver(this)
             }
             observerRegistered = false
@@ -396,19 +415,39 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> "SHUTDOWN"
             else -> "UNKNOWN($eventId)"
         }
+        if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) playbackSignals.cacheStalled = false
         logger.d(TAG, "MPV Event: $eventName")
         if (controlQueue.isUnhealthy) return
 
+        if (eventId == MPVLib.MpvEvent.MPV_EVENT_START_FILE) {
+            failureLogs.beginFile()
+            acceptFailureLogs = true
+        }
         when (eventId) {
-            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> _state.value = PlaybackState.Buffering
-            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> _state.value = PlaybackState.Ready
-            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> _state.value = PlaybackState.Playing
+            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
+                _fileLoaded.value = false
+                stopRequested = false
+                isTransitioning = false // The outgoing END_FILE precedes the incoming START_FILE.
+                _position.value = 0L
+                _duration.value = -1L
+                _bufferAhead.value = 0L
+                _state.value = PlaybackState.Buffering
+            }
+            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+                _fileLoaded.value = true
+                _state.value = PlaybackState.Ready
+            }
+            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
+                failureLogs.playbackHealthy()
+                _state.value = playbackSignals.playbackRestarted()
+            }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
-                if (!isTransitioning) {
-                    _state.value = PlaybackState.Ended
-                } else {
-                    logger.d(TAG, "Ignoring END_FILE state change while isTransitioning=true")
-                }
+                MpvEndFilePolicy.classify(
+                    fileLoaded = _fileLoaded.value,
+                    transitioning = isTransitioning || stopRequested || releaseRequested.get(),
+                    positionMs = _position.value,
+                    durationMs = _duration.value,
+                )?.let { _state.value = it }
             }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> _state.value = PlaybackState.Idle
         }
@@ -416,10 +455,10 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun eventProperty(property: String, value: Boolean) {
         logger.d(TAG, "MPV Property changed: $property = $value")
+        val nextState = playbackSignals.propertyChanged(property, value, _state.value)
         if (controlQueue.isUnhealthy) return
-        if (property == "pause") {
-            _state.value = if (value) PlaybackState.Paused else PlaybackState.Playing
-        }
+        if (nextState == PlaybackState.Playing && failureCode.value == null) failureLogs.playbackHealthy()
+        nextState?.let { _state.value = it }
     }
 
     override fun eventProperty(property: String, value: Long) {
@@ -432,7 +471,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun eventProperty(property: String, value: Double) {
         when (property) {
-            "time-pos" -> _position.value = (value * 1000).toLong()
+            "time-pos" -> {
+                val positionMs = (value * 1000).toLong()
+                failureLogs.positionChanged(positionMs, playing = _state.value == PlaybackState.Playing)
+                _position.value = positionMs
+            }
             "duration" -> _duration.value = (value * 1000).toLong()
             "demuxer-cache-time" -> _bufferAhead.value = (value * 1000).toLong()
         }
@@ -524,6 +567,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override suspend fun load(payload: PlayPayload) {
         logger.i(TAG, "load() queued for ${redactUrlForLog(payload.url)}")
+        playbackSignals.isPaused = false
         enqueueControl("load") {
             var userAgentSet = false
             payload.headers.forEach { (k, v) ->
@@ -547,12 +591,14 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             // Be explicit about replacement semantics. Android TV callers wait for any prior
             // stop/decoder release before invoking load(), while other consumers still replace
             // rather than append if they load over an active file.
+            isTransitioning = true
             MPVLib.command("loadfile", payload.url, "replace")
         }
     }
 
     override fun play() {
         logger.d(TAG, "play() queued")
+        playbackSignals.isPaused = false
         enqueueControl("play") {
             MPVLib.setPropertyBoolean("pause", false)
         }
@@ -560,13 +606,16 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     override fun pause() {
         logger.d(TAG, "pause() queued")
+        playbackSignals.isPaused = true
         enqueueControl("pause") {
             MPVLib.setPropertyBoolean("pause", true)
         }
     }
 
     override fun stop() {
+        acceptFailureLogs = false
         logger.d(TAG, "stop() queued")
+        stopRequested = true
         enqueueControl("stop") {
             MPVLib.command("stop")
         }
@@ -708,6 +757,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 }
                 if (observerRegistered) {
                     runCatchingLogged(TAG, "Failed to remove MPV observer during release") {
+                        MPVLib.removeLogObserver(failureLogObserver)
                         MPVLib.removeObserver(this)
                     }
                     observerRegistered = false

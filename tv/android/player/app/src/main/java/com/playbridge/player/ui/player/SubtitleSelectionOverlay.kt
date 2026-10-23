@@ -321,7 +321,7 @@ fun SubtitleSelectionOverlay(
                                     val preview = remember(t.id, cuesVersion, subtitleDelayMs) {
                                         if (!isExternal) null
                                         else SubtitleCueLoader.cached(t.id)
-                                            ?.let { SubtitleCueLoader.preview(it, frozenPos + subtitleDelayMs) }
+                                            ?.let { SubtitleCueLoader.preview(it, frozenPos - subtitleDelayMs) }
                                     }
                                     val loading = isExternal && SubtitleCueLoader.cached(t.id) == null
                                     SubCard(

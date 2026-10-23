@@ -39,6 +39,32 @@ class RendererFailureReporterTest {
         }
     }
 
+    @Test fun `safe categories use the same short sentences as other receivers`() {
+        val cases = mapOf(
+            "ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED: unsupported_format" to "This video format isn't supported",
+            "mpv_unsupported_format" to "This video format isn't supported",
+            "ERROR_CODE_DECODING_FAILED: decoder_failure" to "The TV couldn't decode this video",
+            "mpv_decoder_failure" to "The TV couldn't decode this video",
+            "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED: network_exhausted" to "The TV couldn't reach the video server",
+            "ERROR_CODE_TIMEOUT: timeout_exhausted" to "The TV couldn't reach the video server",
+            "mpv_network_failed" to "The TV couldn't reach the video server",
+            "playback_stalled" to "The video stopped loading",
+            "The video stopped loading" to "The video stopped loading",
+            "mpv_load_failed" to "The media couldn't be loaded",
+            "mpv_playback_failed" to "The media couldn't be loaded",
+        )
+        for ((code, sentence) in cases) assertEquals(sentence, RendererFailureReporter.userMessage(code))
+        for (status in listOf(401, 403, 404, 410, 429, 500)) {
+            val sentence = when (status) {
+                401, 403 -> "The link was refused (HTTP $status)"
+                404, 410 -> "The video wasn't found (HTTP $status)"
+                else -> "The media couldn't be loaded (HTTP $status)"
+            }
+            assertEquals(sentence, RendererFailureReporter.userMessage("ERROR_CODE_IO_BAD_HTTP_STATUS: http_$status"))
+            assertEquals(sentence, RendererFailureReporter.userMessage("mpv_http_$status"))
+        }
+    }
+
     @Test
     fun `terminal failure sends one error status before scheduling exit`() {
         val host = Host()
@@ -52,7 +78,7 @@ class RendererFailureReporterTest {
         assertEquals("0", status.getValue("duration").jsonPrimitive.content)
         assertEquals("playback-1", status.getValue("playbackId").jsonPrimitive.content)
         assertEquals("item-1", status.getValue("currentItemId").jsonPrimitive.content)
-        assertEquals("The media couldn't be loaded (HTTP 403)", status.getValue("error").jsonPrimitive.content)
+        assertEquals("The link was refused (HTTP 403)", status.getValue("error").jsonPrimitive.content)
         host.fail()
         assertEquals(1, host.frames.size)
     }

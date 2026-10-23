@@ -66,13 +66,14 @@ internal fun maxVideoBitrateBps(capMbps: Double?): Int? = capMbps
 /**
  * TextRenderer advances its internal cue cursor monotonically. Moving the effective subtitle
  * position backwards therefore requires a player position reset; forward movement can be applied
- * on the next render tick. Paused/buffering playback also needs a reset to refresh cues promptly.
+ * on the next render tick. The effective position is `position - delay`, so it moves backwards
+ * when the delay grows. Paused/buffering playback also needs a reset to refresh cues promptly.
  */
 internal fun shouldRefreshSubtitleRenderer(
     previousDelayMs: Long,
     newDelayMs: Long,
     isPlaying: Boolean,
-): Boolean = previousDelayMs != newDelayMs && (!isPlaying || newDelayMs < previousDelayMs)
+): Boolean = previousDelayMs != newDelayMs && (!isPlaying || newDelayMs > previousDelayMs)
 
 /**
  * Android implementation of [PlaybackEngine] using Media3 ExoPlayer.
@@ -747,9 +748,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     /**
-     * Apply a subtitle timing offset. Positive advances subtitles (look-ahead in the cue
-     * timeline); negative delays them. Moving the effective cue position backwards requires a
-     * no-op seek so TextRenderer rewinds its internal cue cursor.
+     * Apply a subtitle timing offset, like mpv's `sub-delay`: positive shows subtitles later,
+     * negative earlier. Increasing the delay moves the effective cue position backwards, which
+     * requires a no-op seek so TextRenderer rewinds its internal cue cursor.
      */
     fun setSubtitleDelay(delayMs: Long) {
         val clamped = delayMs.coerceIn(-120_000L, 120_000L)

@@ -127,6 +127,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private val sessionCoordinator = RendererSessionCoordinator()
     private val failureReporter = RendererFailureReporter()
+    private val stallDetector = PlaybackStallDetector()
+    private var stallMonitor: Runnable? = null
+    private var stallPlaybackRequested = false
+    private var stallState = "buffering"
+    private var stallPositionMs = 0L
+    private var stallBufferedAheadMs = 0L
     private val pendingSeekTracker = PendingSeekTracker()
     private val playbackRequestGate = PlaybackRequestGate()
     private var rendererService: IRendererService? = null
@@ -505,6 +511,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             playbackCoordinator.index,
                         )
                     },
+                    onChapters = controlsViewModel::showChapters,
                     onPrev = { lifecycleScope.launch { playbackCoordinator.previous() } },
                     onNext = { lifecycleScope.launch { playbackCoordinator.next() } },
                     onLoop = {
@@ -547,6 +554,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         controlsViewModel.hideOverlay()
                         lifecycleScope.launch { playbackCoordinator.jumpTo(index) }
                     },
+                    onChapterPicked = ::jumpToChapterIndex,
                     onPlayerSwitched = { playerId ->
                         controlsViewModel.hideControls()
                         switchRenderer(
@@ -835,6 +843,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers += target
         rendererKind = target
         session = sessionCoordinator.begin(target)
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        controlsViewModel.setChapters(emptyList())
         hostPlaying = false
         pendingPlayingState = null
         controlsViewModel.setPlaying(false)
@@ -846,6 +857,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     override fun onDestroy() {
+        cancelStallMonitor()
         finishingSession = true
         logPlaybackContextCheckpoint("onDestroy")
         cancelStartupWatchdog()
@@ -999,6 +1011,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        lastBufferedMs = 0L
+        bufferedSessionId = 0L
+        lastTimelineJson = null
+        controlsViewModel.setChapters(emptyList())
         externalSubtitleUrls = emptyList()
         itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
@@ -1304,11 +1322,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 putString(RendererProtocol.KEY_INITIAL_SUBTITLE_LABEL, initialSubtitleLabel)
             }
         }
+        startStallMonitor(sessionId)
         scheduleRendererOpenWatchdog(sessionId, rendererKind)
         try {
             renderer.prepare(request, sessionId)
             renderer.attachSurface(rendererSurface, sessionId)
             applyRendererSettings(renderer, sessionId)
+            stallPlaybackRequested = true
             pendingPlayingState = true
             renderer.play(sessionId)
             // Request resume immediately. MPV retains this until FILE_LOADED, while Exo can
@@ -1818,6 +1838,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val currentSession = session ?: return
         if (currentSession.sessionId != expectedSessionId) return
         val target = positionMs.coerceAtLeast(0L)
+        stallDetector.reset()
         val origin = lastPositionMs
         pendingSeekTracker.start(
             sessionId = expectedSessionId,
@@ -1896,6 +1917,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     progressManager.saveProgress()
                     requestHistoryThumbnailCapture()
                 }
+                stallState = state
+                stallPositionMs = reportedPositionMs
+                stallBufferedAheadMs = (lastBufferedMs - reportedPositionMs).coerceAtLeast(0L)
                 val status = createStatusJson(
                     state = state,
                     position = lastPositionMs,
@@ -1934,8 +1958,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
             RendererProtocol.EVENT_CHAPTERS -> {
-                currentChapters = decodeChapters(event)
+                val normalized = normalizedChapters(decodeChapters(event))
+                currentChapters = normalized
                 chaptersSessionId = currentSession.sessionId
+                controlsViewModel.setChapters(normalized)
                 broadcastTimelineIfChanged()
             }
             RendererProtocol.EVENT_CAPABILITIES -> handleCapabilities(event)
@@ -2005,6 +2031,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        lastBufferedMs = 0L
+        bufferedSessionId = 0L
+        lastTimelineJson = null
+        controlsViewModel.setChapters(emptyList())
         externalSubtitleUrls = emptyList()
         itemSubtitleLabels = emptyMap()
         lateSubtitleResources.clear()
@@ -2476,6 +2508,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         hadFirstFrame: Boolean = false,
     ) {
         if (finishingSession || isFinishing || isDestroyed) return
+        cancelStallMonitor()
         val failedKind = rendererKind
         val firstFrameSeen = hadFirstFrame ||
             sessionCoordinator.current().phase == RendererSessionPhase.PLAYING
@@ -2527,7 +2560,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             broadcastStatus = { status -> ServerService.broadcastStatus(this, status) },
         )
         if (fallback == null) {
-            showTransition(R.string.player_failed, force = true)
+            if (message == PlaybackStallDetector.MESSAGE) {
+                controlsViewModel.showPlaybackTransition(PlaybackStallDetector.MESSAGE)
+            } else {
+                showTransition(R.string.player_failed, force = true)
+            }
             finishingSession = true
             val finishRunnable = Runnable {
                 failureFinishRunnable = null
@@ -2541,6 +2578,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers += fallback
         rendererKind = fallback
         session = sessionCoordinator.begin(fallback)
+        currentChapters = emptyList()
+        chaptersSessionId = 0L
+        controlsViewModel.setChapters(emptyList())
         resetVideoSurfaceLayout()
         controlsViewModel.setEngine(controlsAdapter, fallback.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, fallback.engineId)
@@ -2554,6 +2594,47 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererKind.EXO -> ExoProcess.terminateRunningProcess(applicationContext)
             else -> Unit
         }
+    }
+
+    private fun startStallMonitor(sessionId: Long) {
+        cancelStallMonitor()
+        stallState = "buffering"
+        stallPositionMs = 0L
+        stallBufferedAheadMs = 0L
+        val monitor = object : Runnable {
+            override fun run() {
+                if (finishingSession || session?.sessionId != sessionId) return
+                val firstFrame = sessionCoordinator.current().phase == RendererSessionPhase.PLAYING
+                if (stallDetector.sample(
+                        nowMs = SystemClock.elapsedRealtime(),
+                        buffering = stallState == "buffering",
+                        playbackRequested = stallPlaybackRequested,
+                        hasFirstFrame = firstFrame,
+                        positionMs = stallPositionMs,
+                        bufferedAheadMs = stallBufferedAheadMs,
+                        seeking = pendingSeekTracker.isPending(sessionId),
+                    )) {
+                    // Exo's own recovery may win first; session fencing and cancellation keep
+                    // both paths from reporting or switching twice. Keep the 60s open backstop.
+                    handleRendererFailure(
+                        message = PlaybackStallDetector.MESSAGE,
+                        severity = if (firstFrame) ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL
+                            else ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
+                        hadFirstFrame = firstFrame,
+                    )
+                    return
+                }
+                mainHandler.postDelayed(this, 1_000L)
+            }
+        }
+        stallMonitor = monitor
+        mainHandler.postDelayed(monitor, 1_000L)
+    }
+
+    private fun cancelStallMonitor() {
+        stallMonitor?.let(mainHandler::removeCallbacks)
+        stallMonitor = null
+        stallDetector.reset()
     }
 
     private fun scheduleRendererOpenWatchdog(sessionId: Long, kind: RendererKind) {
@@ -2591,6 +2672,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             renderer.pause(sessionId)
         }
         hostPlaying = false
+        stallPlaybackRequested = false
         pendingPlayingState = false
         controlsViewModel.setPlaying(false)
         prePlayCountdownJob = lifecycleScope.launch {
@@ -2604,6 +2686,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             controlsViewModel.setPrePlayCountdown(0)
             controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
             showTransition(R.string.player_starting, force = true)
+            stallPlaybackRequested = true
             pendingPlayingState = true
             runCatchingLogged(TAG, "Pre-play countdown play failed", ::logPlayerFailure) {
                 rendererService?.play(sessionId)
@@ -2617,6 +2700,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setPrePlayCountdown(0)
         controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
         showTransition(R.string.player_starting, force = true)
+        stallPlaybackRequested = true
         pendingPlayingState = true
         runCatchingLogged(TAG, "Pre-play skip play failed", ::logPlayerFailure) {
             rendererService?.play(currentSession.sessionId)
@@ -2695,6 +2779,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when {
             command == "play" -> {
                 hostPlaying = true
+                stallPlaybackRequested = true
                 pendingPlayingState = true
                 controlsViewModel.setPlaying(true)
                 runCatchingLogged(TAG, "Control play failed", ::logPlayerFailure) {
@@ -2703,6 +2788,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             command == "pause" -> {
                 hostPlaying = false
+                stallPlaybackRequested = false
                 pendingPlayingState = false
                 runCatchingLogged(TAG, "Control pause failed", ::logPlayerFailure) {
                     renderer.pause(currentSession.sessionId)
@@ -2713,6 +2799,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             command == "toggle" -> {
                 if (hostPlaying) {
                     hostPlaying = false
+                    stallPlaybackRequested = false
                     pendingPlayingState = false
                     runCatchingLogged(TAG, "Control toggle pause failed", ::logPlayerFailure) {
                         renderer.pause(currentSession.sessionId)
@@ -2721,6 +2808,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     progressManager.saveProgress()
                 } else {
                     hostPlaying = true
+                    stallPlaybackRequested = true
                     pendingPlayingState = true
                     controlsViewModel.setPlaying(true)
                     runCatchingLogged(TAG, "Control toggle play failed", ::logPlayerFailure) {
@@ -2956,6 +3044,46 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
+    private fun jumpChapter(forward: Boolean): Boolean {
+        val currentSession = session ?: return false
+        val state = controlsViewModel.controlsState.value
+        if (!canJumpChapters(
+                state = state,
+                isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+                isImageMedia = currentMediaKind == MediaKind.IMAGE,
+            )
+        ) {
+            return false
+        }
+        val target = chapterJumpTarget(state.chapters, lastPositionMs, forward = forward)
+        if (target == null) {
+            if (forward) {
+                controlsViewModel.showSeekUI()
+                controlsViewModel.showChapterOsd(LAST_CHAPTER_OSD)
+                return true
+            }
+            return false
+        }
+        seekToChapterTarget(target, currentSession.sessionId)
+        return true
+    }
+
+    private fun jumpToChapterIndex(index: Int) {
+        val currentSession = session ?: return
+        val state = controlsViewModel.controlsState.value
+        val chapter = state.chapters.getOrNull(index) ?: return
+        val target = ChapterTarget(index + 1, chapter)
+        seekForSession(target.chapter.startMs, currentSession.sessionId)
+        controlsViewModel.hideOverlay()
+        controlsViewModel.showChapterOsd(chapterLabel(target))
+    }
+
+    private fun seekToChapterTarget(target: ChapterTarget, sessionId: Long) {
+        seekForSession(target.chapter.startMs, sessionId)
+        controlsViewModel.showSeekUI()
+        controlsViewModel.showChapterOsd(chapterLabel(target))
+    }
+
     private fun handleDirectionalInput(keyCode: Int, repeatCount: Int = 0): Boolean {
         val state = controlsViewModel.controlsState.value
         if (state.playbackTransitionMessage != null) return true
@@ -3048,7 +3176,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 KeyEvent.KEYCODE_DPAD_UP,
                 KeyEvent.KEYCODE_DPAD_DOWN,
                 KeyEvent.KEYCODE_DPAD_LEFT,
-                KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_CHANNEL_UP,
+                KeyEvent.KEYCODE_CHANNEL_DOWN,
+                KeyEvent.KEYCODE_PAGE_UP,
+                KeyEvent.KEYCODE_PAGE_DOWN,
+                KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+                KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> return true
             }
         }
         when (keyCode) {
@@ -3063,6 +3197,44 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 handleControl("pause")
                 return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_UP,
+            KeyEvent.KEYCODE_PAGE_DOWN -> {
+                if (jumpChapter(forward = true)) return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_DOWN,
+            KeyEvent.KEYCODE_PAGE_UP -> {
+                if (jumpChapter(forward = false)) return true
+            }
+            KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
+            KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> {
+                val state = controlsViewModel.controlsState.value
+                when (
+                    resolveChapterKeyAction(
+                        keyCode = keyCode,
+                        state = state,
+                        isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+                        isImageMedia = currentMediaKind == MediaKind.IMAGE,
+                    )
+                ) {
+                    ChapterKeyAction.NEXT_CHAPTER -> {
+                        jumpChapter(forward = true)
+                        return true
+                    }
+                    ChapterKeyAction.PREV_CHAPTER -> {
+                        jumpChapter(forward = false)
+                        return true
+                    }
+                    ChapterKeyAction.SEEK_FORWARD_FALLBACK -> {
+                        session?.let { seekRelative(10_000L, it.sessionId) }
+                        return true
+                    }
+                    ChapterKeyAction.SEEK_BACKWARD_FALLBACK -> {
+                        session?.let { seekRelative(-10_000L, it.sessionId) }
+                        return true
+                    }
+                    ChapterKeyAction.NONE -> Unit
+                }
             }
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER -> {
@@ -3120,7 +3292,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun showTransition(@StringRes message: Int, force: Boolean = false) {
         if (force || controlsViewModel.controlsState.value.prePlayMetadata == null) {
-            controlsViewModel.showPlaybackTransition(getString(message))
+            val text = if (message == R.string.player_failed) sessionCoordinator.current().error else null
+            controlsViewModel.showPlaybackTransition(text ?: getString(message))
         } else {
             controlsViewModel.clearPlaybackTransition()
         }

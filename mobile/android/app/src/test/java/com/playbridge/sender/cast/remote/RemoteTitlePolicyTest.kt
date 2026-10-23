@@ -34,21 +34,21 @@ class RemoteTitlePolicyTest {
         assertEquals("S1E2", RemoteTitlePolicy.subtitle(raw.copy(playback = raw.playback?.copy(title = "Second"))))
         assertNull(RemoteTitlePolicy.subtitle(raw.copy(queue = raw.queue?.copy(currentItemId = "missing"))))
     }
-    @Test fun subtitleShowsUsefulOptimisticStateAndNeverSaysPlayingVideo() {
+    @Test fun subtitleLeavesPlaybackStateToTheSeekBar() {
         fun line(playback: RemotePlayback) = RemoteTitlePolicy.subtitle(RemoteUiState(playback = playback))
-        assertEquals("Paused", line(RemotePlayback(displayedState = RemotePlaybackState.Paused)))
-        assertEquals("Buffering", line(RemotePlayback(displayedState = RemotePlaybackState.Buffering)))
-        assertEquals("Live", line(RemotePlayback(isLive = true)))
+        for (playback in listOf(
+            RemotePlayback(displayedState = RemotePlaybackState.Paused),
+            RemotePlayback(displayedState = RemotePlaybackState.Buffering),
+            RemotePlayback(displayedState = RemotePlaybackState.Playing),
+            RemotePlayback(isLive = true),
+        )) assertNull(line(playback))
         assertEquals("Image", line(RemotePlayback(mediaKind = RemoteMediaKind.Image)))
-        assertNull(line(RemotePlayback(displayedState = RemotePlaybackState.Playing)))
     }
-    @Test fun duplicateEpisodeCodeFallsBackToUsefulStateAndMatchesNumericMetadata() {
+    @Test fun duplicateEpisodeCodeIsHiddenAndMatchesNumericMetadata() {
         val queue = RemoteQueueState(currentItemId = "seven", items = listOf(RemoteQueueItem(0, "", "seven", season = 4, episode = 7)))
         val state = RemoteUiState(queue = queue, playback = RemotePlayback(title = "Reacher · S4E7 · Vote for Sampson", displayedState = RemotePlaybackState.Playing))
         assertNull(RemoteTitlePolicy.subtitle(state))
-        assertEquals("Paused", RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(displayedState = RemotePlaybackState.Paused))))
-        assertEquals("Buffering", RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(displayedState = RemotePlaybackState.Buffering))))
-        assertEquals("Live", RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(isLive = true))))
+        assertNull(RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(displayedState = RemotePlaybackState.Paused))))
         assertNull(RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(title = "Reacher.S04.E007.Vote.1080p.mkv"))))
         assertEquals("S4E7", RemoteTitlePolicy.subtitle(state.copy(playback = state.playback?.copy(title = "Reacher · S4E70 · Vote"))))
     }

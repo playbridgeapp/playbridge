@@ -33,6 +33,34 @@ internal fun findAddedSubtitleTrackId(
     id !in existingTrackIds && label == expectedLabel
 }?.first
 
+/**
+ * Maps MPV's [PlaybackState] to the wire state reported to [PlayerHostActivity].
+ * libmpv emits `MPV_EVENT_PLAYBACK_RESTART` (mapped to [PlaybackState.Playing]) after any
+ * seek finishes — even while paused — so [playWhenReady] must gate `"playing"`.
+ */
+internal fun mpvReportedStateName(
+    state: PlaybackState,
+    playWhenReady: Boolean,
+    isFileReady: Boolean,
+): String = when (state) {
+    PlaybackState.Buffering -> "buffering"
+    PlaybackState.Playing -> when {
+        !playWhenReady -> "paused"
+        isFileReady -> "playing"
+        else -> "buffering"
+    }
+    else -> "paused"
+}
+
+/** Recover FILE_LOADED readiness when StateFlow jumps directly from Buffering to Playing. */
+internal fun mpvNeedsFileReady(
+    state: PlaybackState,
+    hasLoadedFile: Boolean,
+    transitioning: Boolean,
+    alreadyReady: Boolean,
+): Boolean = hasLoadedFile && !transitioning && !alreadyReady &&
+    state in setOf(PlaybackState.Ready, PlaybackState.Playing, PlaybackState.Paused, PlaybackState.Buffering)
+
 /** Headless MPV renderer for the permanent host process boundary. */
 class MpvRendererService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -64,6 +92,7 @@ class MpvRendererService : Service() {
     private var desiredLooping = false
     private var audioBoostEnabled = false
     private var lastCapabilitiesLive: Boolean? = null
+    private var errorReportedSessionId = 0L
     private val frameRateObserver = object : MPVLib.EventObserver {
         override fun event(eventId: Int, data: MPVNode) = Unit
         override fun eventProperty(property: String) = Unit
@@ -89,6 +118,8 @@ class MpvRendererService : Service() {
             if (request == null || requestedSessionId <= sessionId) return@onMain
             clearPendingExternalSubtitle()
             externalSubtitleTrackIds.clear()
+            // Fence outgoing END_FILE before assigning the replacement's session identity.
+            engine?.isTransitioning = true
             sessionId = requestedSessionId
             firstFrameSession = 0L
             playWhenReady = false
@@ -281,26 +312,24 @@ class MpvRendererService : Service() {
             // Lifecycle transitions must never be sampled: FILE_LOADED -> PLAYBACK_RESTART can
             // happen in under 250 ms, which previously dropped READY and made resume seeks race.
             launch {
-                renderer.state.collectLatest { state ->
+                combine(renderer.state, renderer.fileLoaded) { state, loaded -> state to loaded }
+                    .collectLatest { (state, loaded) ->
+                    if (mpvNeedsFileReady(
+                            state = state,
+                            hasLoadedFile = loaded,
+                            transitioning = renderer.isTransitioning,
+                            alreadyReady = fileReadySessionId == sessionId,
+                        )) {
+                        publishFileReady(renderer)
+                    }
                     when (state) {
-                        PlaybackState.Ready -> {
-                            fileReadySessionId = sessionId
-                            pendingSeekMs?.let(renderer::seek)
-                            pendingSeekMs = null
-                            sendEvent(RendererProtocol.EVENT_READY)
-                            applyDesiredSettings(renderer)
-                            sendCapabilities(renderer)
-                            // The host clears chapters per session; resend in case the new
-                            // file's list equals the previous one and never changes.
-                            sendChapters(renderer.chapters.value)
-                        }
                         PlaybackState.Playing -> {
                             if (fileReadySessionId == sessionId && firstFrameSession != sessionId) {
                                 firstFrameSession = sessionId
                                 sendEvent(RendererProtocol.EVENT_FIRST_FRAME)
                             }
                         }
-                        is PlaybackState.Error -> sendError(state.msg)
+                        is PlaybackState.Error -> sendError(state.code)
                         PlaybackState.Ended -> {
                             // loadfile replacement reports END_FILE for the outgoing file after
                             // prepare() has already assigned the incoming session id. Only let an
@@ -318,6 +347,9 @@ class MpvRendererService : Service() {
             launch {
                 renderer.chapters.collectLatest(::sendChapters)
             }
+            launch {
+                renderer.failureCode.collectLatest { code -> code?.let(::sendError) }
+            }
 
             // Position/duration updates are high-frequency and remain sampled for Binder health.
             launch {
@@ -334,15 +366,11 @@ class MpvRendererService : Service() {
                         lastCapabilitiesLive = isLive
                         sendCapabilities(renderer)
                     }
-                    val stateName = when (state) {
-                        PlaybackState.Buffering -> "buffering"
-                        PlaybackState.Playing -> if (fileReadySessionId == sessionId) {
-                            "playing"
-                        } else {
-                            "buffering"
-                        }
-                        else -> "paused"
-                    }
+                    val stateName = mpvReportedStateName(
+                        state = state,
+                        playWhenReady = playWhenReady,
+                        isFileReady = fileReadySessionId == sessionId,
+                    )
                     sendEvent(RendererProtocol.EVENT_STATE, Bundle().apply {
                         putString(RendererProtocol.KEY_STATE, stateName)
                         putLong(RendererProtocol.KEY_POSITION_MS, position.coerceAtLeast(0L))
@@ -367,6 +395,18 @@ class MpvRendererService : Service() {
                 },
             )
         })
+    }
+
+    private fun publishFileReady(renderer: MpvPlayerEngine) {
+        fileReadySessionId = sessionId
+        pendingSeekMs?.let(renderer::seek)
+        pendingSeekMs = null
+        sendEvent(RendererProtocol.EVENT_READY)
+        applyDesiredSettings(renderer)
+        sendCapabilities(renderer)
+        // The host clears chapters per session; resend in case the new
+        // file's list equals the previous one and never changes.
+        sendChapters(renderer.chapters.value)
     }
 
     private fun observeTracks(renderer: MpvPlayerEngine) {
@@ -610,9 +650,22 @@ class MpvRendererService : Service() {
     }
 
     private fun sendError(message: String) {
-        sendEvent(RendererProtocol.EVENT_ERROR, Bundle().apply {
-            putString(RendererProtocol.KEY_ERROR, message)
-        })
+        val failedSessionId = sessionId
+        val failedEngine = engine
+        fun report(code: String) {
+            if (sessionId != failedSessionId || engine !== failedEngine || errorReportedSessionId == failedSessionId) return
+            errorReportedSessionId = failedSessionId
+            sendEvent(RendererProtocol.EVENT_ERROR, Bundle().apply {
+                putString(RendererProtocol.KEY_ERROR, code)
+            })
+        }
+        if (message == "mpv_load_failed" || message == "mpv_playback_failed") {
+            // cplayer's terminal log can follow END_FILE. Give its fixed category one event-loop
+            // turn to arrive, without restoring the old open-watchdog delay or retaining raw text.
+            mainHandler.postDelayed({ report(failedEngine?.failureCode?.value ?: message) }, 100L)
+        } else {
+            report(message)
+        }
     }
 
     private fun sendEvent(event: String, extras: Bundle = Bundle()) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -6,10 +7,12 @@ import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
 import 'playback_speed.dart';
 import 'player_engine.dart';
+import 'mpv_failure_category.dart';
 import 'skip_segment.dart';
 import 'subtitle_delay.dart';
 import 'subtitle_delay.dart' as subtitle_delay;
 import 'video_scaling.dart';
+import 'playback_stall_detector.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
 import 'engines/playback_request_preparer.dart';
@@ -73,14 +76,42 @@ int? extractHttpStatus(Object? error) {
   return null;
 }
 
-/// Formats a user-safe failure reason:
-/// "The media couldn't be loaded" plus " (HTTP NNN)" only if a three-digit HTTP
-/// status can be extracted reliably from a structured source; otherwise no code.
+/// Only fixed sentences leave the player. Exception text, URLs and host names are never interpolated.
 @visibleForTesting
 String formatPlaybackErrorMessage(Object? rawError, {int? httpStatus}) {
-  final status = httpStatus ?? extractHttpStatus(rawError);
+  final category = rawError is String
+      ? (mpvFailureCategory('cplayer', rawError) ?? rawError)
+      : null;
+  final code = category == null
+      ? null
+      : RegExp(r'^mpv_http_([1-5][0-9]{2})$').firstMatch(category);
+  final status = httpStatus ??
+      (code == null ? null : int.tryParse(code.group(1)!)) ??
+      extractHttpStatus(rawError);
+  if (status == 401 || status == 403) {
+    return "The link was refused (HTTP $status)";
+  }
+  if (status == 404 || status == 410) {
+    return "The video wasn't found (HTTP $status)";
+  }
   if (status != null && status >= 100 && status <= 599) {
     return "The media couldn't be loaded (HTTP $status)";
+  }
+  if (category == 'mpv_unsupported_format') {
+    return "This video format isn't supported";
+  }
+  if (category == 'mpv_decoder_failure') {
+    return "The TV couldn't decode this video";
+  }
+  if (category == 'mpv_network_failed' ||
+      rawError is SocketException ||
+      rawError is HandshakeException ||
+      rawError is TimeoutException) {
+    return "The TV couldn't reach the video server";
+  }
+  if (category == 'playback_stalled' ||
+      category == 'The video stopped loading') {
+    return 'The video stopped loading';
   }
   return "The media couldn't be loaded";
 }
@@ -117,7 +148,11 @@ class PlayerController extends ChangeNotifier {
     PlayerEngine? engineForTest,
     bool preselectHlsQuality = false,
     this.store,
+    int Function()? monotonicMilliseconds,
   }) : _preselectHlsQuality = preselectHlsQuality {
+    _stallClock.start();
+    _monotonicMilliseconds =
+        monotonicMilliseconds ?? (() => _stallClock.elapsedMilliseconds);
     if (engineForTest != null) {
       _currentType = initialEngine;
       _engine = engineForTest;
@@ -131,6 +166,41 @@ class PlayerController extends ChangeNotifier {
   }
 
   final PairingStore? store;
+  final _stallDetector = PlaybackStallDetector();
+  final _stallClock = Stopwatch();
+  late final int Function() _monotonicMilliseconds;
+  Timer? _stallTimer;
+  bool _stallPlaybackRequested = false;
+  bool _stallHasFirstFrame = false;
+
+  void _startStallMonitor() {
+    _stallTimer?.cancel();
+    _stallDetector.reset();
+    _stallHasFirstFrame = false;
+    _stallPlaybackRequested = true;
+    _stallTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_currentIndex < 0 ||
+          currentMediaKind == MediaKind.image ||
+          _hasTerminalError) {
+        return;
+      }
+      if (_engine.state == 'playing') _stallHasFirstFrame = true;
+      if (_stallDetector.sample(
+        nowMs: _monotonicMilliseconds(),
+        buffering: _engine.state == 'buffering',
+        playbackRequested:
+            _stallPlaybackRequested && _engine.playbackRequested != false,
+        hasFirstFrame: _stallHasFirstFrame,
+        positionMs: _engine.positionMs,
+        bufferedAheadMs:
+            math.max(0, (_engine.bufferedMs ?? 0) - _engine.positionMs),
+      )) {
+        _stallTimer?.cancel();
+        unawaited(_handleTerminalError(PlaybackStallDetector.message));
+      }
+    });
+  }
+
   late PlayerEngine _engine;
   EngineType _currentType = EngineType.mpvInternal;
 
@@ -759,6 +829,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> _openCurrentItem() async {
     _hasTerminalError = false;
     _terminalError = null;
+    _stallTimer?.cancel();
     _imageTimer?.cancel();
     _imageTimer = null;
     final item = _queue[_currentIndex];
@@ -779,6 +850,7 @@ class PlayerController extends ChangeNotifier {
     _imagePositionMs = 0;
     _imageDurationMs = 0;
     _imagePlaying = false;
+    _startStallMonitor();
     try {
       await _engine.open(item);
     } catch (e) {
@@ -984,6 +1056,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> resume() async {
+    _stallPlaybackRequested = true;
+    _stallDetector.reset();
     if (_waitingForLinkedItems) {
       _waitingForLinkedItems = false;
       await _openCurrentItem();
@@ -1001,6 +1075,8 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> pause() async {
+    _stallPlaybackRequested = false;
+    _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) {
       _imagePlaying = false;
       _imageTimer?.cancel();
@@ -1011,6 +1087,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> seek(Duration position) async {
+    _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) return;
     await _engine.seek(position);
   }
@@ -1078,6 +1155,9 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _stallPlaybackRequested = false;
+    _stallTimer?.cancel();
+    _stallDetector.reset();
     await _waitForProxyToggle();
     _playbackBoundary('stopped', sessionEnded: true);
     _waitingForLinkedItems = false;
@@ -1115,8 +1195,9 @@ class PlayerController extends ChangeNotifier {
       {int? httpStatus}) async {
     if (_hasTerminalError) return;
     _hasTerminalError = true;
-    final safeMsg =
-        formatPlaybackErrorMessage(rawError, httpStatus: httpStatus);
+    final safeMsg = rawError == PlaybackStallDetector.message
+        ? PlaybackStallDetector.message
+        : formatPlaybackErrorMessage(rawError, httpStatus: httpStatus);
     _terminalError = safeMsg;
     debugPrint('[player] error: $safeMsg');
 
@@ -1416,6 +1497,8 @@ class PlayerController extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _stallTimer?.cancel();
+    _stallClock.stop();
     _playbackBoundary('stopped', sessionEnded: true);
     await playbackBoundaries.close();
     indexChanges.dispose();

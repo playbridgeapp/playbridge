@@ -1,5 +1,5 @@
 /// Subtitle cue offset, matching Android TV (`PlayerControlsViewModel`).
-/// Positive values advance cues relative to video. Clamp ±120 seconds.
+/// Positive values show subtitles later (mpv `sub-delay`). Clamp ±120 seconds.
 const int subtitleDelayMinMs = -120000;
 const int subtitleDelayMaxMs = 120000;
 const int subtitleDelayFineMs = 100;

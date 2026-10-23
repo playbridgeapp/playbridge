@@ -37,15 +37,15 @@ class ExoPlayerEngineConfigTest {
     fun subtitleDelayRefreshesWhenEffectiveCuePositionMovesBackwards() {
         assertTrue(
             shouldRefreshSubtitleRenderer(
-                previousDelayMs = 1_000L,
-                newDelayMs = 0L,
+                previousDelayMs = 0L,
+                newDelayMs = 1_000L,
                 isPlaying = true,
             ),
         )
         assertTrue(
             shouldRefreshSubtitleRenderer(
-                previousDelayMs = 0L,
-                newDelayMs = -100L,
+                previousDelayMs = -100L,
+                newDelayMs = 0L,
                 isPlaying = true,
             ),
         )
@@ -55,8 +55,8 @@ class ExoPlayerEngineConfigTest {
     fun subtitleDelayAvoidsUnnecessarySeekWhilePlayingForward() {
         assertFalse(
             shouldRefreshSubtitleRenderer(
-                previousDelayMs = 0L,
-                newDelayMs = 100L,
+                previousDelayMs = 100L,
+                newDelayMs = 0L,
                 isPlaying = true,
             ),
         )

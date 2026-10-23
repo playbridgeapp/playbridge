@@ -141,8 +141,11 @@ fun SessionObserverSetup(
             session.toggleDesktopMode(isDesktopMode, reload = false)
         }
     }
-    // Reload when the user actively changes desktop mode or the UA override on the current tab.
-    LaunchedEffect(isDesktopMode, userAgentOverride) {
+    // Reload when the user changes the UA override. [isDesktopMode] is the selected tab's own
+    // state, so it changes on tab switches too; the Desktop Site toggle reloads by itself.
+    val desktopModeState = rememberUpdatedState(isDesktopMode)
+    LaunchedEffect(userAgentOverride) {
+        val isDesktopMode = desktopModeState.value
         val shouldReload = currentUrl.value != "about:blank"
         if (userAgentOverride != null) {
             session.settings.userAgentString = userAgentOverride
