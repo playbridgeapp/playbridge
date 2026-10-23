@@ -77,6 +77,7 @@ class CastSessionService : Service(), KoinComponent {
         val capturesDeviceAudio: Boolean,
         val linkedController: String?,
         val media: CastMediaNotificationView?,
+        val failureText: String?,
     )
     private var lastAppearance: NotificationAppearance? = null
 
@@ -96,6 +97,7 @@ class CastSessionService : Service(), KoinComponent {
         castMedia = CastMediaSession(this, manager, coordinator, remoteControllers, scope,
             ::refreshCurrentNotification, { linkedPageCastCoordinator.unlink("unlinked") })
         scope.launch { castMedia.updates.collect { refreshCurrentNotification() } }
+        scope.launch { coordinator.playbackFailure.collect { refreshCurrentNotification() } }
         scope.launch {
             combine(
                 manager.sessionInfo,
@@ -239,13 +241,14 @@ class CastSessionService : Service(), KoinComponent {
         linkedController: String? = linkedPageCastCoordinator.uiState.value.controllerName,
     ): Boolean {
         val media = castMedia.refresh(info, playing, mirroring, linkedController != null)
+        val failureText = playbackFailureNotification(info.deviceName, coordinator.playbackFailure.value?.message)
         val appearance = NotificationAppearance(
             if (media == null) info else info.copy(title = media.title),
-            playing, mirroring, capturesDeviceAudio, linkedController, media)
+            playing, mirroring, capturesDeviceAudio, linkedController, media, failureText)
         // Receiver position ticks only reach MediaSession; visible changes/type changes
         // are the only reason to rebuild/promote this notification.
         if (foregroundStarted && appearance == lastAppearance) return true
-        val notif = buildNotification(info, playing, linkedController, media)
+        val notif = buildNotification(info, playing, linkedController, media, failureText)
         val microphoneType = if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mirroring && capturesDeviceAudio
         ) {
@@ -339,8 +342,9 @@ class CastSessionService : Service(), KoinComponent {
         playing: Boolean,
         linkedController: String?,
         media: CastMediaNotificationView?,
+        failureText: String?,
     ): Notification {
-        if (media != null) return buildMediaNotification(media, linkedController)
+        if (media != null) return buildMediaNotification(media, linkedController, failureText)
         val stopCastPi = PendingIntent.getService(
             this, 1,
             Intent(this, CastSessionService::class.java).setAction(ACTION_STOP_CAST),
@@ -368,7 +372,7 @@ class CastSessionService : Service(), KoinComponent {
             )
         }
         val title = if (playing) "Casting to ${info.deviceName}" else "Connected to ${info.deviceName}"
-        val text = linkedController?.let { "Controlled by $it" }
+        val text = failureText ?: linkedController?.let { "Controlled by $it" }
             ?: if (playing) (info.title ?: "Playing") else "Ready to cast"
         val actionLabel = if (playing) "Stop" else "Disconnect"
         val actionPi = if (playing) stopCastPi else disconnectPi
@@ -376,6 +380,7 @@ class CastSessionService : Service(), KoinComponent {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(contentPi)
             .addAction(0, actionLabel, actionPi)
             .setOngoing(true)
@@ -397,7 +402,7 @@ class CastSessionService : Service(), KoinComponent {
         return notification
     }
 
-    private fun buildMediaNotification(media: CastMediaNotificationView, linkedController: String?): Notification {
+    private fun buildMediaNotification(media: CastMediaNotificationView, linkedController: String?, failureText: String?): Notification {
         fun actionIntent(action: String, code: Int): PendingIntent = PendingIntent.getService(
             this, code, Intent(this, CastSessionService::class.java).setAction(action)
                 .setData("playbridge-cast-control://${media.ownerToken}/$code".toUri())
@@ -411,7 +416,7 @@ class CastSessionService : Service(), KoinComponent {
         castMedia.session.setSessionActivity(content)
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(media.title).setContentText(media.subtitle)
+            .setContentTitle(media.title).setContentText(failureText ?: media.subtitle)
             .setContentIntent(content)
             .setOngoing(true).setAutoCancel(false).setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_TRANSPORT).setVisibility(Notification.VISIBILITY_PUBLIC)

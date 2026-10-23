@@ -82,6 +82,7 @@ class ConnectionCoordinator internal constructor(
     val tvPlayback = MutableStateFlow<TvPlaybackStatus?>(null)
     private val playbackFailures = ReceiverPlaybackFailures()
     internal val playbackFailure = playbackFailures.notice
+    internal fun dismissPlaybackFailure() = playbackFailures.dismiss()
     private var playbackMessageSession = webSocketClient?.messageSession?.value
     val tvVideoTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())

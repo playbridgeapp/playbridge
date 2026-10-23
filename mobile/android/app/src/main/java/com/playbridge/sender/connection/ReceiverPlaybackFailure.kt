@@ -9,17 +9,25 @@ internal data class ReceiverPlaybackFailure(val sequence: Long, val message: Str
 internal class ReceiverPlaybackFailures {
     private var playbackId: String? = null
     private var sequence = 0L
+    private var dismissedMessage: String? = null
     private val mutableNotice = MutableStateFlow<ReceiverPlaybackFailure?>(null)
     val notice = mutableNotice.asStateFlow()
 
+    fun dismiss() {
+        dismissedMessage = mutableNotice.value?.message ?: dismissedMessage
+        mutableNotice.value = null
+    }
+
     fun reset() {
         playbackId = null
+        dismissedMessage = null
         mutableNotice.value = null
     }
 
     fun playlist(id: String?) {
         if (id != null && id != playbackId) {
             playbackId = id
+            dismissedMessage = null
             mutableNotice.value = null
         }
     }
@@ -29,9 +37,15 @@ internal class ReceiverPlaybackFailures {
         if (state == "error") {
             if (id != null && playbackId != null && id != playbackId) return false
             if (id != null) playbackId = id
-            mutableNotice.value = ReceiverPlaybackFailure(++sequence, message(error))
+            val text = message(error)
+            if (text != dismissedMessage && text != mutableNotice.value?.message) {
+                mutableNotice.value = ReceiverPlaybackFailure(++sequence, text)
+            }
         } else if (state in setOf("playing", "buffering", "paused")) {
-            if (state == "playing" || id != null && id != playbackId) mutableNotice.value = null
+            if (state == "playing" || id != null && id != playbackId) {
+                mutableNotice.value = null
+                dismissedMessage = null
+            }
             if (id != null) playbackId = id
         }
         return true
