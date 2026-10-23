@@ -245,7 +245,44 @@ class BrowserActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
         dispatchRemoteVolumeKey(event) || super.dispatchKeyEvent(event)
 
+    /**
+     * Preload the most recently opened bridged app in the background (see
+     * [BridgedAppPreloadPolicy]), so opening it from the dashboard shows a live page.
+     */
+    private fun preloadRecentBridgedApp(enabled: Boolean) {
+        val (app, openedAt) = installedAppStore.lastOpened() ?: return
+        val store = Components.store
+        val existing = app.tabId?.takeIf { id ->
+            store.state.tabs.any { it.id == id && BridgedAppStore.originFor(it.content.url) == app.origin }
+        }
+        val connectivity = getSystemService(android.net.ConnectivityManager::class.java)
+        val capabilities = connectivity?.getNetworkCapabilities(connectivity.activeNetwork)
+        val activityManager = getSystemService(android.app.ActivityManager::class.java)
+        val memory = android.app.ActivityManager.MemoryInfo().also { activityManager?.getMemoryInfo(it) }
+        val conditions = BridgedAppPreloadConditions(
+            enabled = enabled,
+            lastOpenedAt = openedAt,
+            now = System.currentTimeMillis(),
+            alreadyLive = existing != null && store.state.tabs.first { it.id == existing }.engineState.engineSession != null,
+            online = capabilities?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true,
+            metered = connectivity?.isActiveNetworkMetered != false,
+            dataSaver = connectivity?.restrictBackgroundStatus == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
+            powerSave = getSystemService(android.os.PowerManager::class.java)?.isPowerSaveMode == true,
+            lowMemory = memory.lowMemory || activityManager?.isLowRamDevice == true,
+            maxAliveSessions = tabManager.maxAliveSessions,
+        )
+        if (!BridgedAppPreloadPolicy.shouldPreload(conditions)) return
+        val tabId = existing ?: run {
+            app.tabId?.takeIf { id -> store.state.tabs.any { it.id == id } }
+                ?.let { tabManager.closeTab(it, store, rememberClosed = false) }
+            tabManager.createTab(app.startUrl, store, select = false, bridgedAppOrigin = app.origin)
+                .also { installedAppStore.setTab(app.origin, it) }
+        }
+        tabManager.preloadBridgedApp(tabId, store)
+    }
+
     companion object {
+        private const val BRIDGED_APP_PRELOAD_DELAY_MS = 3_000L
         private const val TAG = "BrowserActivity"
         const val ACTION_OPEN_MEDIA_TAB = "com.playbridge.sender.OPEN_MEDIA_TAB"
         const val ACTION_OPEN_CAST_REMOTE = "com.playbridge.sender.OPEN_CAST_REMOTE"
@@ -888,6 +925,14 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            LaunchedEffect(tabsRestoredOrReady.value) {
+                if (tabsRestoredOrReady.value && !Components.bridgedAppPreloadAttempted) {
+                    Components.bridgedAppPreloadAttempted = true
+                    // Let startup settle first; this is background work for the next open.
+                    delay(BRIDGED_APP_PRELOAD_DELAY_MS)
+                    preloadRecentBridgedApp(settingsRepository.preloadRecentApp.first())
+                }
+            }
             LaunchedEffect(tabsRestoredOrReady.value) {
                 Log.d("PB_STARTUP", "Compose: tabsRestoredOrReady=${tabsRestoredOrReady.value} — force-syncing browserState from store (${store.state.tabs.size} tabs, selectedTabId=${store.state.selectedTabId})")
                 browserState = store.state
@@ -2836,6 +2881,8 @@ class BrowserActivity : ComponentActivity() {
                                 app.tabId?.takeIf { id -> store.state.tabs.any { it.id == id } }
                                     ?.let { tabManager.closeTab(it, store, rememberClosed = false) }
                             }
+                            val liveSession = existingTab != null &&
+                                store.state.tabs.firstOrNull { it.id == existingTab }?.engineState?.engineSession != null
                             val appTabId = if (existingTab != null) {
                                 tabManager.selectTab(existingTab, store)
                                 existingTab
@@ -2843,6 +2890,8 @@ class BrowserActivity : ComponentActivity() {
                                 tabManager.createTab(app.startUrl, store, bridgedAppOrigin = app.origin)
                                     .also { bridgedAppStore.setTab(app.origin, it) }
                             }
+                            BridgedAppStartupTiming.begin(appTabId, liveSession)
+                            bridgedAppStore.markOpened(app.origin)
                             activeBridgedAppTabId = appTabId
                             Components.activeBridgedAppTabId = appTabId
                             isEditing = false

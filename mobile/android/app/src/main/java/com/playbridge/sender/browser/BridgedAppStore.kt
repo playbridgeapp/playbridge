@@ -59,6 +59,18 @@ class BridgedAppStore(context: Context) {
 
     fun remove(origin: String) = update { it.filterNot { app -> app.origin == origin } }
 
+    /** Remember the most recently opened app, for preloading it on the next start. */
+    fun markOpened(origin: String, at: Long = System.currentTimeMillis()) {
+        prefs.edit().putString(PREF_KEY_LAST_OPENED_ORIGIN, origin).putLong(PREF_KEY_LAST_OPENED_AT, at).apply()
+    }
+
+    /** The most recently opened app that is still installed, with when it was opened. */
+    fun lastOpened(): Pair<BridgedApp, Long>? {
+        val origin = prefs.getString(PREF_KEY_LAST_OPENED_ORIGIN, null) ?: return null
+        val app = mutableApps.value.firstOrNull { it.origin == origin } ?: return null
+        return app to prefs.getLong(PREF_KEY_LAST_OPENED_AT, 0L)
+    }
+
     fun setTab(origin: String, tabId: String?) = update { apps ->
         apps.map { if (it.origin == origin) it.copy(tabId = tabId) else it }
     }
@@ -175,6 +187,8 @@ class BridgedAppStore(context: Context) {
         const val STREAMS_START_URL = "https://streams.playbridge.app/"
         const val STREAMS_DEFAULT_NAME = "Library"
         const val PREF_KEY_SEEDED_STREAMS_LIBRARY = "seeded_streams_library_v1"
+        private const val PREF_KEY_LAST_OPENED_ORIGIN = "last_opened_origin"
+        private const val PREF_KEY_LAST_OPENED_AT = "last_opened_at"
 
         /**
          * Pure seed logic for preinstalling the Streams bridged app.

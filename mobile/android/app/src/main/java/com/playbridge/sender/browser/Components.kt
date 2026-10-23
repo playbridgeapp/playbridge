@@ -144,6 +144,8 @@ object Components {
      */
     @Volatile var onMagnetDetected: ((String) -> Unit)? = null
     @Volatile var onStremioAddonDetected: ((String) -> Unit)? = null
+    /** The recent bridged app is preloaded at most once per process. */
+    @Volatile var bridgedAppPreloadAttempted = false
     @Volatile var bridgedAppOriginsByTabId: Map<String, String> = emptyMap()
         set(value) {
             if (field == value) return

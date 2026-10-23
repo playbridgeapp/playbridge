@@ -27,6 +27,7 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
     val maxAliveTabsRepository by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
+    val preloadRecentApp by settingsRepository.preloadRecentApp.collectAsState(initial = true)
     val coroutineScope = rememberCoroutineScope()
     // Reactive theme: reading it here subscribes, so the selected row updates instantly
     // when the theme changes — no Activity.recreate(), which used to reset in-Settings
@@ -126,6 +127,26 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                     text = "Controls how many tabs are kept loaded in memory. Higher values allow faster switching between tabs but increase memory usage and risk of crashes on low-end devices. Your most recently used app (such as Streams) stays loaded within this limit unless memory runs low.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { coroutineScope.launch { settingsRepository.setPreloadRecentApp(!preloadRecentApp) } },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                    Text("Preload your most recent app", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = "Loads the app you opened last (such as Streams) in the background when PlayBridge starts, so it opens instantly. Skipped on mobile data, with Data Saver or Battery Saver on, when memory is low, or if you haven't used it in 14 days.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = preloadRecentApp,
+                    onCheckedChange = { checked -> coroutineScope.launch { settingsRepository.setPreloadRecentApp(checked) } }
                 )
             }
         }

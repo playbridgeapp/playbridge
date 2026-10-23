@@ -21,6 +21,7 @@ class SettingsRepository(
     object Keys {
         val AUTO_SWITCH_TO_REMOTE = booleanPreferencesKey("auto_switch_to_remote")
         val MAX_ALIVE_TABS = intPreferencesKey("max_alive_tabs")
+        val PRELOAD_RECENT_APP = booleanPreferencesKey("preload_recent_app")
         val PREFERRED_AUDIO_LANG = stringPreferencesKey("preferred_audio_language")
         val PREFERRED_SUBTITLE_LANG = stringPreferencesKey("preferred_subtitle_language")
         val DEFAULT_VIDEO_QUALITY = stringPreferencesKey("default_video_quality")
@@ -57,6 +58,7 @@ class SettingsRepository(
     // 2. Flow definitions for reactive Compose collectors
     val autoSwitchToRemote: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.AUTO_SWITCH_TO_REMOTE] ?: true }
     val maxAliveTabs: Flow<Int> = dataStore.data.catch { handleException(it) }.map { it[Keys.MAX_ALIVE_TABS] ?: 5 }
+    val preloadRecentApp: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.PRELOAD_RECENT_APP] ?: true }
     val preferredAudioLang: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.PREFERRED_AUDIO_LANG] ?: "" }
     val preferredSubtitleLang: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.PREFERRED_SUBTITLE_LANG] ?: "" }
     val defaultVideoQuality: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.DEFAULT_VIDEO_QUALITY] ?: "Auto" }
@@ -98,6 +100,7 @@ class SettingsRepository(
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
     suspend fun setMaxAliveTabs(value: Int) = write { it[Keys.MAX_ALIVE_TABS] = value }
+    suspend fun setPreloadRecentApp(value: Boolean) = write { it[Keys.PRELOAD_RECENT_APP] = value }
     suspend fun setPreferredAudioLang(value: String) = write { it[Keys.PREFERRED_AUDIO_LANG] = value }
     suspend fun setPreferredSubtitleLang(value: String) = write { it[Keys.PREFERRED_SUBTITLE_LANG] = value }
     suspend fun setDefaultVideoQuality(value: String) = write { it[Keys.DEFAULT_VIDEO_QUALITY] = value }

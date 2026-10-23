@@ -249,6 +249,8 @@ class TabManager {
                         }
                     }
 
+                    BridgedAppStartupTiming.observe(tab.id, tab.content.firstContentfulPaint, tab.content.loading)
+
                     // 2. Mirror back/forward state (EngineObserver keeps content state updated).
                     val nav = TabNavigationState(tab.content.canGoBack, tab.content.canGoForward)
                     if (navigationStates[tab.id] != nav) navigationStates[tab.id] = nav
@@ -509,6 +511,19 @@ class TabManager {
             }
         }
         recentlyActiveTabIds.clear()
+    }
+
+    /**
+     * Load a bridged app's tab in the background without selecting it, and keep it live as the
+     * recently used app. EngineMiddleware restores its saved state or loads its URL.
+     */
+    fun preloadBridgedApp(tabId: String, store: BrowserStore) {
+        val tab = store.state.tabs.firstOrNull { it.id == tabId } ?: return
+        if (tab.engineState.engineSession != null || tab.engineState.initializing) return
+        keptBridgedAppTabId = tabId
+        recentlyActiveTabIds.add(tabId)
+        Log.d(TAG, "Preloading bridged app tab $tabId")
+        store.dispatch(EngineAction.CreateEngineSessionAction(tabId))
     }
 
     /**
