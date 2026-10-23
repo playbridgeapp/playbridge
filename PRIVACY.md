@@ -225,4 +225,4 @@ device settings.
 
 If this policy changes, the date at the top changes too.
 
-For privacy questions, contact <playbridgeapp@gmail.com>.
+For privacy questions, contact <hello@playbridge.app>.

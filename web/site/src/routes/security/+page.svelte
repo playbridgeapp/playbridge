@@ -16,7 +16,7 @@
   </div>
   <div class="prose">
     <h3 id="report">Report a vulnerability</h3>
-    <p>Found a vulnerability? Please email <a href="mailto:{SITE.email}">{SITE.email}</a> rather than filing a public issue. Include the app, its version, your platform, and steps to reproduce.</p>
+    <p>Found a vulnerability? Please email <a href="mailto:{SITE.securityEmail}">{SITE.securityEmail}</a> rather than filing a public issue. Include the app, its version, your platform, and steps to reproduce.</p>
     <p>PlayBridge is a small open-source project, so there is no fixed response time. Fixes ship in the next release of the affected app, and credits go in the release notes unless you ask otherwise.</p>
     <p>Machine-readable contact details are in <a href="/.well-known/security.txt" data-sveltekit-reload>/.well-known/security.txt</a>.</p>
 

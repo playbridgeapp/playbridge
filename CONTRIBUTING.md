@@ -56,7 +56,7 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
 
 ## Questions?
 
-If you have any questions about contributing or need help getting started, please reach out to us at [playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+If you have any questions about contributing or need help getting started, please reach out to us at [hello@playbridge.app](mailto:hello@playbridge.app).
 
 ## License
 

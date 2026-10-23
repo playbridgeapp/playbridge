@@ -14,4 +14,4 @@ when they are truthful and do not suggest endorsement.
 
 These rules do not claim that the name or logos are registered trademarks.
 For permission to use the branding beyond these cases, contact the maintainer at
-[playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+[hello@playbridge.app](mailto:hello@playbridge.app).

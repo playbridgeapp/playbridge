@@ -19,7 +19,7 @@ your report; a draft release is not a published security update.
 
 We take the security of PlayBridge seriously. If you have discovered a security vulnerability, please do not disclose it publicly.
 
-1.  **Report**: Please email the security team at `playbridgeapp@gmail.com`.
+1.  **Report**: Please email the security team at `security@playbridge.app`.
 2.  **Response**: PlayBridge is a small open-source project, so there is no fixed response time.
 3.  **Resolution**: Fixes ship in the next release of the affected component, with credit in the release notes unless you ask otherwise.
 

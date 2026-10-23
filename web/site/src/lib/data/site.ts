@@ -8,7 +8,9 @@ export const SITE = {
   url: 'https://playbridge.app',
   ogImage: '/og.png',
   twitter: '@playbridge',
-  email: 'playbridgeapp@gmail.com',
+  email: 'hello@playbridge.app',
+  /** Vulnerability reports (Security page, security.txt, SECURITY.md). */
+  securityEmail: 'security@playbridge.app',
   github: 'https://github.com/playbridgeapp/PlayBridge',
   githubOrg: 'https://github.com/playbridgeapp',
   discord: 'https://discord.gg/4U6WPSdSa9',

@@ -339,7 +339,7 @@ Contributors must read and sign [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBU
 
 ## Contact
 
-For questions, feedback, or support, please reach out to us at [playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+For questions, feedback, or support, please reach out to us at [hello@playbridge.app](mailto:hello@playbridge.app).
 
 If you'd like to support development, you can [buy us a coffee on Ko-fi (kofi)](https://ko-fi.com/playbridgeapp).
 
