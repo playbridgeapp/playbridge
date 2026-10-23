@@ -83,6 +83,23 @@ private actor Probe {
         precondition(BridgedAppStore(defaults: defaults).apps.isEmpty, "Removal must persist")
         defaults.set(try! JSONEncoder().encode([parsed, parsed]), forKey: "bridged_apps_v1")
         precondition(BridgedAppStore(defaults: defaults).apps == [parsed], "Duplicate saved origins must be filtered")
-        print("PASS: bridged-app manifest, origin cache, installation persistence and removal")
+        precondition(BridgedAppDeclaration.resetAction(startURL: origin, firstBackItemURL: nil) == .none,
+                     "At first entry, reopening must be a no-op")
+        precondition(BridgedAppDeclaration.resetAction(startURL: origin,
+                                                       firstBackItemURL: URL(string: "https://app.example/#/catalog")!) == .goToFirstHistoryItem,
+                     "Hash-routed SPA with matching root path must traverse to first history item")
+        precondition(BridgedAppDeclaration.resetAction(startURL: URL(string: "https://app.example")!,
+                                                       firstBackItemURL: URL(string: "https://app.example/?tab=1#home")!) == .goToFirstHistoryItem,
+                     "Root start URL without trailing slash must match root history item")
+        precondition(BridgedAppDeclaration.resetAction(startURL: URL(string: "https://app.example/home#movies")!,
+                                                       firstBackItemURL: URL(string: "https://app.example/home?view=grid")!) == .goToFirstHistoryItem,
+                     "Matching non-root path must traverse to first history item")
+        precondition(BridgedAppDeclaration.resetAction(startURL: URL(string: "https://app.example/home")!,
+                                                       firstBackItemURL: URL(string: "https://app.example/login")!) == .loadStartURL,
+                     "Different first-entry path must fall back to loading startURL")
+        precondition(BridgedAppDeclaration.resetAction(startURL: origin,
+                                                       firstBackItemURL: URL(string: "https://other.example/")!) == .loadStartURL,
+                     "Different first-entry origin must fall back to loading startURL")
+        print("PASS: bridged-app manifest, origin cache, installation persistence, removal and reset-on-reopen")
     }
 }

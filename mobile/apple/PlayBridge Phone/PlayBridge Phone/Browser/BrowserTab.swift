@@ -724,6 +724,24 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
         webView.goBack()
     }
+    func resetToStart(_ startURL: URL) {
+        guard let view = loadedWebView else { return }
+        let firstItem = view.backForwardList.backList.first
+        switch BridgedAppDeclaration.resetAction(startURL: startURL, firstBackItemURL: firstItem?.url) {
+        case .none:
+            return
+        case .goToFirstHistoryItem:
+            guard let firstItem else { return }
+            processRecovery.cancelPendingReload()
+            stopElementPicker()
+            cancelPrompt()
+            navigationFailure = nil
+            refreshAdblockSiteScripts(for: firstItem.url)
+            view.go(to: firstItem)
+        case .loadStartURL:
+            load(URLRequest(url: startURL))
+        }
+    }
     func goForward() {
         processRecovery.cancelPendingReload()
         stopElementPicker()

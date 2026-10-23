@@ -2838,6 +2838,12 @@ class BrowserActivity : ComponentActivity() {
                             }
                             val appTabId = if (existingTab != null) {
                                 tabManager.selectTab(existingTab, store)
+                                store.state.tabs.firstOrNull { it.id == existingTab }?.let { tab ->
+                                    tab.resetBridgedAppToStart(
+                                        app.startUrl,
+                                        tab.engineState.engineSession ?: tabManager.sessions[existingTab],
+                                    )
+                                }
                                 existingTab
                             } else {
                                 tabManager.createTab(app.startUrl, store, bridgedAppOrigin = app.origin)

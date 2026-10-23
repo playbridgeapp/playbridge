@@ -23,6 +23,12 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+enum BridgedAppResetAction: Equatable, Sendable {
+    case none
+    case goToFirstHistoryItem
+    case loadStartURL
+}
+
 /// The declaration is an origin-wide detection opt-out, independent of app installation.
 enum BridgedAppDeclaration {
     static func origin(of url: URL) -> URL? {
@@ -38,6 +44,21 @@ enum BridgedAppDeclaration {
         parts.query = nil
         parts.fragment = nil
         return parts.url
+    }
+
+    static func resetAction(startURL: URL, firstBackItemURL: URL?) -> BridgedAppResetAction {
+        guard let firstURL = firstBackItemURL else { return .none }
+        guard let startOrigin = origin(of: startURL),
+              origin(of: firstURL) == startOrigin,
+              normalizedPath(of: firstURL) == normalizedPath(of: startURL) else {
+            return .loadStartURL
+        }
+        return .goToFirstHistoryItem
+    }
+
+    private static func normalizedPath(of url: URL) -> String {
+        let path = URLComponents(url: url, resolvingAgainstBaseURL: true)?.path ?? url.path
+        return path.isEmpty ? "/" : path
     }
 
     private static func isLocalHost(_ host: String) -> Bool {
