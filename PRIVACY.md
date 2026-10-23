@@ -182,6 +182,9 @@ blocker downloads filter lists from their publishers (EasyList, uBlock Origin's
 lists on GitHub, and a short PlayBridge list on playbridge.app). Tab icons come
 from Google's favicon service.
 
+The iPhone app comes with no bridged apps. Any bridged app you add opens in the
+in-app browser and handles data under its own policy.
+
 ## Apple TV (receiver, TestFlight beta)
 
 The Apple TV receiver stores cast history and favorites on the Apple TV,

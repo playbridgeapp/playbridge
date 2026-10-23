@@ -77,6 +77,7 @@
 
     <h3 id="iphone">iPhone and iPad (sender, TestFlight beta)</h3>
     <p>The iPhone sender stores browser history, bookmarks, downloads, cast history, settings, and saved receiver details on your device. Receiver pairing credentials are stored in the iOS Keychain. You can clear browser history and website data in Browser settings and forget saved receivers in the Devices screen. Its content blocker downloads filter lists from their publishers (EasyList, uBlock Origin's lists on GitHub, and a short PlayBridge list on playbridge.app). Tab icons come from Google's favicon service.</p>
+    <p>The iPhone app comes with no bridged apps. Any bridged app you add opens in the in-app browser and handles data under its own policy.</p>
 
     <h3 id="appletv">Apple TV (receiver, TestFlight beta)</h3>
     <p>The Apple TV receiver stores cast history and favorites on the Apple TV, including media addresses, titles, request headers sent with a cast, and playback position for resuming. History is encrypted with a key kept in the Apple TV Keychain. You can turn it off with <strong>Save Cast History</strong> in Settings and erase it with <strong>Clear All</strong> in the library. The receiver also stores the names of paired phones and a one-way verifier of each phone's pairing secret, never the secret itself; you can forget phones in the pairing screen. Its TLS identity is kept in the Keychain.</p>
