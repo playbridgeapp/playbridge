@@ -92,7 +92,8 @@ class SubtitleManager(
     }
 
     private fun updateSubtitle(currentPos: Long) {
-        val adjustedPos = currentPos + offsetMs
+        // Positive offset shows subtitles later, matching mpv `sub-delay` and the other receivers.
+        val adjustedPos = currentPos - offsetMs
         // Find all active cues (some subtitles have multiple overlapping cues for different screen positions)
         val activeCues = synchronized(cues) {
             cues.filter { adjustedPos >= it.startTime && adjustedPos <= it.endTime }
