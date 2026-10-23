@@ -85,11 +85,17 @@ struct BrowserAppSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showDetection = false
     @State private var showSite = false
+    @AppStorage(BridgedAppPreloadPolicy.enabledKey) private var preloadRecentApp = true
     var body: some View {
         NavigationStack {
             List {
                 Button("Media detect") { showDetection = true }
                 Button("Site Settings") { showSite = true }
+                Section {
+                    Toggle("Preload your most recent app", isOn: $preloadRecentApp)
+                } footer: {
+                    Text("Loads the app you opened last in the background when PlayBridge starts, so it opens instantly. Skipped on cellular or Low Data Mode, in Low Power Mode, when memory is low, or if you haven't used it in 14 days.")
+                }
             }
             .navigationTitle("App Settings").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

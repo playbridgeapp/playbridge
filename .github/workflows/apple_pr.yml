@@ -54,6 +54,9 @@ jobs:
       - name: Browser startup readiness
         run: bash mobile/apple/tests/run-browser-readiness-checks.sh
 
+      - name: Bridged app preload policy
+        run: bash mobile/apple/tests/run-bridged-app-preload-checks.sh
+
       - name: Page cast model
         run: bash mobile/apple/tests/run-page-cast-model-checks.sh
 

@@ -2,6 +2,7 @@ import Foundation
 import WebKit
 import Combine
 import UIKit
+import Network
 
 /// Owns the set of browser tabs and the active selection. Tabs share a `WKProcessPool` +
 /// default data store so cookies/logins persist across tabs (like a normal browser).
@@ -61,6 +62,7 @@ final class BrowserStore: ObservableObject {
     private let tabStates: BrowserTabStatePersistence
     private var stateIDs: [UUID: String] = [:]
     private var lifecycleObservers: [NSObjectProtocol] = []
+    private var lastMemoryWarning: Date?
     private static func defaultTabsFileURL() -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -83,6 +85,9 @@ final class BrowserStore: ObservableObject {
                       host == site || host.hasSuffix("." + site) else { continue }
                 tab.reload()
             }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.lastMemoryWarning = Date()
         })
         for notification in [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: notification, object: nil, queue: .main) { [weak self] _ in
@@ -114,6 +119,11 @@ final class BrowserStore: ObservableObject {
             }
             rulesReady = true
             flushPendingLoads()
+            // Background work for the next open; never delays this launch.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await self?.preloadRecentBridgedApp()
+            }
             await compile.value
             // Then fetch/refresh the full filter lists and recompile.
             await ContentBlocker.ensureListsDownloaded()
@@ -487,10 +497,47 @@ final class BrowserStore: ObservableObject {
         else { newTab() }
     }
 
+    /// Load the most recently opened bridged app in the background, without selecting it, so
+    /// opening it from the dashboard shows a live page (see `BridgedAppPreloadPolicy`).
+    private func preloadRecentBridgedApp() async {
+        guard let (app, openedAt) = bridgedApps.lastOpened() else { return }
+        let existing = tabs.first { $0.bridgedAppOrigin == app.origin &&
+            URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }
+        let path = await Self.currentNetworkPath()
+        let conditions = BridgedAppPreloadConditions(
+            enabled: BridgedAppPreloadPolicy.isEnabled(), lastOpenedAt: openedAt, now: Date(),
+            alreadyLoaded: existing?.loadedWebView != nil, online: path?.status == .satisfied,
+            expensiveNetwork: path?.isExpensive ?? true, lowDataMode: path?.isConstrained ?? true,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            recentMemoryWarning: lastMemoryWarning.map { Date().timeIntervalSince($0) < 600 } ?? false)
+        guard BridgedAppPreloadPolicy.shouldPreload(conditions) else { return }
+        let tab: BrowserTab
+        if let existing { tab = existing } else {
+            closeTabs(Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id)))
+            tab = makeTab(url: app.startURL.absoluteString, activate: false, bridgedAppOrigin: app.origin)
+        }
+        if pendingInitialLoads[tab.id] == nil { pendingInitialLoads[tab.id] = tab.urlString }
+        // Lay out at screen size so the page doesn't first render at zero width.
+        tab.webView.frame = UIScreen.main.bounds
+        loadInitialTab(tab)
+    }
+
+    /// The current network path, or nil if it can't be determined within a second.
+    private static func currentNetworkPath() async -> NWPath? {
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            let once = OneShot<NWPath?> { continuation.resume(returning: $0) }
+            monitor.pathUpdateHandler = { path in once.fire(path); monitor.cancel() }
+            monitor.start(queue: .global(qos: .utility))
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) { once.fire(nil); monitor.cancel() }
+        }
+    }
+
     @discardableResult
     func openBridgedApp(_ app: BridgedApp) -> BrowserTab? {
         let tappedAt = ProcessInfo.processInfo.systemUptime
         guard let app = bridgedApps.apps.first(where: { $0.origin == app.origin }) else { return nil }
+        bridgedApps.markOpened(app.origin)
         if let tab = tabs.first(where: { $0.bridgedAppOrigin == app.origin &&
             URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }) {
             tab.startupTiming.begin(at: tappedAt)
@@ -660,5 +707,16 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         default:
             break
         }
+    }
+}
+
+/// Delivers a value exactly once, from whichever caller fires first.
+private final class OneShot<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: ((Value) -> Void)?
+    init(_ action: @escaping (Value) -> Void) { self.action = action }
+    func fire(_ value: Value) {
+        lock.lock(); let pending = action; action = nil; lock.unlock()
+        pending?(value)
     }
 }

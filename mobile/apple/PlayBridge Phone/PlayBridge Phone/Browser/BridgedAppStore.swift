@@ -6,6 +6,8 @@ final class BridgedAppStore: ObservableObject {
     @Published private(set) var apps: [BridgedApp]
     private let defaults: UserDefaults
     private let key = "bridged_apps_v1"
+    private let lastOpenedOriginKey = "bridged_apps_last_opened_origin"
+    private let lastOpenedAtKey = "bridged_apps_last_opened_at"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -32,6 +34,19 @@ final class BridgedAppStore: ObservableObject {
     func remove(_ origin: URL) {
         apps.removeAll { $0.origin == origin }
         save()
+    }
+
+    /// Remember the most recently opened app, for preloading it at the next launch.
+    func markOpened(_ origin: URL, at date: Date = Date()) {
+        defaults.set(origin.absoluteString, forKey: lastOpenedOriginKey)
+        defaults.set(date.timeIntervalSince1970, forKey: lastOpenedAtKey)
+    }
+
+    /// The most recently opened app that is still installed, with when it was opened.
+    func lastOpened() -> (app: BridgedApp, at: Date)? {
+        guard let origin = defaults.string(forKey: lastOpenedOriginKey),
+              let app = apps.first(where: { $0.origin.absoluteString == origin }) else { return nil }
+        return (app, Date(timeIntervalSince1970: defaults.double(forKey: lastOpenedAtKey)))
     }
 
     private func save() {
