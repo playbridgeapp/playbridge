@@ -1,6 +1,8 @@
 package com.playbridge.sender
 
 import android.app.Application
+import android.content.ComponentCallbacks2
+import android.content.res.Configuration
 import android.util.Log
 import com.playbridge.sender.data.backup.BackupTrigger
 import com.playbridge.sender.diagnostics.CrashLogger
@@ -45,6 +47,15 @@ class PlayBridgeApplication : Application() {
         // Start backup trigger
         BackupTrigger(this, applicationScope).start()
 
+        // The recently used bridged app is kept live across tab switches; give it up when memory is short.
+        registerComponentCallbacks(object : ComponentCallbacks2 {
+            override fun onTrimMemory(level: Int) {
+                if (com.playbridge.sender.browser.BridgedAppMemoryPolicy.shouldRelease(level)) releaseKeptBridgedApp()
+            }
+            override fun onLowMemory() = releaseKeptBridgedApp()
+            override fun onConfigurationChanged(newConfig: Configuration) = Unit
+        })
+
         // Perf: Room init + stale-APK cleanup do file IO — off the main thread so
         // cold start isn't blocked on DB verification / cacheDir scans.
         applicationScope.launch(Dispatchers.IO) {
@@ -55,6 +66,11 @@ class PlayBridgeApplication : Application() {
                 com.playbridge.sender.update.ApkInstaller.cleanupStaleApks(this@PlayBridgeApplication)
             }
         }
+    }
+
+    private fun releaseKeptBridgedApp() {
+        val components = com.playbridge.sender.browser.Components
+        if (components.isEngineInitialized()) components.tabManager.releaseKeptBridgedApp()
     }
 
     companion object {

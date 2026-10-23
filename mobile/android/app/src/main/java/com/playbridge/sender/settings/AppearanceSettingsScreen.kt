@@ -123,7 +123,7 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                     steps = 13
                 )
                 Text(
-                    text = "Controls how many tabs are kept loaded in memory. Higher values allow faster switching between tabs but increase memory usage and risk of crashes on low-end devices.",
+                    text = "Controls how many tabs are kept loaded in memory. Higher values allow faster switching between tabs but increase memory usage and risk of crashes on low-end devices. Your most recently used app (such as Streams) stays loaded within this limit unless memory runs low.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

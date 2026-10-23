@@ -136,6 +136,9 @@ class TabManager {
     /** LRU tracker for recently active tab IDs (engine-session lifetime). */
     private val recentlyActiveTabIds = linkedSetOf<String>()
 
+    /** The most recently used bridged app, kept live under LRU pressure (see [SessionLruPolicy]). */
+    @Volatile private var keptBridgedAppTabId: String? = null
+
     private data class ClosedTab(
         val url: String,
         val parentId: String?,
@@ -508,6 +511,23 @@ class TabManager {
         recentlyActiveTabIds.clear()
     }
 
+    /**
+     * Memory pressure: stop keeping the bridged app live and hibernate it unless it is selected
+     * or playing. Its state stays in the store, so it restores to the same page when reopened.
+     */
+    fun releaseKeptBridgedApp() {
+        val tabId = keptBridgedAppTabId ?: return
+        keptBridgedAppTabId = null
+        val selected = Components.store.state.selectedTabId
+        if (tabId == selected || playingTabIds[tabId] == true) return
+        val tab = Components.store.state.tabs.firstOrNull { it.id == tabId } ?: return
+        if (tab.engineState.engineSession == null) return
+        Log.d(TAG, "Memory pressure: hibernating kept bridged app $tabId")
+        recentlyActiveTabIds.remove(tabId)
+        Components.store.dispatch(EngineAction.SuspendEngineSessionAction(tabId))
+        VideoDetector.clearTab(tabId)
+    }
+
     /** Drop all per-tab UI state for [tabId]. Called when a tab is closed. */
     fun purgeTabState(tabId: String) {
         disposeMediaObserver(tabId)
@@ -515,6 +535,7 @@ class TabManager {
         navigationStates.remove(tabId)
         playingTabIds.remove(tabId)
         recentlyActiveTabIds.remove(tabId)
+        if (keptBridgedAppTabId == tabId) keptBridgedAppTabId = null
         selectionStack.remove(tabId)
         parentIds.remove(tabId)
         lastSessionStates.remove(tabId)
@@ -568,27 +589,21 @@ class TabManager {
             recordSelection(selectedTabId)
         }
         recentlyActiveTabIds.retainAll(allValidTabIds)
+        val playing = playingTabIds.filterValues { it }.keys
+        val kept = SessionLruPolicy.keptBridgedApp(keptBridgedAppTabId, selectedTabId,
+            Components.bridgedAppOriginsByTabId.keys, allValidTabIds)
+        keptBridgedAppTabId = kept
 
-        // 2. Cull the LRU: evict the oldest non-playing, non-selected tabs.
-        while (recentlyActiveTabIds.size > maxAliveSessions) {
-            val oldestNonPlaying = recentlyActiveTabIds.find { id ->
-                id != selectedTabId && (playingTabIds[id] != true)
-            }
-            if (oldestNonPlaying != null) {
-                recentlyActiveTabIds.remove(oldestNonPlaying)
-            } else {
-                // All remaining tabs are selected or playing media — stop culling.
-                break
-            }
-        }
+        // 2. Cull the LRU: evict the oldest tabs that aren't selected, playing or the kept bridged app.
+        val retained = SessionLruPolicy.retain(recentlyActiveTabIds.toList(), maxAliveSessions, selectedTabId, playing, kept)
+        recentlyActiveTabIds.retainAll(retained.toSet())
         val activeTabIds = recentlyActiveTabIds.toSet()
 
         // 3. Hibernate live sessions outside the active window (read fresh store state).
         Components.store.state.tabs.forEach { tab ->
             if (tab.id !in activeTabIds &&
                 tab.engineState.engineSession != null &&
-                tab.id != selectedTabId &&
-                playingTabIds[tab.id] != true
+                !SessionLruPolicy.isProtected(tab.id, selectedTabId, playing, kept)
             ) {
                 Log.d(TAG, "Hibernating tab ${tab.id} (suspend via EngineMiddleware)")
                 Components.store.dispatch(EngineAction.SuspendEngineSessionAction(tab.id))
