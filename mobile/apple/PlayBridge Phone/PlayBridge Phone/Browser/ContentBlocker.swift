@@ -46,6 +46,8 @@ enum ContentBlocker {
     private static let blockResourceTypes = ["image", "style-sheet", "script", "font", "raw", "svg-document", "media", "popup"]
     @MainActor private static var generation = UUID()
     @MainActor private static var activeLists: [WKContentRuleList] = []
+    @MainActor private static var activeSettingsFingerprint: String?
+    private static let startupCacheKey = "pb_adblock_startup_rules_v1"
     @MainActor private static var popupRules = NavigationAdRules()
 
     /// Prior lists remain installed while all replacement chunks compile. A failed or
@@ -57,6 +59,37 @@ enum ContentBlocker {
         catch { return activeLists }
     }
     @MainActor static func forceCompileAll() async throws -> [WKContentRuleList] { try await rebuild() }
+
+    /// Restore only already-compiled rules; never invoke the engine or compile here.
+    /// A settings fingerprint prevents resurrecting disabled lists or removed picker rules.
+    private static var startupFingerprint: String {
+        cacheIdentifier(for: enabledFilterListURLs.map(\.absoluteString).joined(separator: "\n")
+            + "\n" + userDomainsJSON() + "\n" + userCosmeticJSON())
+    }
+
+    @MainActor static func cachedRulesForStartup() async -> [WKContentRuleList] {
+        let fingerprint = startupFingerprint
+        if !activeLists.isEmpty, activeSettingsFingerprint == fingerprint { return activeLists }
+        guard let store = WKContentRuleListStore.default() else { return [] }
+        let token = generation
+        let saved = UserDefaults.standard.dictionary(forKey: startupCacheKey)
+        let savedIDs = saved?["fingerprint"] as? String == fingerprint ? saved?["identifiers"] as? [String] : nil
+        // Older installations have no index yet. Reuse their known baseline/picker
+        // cache entries, without spending launch time compiling a missing entry.
+        let fallback = ["playbridge-adblock-bootstrap-" + cacheIdentifier(for: domainsBlockJSON(blockedDomains)),
+            "playbridge-adblock-builtin-" + cacheIdentifier(for: builtinIframeAdJSON()),
+            userDomainRuleIdentifier, "playbridge-adblock-user-css-" + cacheIdentifier(for: userCosmeticJSON())]
+        var cached: [WKContentRuleList] = []
+        for id in savedIDs ?? fallback {
+            if let list = await lookup(store: store, identifier: id) { cached.append(list) }
+        }
+        guard generation == token, fingerprint == startupFingerprint else { return activeLists }
+        // Do not publish a partially missing indexed generation.
+        if let savedIDs, cached.count != savedIDs.count { return [] }
+        activeLists = cached
+        activeSettingsFingerprint = fingerprint
+        return activeLists
+    }
 
     /// Attach a small bundled fallback before waiting for the full engine/compile.
     @MainActor static func bootstrapRules() async -> [WKContentRuleList] {
@@ -77,6 +110,7 @@ enum ContentBlocker {
             if activeLists.isEmpty { _ = await bootstrapRules() }
             guard generation == token else { return activeLists }
             let urls = enabledFilterListURLs
+            let fingerprint = startupFingerprint
             let engineStart = Date()
             let (engine, texts) = try await AdblockEngineWorker.shared.load(files: urls.map(getLocalListPath))
             guard generation == token else { return activeLists }
@@ -115,8 +149,11 @@ enum ContentBlocker {
                 }
                 guard generation == token else { return activeLists }
             }
-            guard generation == token else { return activeLists }
+            guard generation == token, fingerprint == startupFingerprint else { return activeLists }
             activeLists = replacement
+            activeSettingsFingerprint = fingerprint
+            UserDefaults.standard.set(["fingerprint": fingerprint,
+                "identifiers": replacement.map(\.identifier)], forKey: startupCacheKey)
             lastCompilationMetrics = CompilationMetrics(engineMS: engineMS, conversionMS: conversionMS,
                 webKitMS: Date().timeIntervalSince(webKitStart) * 1000, reusedChunks: reused, compiledChunks: compiled)
             lastCompilationError = nil
