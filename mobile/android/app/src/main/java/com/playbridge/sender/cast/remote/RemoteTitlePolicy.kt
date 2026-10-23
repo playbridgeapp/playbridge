@@ -69,11 +69,7 @@ object RemoteTitlePolicy {
                 current.season == null && episodeOnly.findAll(title).any { it.groupValues[1].toIntOrNull() == episode }
             if (!alreadyShown) return current.season?.let { "S${it}E$episode" } ?: "Episode $episode"
         }
-        return when {
-            playback.isLive -> "Live"
-            playback.displayedState == RemotePlaybackState.Paused -> "Paused"
-            playback.displayedState == RemotePlaybackState.Buffering -> "Buffering"
-            else -> null
-        }
+        // Paused/buffering/live are already shown by the transport and seek bar.
+        return null
     }
 }
