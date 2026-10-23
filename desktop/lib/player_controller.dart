@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
 import 'playback_speed.dart';
 import 'player_engine.dart';
+import 'mpv_failure_category.dart';
 import 'skip_segment.dart';
 import 'subtitle_delay.dart';
 import 'subtitle_delay.dart' as subtitle_delay;
@@ -74,14 +76,42 @@ int? extractHttpStatus(Object? error) {
   return null;
 }
 
-/// Formats a user-safe failure reason:
-/// "The media couldn't be loaded" plus " (HTTP NNN)" only if a three-digit HTTP
-/// status can be extracted reliably from a structured source; otherwise no code.
+/// Only fixed sentences leave the player. Exception text, URLs and host names are never interpolated.
 @visibleForTesting
 String formatPlaybackErrorMessage(Object? rawError, {int? httpStatus}) {
-  final status = httpStatus ?? extractHttpStatus(rawError);
+  final category = rawError is String
+      ? (mpvFailureCategory('cplayer', rawError) ?? rawError)
+      : null;
+  final code = category == null
+      ? null
+      : RegExp(r'^mpv_http_([1-5][0-9]{2})$').firstMatch(category);
+  final status = httpStatus ??
+      (code == null ? null : int.tryParse(code.group(1)!)) ??
+      extractHttpStatus(rawError);
+  if (status == 401 || status == 403) {
+    return "The link was refused (HTTP $status)";
+  }
+  if (status == 404 || status == 410) {
+    return "The video wasn't found (HTTP $status)";
+  }
   if (status != null && status >= 100 && status <= 599) {
     return "The media couldn't be loaded (HTTP $status)";
+  }
+  if (category == 'mpv_unsupported_format') {
+    return "This video format isn't supported";
+  }
+  if (category == 'mpv_decoder_failure') {
+    return "The TV couldn't decode this video";
+  }
+  if (category == 'mpv_network_failed' ||
+      rawError is SocketException ||
+      rawError is HandshakeException ||
+      rawError is TimeoutException) {
+    return "The TV couldn't reach the video server";
+  }
+  if (category == 'playback_stalled' ||
+      category == 'The video stopped loading') {
+    return 'The video stopped loading';
   }
   return "The media couldn't be loaded";
 }

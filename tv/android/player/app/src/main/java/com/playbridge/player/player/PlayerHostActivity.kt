@@ -3292,7 +3292,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun showTransition(@StringRes message: Int, force: Boolean = false) {
         if (force || controlsViewModel.controlsState.value.prePlayMetadata == null) {
-            controlsViewModel.showPlaybackTransition(getString(message))
+            val text = if (message == R.string.player_failed) sessionCoordinator.current().error else null
+            controlsViewModel.showPlaybackTransition(text ?: getString(message))
         } else {
             controlsViewModel.clearPlaybackTransition()
         }

@@ -92,6 +92,7 @@ class MpvRendererService : Service() {
     private var desiredLooping = false
     private var audioBoostEnabled = false
     private var lastCapabilitiesLive: Boolean? = null
+    private var errorReportedSessionId = 0L
     private val frameRateObserver = object : MPVLib.EventObserver {
         override fun event(eventId: Int, data: MPVNode) = Unit
         override fun eventProperty(property: String) = Unit
@@ -345,6 +346,9 @@ class MpvRendererService : Service() {
 
             launch {
                 renderer.chapters.collectLatest(::sendChapters)
+            }
+            launch {
+                renderer.failureCode.collectLatest { code -> code?.let(::sendError) }
             }
 
             // Position/duration updates are high-frequency and remain sampled for Binder health.
@@ -646,9 +650,22 @@ class MpvRendererService : Service() {
     }
 
     private fun sendError(message: String) {
-        sendEvent(RendererProtocol.EVENT_ERROR, Bundle().apply {
-            putString(RendererProtocol.KEY_ERROR, message)
-        })
+        val failedSessionId = sessionId
+        val failedEngine = engine
+        fun report(code: String) {
+            if (sessionId != failedSessionId || engine !== failedEngine || errorReportedSessionId == failedSessionId) return
+            errorReportedSessionId = failedSessionId
+            sendEvent(RendererProtocol.EVENT_ERROR, Bundle().apply {
+                putString(RendererProtocol.KEY_ERROR, code)
+            })
+        }
+        if (message == "mpv_load_failed" || message == "mpv_playback_failed") {
+            // cplayer's terminal log can follow END_FILE. Give its fixed category one event-loop
+            // turn to arrive, without restoring the old open-watchdog delay or retaining raw text.
+            mainHandler.postDelayed({ report(failedEngine?.failureCode?.value ?: message) }, 100L)
+        } else {
+            report(message)
+        }
     }
 
     private fun sendEvent(event: String, extras: Bundle = Bundle()) {

@@ -1772,15 +1772,63 @@ private func runTransportChromeTests() {
     assert(PlaybackSurfaceState.buffering.rawValue == "buffering")
     print("PASS: playback surface reduction, user-pause/pre-play precedence and spinner visibility")
 
-    let open = "The video couldn't be opened."
-    let generic = "This video couldn't be played."
+    let open = "The media couldn't be loaded"
+    let generic = "The media couldn't be loaded"
     assert(PlaybackFailureMessage.sentence(forMpvCode: -13) == open)
     for code: Int32 in -11 ... -5 { assert(PlaybackFailureMessage.sentence(forMpvCode: code) == open) }
-    for code: Int32 in [0, -1, -4, -12, -14, -16, Int32.min, Int32.max] {
+    for code: Int32 in [0, -1, -4, -12, -14, Int32.min, Int32.max] {
         assert(PlaybackFailureMessage.sentence(forMpvCode: code) == generic)
     }
     for sentence in [open, generic] { assert(!sentence.contains("://") && !sentence.contains("//")) }
-    print("PASS: fixed playback failure sentences for mpv loading/init codes and unknown errors")
+    let cases: [(PlaybackFailureMessage.Category, String)] = [
+        (.unsupported, "This video format isn't supported"),
+        (.http(401), "The link was refused (HTTP 401)"), (.http(403), "The link was refused (HTTP 403)"),
+        (.http(404), "The video wasn't found (HTTP 404)"), (.http(410), "The video wasn't found (HTTP 410)"),
+        (.http(503), "The media couldn't be loaded (HTTP 503)"), (.http(999), generic),
+        (.network, "The TV couldn't reach the video server"), (.stall, "The video stopped loading"),
+        (.decoder, "The TV couldn't decode this video"), (.generic, generic),
+    ]
+    for (category, sentence) in cases {
+        assert(PlaybackFailureMessage.sentence(for: category) == sentence)
+        assert(PlaybackFailureMessage.sentence(forMpvCode: -13, category: category) == sentence)
+        var attempt = PlaybackFailureSession()
+        assert(attempt.present(code: -13, category: category, attempt: attempt.attempt))
+        assert(attempt.sentence == sentence)
+    }
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -17) == "This video format isn't supported")
+    let logs: [(String, PlaybackFailureMessage.Category)] = [
+        ("HTTP error 403 Forbidden https://private.example/token", .http(403)),
+        ("Failed to resolve hostname private.example", .network),
+        ("Failed to recognize file format https://private.example/token", .unsupported),
+    ]
+    for (text, category) in logs { assert(PlaybackFailureMessage.category(prefix: "cplayer", text: text) == category) }
+    assert(PlaybackFailureMessage.category(prefix: "sub", text: "Failed to open subtitle") == nil)
+    assert(PlaybackFailureMessage.category(prefix: "cplayer", text: "https://private.example/http_403") == nil)
+    for prefix in ["vd", "ad", "cplayer", "ffmpeg", "ffmpeg/video"] {
+        for text in ["Failed to initialize a decoder for codec", "Error while decoding frame!"] {
+            assert(PlaybackFailureMessage.category(prefix: prefix, text: text) == nil)
+        }
+    }
+    var failureLogs = PlaybackFailureLogState()
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 404 subtitle missing")
+    assert(failureLogs.category == .http(404))
+    failureLogs.playbackHealthy() // First frame / PLAYBACK_RESTART.
+    assert(failureLogs.category == nil)
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -13, category: failureLogs.category) == generic)
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 404 segment missing")
+    failureLogs.positionChanged(1)
+    assert(failureLogs.category == nil, "Progress after a recovered HLS error clears the category")
+    failureLogs.record(prefix: "ffmpeg/https", level: 20, text: "HTTP error 403 expired")
+    failureLogs.positionChanged(1)
+    assert(failureLogs.category == .http(403), "Frozen samples preserve current failure evidence")
+    failureLogs.record(prefix: "ffmpeg/https", level: 30, text: "HTTP error 404 warning")
+    assert(failureLogs.category == .http(403), "Debug warnings never classify failures")
+    failureLogs.beginFile()
+    assert(failureLogs.category == nil)
+    failureLogs.record(prefix: "ffmpeg/tcp", level: 20, text: "Connection timed out private.example")
+    assert(failureLogs.category == .network)
+    print("PASS: recovered HTTP errors, native restart/progress resets and error-only classification")
+    print("PASS: safe playback category, HTTP, mpv code, log classification and on-screen/session sentences")
 
     assert(PlaybackFailureModel.actions(hasNextItem: false) == [.tryAgain, .close])
     assert(PlaybackFailureModel.actions(hasNextItem: true) == [.tryAgain, .next, .close])

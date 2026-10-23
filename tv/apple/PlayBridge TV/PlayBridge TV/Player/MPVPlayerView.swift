@@ -173,6 +173,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Item generation of the file mpv has actually opened. Touched only on `mpvQueue`.
     /// Stays at the previous item until START_FILE, so a late EOF cannot adopt the next item.
     private var loadedIdentity = -1
+    private var failureLogs = PlaybackFailureLogState()
     private var pendingLoadedIdentity = -1
     private var engineChrome: PlayerEngineChrome?
     private var statusTimer: Timer?
@@ -491,12 +492,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpv_set_option_string(handle, "subs-match-os-language", "yes")
         mpv_set_option_string(handle, "subs-fallback", "yes")
 
+        // Error logs are classified in memory and discarded, including in release builds.
         #if DEBUG
-        // Verbose scaler/frame logs are delivered even when handleEvent discards them.
-        // Keep Debug playback lightweight; errors and warnings remain available.
         mpv_request_log_messages(handle, "warn")
         #else
-        mpv_request_log_messages(handle, "no")
+        mpv_request_log_messages(handle, "error")
         #endif
 
         let initializeStatus = mpv_initialize(handle)
@@ -565,9 +565,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.failureHighlight = PlaybackFailureModel.defaultAction
     }
 
-    private func presentFailure(code: Int32, generation: Int, attempt: UUID) {
+    private func presentFailure(code: Int32, category: PlaybackFailureMessage.Category? = nil, generation: Int, attempt: UUID) {
         guard !isMpvStopped, generation == mediaIdentity,
-              failureSession.present(code: code, attempt: attempt) else { return }
+              failureSession.present(code: code, category: category, attempt: attempt) else { return }
         discardTouchScrub()
         showFailureScreen(generation: generation, attempt: attempt)
     }
@@ -844,10 +844,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func handleEvent(_ event: mpv_event) {
         switch event.event_id {
         case MPV_EVENT_START_FILE:
+            failureLogs.beginFile()
             loadedIdentity = pendingLoadedIdentity
             loadedAttempt = pendingLoadedAttempt
 
         case MPV_EVENT_PLAYBACK_RESTART:
+            failureLogs.playbackHealthy()
             let generation = loadedIdentity
             let attempt = loadedAttempt
             DispatchQueue.main.async { [weak self] in
@@ -866,13 +868,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                   let attempt = loadedAttempt else { break }
             let reason = end.reason
             let code = end.error
+            let category = failureLogs.category
             let generation = loadedIdentity
             let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: generation)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                       self.failureSession.matches(attempt) else { return }
                 if reason == MPV_END_FILE_REASON_ERROR {
-                    self.presentFailure(code: code, generation: generation, attempt: attempt)
+                    self.presentFailure(code: code, category: category, generation: generation, attempt: attempt)
                     return
                 }
                 guard reason == MPV_END_FILE_REASON_EOF, self.playbackState.failureSentence == nil else { return }
@@ -892,14 +895,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             handlePropertyChange(name: String(cString: nameCStr), prop: propPtr.pointee)
 
         case MPV_EVENT_LOG_MESSAGE:
+            guard let log = event.data?.assumingMemoryBound(to: mpv_event_log_message.self).pointee else { break }
+            let text = String(cString: log.text)
+            failureLogs.record(prefix: String(cString: log.prefix), level: Int(log.log_level.rawValue), text: text)
             #if DEBUG
-            if let logPtr = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) {
-                let text = String(cString: logPtr.pointee.text)
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                // Drop the per-frame software-scaler flood so cache/audio events stay readable.
-                if !trimmed.isEmpty, !trimmed.contains("swscaler") {
-                    print("[MPV] \(text)", terminator: "")
-                }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Keep debug warnings without the per-frame software-scaler flood.
+            if !trimmed.isEmpty, !trimmed.contains("swscaler") {
+                print("[MPV] \(text)", terminator: "")
             }
             #endif
 
@@ -954,6 +957,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         case "time-pos":
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
+            failureLogs.positionChanged(val)
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                       let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil,
