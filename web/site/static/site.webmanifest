@@ -1,0 +1,14 @@
+{
+  "name": "PlayBridge",
+  "short_name": "PlayBridge",
+  "description": "Open-source casting: browse on your phone, watch on the TV. Local network, no account.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "browser",
+  "theme_color": "#06091e",
+  "background_color": "#06091e",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

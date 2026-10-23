@@ -2,6 +2,7 @@
   import LogoMark from '$lib/icons/LogoMark.svelte';
   import Icon from '$lib/icons/Icon.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
+  import GithubStars from './GithubStars.svelte';
   import { SITE } from '$lib/data/site';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
@@ -74,9 +75,9 @@
     </div>
     <div class="nav__actions">
       <a class="nav__source" href={SITE.github} rel="noopener noreferrer" target="_blank"
-        >GitHub</a
+        >GitHub<GithubStars /></a
       >
-      <a class="btn btn--primary" href="/#install">Get a receiver</a>
+      <a class="btn btn--primary" href="/receivers">Get a receiver</a>
     </div>
     <ThemeToggle />
     <button
@@ -113,10 +114,20 @@
   >
     <div class="nav__mobile-links">
       <a href="/#how" onclick={closeMenu}>How it works</a>
-      <a href="/senders" onclick={closeMenu}>Senders</a>
-      <a href="/receivers" onclick={closeMenu}>Receivers</a>
+      <a
+        href="/senders"
+        onclick={closeMenu}
+        class:nav__link--active={onSenders}
+        aria-current={onSenders ? 'page' : undefined}>Senders</a
+      >
+      <a
+        href="/receivers"
+        onclick={closeMenu}
+        class:nav__link--active={onReceivers}
+        aria-current={onReceivers ? 'page' : undefined}>Receivers</a
+      >
       <a href="/#features" onclick={closeMenu}>Features</a>
-      <a class="btn btn--primary nav__mobile-cta" href="/#install" onclick={closeMenu}
+      <a class="btn btn--primary nav__mobile-cta" href="/receivers" onclick={closeMenu}
         >Get a receiver</a
       >
       <a
@@ -125,7 +136,7 @@
         rel="noopener noreferrer"
         target="_blank"
         onclick={closeMenu}
-      >GitHub</a
+      >GitHub<GithubStars /></a
       >
     </div>
   </div>

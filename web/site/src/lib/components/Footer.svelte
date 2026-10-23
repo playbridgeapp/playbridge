@@ -27,7 +27,7 @@
         <h4>Community</h4>
         <ul>
           <li><a href={SITE.github} rel="noopener">GitHub</a></li>
-          <li><a href="https://matrix.to/#/#playbridge:matrix.org" rel="noopener">Matrix</a></li>
+          <li><a href={SITE.discord} rel="noopener">Discord</a></li>
           <li><a href="{SITE.github}/blob/main/CONTRIBUTING.md" rel="noopener">Contribute</a></li>
         </ul>
       </div>
@@ -42,7 +42,7 @@
       </div>
     </div>
     <div class="footer__bottom">
-      <span>© 2026 PlayBridge contributors • Active Development</span>
+      <span>© 2026 PlayBridge contributors · MPL-2.0</span>
       <span>{SITE.versionLabel}</span>
     </div>
   </div>

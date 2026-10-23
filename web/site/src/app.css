@@ -12,7 +12,7 @@
   --surface-solid: #0a1530;
   --text: #dce8f8;
   --text-dim: #94afd0;
-  --text-faint: #556e8f;
+  --text-faint: #738bad;
   --accent: #4a90e2;
   --accent-strong: #0d3a8a;
   --line: rgba(200, 220, 255, 0.07);
@@ -35,7 +35,7 @@ html[data-theme='light'] {
   --surface-solid: #fffdf8;
   --text: #1b1914;
   --text-dim: #524c43;
-  --text-faint: #8a8378;
+  --text-faint: #6d665c;
   --accent: #1f4e8c;
   --accent-strong: #163868;
   --line: rgba(27, 25, 20, 0.1);
@@ -58,7 +58,10 @@ html, body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  overflow-x: hidden;
+  /* `clip`, not `hidden`: `hidden` on body turns it into a scroll container,
+     which breaks `position: sticky` on .nav. `clip` guards horizontal overflow
+     without creating a scroll container. */
+  overflow-x: clip;
 }
 
 body {
@@ -192,6 +195,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 .mono { font-family: var(--font-mono-ui); }
 
 .section { padding-block: 120px; }
+/* Adjacent sections share one gap instead of stacking bottom + top padding. */
+.section + .section:not(.section--divided) { padding-top: 0; }
 .section:first-of-type { border-top: 0; }
 .section--divided { border-top: 1px solid var(--line); }
 
@@ -377,7 +382,8 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   color: var(--text);
 }
 
-.hero { padding-block: 120px 80px; position: relative; }
+/* No bottom padding: the following .section's top padding is the gap. */
+.hero { padding-block: 120px 0; position: relative; }
 .hero__pill {
   display: inline-flex;
   align-items: center;
@@ -558,7 +564,7 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 @media (max-width: 900px) {
   .section { padding-block: 72px; }
   .section-head { margin-bottom: 40px; }
-  .hero { padding-block: 48px 32px; }
+  .hero { padding-block: 48px 0; }
   .steps { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .step { padding: 18px; }
   .installer__panel { gap: 32px; padding: 24px; }
@@ -617,6 +623,16 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   }
 }
 
+@media (max-width: 720px) {
+  .footer { padding-block: 48px 32px; }
+  /* Brand block spans the row; link groups sit in a compact 2-column grid. */
+  .footer__grid { grid-template-columns: 1fr 1fr; gap: 32px 20px; margin-bottom: 32px; }
+  .footer__grid > :first-child { grid-column: 1 / -1; }
+  .footer ul { gap: 2px; }
+  .footer ul a { display: inline-block; padding-block: 6px; }
+  .footer__bottom { gap: 12px; }
+}
+
 @media (max-width: 600px) {
   .logo span { font-size: 14px; }
   .steps { grid-template-columns: 1fr; }
@@ -634,8 +650,5 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
   .hero__pill { max-width: 100%; }
   .hero__pill-copy { font-size: 12px; }
   .section { padding-block: 56px; }
-  .footer ul a { display: inline-block; padding-block: 6px; }
-  .footer__grid { grid-template-columns: 1fr; }
-  .footer__bottom { flex-direction: column; gap: 10px; align-items: flex-start; }
   .footer__bottom { padding-bottom: env(safe-area-inset-bottom); }
 }

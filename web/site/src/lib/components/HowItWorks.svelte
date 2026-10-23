@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Icon from '$lib/icons/Icon.svelte';
   import BridgeDiagram from './visuals/BridgeDiagram.svelte';
   import { STEPS } from '$lib/data/site';
 </script>
@@ -30,14 +29,6 @@
         <p>{step.desc}</p>
       </div>
     {/each}
-  </div>
-
-  <div class="how__cta">
-    <a href="/#install" class="btn btn--primary"
-      ><Icon name="download" size={14} /> Get a receiver</a
-    >
-    <a class="how__link" href="/receivers">Receivers</a>
-    <a class="how__link" href="/senders">Senders</a>
   </div>
 </section>
 
@@ -70,32 +61,7 @@
     margin: -16px 0 64px;
   }
 
-  .how__cta {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 18px;
-    margin-top: 48px;
-  }
-  .how__link {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-dim);
-    border-bottom: 1px solid var(--line-strong);
-    padding-bottom: 1px;
-    transition: color 0.15s ease, border-color 0.15s ease;
-  }
-  .how__link:hover {
-    color: var(--text);
-    border-bottom-color: color-mix(in oklab, var(--accent) 60%, transparent);
-  }
   @media (max-width: 600px) {
-    .how__cta {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 14px;
-    }
-    .how__cta .btn { justify-content: center; }
     .how__diagram { margin: 0 0 36px; }
   }
 </style>

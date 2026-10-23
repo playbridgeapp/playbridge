@@ -6,7 +6,7 @@
 <Seo
   path="/senders"
   title="Install senders"
-  description="Install PlayBridge senders: Android phone, browser extensions, Desktop, and CLI. Cast media to receivers on your local network."
+  description="Install PlayBridge senders: Android phone, iPhone and iPad, browser extensions, Desktop, and CLI. Cast media to receivers on your local network."
 />
 
 <section class="section wrap role-page">

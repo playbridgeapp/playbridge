@@ -19,9 +19,27 @@ your report; a draft release is not a published security update.
 
 We take the security of PlayBridge seriously. If you have discovered a security vulnerability, please do not disclose it publicly.
 
-1.  **Report**: Please email the security team at `playbridgeapp@gmail.com`.
-2.  **Response**: We will acknowledge your report within 48 hours.
-3.  **Resolution**: We will work to resolve the issue as quickly as possible and will keep you updated on the progress.
+1.  **Report**: Please email the security team at `security@playbridge.app`.
+2.  **Response**: PlayBridge is a small open-source project, so there is no fixed response time.
+3.  **Resolution**: Fixes ship in the next release of the affected component, with credit in the release notes unless you ask otherwise.
+
+The same contact is published at <https://playbridge.app/.well-known/security.txt>,
+and the public policy is at <https://playbridge.app/security>.
+
+## Scope
+
+- Android phone app (sender) and Android TV / Fire TV receiver, including the
+  GeckoView browser plugin
+- PlayBridge Desktop (macOS, Windows, Linux)
+- PlayBridge Video Detector browser extension (Chrome, Firefox)
+- The `playbridge` CLI and its installers
+- iPhone, iPad, and Apple TV apps (TestFlight beta)
+- Shared Rust components (`cast/`, `browser-receiver-rust/`, `stream-proxy-rust/`)
+  and the protocol
+- playbridge.app, including its download and update endpoints
+
+Issues in third-party websites, bridged apps, services you connect yourself, or a
+TV's own DLNA software belong with their operators.
 
 ## Security Considerations
 

@@ -10,7 +10,7 @@
     DESKTOP_PLATFORMS,
     EXTENSION_BROWSERS
   } from '$lib/data/site';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
 
   interface Props {
     role: InstallRole;
@@ -25,6 +25,14 @@
   let activeBrowser = $state<'chrome' | 'firefox'>('chrome');
   let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
   let panelEl = $state<HTMLElement | null>(null);
+  let rootEl = $state<HTMLElement | null>(null);
+  let tabsEl = $state<HTMLElement | null>(null);
+  let fadeStart = $state(false);
+  let fadeEnd = $state(false);
+
+  function prefersReducedMotion(): boolean {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  }
 
   function applyHash(scroll = false) {
     if (typeof window === 'undefined') return;
@@ -37,10 +45,56 @@
     } else if (!activeId && list[0]) {
       activeId = list[0].id;
     }
-    if (scroll && panelEl) {
-      panelEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Only move the page when the hash asked for a product; a bare /receivers stays at the top.
+    // The installer's scroll-margin-top keeps the tab row clear of the sticky nav.
+    if (scroll && id) {
+      // Wait for the newly selected panel to render so the target position is final.
+      void tick().then(() =>
+        rootEl?.scrollIntoView({
+          behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+          block: 'start'
+        })
+      );
     }
   }
+
+  /** Edge fades on the tab row show there is more to scroll (narrow screens). */
+  function updateTabFades() {
+    const el = tabsEl;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    fadeStart = el.scrollLeft > 2;
+    fadeEnd = max - el.scrollLeft > 2;
+  }
+
+  /** Keep the active tab fully visible inside the horizontally scrolling tab row. */
+  function revealActiveTab(smooth: boolean) {
+    const el = tabsEl;
+    if (!el || !activeId) return;
+    const tab = el.querySelector<HTMLElement>(`#tab-${CSS.escape(activeId)}`);
+    if (!tab) return;
+    const pad = 32;
+    const left = tab.offsetLeft;
+    const right = left + tab.offsetWidth;
+    let target = el.scrollLeft;
+    if (left - pad < el.scrollLeft) target = Math.max(0, left - pad);
+    else if (right + pad > el.scrollLeft + el.clientWidth) target = right + pad - el.clientWidth;
+    if (target !== el.scrollLeft) {
+      el.scrollTo({ left: target, behavior: smooth && !prefersReducedMotion() ? 'smooth' : 'auto' });
+    }
+  }
+
+  // Animate the tab row only for clicks/arrow keys. Hash-driven selection jumps, because a
+  // second smooth scroll running alongside the page's smooth scroll makes Chrome overshoot.
+  let animateTabReveal = false;
+
+  $effect(() => {
+    void activeId;
+    if (!tabsEl) return;
+    revealActiveTab(animateTabReveal);
+    animateTabReveal = false;
+    updateTabFades();
+  });
 
   onMount(() => {
     const ua = window.navigator.userAgent.toLowerCase();
@@ -59,7 +113,16 @@
     applyHash(true);
     const onHash = () => applyHash(true);
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+
+    revealActiveTab(false);
+    updateTabFades();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateTabFades) : null;
+    if (tabsEl) ro?.observe(tabsEl);
+
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      ro?.disconnect();
+    };
   });
 
   $effect(() => {
@@ -105,13 +168,17 @@
         : (detail?.steps ?? [])
   );
 
-  const cmd = $derived(
-    isDesktop ? desktopTab.cmd : isExtension ? browserTab.cmd : (detail?.cmd ?? '')
-  );
+  const rawCmd = $derived(isDesktop ? desktopTab.cmd : (detail?.cmd ?? ''));
   const downloadUrl = $derived(
     isDesktop ? desktopTab.downloadUrl : isExtension ? browserTab.downloadUrl : detail?.downloadUrl
   );
   const playStoreUrl = $derived(detail?.playStoreUrl);
+  const downloadStore = $derived(storeNameFor(downloadUrl));
+  // Never show two buttons that open the same store listing.
+  const cmd = $derived(
+    rawCmd && downloadUrl && hostOf(rawCmd) === hostOf(downloadUrl) ? '' : rawCmd
+  );
+  const cmdIsReleases = $derived(hostOf(cmd) === 'github.com' && cmd.includes('/releases'));
   const meta = $derived(
     isDesktop ? desktopTab.meta : isExtension ? browserTab.meta : (detail?.meta ?? [])
   );
@@ -125,6 +192,7 @@
   );
 
   function selectProduct(id: string) {
+    animateTabReveal = true;
     activeId = id;
     if (typeof history !== 'undefined') {
       history.replaceState(null, '', `#${id}`);
@@ -162,6 +230,25 @@
     return c.startsWith('http') ? c : `https://${c}`;
   }
 
+  function hostOf(url: string | undefined): string {
+    if (!url || url.startsWith('/')) return '';
+    try {
+      return new URL(hrefForCmd(url)).hostname;
+    } catch {
+      return '';
+    }
+  }
+
+  /** Human store name for a known store URL; '' for direct downloads. */
+  function storeNameFor(url: string | undefined): string {
+    const host = hostOf(url);
+    if (host === 'chromewebstore.google.com') return 'Chrome Web Store';
+    if (host === 'addons.mozilla.org') return 'Firefox Add-ons';
+    if (host === 'play.google.com') return 'Google Play';
+    if (host === 'testflight.apple.com') return 'TestFlight';
+    return '';
+  }
+
   async function copyInstallCommand(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -176,29 +263,37 @@
 </script>
 
 {#if product && detail}
-  <div class="installer" id="install">
+  <div class="installer" id="install" bind:this={rootEl}>
     <div
-      class="installer__tabs"
-      role="tablist"
-      tabindex="-1"
-      aria-label={role === 'sender' ? 'Sender products' : 'Receiver products'}
-      onkeydown={onTabListKeydown}
+      class="installer__tabbar"
+      class:installer__tabbar--fade-start={fadeStart}
+      class:installer__tabbar--fade-end={fadeEnd}
     >
-      {#each products as t}
-        <button
-          type="button"
-          class="installer__tab"
-          class:installer__tab--active={activeId === t.id}
-          onclick={() => selectProduct(t.id)}
-          role="tab"
-          aria-selected={activeId === t.id}
-          aria-controls="panel-{t.id}"
-          id="tab-{t.id}"
-          tabindex={activeId === t.id ? 0 : -1}
-        >
-          <Icon name={t.icon} size={13} /> {t.label}
-        </button>
-      {/each}
+      <div
+        class="installer__tabs"
+        role="tablist"
+        tabindex="-1"
+        aria-label={role === 'sender' ? 'Sender products' : 'Receiver products'}
+        onkeydown={onTabListKeydown}
+        onscroll={updateTabFades}
+        bind:this={tabsEl}
+      >
+        {#each products as t}
+          <button
+            type="button"
+            class="installer__tab"
+            class:installer__tab--active={activeId === t.id}
+            onclick={() => selectProduct(t.id)}
+            role="tab"
+            aria-selected={activeId === t.id}
+            aria-controls="panel-{t.id}"
+            id="tab-{t.id}"
+            tabindex={activeId === t.id ? 0 : -1}
+          >
+            <Icon name={t.icon} size={13} /> {t.label}
+          </button>
+        {/each}
+      </div>
     </div>
 
     <div
@@ -209,7 +304,7 @@
       tabindex="-1"
       bind:this={panelEl}
     >
-      <div>
+      <div class="installer__body">
         <h3>{title}</h3>
 
         {#if dual}
@@ -331,15 +426,6 @@
         <div class="cta-row">
           {#if product.id === 'dlna'}
             <a href="/senders#android" class="btn btn--primary">Get the Android sender</a>
-          {:else if product.id === 'appletv'}
-            <a
-              href="https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn--primary"
-            >
-              <Icon name="github" size={13} /> View tvOS source
-            </a>
           {:else}
             {#if playStoreUrl}
               <a
@@ -348,7 +434,7 @@
                 rel="noopener noreferrer"
                 class="btn btn--primary"
               >
-                <Icon name="googleplay" size={13} /> Get on Google Play
+                <Icon name="googleplay" size={13} /> Get it on Google Play
               </a>
             {/if}
             {#if downloadUrl}
@@ -357,10 +443,19 @@
                 target="_blank"
                 rel="noopener noreferrer"
                 class="btn"
-                class:btn--primary={!playStoreUrl && !downloadUrl.startsWith('https://')}
+                class:btn--primary={!playStoreUrl}
               >
-                {#if downloadUrl.startsWith('https://')}
-                  <Icon name="link" size={13} stroke={2.0} /> Get extension
+                {#if downloadStore}
+                  {#if downloadStore === 'TestFlight'}
+                    <Icon name="apple" size={13} /> Join the TestFlight beta
+                  {:else}
+                    {#if downloadStore === 'Firefox Add-ons'}
+                      <Icon name="firefox" size={13} />
+                    {:else}
+                      <Icon name="link" size={13} stroke={2.0} />
+                    {/if}
+                    Get it on {downloadStore}
+                  {/if}
                 {:else if playStoreUrl}
                   <Icon name="download" size={13} stroke={2.0} /> Download APK
                 {:else}
@@ -376,7 +471,9 @@
                 class="btn"
                 class:btn--primary={!playStoreUrl && !downloadUrl}
               >
-                {#if cmd.includes('github.com')}
+                {#if cmdIsReleases}
+                  <Icon name="github" size={13} /> GitHub Releases <span aria-hidden="true">↗</span>
+                {:else if cmd.includes('github.com')}
                   <Icon name="github" size={13} /> View on GitHub
                 {:else if cmd.startsWith('git ')}
                   <Icon name="github" size={13} /> Clone
@@ -447,6 +544,63 @@
 {/if}
 
 <style>
+  /* Hash jumps (/receivers#desktop) land with the tab row below the sticky nav. */
+  .installer {
+    scroll-margin-top: 88px;
+  }
+
+  /* Tab row: one line that scrolls sideways on narrow screens, with edge fades
+     as the affordance and snap so a tab never rests half-cut. */
+  .installer__tabbar {
+    position: relative;
+  }
+  .installer__tabbar::before,
+  .installer__tabbar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 1px;
+    width: 56px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 1;
+  }
+  .installer__tabbar::before {
+    left: 0;
+    background: linear-gradient(to right, var(--surface-solid) 30%, transparent);
+  }
+  .installer__tabbar::after {
+    right: 0;
+    background: linear-gradient(to left, var(--surface-solid) 30%, transparent);
+  }
+  .installer__tabbar--fade-start::before,
+  .installer__tabbar--fade-end::after {
+    opacity: 1;
+  }
+  .installer__tabs {
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 16px;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .installer__tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .installer__tab {
+    scroll-snap-align: start;
+  }
+
+  /* Panel content starts on the same left edge as the first tab label. */
+  .installer__panel {
+    max-width: none;
+    margin: 0;
+    padding: 40px 28px 40px;
+  }
+  .installer__body {
+    max-width: 680px;
+  }
+
   .step-desc {
     color: var(--text-dim);
   }
@@ -694,6 +848,25 @@
   }
   .installer__panel:focus-visible {
     box-shadow: inset 0 0 0 1px rgba(74, 144, 226, 0.45);
+  }
+
+  @media (max-width: 900px) {
+    .installer__panel {
+      padding: 28px 28px 32px;
+    }
+  }
+  @media (max-width: 768px) {
+    /* Tighter tabs: the four sender tabs fit a 390px phone without scrolling. */
+    .installer__tabs {
+      gap: 2px;
+      padding: 0 14px;
+    }
+    .installer__tab {
+      padding: 14px 8px;
+    }
+    .installer__panel {
+      padding: 24px 22px 28px;
+    }
   }
 
   @media (max-width: 600px) {
