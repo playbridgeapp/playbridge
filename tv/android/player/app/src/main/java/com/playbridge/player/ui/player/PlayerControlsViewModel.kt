@@ -153,7 +153,7 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Set absolute subtitle delay (ms). Positive advances cues relative to video.
+     * Set absolute subtitle delay (ms). Positive shows subtitles later (mpv `sub-delay`).
      * Always pushes to the engine and external overlay manager — do not only update UI state.
      */
     fun setSubtitleDelay(delayMs: Long) {
