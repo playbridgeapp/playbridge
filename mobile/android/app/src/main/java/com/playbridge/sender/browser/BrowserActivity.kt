@@ -1813,7 +1813,11 @@ class BrowserActivity : ComponentActivity() {
             LaunchedEffect(mediaDetectionSettings) {
                 Components.mediaDetectionSettings = mediaDetectionSettings
             }
-            var isDesktopMode by remember { mutableStateOf(false) }
+            // Desktop Site is per tab: the engine reports changes into the tab's store state.
+            val isDesktopMode = selectedTab?.content?.desktopMode == true
+            fun setDesktopMode(enabled: Boolean) {
+                session?.toggleDesktopMode(enabled, reload = currentUrl != "about:blank")
+            }
             var isSecureConnection by remember { mutableStateOf(false) }
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
             var showSiteInfoSheet by remember { mutableStateOf(false) }
@@ -2897,7 +2901,7 @@ class BrowserActivity : ComponentActivity() {
                         showFindBar = showFindBar,
                         onShowFindBarChange = { showFindBar = it },
                         isDesktopMode = isDesktopMode,
-                        onIsDesktopModeChange = { isDesktopMode = it },
+                        onIsDesktopModeChange = ::setDesktopMode,
                         detectVideosEnabled = detectVideosEnabled,
                         onDetectVideosEnabledChange = { composeScope.launch { settingsRepository.setDetectVideos(it) } },
                         currentUrl = currentUrl,
@@ -2986,7 +2990,7 @@ class BrowserActivity : ComponentActivity() {
                             currentScreen = Screen.Extensions
                         }
                     },
-                    onToggleDesktopMode = { isDesktopMode = !isDesktopMode },
+                    onToggleDesktopMode = { setDesktopMode(!isDesktopMode) },
                     onToggleVideoDetect = { composeScope.launch { settingsRepository.setDetectVideos(!detectVideosEnabled) } },
                     mediaDetectionSettings = mediaDetectionSettings,
                     onMediaDetectionChange = { composeScope.launch { settingsRepository.setMediaDetectionSettings(it) } },
