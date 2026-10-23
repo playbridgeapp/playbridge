@@ -44,11 +44,10 @@ final class BrowserStore: ObservableObject {
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
     private var ruleLists: [WKContentRuleList] = []
 
-    /// Browsing starts immediately; background compilation attaches the bundled
-    /// fallback and then the full rules without holding restored pages blank.
-    /// False until the saved filter lists are attached at launch (bounded wait), so the
-    /// first restored page is blocked like a reload is.
+    /// Ordinary pages wait for the full rules, bounded by a real three-second timer.
+    /// Installed apps only wait for a cached network baseline (possibly empty).
     private var rulesReady = false
+    private var baselineReadiness: BrowserStartupReadiness.Baseline = .pending
     @MainActor private var ruleGeneration = UUID()
     private var pendingInitialLoads: [UUID: String] = [:]
 
@@ -91,23 +90,27 @@ final class BrowserStore: ObservableObject {
             })
         }
         Task { @MainActor in
-            let token = UUID()
-            ruleGeneration = token
-            let initial = await ContentBlocker.bootstrapRules()
-            if ruleGeneration == token {
-                ruleLists = initial
-                applyRulesToAllTabs()
-            }
-            // Hold the restored page until the saved lists (and scriptlet engine) are
-            // attached, at most 3 s, so a slow first launch never stalls the browser.
-            let compile = Task { @MainActor in await self.recompileAndApply() }
-            if adBlockEnabled {
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask { await compile.value }
-                    group.addTask { try? await Task.sleep(nanoseconds: 3_000_000_000) }
-                    await group.next()
-                    group.cancelAll()
+            // This task continues after readiness times out. Include even the cache
+            // lookup/bootstrap in the bound, not just the final engine compile.
+            let compile = Task { @MainActor in
+                let token = UUID()
+                self.ruleGeneration = token
+                let cached = await ContentBlocker.cachedRulesForStartup()
+                if self.ruleGeneration == token {
+                    self.ruleLists = cached
+                    self.applyRulesToAllTabs()
                 }
+                self.baselineReadiness = self.ruleLists.isEmpty ? .empty : .installed
+                self.flushPendingLoads()
+                let initial = await ContentBlocker.bootstrapRules()
+                if self.ruleGeneration == token {
+                    self.ruleLists = initial
+                    self.applyRulesToAllTabs()
+                }
+                await self.recompileAndApply()
+            }
+            if adBlockEnabled {
+                _ = await BrowserStartupReadiness.wait(for: compile, timeoutNanoseconds: 3_000_000_000)
             }
             rulesReady = true
             flushPendingLoads()
@@ -133,8 +136,11 @@ final class BrowserStore: ObservableObject {
     /// Called both by selection and by the first SwiftUI WebViewContainer creation.
     /// Consume the pending URL first, so creating the view cannot restore twice.
     private func loadInitialTab(_ tab: BrowserTab) {
-        guard rulesReady, let url = pendingInitialLoads.removeValue(forKey: tab.id) else { return }
+        guard BrowserStartupReadiness.canLoad(isBridgedApp: tab.isBridgedApp,
+            baseline: baselineReadiness, fullRulesReady: rulesReady),
+            let url = pendingInitialLoads.removeValue(forKey: tab.id) else { return }
         applyRules(to: tab)
+        tab.startupTiming.mark(.rulesReady)
         if !tab.isBridgedApp, let stateID = stateIDs[tab.id], let expected = URL(string: url),
            let state = tabStates.load(stateID, matching: url),
            tab.restoreInteractionState(state, url: expected) { return }
@@ -164,7 +170,7 @@ final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil, bridgedAppOrigin: URL? = nil) -> BrowserTab {
+    private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil, bridgedAppOrigin: URL? = nil, startupStartedAt: TimeInterval? = nil) -> BrowserTab {
         let handler = TabScriptHandler()
         let configuration = windowConfiguration ?? makeConfiguration()
         // AirPlay is owned by the app's persistent casting player. Page players
@@ -174,6 +180,7 @@ final class BrowserStore: ObservableObject {
         // message handler without changing the supplied process pool/data store.
         if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }
         let tab = BrowserTab(configuration: configuration, handler: handler, bridgedAppOrigin: bridgedAppOrigin)
+        if let startupStartedAt { tab.startupTiming.begin(at: startupStartedAt) }
         if !tab.isBridgedApp { stateIDs[tab.id] = UUID().uuidString }
         tab.onWebViewCreated = { [weak self, weak tab] in
             guard let self, let tab else { return }
@@ -292,10 +299,9 @@ final class BrowserStore: ObservableObject {
             applyRules(to: tab)
             if windowConfiguration != nil {
                 // Returning the child view lets WebKit perform exactly one navigation.
-            } else if activate && !isRestoring && rulesReady {
-                tab.load(url)
             } else {
                 pendingInitialLoads[tab.id] = url
+                if activate && !isRestoring { loadInitialTab(tab) }
             }
         } else {
             tab.isHome = windowConfiguration == nil
@@ -483,15 +489,18 @@ final class BrowserStore: ObservableObject {
 
     @discardableResult
     func openBridgedApp(_ app: BridgedApp) -> BrowserTab? {
+        let tappedAt = ProcessInfo.processInfo.systemUptime
         guard let app = bridgedApps.apps.first(where: { $0.origin == app.origin }) else { return nil }
         if let tab = tabs.first(where: { $0.bridgedAppOrigin == app.origin &&
             URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }) {
+            tab.startupTiming.begin(at: tappedAt)
+            if tab.loadedWebView != nil { tab.startupTiming.mark(.sessionReused) }
             select(tab.id)
             return tab
         }
         let stale = Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id))
         closeTabs(stale)
-        return makeTab(url: app.startURL.absoluteString, bridgedAppOrigin: app.origin)
+        return makeTab(url: app.startURL.absoluteString, bridgedAppOrigin: app.origin, startupStartedAt: tappedAt)
     }
 
     @discardableResult
@@ -582,6 +591,15 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             DispatchQueue.main.async { [weak self] in self?.userContentController(controller, didReceive: message) }
             return
         }
+        #if DEBUG
+        if message.name == "startupPaint" {
+            guard let tab, tab.isBridgedApp, message.webView === tab.loadedWebView,
+                  message.frameInfo.isMainFrame, message.world == .defaultClient,
+                  let value = message.body as? String, value == "fcp" || value == "frame" else { return }
+            tab.startupTiming.mark(value == "fcp" ? .firstContentfulPaint : .paintOpportunity)
+            return
+        }
+        #endif
         if message.name == "moviFullscreen" {
             guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame else { return }
             tab?.recordMoviFullscreen(message.body)

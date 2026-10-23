@@ -75,11 +75,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private(set) var loadedWebView: WKWebView?
     let configuration: WKWebViewConfiguration
     var onWebViewCreated: (() -> Void)?
+    let startupTiming = BridgedAppStartupTiming()
     var webView: WKWebView {
         if let loadedWebView { return loadedWebView }
         configuration.defaultWebpagePreferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
         let view = WKWebView(frame: .zero, configuration: configuration)
         loadedWebView = view
+        startupTiming.mark(.webViewCreated)
         view.navigationDelegate = self
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
@@ -514,6 +516,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         cc.add(handler, contentWorld: BrowserPlaybackScript.world, name: "playbackState")
         if bridgedAppOrigin != nil {
             cc.add(handler, contentWorld: BrowserMoviFullscreenScript.world, name: "moviFullscreen")
+            #if DEBUG
+            cc.add(handler, contentWorld: .defaultClient, name: "startupPaint")
+            cc.addUserScript(WKUserScript(source: BridgedAppStartupTiming.paintScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+            #endif
         }
 
         self.configuration = configuration
@@ -819,6 +826,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        startupTiming.mark(.committed)
         securityProvisional = false
         refreshSiteSecurity()
         onPageCastInvalidated?()

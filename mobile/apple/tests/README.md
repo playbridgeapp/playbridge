@@ -1,5 +1,17 @@
 # iPhone standalone fixture checks
 
+Browser rule readiness (macOS host only; no simulator or phone):
+
+```sh
+bash mobile/apple/tests/run-browser-readiness-checks.sh
+```
+
+Checks ordinary versus bridged initial loads, pending/empty/installed cached rules,
+and a real bounded timeout whose slow compilation continues in the background.
+Debug phone builds emit `[BridgedStartup]` event labels and elapsed milliseconds,
+with no URLs or page data. `paint_opportunity` is the two-frame fallback on WebKit
+versions without Paint Timing; it does not prove that Streams content is ready.
+
 Dashboard tile ordering and persistence (host model checks):
 
 ```sh
