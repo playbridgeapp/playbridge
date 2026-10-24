@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Speaker
@@ -340,20 +341,22 @@ fun PlayOnSheet(
                                     viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
                                 })
                             saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
-                            if (groups.nearby.isNotEmpty() || scanning) {
-                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween) {
-                                    PlayOnSectionLabel("Nearby")
-                                    if (scanning) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                        Text("Searching", style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
+                            // Nearby always shows so a search can be retried once the scan window ends.
+                            Row(Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 48.dp),
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                PlayOnSectionLabel("Nearby")
+                                if (scanning) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Text("Searching", style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else TextButton(onClick = { viewModel.rescan(); viewModel.pingSavedDevices() }) {
+                                    Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                                    Text("Search again", Modifier.padding(start = 6.dp))
                                 }
-                                groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
-                                if (groups.nearby.isEmpty()) Text("Looking for TVs on this Wi-Fi…",
-                                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
+                            if (groups.nearby.isEmpty()) Text(if (scanning) "Looking for TVs on this Wi-Fi…" else "No new devices found.",
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (unavailable.isNotEmpty()) {
                                 HorizontalDivider(Modifier.padding(top = 8.dp))
                                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
