@@ -30,6 +30,8 @@ final class NavigationViewModel: ObservableObject {
     @Published var playOnRequest: PlayOnRequest?
     @Published var pendingAtvPairing = false
     var playOnSuppressCount = 0
+    /// Banner dismissals last for this process, including after the sheet closes and reopens.
+    var playOnDismissedBanners = Set<String>()
 
     func openPlayOn(picking: Bool = true, page: PlayOnPage? = nil) {
         playOnRequest = PlayOnRequest(page: page, openedForPicking: picking)

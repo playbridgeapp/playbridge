@@ -35,6 +35,19 @@ import Foundation
         precondition(!SavedReceiverEndpoint.isLive(legacy, in: [live]))
         let sameLegacy = DiscoveredDevice(ip: legacy.ip, port: legacy.port, name: legacy.name)
         precondition(SavedReceiverEndpoint.isLive(legacy, in: [sameLegacy]))
+        let occupant = DiscoveredDevice(ip: saved.ip, port: saved.port, name: "MacBook Pro.local", uuid: "mac-uuid")
+        precondition(!SavedReceiverEndpoint.sameIdentity(saved, occupant), "two ids at one address are different receivers")
+        precondition(SavedReceiverEndpoint.refresh(saved, from: [occupant]) == saved, "a stranger must not rename or move the saved TV")
+        precondition(!SavedReceiverEndpoint.isLive(saved, in: [occupant]))
+        var unnamedAtSaved = occupant
+        unnamedAtSaved.uuid = ""
+        precondition(SavedReceiverEndpoint.sameIdentity(saved, unnamedAtSaved), "address matches when one side has no id")
+        let adopted = SavedReceiverEndpoint.refresh(saved, from: [unnamedAtSaved])
+        precondition(adopted.name == unnamedAtSaved.name && adopted.uuid == saved.uuid && adopted.token == saved.token,
+                     "an id-less advertiser can refresh the endpoint without taking the saved id")
+        precondition(SavedReceiverEndpoint.isLive(saved, in: [unnamedAtSaved]))
+        let portOnly = DiscoveredDevice(ip: saved.ip, port: saved.port + 1, name: unnamedAtSaved.name, uuid: "")
+        precondition(!SavedReceiverEndpoint.sameIdentity(saved, portOnly))
         var first = saved
         first.uuid = "other"; first.lastConnected = Date(timeIntervalSince1970: 456)
         let history = SavedReceiverEndpoint.refreshHistory([first, saved], from: [live])

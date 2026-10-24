@@ -21,6 +21,8 @@ struct PlayOnListedDevice: Equatable, Identifiable {
     let lastConnected: Date?
     let needsPairing: Bool
     let matchKeys: Set<String>
+    /// Empty when this receiver has no stable id. Two non-empty ids that differ are different devices.
+    var uuid: String = ""
 
     var protocolName: String {
         switch kind {
@@ -41,18 +43,65 @@ struct PlayOnGroups: Equatable {
 
 enum PlayOnCatalog {
     /// Saved rows split by reachability, most recently used first.
-    /// Nearby drops anything that matches a saved id or match key, then orders
-    /// unpaired PlayBridge TVs, Google Cast, DLNA, Roku, and browser sessions.
+    /// Nearby drops a discovery only when it is the same receiver as a saved row.
+    /// Two PlayBridge receivers that both have ids never match on address alone.
     static func group(saved: [PlayOnListedDevice], discovered: [PlayOnListedDevice]) -> PlayOnGroups {
-        let savedKeys = Set(saved.flatMap { $0.matchKeys.union([$0.id]) })
         let nearby = discovered.filter { device in
-            !savedKeys.contains(device.id) && savedKeys.isDisjoint(with: device.matchKeys)
+            !saved.contains { sameReceiver($0, device) }
         }.sorted(by: nearbyOrder)
         return PlayOnGroups(
             reachableSaved: saved.filter(\.reachable).sorted(by: savedOrder),
             nearby: nearby,
             unavailable: saved.filter { !$0.reachable }.sorted(by: savedOrder)
         )
+    }
+
+    /// UUID match when both sides have one. Address match only when one side has no id.
+    static func sameReceiver(_ saved: PlayOnListedDevice, _ live: PlayOnListedDevice) -> Bool {
+        if saved.kind == .playBridge, live.kind == .playBridge {
+            if !saved.uuid.isEmpty, !live.uuid.isEmpty { return saved.uuid == live.uuid }
+            if !saved.address.isEmpty, saved.address == live.address { return true }
+        }
+        if saved.id == live.id { return true }
+        return !saved.matchKeys.isDisjoint(with: live.matchKeys.union([live.id]))
+    }
+
+    /// A different identified receiver currently advertised at the saved address.
+    static func addressHeldByOther(savedUUID: String, savedAddress: String, sightings: [(uuid: String, address: String)]) -> Bool {
+        guard !savedUUID.isEmpty, !savedAddress.isEmpty else { return false }
+        return sightings.contains { sighting in
+            !sighting.uuid.isEmpty && sighting.uuid != savedUUID && sighting.address == savedAddress
+        }
+    }
+
+    /// A live sighting of this receiver wins. Otherwise a stranger at the saved address
+    /// beats a TCP probe: the probe only proves that some process answered.
+    static func savedReachable(probe: Bool, seenLive: Bool, remoteReachable: Bool, addressHeldByOther: Bool) -> Bool {
+        if seenLive { return true }
+        if addressHeldByOther { return false }
+        return probe || remoteReachable
+    }
+
+    /// Hostnames lose a trailing mDNS suffix. ".local-ipv6" is a different suffix and stays.
+    static func displayName(_ name: String) -> String {
+        guard name.lowercased().hasSuffix(".local") else { return name }
+        let trimmed = String(name.dropLast(".local".count))
+        return trimmed.isEmpty ? name : trimmed
+    }
+
+    static func isDesktopName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.lowercased().hasSuffix(".local") && trimmed.count > ".local".count
+    }
+
+    static func symbol(kind: PlayOnListedDevice.Kind, desktop: Bool) -> String {
+        if desktop { return "laptopcomputer" }
+        switch kind {
+        case .playBridge, .roku: return "tv"
+        case .googleCast: return "airplayvideo"
+        case .dlna: return "hifispeaker"
+        case .browser: return "globe"
+        }
     }
 
     static func savedSubtitle(protocolName: String, reachable: Bool, used: String?) -> String {

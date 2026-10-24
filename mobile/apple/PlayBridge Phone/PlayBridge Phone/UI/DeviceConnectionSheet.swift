@@ -17,6 +17,8 @@ struct DeviceConnectionSheet: View {
     @State private var pairingCode = ""
     @State private var showUnavailable = false
     @State private var vpnDismissed = false
+    @State private var wifiDismissed = false
+    @State private var listOffset: CGFloat = 0
     @State private var userPicked = false
     @State private var pendingExternalID: String?
     @State private var manualIP = ""
@@ -41,9 +43,14 @@ struct DeviceConnectionSheet: View {
                             Text("Play on")
                                 .font(Theme.font(size: 17, weight: .bold))
                                 .foregroundColor(Theme.onSurface)
-                            Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
-                                .font(Theme.font(size: 12))
-                                .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
+                            HStack(spacing: 4) {
+                                Image(systemName: pathMonitor.onWiFi ? "wifi" : "antenna.radiowaves.left.and.right")
+                                    .font(Theme.font(size: 11, weight: .semibold))
+                                    .accessibilityHidden(true)
+                                Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
+                            }
+                            .font(Theme.font(size: 12))
+                            .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -83,8 +90,12 @@ struct DeviceConnectionSheet: View {
             vm.stopDiscovery()
             pathMonitor.stop()
         }
+        .onAppear { restoreDismissedBanners() }
         .onChange(of: pathMonitor.vpnActive) { active in
-            if !active { vpnDismissed = false }
+            if !active { clearDismissedBanner("vpn") }
+        }
+        .onChange(of: pathMonitor.onWiFi) { onWiFi in
+            if onWiFi { clearDismissedBanner("wifi") }
         }
         .onChange(of: vm.state) { state in
             switch state {
@@ -131,6 +142,7 @@ struct DeviceConnectionSheet: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 12)
+                .background(PlayOnListOffset(offset: $listOffset, restore: path.isEmpty))
             }
             .refreshable { vm.pingSavedDevices() }
             addDeviceButton
@@ -141,21 +153,27 @@ struct DeviceConnectionSheet: View {
     }
 
     @ViewBuilder private var networkBanners: some View {
-        if !pathMonitor.onWiFi {
+        if !pathMonitor.onWiFi && !wifiBannerHidden {
             banner(title: "Not on Wi‑Fi",
                    message: "Connect this phone to the same Wi‑Fi as your TV to cast and discover devices.",
                    systemImage: "wifi.slash",
                    tint: Theme.tertiary) {
-                Button("Wi‑Fi settings") { openSettings() }
-                    .font(Theme.font(size: 14, weight: .semibold))
-                    .frame(minHeight: 44)
+                HStack(spacing: 8) {
+                    Button("Wi‑Fi settings") { openSettings() }
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .frame(minHeight: 44)
+                    Button { dismissBanner("wifi") } label: {
+                        Image(systemName: "xmark").frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Dismiss")
+                }
             }
-        } else if pathMonitor.vpnActive && !vpnDismissed {
+        } else if pathMonitor.vpnActive && !vpnBannerHidden {
             banner(title: "VPN may block casting",
                    message: "Some VPNs hide your local network. If devices don’t appear, pause the VPN and try again.",
                    systemImage: "shield",
                    tint: Theme.primary) {
-                Button { vpnDismissed = true } label: {
+                Button { dismissBanner("vpn") } label: {
                     Image(systemName: "xmark").frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("Dismiss")
@@ -177,9 +195,7 @@ struct DeviceConnectionSheet: View {
                         .font(Theme.font(size: 16, weight: .semibold))
                         .foregroundColor(Theme.onSecondaryContainer)
                         .lineLimit(1)
-                    Text(nowStatusText)
-                        .font(Theme.font(size: 13))
-                        .foregroundColor(showsFailure && !vm.isConnected ? Theme.danger : Theme.onSecondaryContainer)
+                    nowStatusLine
                     if let failureDetail {
                         Text(failureDetail)
                             .font(Theme.font(size: 12))
@@ -308,6 +324,7 @@ struct DeviceConnectionSheet: View {
     @ViewBuilder private var unavailableSection: some View {
         if !sections.unavailable.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
+                Divider().overlay(Theme.outlineVariant).padding(.top, 8)
                 Button {
                     withAnimation { showUnavailable.toggle() }
                 } label: {
@@ -364,7 +381,7 @@ struct DeviceConnectionSheet: View {
         return HStack(spacing: 0) {
             Button { select(row) } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: symbol(for: row.listed.kind))
+                    Image(systemName: PlayOnCatalog.symbol(kind: row.listed.kind, desktop: row.desktop))
                         .font(Theme.font(size: 20))
                         .foregroundColor(dimmed ? Theme.onSurfaceVariant : Theme.primary)
                         .frame(width: 28, height: 28)
@@ -374,10 +391,7 @@ struct DeviceConnectionSheet: View {
                             .font(Theme.font(size: 15, weight: .semibold))
                             .foregroundColor(dimmed ? Theme.onSurfaceVariant : Theme.onSurface)
                             .lineLimit(1)
-                        Text(rowSubtitle(row))
-                            .font(Theme.font(size: 13))
-                            .foregroundColor(Theme.onSurfaceVariant)
-                            .lineLimit(1)
+                        rowSubtitleView(row)
                     }
                     Spacer(minLength: 0)
                     if let newBadge {
@@ -402,6 +416,7 @@ struct DeviceConnectionSheet: View {
                 .accessibilityLabel("More options for \(row.listed.name)")
             }
         }
+        .opacity(dimmed ? 0.5 : 1)
     }
 
     private var pairingPage: some View {
@@ -486,7 +501,7 @@ struct DeviceConnectionSheet: View {
                             systemImage: "tv")
                     addLink(.manualRoku, title: "Roku by IP address",
                             subtitle: "Find it under Settings › Network on the Roku",
-                            systemImage: "tv")
+                            systemImage: "play.tv")
                     addLink(.manualDLNA, title: "DLNA device by URL",
                             subtitle: "Paste its description URL",
                             systemImage: "link")
@@ -785,13 +800,22 @@ struct DeviceConnectionSheet: View {
             let id = "pb:\(key)"
             if id == activePlayBridgeID { continue }
             let remote = vm.remoteTVRows.first { vm.deviceKey($0.device) == key }
-            let reachable = vm.onlineStatus[key] == true || remote?.receiverReachable == true || remote?.tvReachable == true
-            var keys: Set<String> = [id, key, "\(device.ip):\(device.port)"]
+            let address = "\(device.ip):\(device.port)"
+            let sightings = vm.browser.devices.map { (uuid: $0.uuid, address: "\($0.ip):\($0.port)") }
+            let held = PlayOnCatalog.addressHeldByOther(savedUUID: device.uuid, savedAddress: address, sightings: sightings)
+            let seenLive = vm.browser.devices.contains { SavedReceiverEndpoint.sameIdentity(device, $0) }
+            let reachable = PlayOnCatalog.savedReachable(
+                probe: vm.onlineStatus[key] == true,
+                seenLive: seenLive,
+                remoteReachable: remote?.receiverReachable == true || remote?.tvReachable == true,
+                addressHeldByOther: held)
+            var keys: Set<String> = [id, key, address]
             if !device.uuid.isEmpty { keys.insert(device.uuid) }
             rows.append(PlayOnSheetRow(
-                listed: PlayOnListedDevice(id: id, name: device.name, kind: .playBridge, address: "\(device.ip):\(device.port)",
-                                            reachable: reachable, saved: true, lastConnected: device.lastConnected, needsPairing: false, matchKeys: keys),
-                playBridge: device, external: nil, paired: remote?.paired == true, ambiguous: remote?.ambiguous == true))
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: .playBridge, address: address,
+                                            reachable: reachable, saved: true, lastConnected: device.lastConnected, needsPairing: false, matchKeys: keys, uuid: device.uuid),
+                playBridge: device, external: nil, paired: remote?.paired == true, ambiguous: remote?.ambiguous == true,
+                desktop: PlayOnCatalog.isDesktopName(device.name)))
         }
         let liveIDs = Set((vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices).map(\.identity))
         for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" {
@@ -799,11 +823,11 @@ struct DeviceConnectionSheet: View {
             if id == activeExternalID { continue }
             let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
             rows.append(PlayOnSheetRow(
-                listed: PlayOnListedDevice(id: id, name: device.name, kind: kind(device.protocolID), address: address,
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: kind(device.protocolID), address: address,
                                             reachable: liveIDs.contains(device.identity), saved: true,
                                             lastConnected: Date(timeIntervalSince1970: TimeInterval(1_000_000 - index)),
                                             needsPairing: false, matchKeys: [id, device.identity]),
-                playBridge: nil, external: device, paired: false, ambiguous: false))
+                playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
     }
@@ -817,18 +841,19 @@ struct DeviceConnectionSheet: View {
             var keys: Set<String> = [id, key, "\(device.ip):\(device.port)"]
             if !device.uuid.isEmpty { keys.insert(device.uuid) }
             rows.append(PlayOnSheetRow(
-                listed: PlayOnListedDevice(id: id, name: device.name, kind: .playBridge, address: "\(device.ip):\(device.port)",
-                                            reachable: true, saved: false, lastConnected: nil, needsPairing: true, matchKeys: keys),
-                playBridge: nil, external: nil, discovered: device, paired: false, ambiguous: false))
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: .playBridge, address: "\(device.ip):\(device.port)",
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: true, matchKeys: keys, uuid: device.uuid),
+                playBridge: nil, external: nil, discovered: device, paired: false, ambiguous: false,
+                desktop: PlayOnCatalog.isDesktopName(device.name)))
         }
         for device in vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices where device.protocolID != "dial" {
             let id = "ex:\(device.identity)"
             if id == activeExternalID { continue }
             let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
             rows.append(PlayOnSheetRow(
-                listed: PlayOnListedDevice(id: id, name: device.name, kind: kind(device.protocolID), address: address,
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: kind(device.protocolID), address: address,
                                             reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity]),
-                playBridge: nil, external: device, paired: false, ambiguous: false))
+                playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
     }
@@ -859,7 +884,9 @@ struct DeviceConnectionSheet: View {
     }
 
     private var showConfigure: Bool {
-        vm.isConnected && vm.nativeReceiverSelected && !vm.isExternalReceiver && !vm.isAirPlay
+        guard vm.isConnected, vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay else { return false }
+        // TV Default is always present. A desktop that offers nothing else has no choice to make.
+        return TvCapabilityOptions.playerOptions(for: vm.pairedDevice).count >= 2
     }
 
     private var showsFailure: Bool {
@@ -870,29 +897,31 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowName: String {
-        if vm.isAirPlay { return vm.airPlay.routeName }
+        if vm.isAirPlay { return shown(vm.airPlay.routeName) }
         switch vm.state {
-        case .connected(let name, _): return name
+        case .connected(let name, _): return shown(name)
         case .waitingForApproval(let name), .waitingForCodeInput(let name, _, _), .verifyingCode(let name),
                 .pairingDenied(let name), .pinMismatch(let name):
-            return name.isEmpty ? fallbackName : name
+            return name.isEmpty ? fallbackName : shown(name)
         default:
             return fallbackName
         }
     }
 
     private var fallbackName: String {
-        vm.externalReceiver?.name ?? vm.selectedRemoteTV?.device.name ?? vm.pairedDevice?.name ?? "TV"
+        shown(vm.externalReceiver?.name ?? vm.selectedRemoteTV?.device.name ?? vm.pairedDevice?.name ?? "TV")
     }
 
     private var pairingName: String {
         switch vm.state {
         case .waitingForCodeInput(let name, _, _), .verifyingCode(let name), .waitingForApproval(let name):
-            return name.isEmpty ? fallbackName : name
+            return name.isEmpty ? fallbackName : shown(name)
         default:
             return fallbackName
         }
     }
+
+    private func shown(_ name: String) -> String { PlayOnCatalog.displayName(name) }
 
     private var protocolName: String {
         if vm.isAirPlay { return "AirPlay" }
@@ -900,7 +929,17 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowSymbol: String {
-        vm.isAirPlay || vm.isExternalReceiver ? "airplayvideo" : "tv"
+        if vm.isAirPlay || vm.isExternalReceiver { return "airplayvideo" }
+        if PlayOnCatalog.isDesktopName(connectedRawName) { return "laptopcomputer" }
+        return "tv"
+    }
+
+    /// Name before display trimming, so a ".local" desktop still picks the laptop icon.
+    private var connectedRawName: String {
+        switch vm.state {
+        case .connected(let name, _) where !name.isEmpty: return name
+        default: return vm.pairedDevice?.name ?? vm.selectedRemoteTV?.device.name ?? ""
+        }
     }
 
     private var nowStatusText: String {
@@ -961,18 +1000,60 @@ struct DeviceConnectionSheet: View {
         return PlayOnCatalog.nearbySubtitle(kind: row.listed.kind, needsPairing: row.listed.needsPairing, protocolName: row.listed.protocolName)
     }
 
-    private func usedText(_ date: Date?) -> String? {
-        date.map { PlayOnRelativeTime.used($0) }
+    @ViewBuilder private func rowSubtitleView(_ row: PlayOnSheetRow) -> some View {
+        if row.listed.saved && row.listed.reachable {
+            HStack(spacing: 4) {
+                Text("\(row.listed.protocolName) ·")
+                Circle().fill(PlayOnStatusGreen.color).frame(width: 6, height: 6).accessibilityHidden(true)
+                Text("Ready")
+            }
+            .font(Theme.font(size: 13))
+            .foregroundColor(Theme.onSurfaceVariant)
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
+        } else {
+            Text(rowSubtitle(row))
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+                .lineLimit(1)
+        }
     }
 
-    private func symbol(for kind: PlayOnListedDevice.Kind) -> String {
-        switch kind {
-        case .playBridge: return "tv"
-        case .googleCast: return "airplayvideo"
-        case .dlna: return "hifispeaker"
-        case .roku: return "tv"
-        case .browser: return "globe"
+    private var nowStatusLine: some View {
+        let connected = nowStatusText.hasPrefix("Connected")
+        return HStack(spacing: 4) {
+            if connected {
+                Circle().fill(PlayOnStatusGreen.color).frame(width: 6, height: 6).accessibilityHidden(true)
+            }
+            Text(nowStatusText)
         }
+        .font(Theme.font(size: 13))
+        .foregroundColor(showsFailure && !vm.isConnected ? Theme.danger : Theme.onSecondaryContainer)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var wifiBannerHidden: Bool { wifiDismissed || nav.playOnDismissedBanners.contains("wifi") }
+    private var vpnBannerHidden: Bool { vpnDismissed || nav.playOnDismissedBanners.contains("vpn") }
+
+    private func restoreDismissedBanners() {
+        if nav.playOnDismissedBanners.contains("wifi") { wifiDismissed = true }
+        if nav.playOnDismissedBanners.contains("vpn") { vpnDismissed = true }
+    }
+
+    private func dismissBanner(_ key: String) {
+        nav.playOnDismissedBanners.insert(key)
+        if key == "wifi" { wifiDismissed = true }
+        if key == "vpn" { vpnDismissed = true }
+    }
+
+    private func clearDismissedBanner(_ key: String) {
+        nav.playOnDismissedBanners.remove(key)
+        if key == "wifi" { wifiDismissed = false }
+        if key == "vpn" { vpnDismissed = false }
+    }
+
+    private func usedText(_ date: Date?) -> String? {
+        date.map { PlayOnRelativeTime.used($0) }
     }
 
     private func kind(_ protocolID: String) -> PlayOnListedDevice.Kind {
@@ -1053,7 +1134,75 @@ private struct PlayOnSheetRow: Identifiable {
     var discovered: DiscoveredDevice?
     var paired = false
     var ambiguous = false
+    var desktop = false
     var id: String { listed.id }
+}
+
+private enum PlayOnStatusGreen {
+    static let color = Color(hex: 0x4CAF50)
+}
+
+/// Keeps page 1's scroll offset when an in-sheet page covers the list and the scroll view is rebuilt.
+private struct PlayOnListOffset: UIViewRepresentable {
+    @Binding var offset: CGFloat
+    var restore: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        let binding = $offset
+        let shouldRestore = restore
+        DispatchQueue.main.async {
+            guard let scroll = context.coordinator.scrollView(from: view) else { return }
+            context.coordinator.track(scroll, offset: binding)
+            if shouldRestore { context.coordinator.restore(scroll, to: binding.wrappedValue) }
+        }
+    }
+
+    final class Coordinator {
+        private var observation: NSKeyValueObservation?
+        private var suppress = false
+        private weak var tracked: UIScrollView?
+        private var offset: Binding<CGFloat>?
+
+        func scrollView(from view: UIView) -> UIScrollView? {
+            var current: UIView? = view
+            while let next = current?.superview {
+                if let scroll = next as? UIScrollView { return scroll }
+                current = next
+            }
+            return nil
+        }
+
+        func track(_ scroll: UIScrollView, offset: Binding<CGFloat>) {
+            self.offset = offset
+            guard tracked !== scroll else { return }
+            tracked = scroll
+            observation = scroll.observe(\.contentOffset, options: [.new]) { [weak self] scroll, _ in
+                guard let self, !self.suppress else { return }
+                // A page push can rebuild the scroll view at the top. Only a finger scroll commits.
+                guard scroll.isTracking || scroll.isDragging || scroll.isDecelerating else { return }
+                let y = max(0, scroll.contentOffset.y)
+                if abs((self.offset?.wrappedValue ?? 0) - y) > 0.5 {
+                    self.offset?.wrappedValue = y
+                }
+            }
+        }
+
+        func restore(_ scroll: UIScrollView, to y: CGFloat) {
+            guard y > 1, abs(scroll.contentOffset.y - y) > 1 else { return }
+            suppress = true
+            scroll.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            suppress = false
+        }
+    }
 }
 
 final class PlayOnPathMonitor: ObservableObject {

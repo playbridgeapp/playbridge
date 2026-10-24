@@ -263,9 +263,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Connect to a device found via Bonjour. Reuses a saved token/pin if we've paired with it.
     func connect(to device: DiscoveredDevice) {
         destinationSelectionRevision &+= 1
-        let sameReceiver = !isExternalReceiver && pairedDevice.map { saved in
-            (!device.uuid.isEmpty && saved.uuid == device.uuid) || (saved.ip == device.ip && saved.port == device.port)
-        } == true
+        let sameReceiver = !isExternalReceiver && pairedDevice.map { SavedReceiverEndpoint.sameIdentity($0, device) } == true
         usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         connectingDevice = device
@@ -1338,10 +1336,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Returns nil when there's no match — never falls back to the active device, or we'd
     /// try to validate a new TV against another TV's pin ("fingerprint changed").
     private func matchingSaved(for device: DiscoveredDevice) -> PairedDevice? {
-        savedDevices.first { saved in
-            if !device.uuid.isEmpty, !saved.uuid.isEmpty { return device.uuid == saved.uuid }
-            return saved.ip == device.ip
-        }
+        savedDevices.first { SavedReceiverEndpoint.sameIdentity($0, device) }
     }
 
     private func persistCredentials(_ creds: WebSocketClient.IssuedCredentials) {

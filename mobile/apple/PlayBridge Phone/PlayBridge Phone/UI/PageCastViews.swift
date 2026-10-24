@@ -90,9 +90,7 @@ private struct PageCastDeviceChoices: View {
     @State private var address = ""
     private var discovered: [DiscoveredDevice] {
         vm.browser.devices.filter { device in
-            !vm.savedDevices.contains { saved in
-                (!device.uuid.isEmpty && device.uuid == saved.uuid) || (device.ip == saved.ip && device.port == saved.port)
-            }
+            !vm.savedDevices.contains { SavedReceiverEndpoint.sameIdentity($0, device) }
         }
     }
     var body: some View {

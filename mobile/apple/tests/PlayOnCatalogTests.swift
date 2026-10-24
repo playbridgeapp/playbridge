@@ -3,6 +3,7 @@ import Foundation
 @main struct PlayOnCatalogTests {
     static func main() {
         grouping()
+        identity()
         subtitles()
         networkAndStatus()
         relativeTime()
@@ -19,12 +20,13 @@ import Foundation
         saved: Bool,
         lastConnected: Date? = nil,
         needsPairing: Bool = false,
-        matchKeys: Set<String> = []
+        matchKeys: Set<String> = [],
+        uuid: String = ""
     ) -> PlayOnListedDevice {
         PlayOnListedDevice(
             id: id, name: name, kind: kind, address: address, reachable: reachable, saved: saved,
             lastConnected: lastConnected, needsPairing: needsPairing,
-            matchKeys: matchKeys.isEmpty ? [id] : matchKeys
+            matchKeys: matchKeys.isEmpty ? [id] : matchKeys, uuid: uuid
         )
     }
 
@@ -58,6 +60,46 @@ import Foundation
             device("a", name: "Alpha", kind: .playBridge, reachable: true, saved: true, lastConnected: newer),
         ], discovered: [])
         precondition(tied.reachableSaved.map(\.name) == ["Alpha", "Beta"], "equal recency falls back to name")
+    }
+
+    private static func identity() {
+        let address = "192.168.0.28:8765"
+        let apple = device("pb:apple", name: "Apple TV 4K", kind: .playBridge, address: address,
+                           reachable: false, saved: true, matchKeys: ["pb:apple", "apple-tv", address],
+                           uuid: "apple-tv")
+        let mac = device("pb:mac", name: "Atul’s MacBook Pro.local", kind: .playBridge, address: address,
+                         reachable: true, saved: false, needsPairing: true,
+                         matchKeys: ["pb:mac", "mac", address], uuid: "mac")
+        let stolen = PlayOnCatalog.group(saved: [apple], discovered: [mac])
+        precondition(stolen.reachableSaved.isEmpty && stolen.unavailable.map(\.id) == ["pb:apple"],
+                     "a saved TV whose address belongs to another id is not Ready")
+        precondition(stolen.nearby.map(\.id) == ["pb:mac"], "the receiver that holds the address stays in Nearby")
+
+        let moved = device("pb:apple-live", name: "Apple TV 4K", kind: .playBridge, address: "192.168.0.40:8765",
+                           reachable: true, saved: false, matchKeys: ["apple-tv"], uuid: "apple-tv")
+        precondition(PlayOnCatalog.group(saved: [apple], discovered: [moved]).nearby.isEmpty,
+                     "the same id is one receiver even after its address changes")
+
+        let sightings = [(uuid: "mac", address: address), (uuid: "apple-tv", address: "192.168.0.40:8765")]
+        precondition(PlayOnCatalog.addressHeldByOther(savedUUID: "apple-tv", savedAddress: address, sightings: sightings))
+        precondition(!PlayOnCatalog.addressHeldByOther(savedUUID: "apple-tv", savedAddress: "192.168.0.40:8765", sightings: sightings))
+        precondition(!PlayOnCatalog.savedReachable(probe: true, seenLive: false, remoteReachable: true, addressHeldByOther: true),
+                     "a TCP probe cannot mark a taken address Ready")
+        precondition(PlayOnCatalog.savedReachable(probe: false, seenLive: true, remoteReachable: false, addressHeldByOther: true),
+                     "seeing this receiver's own id still counts as live")
+        precondition(PlayOnCatalog.savedReachable(probe: true, seenLive: false, remoteReachable: false, addressHeldByOther: false))
+
+        precondition(PlayOnCatalog.displayName("Atul’s MacBook Pro.local") == "Atul’s MacBook Pro")
+        precondition(PlayOnCatalog.displayName("Living Room") == "Living Room")
+        precondition(PlayOnCatalog.displayName("fe80.local-ipv6") == "fe80.local-ipv6")
+        precondition(PlayOnCatalog.displayName(".local") == ".local")
+        precondition(PlayOnCatalog.isDesktopName("Mac.local") && !PlayOnCatalog.isDesktopName("Living Room"))
+        precondition(PlayOnCatalog.symbol(kind: .playBridge, desktop: true) == "laptopcomputer")
+        precondition(PlayOnCatalog.symbol(kind: .playBridge, desktop: false) == "tv")
+        precondition(PlayOnCatalog.symbol(kind: .googleCast, desktop: false) == "airplayvideo")
+        precondition(PlayOnCatalog.symbol(kind: .dlna, desktop: false) == "hifispeaker")
+        precondition(PlayOnCatalog.symbol(kind: .roku, desktop: false) == "tv")
+        precondition(PlayOnCatalog.symbol(kind: .browser, desktop: false) == "globe")
     }
 
     private static func subtitles() {
