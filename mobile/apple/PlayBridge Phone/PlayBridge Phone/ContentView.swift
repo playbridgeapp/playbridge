@@ -9,13 +9,12 @@ struct ContentView: View {
     @StateObject private var atv = AtvRemoteCoordinator()
     @StateObject private var remoteTVBrowser = AtvBonjourBrowser()
     @State private var remoteTVScan: Task<Void, Never>?
-    @State private var showDestinationPicker = false
     @State private var attemptedReconnectInForeground = false
 
     private var showsMiniBar: Bool {
         switch nav.currentScreen {
         case .browser: return false
-        case .dashboard, .connection, .remote, .history, .bookmarks, .browserSettings:
+        case .dashboard, .remote, .history, .bookmarks, .browserSettings:
             return false
         default:
             return true
@@ -33,7 +32,7 @@ struct ContentView: View {
                 .transition(.opacity)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if showsMiniBar {
-                        NowPlayingMiniBar(showDestinationPicker: $showDestinationPicker)
+                        NowPlayingMiniBar()
                     }
                 }
         }
@@ -50,7 +49,9 @@ struct ContentView: View {
 #endif
             }, onDismiss: { vm.websitePlayerItem = nil })
         }
-        .sheet(isPresented: $showDestinationPicker) { DeviceConnectionSheet() }
+        .sheet(item: $nav.playOnRequest) { request in
+            DeviceConnectionSheet(initialPage: request.page, openedForPicking: request.openedForPicking)
+        }
         .sheet(item: Binding(get: { pageCasting.presentation }, set: { if $0 == nil { pageCasting.dismissPresentation() } })) { _ in
             PageCastRequestSheet(casting: pageCasting)
         }
@@ -66,7 +67,7 @@ struct ContentView: View {
             nav.browserStore = store
             store.onBridgedAppExternalNavigation = { [weak nav] in nav?.navigate(to: .browser) }
             pageCasting.attach(vm)
-            pageCasting.onChooseDestination = { showDestinationPicker = true }
+            pageCasting.onChooseDestination = { nav.openPlayOn() }
             pageCasting.onError = { [weak vm] in vm?.operationError = $0 }
             store.onWebsiteCast = { [weak pageCasting] tab, message in
                 MainActor.assumeIsolated { pageCasting?.receive(message, from: tab) }
@@ -98,6 +99,7 @@ struct ContentView: View {
         .onReceive(vm.$pairedDevice) { device in updateAtv(selection: (vm.nativeReceiverSelected, device)) }
         .onReceive(vm.$nativeReceiverSelected) { selected in updateAtv(selection: (selected, vm.pairedDevice)) }
         .onReceive(nav.$currentScreen) { screen in updateAtv(screen: screen) }
+        .onChange(of: vm.state) { state in presentPairingIfNeeded(state) }
         .onChange(of: scenePhase) { phase in
             if phase != .active { vm.pendingPlayBridgeLaunch = nil }
             updateAtv()
@@ -149,6 +151,12 @@ struct ContentView: View {
         atv.update(receiver: target, remoteVisible: (screen ?? nav.currentScreen) == .remote && vm.websitePlayerItem == nil, foreground: scenePhase != .background)
     }
 
+    private func presentPairingIfNeeded(_ state: ConnectionState) {
+        guard case .waitingForCodeInput = state else { return }
+        guard nav.playOnRequest == nil, nav.playOnSuppressCount == 0 else { return }
+        nav.openPlayOn(picking: false, page: .pairing)
+    }
+
     private func reconnectOnActivation() {
         guard !attemptedReconnectInForeground else { return }
         attemptedReconnectInForeground = true
@@ -160,7 +168,6 @@ struct ContentView: View {
         switch nav.currentScreen {
         case .browser: BrowserScreen()
         case .dashboard: DashboardScreen()
-        case .connection: ConnectionScreen()
         case .remote: RemoteControlScreen()
         case .phoneFiles: PhoneFilesScreen()
         case .iptv: IptvScreen()

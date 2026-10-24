@@ -332,6 +332,7 @@ final class ConnectionViewModel: ObservableObject {
     /// user action rather than an automatic retry.
     func reconnectLastReceiverIfNeeded() {
         if isAirPlay { airPlay.refreshRoute(); return }
+        guard PlayOnPreferences.autoConnectEnabled() else { return }
         switch state {
         case .disconnected, .error:
             break

@@ -54,7 +54,7 @@ struct PageCastRequestSheet: View {
                             case .waitingForApproval(let name):
                                 ProgressView("Approve the connection on \(name)…")
                             case .pinMismatch:
-                                Text("This device’s identity changed. Reconnect from Devices before casting.").foregroundColor(Theme.danger)
+                                Text("This device’s identity changed. Reconnect from Play on before casting.").foregroundColor(Theme.danger)
                             case .pairingDenied, .authFailed:
                                 Text("The connection wasn’t approved. Cancel and try again.").foregroundColor(Theme.danger)
                             case .error:

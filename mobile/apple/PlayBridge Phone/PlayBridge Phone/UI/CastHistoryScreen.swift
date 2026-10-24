@@ -60,7 +60,7 @@ private struct CastHistoryList: View {
                     }
                 }
                 if !vm.isConnected && !store.entries.isEmpty {
-                    Button("Connect a device to replay") { nav.navigate(to: .connection) }
+                    Button("Connect a device to replay") { nav.openPlayOn() }
                 }
             }
             .font(Theme.font(.body))

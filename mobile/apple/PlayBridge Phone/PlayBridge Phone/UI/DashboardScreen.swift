@@ -59,7 +59,7 @@ struct DashboardScreen: View {
                         isConnected: isConnected,
                         isSecure: isSecure,
                         name: connectedDeviceName,
-                        action: { nav.navigate(to: .connection) }
+                        action: { nav.openPlayOn() }
                     )
 
                     Spacer().frame(height: 36)
@@ -102,7 +102,7 @@ struct DashboardScreen: View {
             DashboardTile(id: "connection", title: "Connection", subtitle: isConnected ? "Connected" : "Not connected",
                           systemImage: "tv",
                           gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
-                          isActive: isSource(.connection), action: { nav.navigate(to: .connection) }),
+                          isActive: false, action: { nav.openPlayOn() }),
             DashboardTile(id: "phone-files", title: "Media Library", subtitle: "Videos, images & audio", systemImage: "folder",
                           gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)], isActive: isSource(.phoneFiles),
                           action: { nav.navigate(to: .phoneFiles) }),

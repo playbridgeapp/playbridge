@@ -15,6 +15,8 @@ struct PhoneMediaDetail: View {
     @State private var sent = false
     @State private var showCollections = false
     @State private var showDevices = false
+    @State private var playOnPage: PlayOnPage?
+    @State private var playOnPicking = true
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -37,7 +39,7 @@ struct PhoneMediaDetail: View {
                 HStack {
                     Button { showCollections = true } label: { Label("Collection", systemImage: "folder.badge.plus") }.buttonStyle(.bordered)
                     Button {
-                        if vm.isConnected { Task { await cast() } } else { showDevices = true }
+                        if vm.isConnected { Task { await cast() } } else { openPlayOn() }
                     } label: {
                         if sending { ProgressView() }
                         else { Label(vm.isConnected ? "Cast to TV" : "Connect TV", systemImage: "play.tv") }
@@ -55,9 +57,15 @@ struct PhoneMediaDetail: View {
                 releaseLocalAudio()
             }
             .sheet(isPresented: $showCollections) { AddPhoneMediaToCollection(item: item) }
-            .sheet(isPresented: $showDevices) { DeviceConnectionSheet() }
+            .playOnLocalSheet(isPresented: $showDevices, page: $playOnPage, picking: $playOnPicking)
         }
     }
+    private func openPlayOn() {
+        playOnPage = nil
+        playOnPicking = true
+        showDevices = true
+    }
+
     @MainActor private func prepare() async {
         error = nil
         do {

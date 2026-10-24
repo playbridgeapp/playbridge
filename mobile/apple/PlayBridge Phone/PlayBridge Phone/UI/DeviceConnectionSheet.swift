@@ -1,527 +1,1122 @@
 import SwiftUI
+import Network
+import UIKit
 
-/// Fast destination picker opened from cast actions. Its hierarchy intentionally mirrors
-/// Android's compact picker: current destination, this phone, PlayBridge history, recent
-/// third-party receivers, then a route into the full Devices screen.
+/// The Play on sheet. Pages slide inside this same sheet; the system back gesture
+/// pops a page, and dragging the sheet closed leaves the app on the screen underneath.
 struct DeviceConnectionSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var atv: AtvRemoteCoordinator
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @StateObject private var pathMonitor = PlayOnPathMonitor()
+
+    private let openedForPicking: Bool
+    @State private var path: [PlayOnPage]
+    @State private var pairingCode = ""
+    @State private var showUnavailable = false
+    @State private var vpnDismissed = false
+    @State private var userPicked = false
     @State private var pendingExternalID: String?
+    @State private var manualIP = ""
+    @State private var rokuAddress = ""
+    @State private var dlnaLocation = ""
+    @State private var showAtvPairing = false
+    @State private var showPairedTVs = false
 
-    private var activePairedDeviceKey: String? {
-        guard vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice,
-              vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV?.paired == true || vm.selectedRemoteTV?.ambiguous == true else { return nil }
-        return vm.deviceKey(device)
-    }
-
-    private var playBridgeDevices: [PairedDevice] {
-        vm.remoteTVRows.map(\.device)
-            .filter { vm.deviceKey($0) != activePairedDeviceKey }
-            .sorted {
-                let leftOnline = vm.onlineStatus[vm.deviceKey($0)] == true
-                let rightOnline = vm.onlineStatus[vm.deviceKey($1)] == true
-                if leftOnline != rightOnline { return leftOnline && !rightOnline }
-                return $0.lastConnected > $1.lastConnected
-            }
-    }
-
-    private var recentExternalDevices: [ExternalReceiverDevice] {
-        vm.savedExternalReceiverDevices.filter {
-            !(vm.isConnected && vm.externalReceiver?.identity == $0.identity)
-        }
+    init(initialPage: PlayOnPage? = nil, openedForPicking: Bool = true) {
+        self.openedForPicking = openedForPicking
+        _path = State(initialValue: initialPage.map { [$0] } ?? [])
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ConnectionNowDestinationCard(compact: true) {
-                        vm.disconnect()
-                        dismiss()
-                    }
-
-                    ConnectionThisPhoneRow(
-                        selected: !vm.nativeReceiverSelected && !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
-                        compact: true
-                    ) {
-                        vm.disconnect()
-                        dismiss()
-                    }
-
-                    AirPlayDestinationRow()
-
-                    HStack {
-                        ConnectionSectionLabel("PlayBridge")
-                        Spacer()
-                        Button { vm.pingSavedDevices() } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .foregroundColor(Theme.primary)
-                                .frame(width: 36, height: 36)
+        NavigationStack(path: $path) {
+            mainPage
+                .navigationTitle("Play on")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        VStack(spacing: 0) {
+                            Text("Play on")
+                                .font(Theme.font(size: 17, weight: .bold))
+                                .foregroundColor(Theme.onSurface)
+                            Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
+                                .font(Theme.font(size: 12))
+                                .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
                         }
-                        .accessibilityLabel("Refresh")
+                        .accessibilityElement(children: .combine)
                     }
-                    .padding(.top, 4)
-
-                    if PlayBridgeListEmptyState.showsEmptyCopy(
-                        savedCount: vm.remoteTVRows.count,
-                        activeKey: activePairedDeviceKey
-                    ) {
-                        Text("No PlayBridge TVs yet. Tap Find more devices to scan and pair.")
-                            .font(Theme.font(.subheadline))
-                            .foregroundColor(Theme.onSurfaceVariant)
-                            .padding(.vertical, 4)
-                    } else if !playBridgeDevices.isEmpty {
-                        ForEach(Array(playBridgeDevices.enumerated()), id: \.offset) { _, device in
-                            ConnectionPairedDeviceRow(
-                                device: device,
-                                online: vm.remoteTVRows.first { $0.id == AtvReceiverTarget(playBridge: device).endpoint }.map { $0.receiverReachable || $0.tvReachable } ?? false,
-                                compact: true,
-                                onSelect: {
-                                    vm.connectSaved(device)
-                                    dismiss()
-                                },
-                                onRemove: vm.savedDevices.contains { vm.deviceKey($0) == vm.deviceKey(device) } ? { vm.forget(device) } : nil
-                            )
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(action: close) {
+                            Image(systemName: "xmark")
+                                .frame(width: 44, height: 44)
                         }
+                        .accessibilityLabel("Close")
                     }
-
-                    if !recentExternalDevices.isEmpty {
-                        ConnectionSectionLabel("Recent other")
-                            .padding(.top, 4)
-                        ForEach(recentExternalDevices, id: \.identity) { device in
-                            ConnectionExternalDeviceRow(
-                                device: device,
-                                online: isExternalDeviceOnline(device),
-                                compact: true,
-                                onSelect: {
-                                    pendingExternalID = device.identity
-                                    vm.connectExternalReceiver(device)
-                                },
-                                onRemove: { vm.forgetExternalReceiver(device) }
-                            )
-                        }
-                    }
-
-                    Button {
-                        closePicker()
-                        nav.navigate(to: .connection)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus")
-                            Text("Find more devices…")
-                                .font(Theme.font(size: 16, weight: .semibold))
-                            Spacer()
-                        }
-                        .foregroundColor(Theme.primary)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-            }
-            .background(Theme.surfaceContainerHigh.ignoresSafeArea())
-            .navigationTitle("Cast to")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(action: closePicker) {
-                        Image(systemName: "xmark")
+                .navigationDestination(for: PlayOnPage.self) { page in
+                    switch page {
+                    case .pairing: pairingPage
+                    case .add: addPage
+                    case .actions(let id): actionsPage(id)
+                    case .configure: configurePage
+                    case .manualPlayBridge: manualPlayBridgePage
+                    case .manualRoku: manualRokuPage
+                    case .manualDLNA: manualDLNAPage
                     }
-                    .accessibilityLabel("Close")
                 }
-            }
-            .onAppear {
-                vm.startDiscovery()
-                vm.pingSavedDevices()
-            }
-            .onDisappear { vm.stopDiscovery() }
-            .onChange(of: vm.state) { state in
-                guard state.isConnected,
-                      let pendingExternalID,
-                      vm.externalReceiver?.identity == pendingExternalID else { return }
-                self.pendingExternalID = nil
-                dismiss()
-            }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .accessibilityIdentifier("play-on-sheet")
+        .sheet(isPresented: $showAtvPairing) { AtvPairingSheet(coordinator: atv) }
+        .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
+        .onAppear {
+            nav.playOnSuppressCount += 1
+            vm.startDiscovery()
+            vm.pingSavedDevices()
+            pathMonitor.start()
+        }
+        .onDisappear {
+            nav.playOnSuppressCount = max(0, nav.playOnSuppressCount - 1)
+            vm.stopDiscovery()
+            pathMonitor.stop()
+        }
+        .onChange(of: pathMonitor.vpnActive) { active in
+            if !active { vpnDismissed = false }
+        }
+        .onChange(of: vm.state) { state in
+            switch state {
+            case .waitingForCodeInput(_, _, let wrong):
+                if wrong { pairingCode = "" }
+                showPairingPage()
+            case .verifyingCode, .waitingForApproval:
+                showPairingPage()
+            case .connected:
+                guard pendingExternalID == nil || vm.externalReceiver?.identity == pendingExternalID else { return }
+                pendingExternalID = nil
+                if userPicked || (openedForPicking && path.contains(.pairing)) {
+                    userPicked = false
+                    dismiss()
+                } else if path.contains(.pairing) {
+                    path = []
+                }
+            default:
+                break
+            }
+        }
+        .onChange(of: path) { newPath in
+            guard !newPath.contains(.pairing) else { return }
+            switch vm.state {
+            case .waitingForCodeInput, .verifyingCode, .waitingForApproval:
+                vm.disconnect()
+            default:
+                break
+            }
+        }
     }
 
-    private func isExternalDeviceOnline(_ device: ExternalReceiverDevice) -> Bool {
-        (vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices)
-            .contains { $0.identity == device.identity }
+    private var mainPage: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    networkBanners
+                    if showNowCard { nowCard }
+                    devicesSection
+                    nearbySection
+                    unavailableSection
+                    if !showNowCard { firstRunTip }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+            }
+            .refreshable { vm.pingSavedDevices() }
+            addDeviceButton
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+        }
+        .background(Theme.surface.ignoresSafeArea())
     }
 
-    private func closePicker() {
-        if let pendingExternalID,
-           vm.externalReceiver?.identity == pendingExternalID,
-           !vm.isConnected {
+    @ViewBuilder private var networkBanners: some View {
+        if !pathMonitor.onWiFi {
+            banner(title: "Not on Wi‑Fi",
+                   message: "Connect this phone to the same Wi‑Fi as your TV to cast and discover devices.",
+                   systemImage: "wifi.slash",
+                   tint: Theme.tertiary) {
+                Button("Wi‑Fi settings") { openSettings() }
+                    .font(Theme.font(size: 14, weight: .semibold))
+                    .frame(minHeight: 44)
+            }
+        } else if pathMonitor.vpnActive && !vpnDismissed {
+            banner(title: "VPN may block casting",
+                   message: "Some VPNs hide your local network. If devices don’t appear, pause the VPN and try again.",
+                   systemImage: "shield",
+                   tint: Theme.primary) {
+                Button { vpnDismissed = true } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Dismiss")
+            }
+        }
+    }
+
+    private var nowCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: nowSymbol)
+                    .font(Theme.font(size: 22))
+                    .foregroundColor(Theme.onSecondaryContainer)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.onSecondaryContainer.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(nowName)
+                        .font(Theme.font(size: 16, weight: .semibold))
+                        .foregroundColor(Theme.onSecondaryContainer)
+                        .lineLimit(1)
+                    Text(nowStatusText)
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(showsFailure && !vm.isConnected ? Theme.danger : Theme.onSecondaryContainer)
+                    if let failureDetail {
+                        Text(failureDetail)
+                            .font(Theme.font(size: 12))
+                            .foregroundColor(Theme.onSecondaryContainer.opacity(0.85))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    nav.navigate(to: .remote)
+                    dismiss()
+                } label: {
+                    Label("Remote", systemImage: "av.remote")
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .frame(minHeight: 44)
+                }
+                .accessibilityLabel("Remote")
+            }
+            HStack(spacing: 8) {
+                if showConfigure {
+                    Button { path.append(.configure) } label: {
+                        Label("Configure TV", systemImage: "slider.horizontal.3")
+                            .font(Theme.font(size: 14, weight: .semibold))
+                            .frame(minHeight: 44)
+                    }
+                }
+                if let row = vm.selectedRemoteTV, row.paired, !row.ambiguous, !vm.isConnected {
+                    Button {
+                        vm.requestOpenPlayBridge()
+                        nav.navigate(to: .remote)
+                        dismiss()
+                    } label: {
+                        Text("Open PlayBridge on \(row.device.name)")
+                            .font(Theme.font(size: 14, weight: .semibold))
+                            .frame(minHeight: 44)
+                    }
+                }
+                Spacer(minLength: 0)
+                Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect") {
+                    vm.disconnect()
+                }
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(Theme.danger)
+                .frame(minHeight: 44)
+            }
+            if showsFailure && !vm.isConnected {
+                ShareLink(item: diagnosticsText) {
+                    Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .frame(minHeight: 44)
+                }
+            }
+        }
+        .padding(14)
+        .background(Theme.secondaryContainer.opacity(0.78), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var devicesSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("Devices")
+            phoneRow
+            AirPlayDestinationRow()
+            ForEach(sections.ready) { row in
+                deviceRow(row)
+            }
+        }
+    }
+
+    private var phoneRow: some View {
+        Button {
+            vm.disconnect()
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "iphone")
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 28, height: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("This phone")
+                        .font(Theme.font(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                    Text("Play here")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+                if thisPhoneSelected {
+                    Image(systemName: "checkmark")
+                        .font(Theme.font(size: 16, weight: .bold))
+                        .foregroundColor(Theme.primary)
+                        .accessibilityLabel("Selected")
+                }
+            }
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(thisPhoneSelected ? .isSelected : [])
+    }
+
+    @ViewBuilder private var nearbySection: some View {
+        if scanning || !sections.nearby.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    sectionLabel("Nearby")
+                    Spacer()
+                    if scanning {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Searching")
+                                .font(Theme.font(size: 12))
+                                .foregroundColor(Theme.onSurfaceVariant)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Searching")
+                    }
+                }
+                ForEach(sections.nearby) { row in
+                    deviceRow(row)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var unavailableSection: some View {
+        if !sections.unavailable.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    withAnimation { showUnavailable.toggle() }
+                } label: {
+                    HStack {
+                        Text("Not available now · \(sections.unavailable.count)")
+                            .font(Theme.font(size: 14))
+                            .foregroundColor(Theme.onSurfaceVariant)
+                        Spacer()
+                        Image(systemName: showUnavailable ? "chevron.up" : "chevron.down")
+                            .foregroundColor(Theme.onSurfaceVariant)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Not available now, \(sections.unavailable.count)")
+                .accessibilityValue(showUnavailable ? "Expanded" : "Collapsed")
+                if showUnavailable {
+                    ForEach(sections.unavailable) { row in
+                        deviceRow(row, dimmed: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private var firstRunTip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Don’t see your TV?")
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(Theme.onSurface)
+            Text("Open the PlayBridge app on your TV and make sure it’s on the same Wi‑Fi as this phone.")
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var addDeviceButton: some View {
+        Button { path.append(.add) } label: {
+            Label("Add a device", systemImage: "plus")
+                .font(Theme.font(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(Theme.primary)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.outlineVariant))
+    }
+
+    private func deviceRow(_ row: PlayOnSheetRow, badge: String? = nil, dimmed: Bool = false) -> some View {
+        let newBadge = badge ?? (row.listed.kind == .playBridge && row.listed.needsPairing ? "New" : nil)
+        return HStack(spacing: 0) {
+            Button { select(row) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: symbol(for: row.listed.kind))
+                        .font(Theme.font(size: 20))
+                        .foregroundColor(dimmed ? Theme.onSurfaceVariant : Theme.primary)
+                        .frame(width: 28, height: 28)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.listed.name)
+                            .font(Theme.font(size: 15, weight: .semibold))
+                            .foregroundColor(dimmed ? Theme.onSurfaceVariant : Theme.onSurface)
+                            .lineLimit(1)
+                        Text(rowSubtitle(row))
+                            .font(Theme.font(size: 13))
+                            .foregroundColor(Theme.onSurfaceVariant)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if let newBadge {
+                        Text(newBadge)
+                            .font(Theme.font(size: 12, weight: .semibold))
+                            .foregroundColor(Theme.onSecondaryContainer)
+                            .padding(.horizontal, 9)
+                            .frame(minHeight: 24)
+                            .background(Theme.secondaryContainer, in: Capsule())
+                    }
+                }
+                .frame(minHeight: 56)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if row.listed.saved {
+                Button { path.append(.actions(row.id)) } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More options for \(row.listed.name)")
+            }
+        }
+    }
+
+    private var pairingPage: some View {
+        let name = pairingName
+        return VStack(spacing: 18) {
+            Text("Enter the 6-digit code shown on \(name).")
+                .font(Theme.font(size: 15))
+                .foregroundColor(Theme.onSurface)
+                .multilineTextAlignment(.center)
+                .padding(.top, 12)
+            pairingEntry
+            if case .waitingForCodeInput(_, let attempts, true) = vm.state {
+                Text("Incorrect code — \(attempts) \(attempts == 1 ? "try" : "tries") left")
+                    .font(Theme.font(size: 13))
+                    .foregroundColor(Theme.danger)
+            }
+            Text("No code on the TV? Make sure the PlayBridge app is open on it, then tap the TV again.")
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Theme.surface.ignoresSafeArea())
+        .navigationTitle("Pair \(name)")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder private var pairingEntry: some View {
+        switch vm.state {
+        case .waitingForApproval:
+            ProgressView()
+            Text("Approve on the TV")
+                .font(Theme.font(size: 16, weight: .semibold))
+                .foregroundColor(Theme.onSurface)
+        case .verifyingCode:
+            ProgressView()
+            Text("Checking the code…")
+                .font(Theme.font(size: 16, weight: .semibold))
+                .foregroundColor(Theme.onSurface)
+        default:
+            ZStack {
+                HStack(spacing: 8) {
+                    ForEach(0..<6, id: \.self) { index in
+                        Text(digit(index))
+                            .font(Theme.font(size: 24, weight: .bold, design: .monospaced))
+                            .foregroundColor(Theme.onSurface)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(index == pairingCode.count ? Theme.primary : Theme.outlineVariant, lineWidth: index == pairingCode.count ? 2 : 1))
+                    }
+                }
+                .accessibilityHidden(true)
+                TextField("000000", text: $pairingCode)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .foregroundColor(.clear)
+                    .tint(.clear)
+                    .accessibilityLabel("Pairing code")
+                    .onChange(of: pairingCode) { newValue in
+                        let filtered = String(newValue.filter(\.isNumber).prefix(6))
+                        if filtered != newValue { pairingCode = filtered }
+                        if filtered.count == 6 { vm.submitPairingCode(filtered) }
+                    }
+            }
+            Text("Pairs automatically when all six digits are in")
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+        }
+    }
+
+    private var addPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("TVs on your Wi‑Fi show up automatically under Nearby. Use these when one doesn’t.")
+                    .font(Theme.font(size: 14))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                VStack(spacing: 0) {
+                    addLink(.manualPlayBridge, title: "PlayBridge TV by IP address",
+                            subtitle: "When it’s on another network segment or discovery is blocked",
+                            systemImage: "tv")
+                    addLink(.manualRoku, title: "Roku by IP address",
+                            subtitle: "Find it under Settings › Network on the Roku",
+                            systemImage: "tv")
+                    addLink(.manualDLNA, title: "DLNA device by URL",
+                            subtitle: "Paste its description URL",
+                            systemImage: "link")
+                }
+                .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("If a TV won’t show up")
+                        .font(Theme.font(size: 14, weight: .semibold))
+                    tip("1", "Open PlayBridge on the TV and leave it on the home screen.")
+                    tip("2", "Put the phone and TV on the same Wi‑Fi. Guest networks often block devices.")
+                    tip("3", "Turn off VPN on this phone.")
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                ShareLink(item: diagnosticsText) {
+                    Text("Share connection diagnostics")
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+            }
+            .padding(16)
+        }
+        .background(Theme.surface.ignoresSafeArea())
+        .navigationTitle("Add a device")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func actionsPage(_ id: String) -> some View {
+        let row = rowIndex[id]
+        return VStack(alignment: .leading, spacing: 8) {
+            if let row {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(row.listed.name)
+                        .font(Theme.font(size: 20, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                    Text(PlayOnCatalog.actionsSubtitle(protocolName: row.listed.protocolName, address: row.listed.address, used: usedText(row.listed.lastConnected)))
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                .padding(.bottom, 8)
+                actionButton("Play on this TV", systemImage: "play.tv") { select(row) }
+                if row.playBridge != nil {
+                    Button { openFullTVRemote(row) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "av.remote").frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Full TV remote")
+                                    .font(Theme.font(size: 15, weight: .semibold))
+                                Text("Power, volume and apps — pair once with a code")
+                                    .font(Theme.font(size: 13))
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                            }
+                            Spacer()
+                            Text(row.paired && !row.ambiguous ? "Paired" : "Set up")
+                                .font(Theme.font(size: 12, weight: .semibold))
+                                .foregroundColor(Theme.onSecondaryContainer)
+                                .padding(.horizontal, 9)
+                                .frame(minHeight: 24)
+                                .background(Theme.secondaryContainer, in: Capsule())
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Full TV remote, \(row.paired && !row.ambiguous ? "Paired" : "Set up")")
+                }
+                Button(role: .destructive) { forget(row) } label: {
+                    Label(row.playBridge == nil ? "Forget this device" : "Forget this TV", systemImage: "trash")
+                        .font(Theme.font(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                }
+                .foregroundColor(Theme.danger)
+            } else {
+                Text("This device is no longer available.")
+                    .foregroundColor(Theme.onSurfaceVariant)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.surface.ignoresSafeArea())
+        .navigationTitle("Device")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var configurePage: some View {
+        let options = TvCapabilityOptions.playerOptions(for: vm.pairedDevice).filter { $0.id != "tv" }
+        let selected = vm.coordinator.playerEngine
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel("Playback")
+                if options.isEmpty {
+                    Text("This TV hasn’t reported a video player yet.")
+                        .font(Theme.font(size: 14))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                            Button { vm.control("switch_player:\(option.id)") } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(option.label)
+                                            .font(Theme.font(size: 15, weight: .semibold))
+                                            .foregroundColor(Theme.onSurface)
+                                        Text(PlayOnPlayerCopy.detail(for: option.id))
+                                            .font(Theme.font(size: 13))
+                                            .foregroundColor(Theme.onSurfaceVariant)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: selected == option.id ? "largecircle.fill.circle" : "circle")
+                                        .foregroundColor(selected == option.id ? Theme.primary : Theme.onSurfaceVariant)
+                                }
+                                .padding(14)
+                                .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(option.label), \(PlayOnPlayerCopy.detail(for: option.id))")
+                            .accessibilityAddTraits(selected == option.id ? .isSelected : [])
+                            if index < options.count - 1 {
+                                Divider().overlay(Theme.outlineVariant)
+                            }
+                        }
+                    }
+                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                }
+                Text("Changes apply on the TV right away.")
+                    .font(Theme.font(size: 13))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .padding(.horizontal, 4)
+            }
+            .padding(16)
+        }
+        .background(Theme.surface.ignoresSafeArea())
+        .navigationTitle("Configure TV")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 0) {
+                    Text("Configure TV")
+                        .font(Theme.font(size: 17, weight: .bold))
+                    Text("\(nowName) · Connected")
+                        .font(Theme.font(size: 12))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private var manualPlayBridgePage: some View {
+        manualForm(title: "PlayBridge TV by IP address", prompt: "TV IP address", text: $manualIP, keyboard: .numbersAndPunctuation) {
+            let ip = manualIP.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !ip.isEmpty else { return }
+            userPicked = true
+            vm.connectManual(ip: ip)
+        }
+    }
+
+    private var manualRokuPage: some View {
+        manualForm(title: "Roku by IP address", prompt: "Roku IP address", text: $rokuAddress, keyboard: .URL) {
+            let input = rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let device = DLNABrowser.manualRoku(input) else {
+                vm.operationError = "Enter a Roku IP address or HTTP address, optionally including its port."
+                return
+            }
+            pickExternal(device)
+        }
+    }
+
+    private var manualDLNAPage: some View {
+        manualForm(title: "DLNA device by URL", prompt: "Description URL", text: $dlnaLocation, keyboard: .URL) {
+            let location = dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let device = DLNABrowser.device(from: ["protocol": "Dlna", "id": location, "location": location]) else {
+                vm.operationError = "Enter a valid HTTP or HTTPS device description URL."
+                return
+            }
+            pickExternal(device)
+        }
+    }
+
+    private func manualForm(title: String, prompt: String, text: Binding<String>, keyboard: UIKeyboardType, connect: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField(prompt, text: text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(keyboard)
+                .padding(12)
+                .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+            Button("Connect", action: connect)
+                .font(Theme.font(size: 16, weight: .semibold))
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .foregroundColor(Theme.onPrimary)
+                .background(Theme.primaryDim, in: RoundedRectangle(cornerRadius: 14))
+                .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.surface.ignoresSafeArea())
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func addLink(_ page: PlayOnPage, title: String, subtitle: String, systemImage: String) -> some View {
+        Button { path.append(page) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.secondaryContainer, in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(Theme.font(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                    Text(subtitle)
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").foregroundColor(Theme.onSurfaceVariant)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(Theme.font(size: 15, weight: .semibold))
+                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func tip(_ number: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(number).font(Theme.font(size: 13, weight: .bold)).foregroundColor(Theme.primary)
+            Text(text).font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(Theme.font(size: 12, weight: .bold))
+            .foregroundColor(Theme.onSurfaceVariant)
+            .tracking(0.8)
+            .padding(.top, 4)
+    }
+
+    private func banner<Accessory: View>(title: String, message: String, systemImage: String, tint: Color, @ViewBuilder accessory: () -> Accessory) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundColor(tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
+                Text(message).font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
+                accessory()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var sections: (ready: [PlayOnSheetRow], nearby: [PlayOnSheetRow], unavailable: [PlayOnSheetRow]) {
+        let groups = PlayOnCatalog.group(saved: savedRows.map(\.listed), discovered: nearbyRows.map(\.listed))
+        func resolve(_ devices: [PlayOnListedDevice]) -> [PlayOnSheetRow] {
+            devices.compactMap { rowIndex[$0.id] }
+        }
+        return (resolve(groups.reachableSaved), resolve(groups.nearby), resolve(groups.unavailable))
+    }
+
+    private var rowIndex: [String: PlayOnSheetRow] {
+        var index: [String: PlayOnSheetRow] = [:]
+        for row in savedRows { index[row.id] = row }
+        for row in nearbyRows where index[row.id] == nil { index[row.id] = row }
+        return index
+    }
+
+    private var savedRows: [PlayOnSheetRow] {
+        var rows: [PlayOnSheetRow] = []
+        for device in vm.savedDevices {
+            let key = vm.deviceKey(device)
+            let id = "pb:\(key)"
+            if id == activePlayBridgeID { continue }
+            let remote = vm.remoteTVRows.first { vm.deviceKey($0.device) == key }
+            let reachable = vm.onlineStatus[key] == true || remote?.receiverReachable == true || remote?.tvReachable == true
+            var keys: Set<String> = [id, key, "\(device.ip):\(device.port)"]
+            if !device.uuid.isEmpty { keys.insert(device.uuid) }
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: device.name, kind: .playBridge, address: "\(device.ip):\(device.port)",
+                                            reachable: reachable, saved: true, lastConnected: device.lastConnected, needsPairing: false, matchKeys: keys),
+                playBridge: device, external: nil, paired: remote?.paired == true, ambiguous: remote?.ambiguous == true))
+        }
+        let liveIDs = Set((vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices).map(\.identity))
+        for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" {
+            let id = "ex:\(device.identity)"
+            if id == activeExternalID { continue }
+            let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: device.name, kind: kind(device.protocolID), address: address,
+                                            reachable: liveIDs.contains(device.identity), saved: true,
+                                            lastConnected: Date(timeIntervalSince1970: TimeInterval(1_000_000 - index)),
+                                            needsPairing: false, matchKeys: [id, device.identity]),
+                playBridge: nil, external: device, paired: false, ambiguous: false))
+        }
+        return rows
+    }
+
+    private var nearbyRows: [PlayOnSheetRow] {
+        var rows: [PlayOnSheetRow] = []
+        for device in vm.browser.devices {
+            let key = device.uuid.isEmpty ? "\(device.ip):\(device.port)" : device.uuid
+            let id = "pb:\(key)"
+            if id == activePlayBridgeID { continue }
+            var keys: Set<String> = [id, key, "\(device.ip):\(device.port)"]
+            if !device.uuid.isEmpty { keys.insert(device.uuid) }
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: device.name, kind: .playBridge, address: "\(device.ip):\(device.port)",
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: true, matchKeys: keys),
+                playBridge: nil, external: nil, discovered: device, paired: false, ambiguous: false))
+        }
+        for device in vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices where device.protocolID != "dial" {
+            let id = "ex:\(device.identity)"
+            if id == activeExternalID { continue }
+            let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: device.name, kind: kind(device.protocolID), address: address,
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity]),
+                playBridge: nil, external: device, paired: false, ambiguous: false))
+        }
+        return rows
+    }
+
+    private var activePlayBridgeID: String? {
+        guard vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
+        guard vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV != nil || showsFailure else { return nil }
+        return "pb:\(vm.deviceKey(device))"
+    }
+
+    private var activeExternalID: String? {
+        guard let device = vm.externalReceiver, vm.isConnected || vm.connectionIsConnecting || showsFailure else { return nil }
+        return "ex:\(device.identity)"
+    }
+
+    private var scanning: Bool {
+        vm.browser.isScanning || vm.googleCastBrowser.isScanning || vm.dlnaBrowser.isScanning || vm.rokuBrowser.isScanning
+    }
+
+    private var thisPhoneSelected: Bool {
+        !vm.nativeReceiverSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.isConnected && !vm.connectionIsConnecting
+    }
+
+    private var showNowCard: Bool {
+        vm.isAirPlay || vm.isConnected || vm.connectionIsConnecting || showsFailure
+            || (vm.nativeReceiverSelected && vm.selectedRemoteTV != nil)
+            || vm.externalReceiver != nil
+    }
+
+    private var showConfigure: Bool {
+        vm.isConnected && vm.nativeReceiverSelected && !vm.isExternalReceiver && !vm.isAirPlay
+    }
+
+    private var showsFailure: Bool {
+        switch vm.state {
+        case .error, .authFailed, .pinMismatch, .pairingDenied: return true
+        default: return false
+        }
+    }
+
+    private var nowName: String {
+        if vm.isAirPlay { return vm.airPlay.routeName }
+        switch vm.state {
+        case .connected(let name, _): return name
+        case .waitingForApproval(let name), .waitingForCodeInput(let name, _, _), .verifyingCode(let name),
+                .pairingDenied(let name), .pinMismatch(let name):
+            return name.isEmpty ? fallbackName : name
+        default:
+            return fallbackName
+        }
+    }
+
+    private var fallbackName: String {
+        vm.externalReceiver?.name ?? vm.selectedRemoteTV?.device.name ?? vm.pairedDevice?.name ?? "TV"
+    }
+
+    private var pairingName: String {
+        switch vm.state {
+        case .waitingForCodeInput(let name, _, _), .verifyingCode(let name), .waitingForApproval(let name):
+            return name.isEmpty ? fallbackName : name
+        default:
+            return fallbackName
+        }
+    }
+
+    private var protocolName: String {
+        if vm.isAirPlay { return "AirPlay" }
+        return vm.externalReceiver?.protocolName ?? "PlayBridge"
+    }
+
+    private var nowSymbol: String {
+        vm.isAirPlay || vm.isExternalReceiver ? "airplayvideo" : "tv"
+    }
+
+    private var nowStatusText: String {
+        if vm.isConnected || vm.connectionIsConnecting || (showsFailure && !vm.isAirPlay) {
+            return PlayOnCatalog.nowStatus(connecting: vm.connectionIsConnecting && !vm.isConnected,
+                                            failed: showsFailure && !vm.isConnected,
+                                            castingTitle: castingTitle,
+                                            protocolName: protocolName)
+        }
+        if vm.isAirPlay { return vm.airPlay.routeAvailable ? "Connected · AirPlay" : "Couldn’t connect" }
+        if let row = vm.selectedRemoteTV { return row.status }
+        return "Couldn’t connect"
+    }
+
+    private var castingTitle: String? {
+        guard vm.isConnected, let playback = vm.coordinator.playback else { return nil }
+        guard ["playing", "paused", "buffering"].contains(playback.state.lowercased()) else { return nil }
+        let title = playback.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? nil : title
+    }
+
+    private var failureDetail: String? {
+        guard showsFailure, !vm.isConnected else { return nil }
+        switch vm.state {
+        case .error(let message): return message
+        case .authFailed: return "The saved pairing was rejected. Pair again."
+        case .pinMismatch: return "This TV’s security fingerprint changed. Forget it and pair again."
+        case .pairingDenied(let name): return "\(name) denied the pairing request."
+        default: return nil
+        }
+    }
+
+    private var diagnosticsText: String {
+        PlayOnCatalog.connectionDiagnostics(state: stateLabel, destination: showNowCard ? nowName : nil,
+                                             protocolName: showNowCard ? protocolName : nil, scanning: scanning)
+    }
+
+    private var stateLabel: String {
+        switch vm.state {
+        case .disconnected: return "disconnected"
+        case .connecting: return "connecting"
+        case .connected: return "connected"
+        case .waitingForApproval: return "waiting for approval"
+        case .waitingForCodeInput: return "waiting for code"
+        case .verifyingCode: return "verifying code"
+        case .pairingDenied: return "pairing denied"
+        case .retrying: return "retrying"
+        case .error: return "error"
+        case .authFailed: return "auth failed"
+        case .pinMismatch: return "pin mismatch"
+        }
+    }
+
+    private func rowSubtitle(_ row: PlayOnSheetRow) -> String {
+        if row.listed.saved {
+            return PlayOnCatalog.savedSubtitle(protocolName: row.listed.protocolName, reachable: row.listed.reachable, used: usedText(row.listed.lastConnected))
+        }
+        return PlayOnCatalog.nearbySubtitle(kind: row.listed.kind, needsPairing: row.listed.needsPairing, protocolName: row.listed.protocolName)
+    }
+
+    private func usedText(_ date: Date?) -> String? {
+        date.map { PlayOnRelativeTime.used($0) }
+    }
+
+    private func symbol(for kind: PlayOnListedDevice.Kind) -> String {
+        switch kind {
+        case .playBridge: return "tv"
+        case .googleCast: return "airplayvideo"
+        case .dlna: return "hifispeaker"
+        case .roku: return "tv"
+        case .browser: return "globe"
+        }
+    }
+
+    private func kind(_ protocolID: String) -> PlayOnListedDevice.Kind {
+        switch protocolID {
+        case "dlna": return .dlna
+        case "roku": return .roku
+        default: return .googleCast
+        }
+    }
+
+    private func digit(_ index: Int) -> String {
+        guard index < pairingCode.count else { return "" }
+        let character = pairingCode[pairingCode.index(pairingCode.startIndex, offsetBy: index)]
+        return String(character)
+    }
+
+    private func select(_ row: PlayOnSheetRow) {
+        if let device = row.playBridge {
+            userPicked = true
+            vm.connectSaved(device)
+        } else if let device = row.external {
+            pickExternal(device)
+        } else if let device = row.discovered {
+            userPicked = true
+            vm.connect(to: device)
+        }
+    }
+
+    private func pickExternal(_ device: ExternalReceiverDevice) {
+        pendingExternalID = device.identity
+        userPicked = true
+        vm.connectExternalReceiver(device)
+    }
+
+    private func forget(_ row: PlayOnSheetRow) {
+        if let device = row.playBridge { vm.forget(device) }
+        if let device = row.external { vm.forgetExternalReceiver(device) }
+        if !path.isEmpty { path.removeLast() }
+    }
+
+    private func openFullTVRemote(_ row: PlayOnSheetRow) {
+        guard let device = row.playBridge else { return }
+        if row.paired && !row.ambiguous {
+            showPairedTVs = true
+            return
+        }
+        if vm.remoteEndpoint != AtvReceiverTarget(playBridge: device).endpoint {
+            userPicked = false
+            vm.connectSaved(device)
+        }
+        nav.pendingAtvPairing = true
+        nav.navigate(to: .remote)
+        dismiss()
+    }
+
+    private func showPairingPage() {
+        if path.last != .pairing { path = [.pairing] }
+    }
+
+    private func close() {
+        if let pendingExternalID, vm.externalReceiver?.identity == pendingExternalID, !vm.isConnected {
             vm.disconnect()
         }
         self.pendingExternalID = nil
         dismiss()
     }
-}
 
-// MARK: - Shared Android-parity destination components
-
-struct ConnectionSectionLabel: View {
-    private let text: String
-
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text)
-            .font(Theme.font(size: 17, weight: .bold))
-            .foregroundColor(Theme.primary)
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        openURL(url)
     }
 }
 
-struct ConnectionNowDestinationCard: View {
+private struct PlayOnSheetRow: Identifiable {
+    let listed: PlayOnListedDevice
+    var playBridge: PairedDevice?
+    var external: ExternalReceiverDevice?
+    var discovered: DiscoveredDevice?
+    var paired = false
+    var ambiguous = false
+    var id: String { listed.id }
+}
+
+final class PlayOnPathMonitor: ObservableObject {
+    @Published private(set) var onWiFi = true
+    @Published private(set) var vpnActive = false
+    private var monitor: NWPathMonitor?
+
+    func start() {
+        guard monitor == nil else { return }
+        let monitor = NWPathMonitor()
+        self.monitor = monitor
+        monitor.pathUpdateHandler = { [weak self] path in
+            let onWiFi = path.status == .satisfied && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
+            let vpn = path.availableInterfaces.contains { $0.type == .other }
+            Task { @MainActor in
+                self?.onWiFi = onWiFi
+                self?.vpnActive = onWiFi && vpn
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "PlayBridge.playon.path"))
+    }
+
+    func stop() {
+        monitor?.cancel()
+        monitor = nil
+    }
+}
+
+struct PlayOnLocalSheetModifier: ViewModifier {
     @EnvironmentObject private var nav: NavigationViewModel
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var vm: ConnectionViewModel
-    var compact = false
-    var onRemote: (() -> Void)?
-    let onDisconnect: () -> Void
+    @Binding var isPresented: Bool
+    @Binding var page: PlayOnPage?
+    @Binding var picking: Bool
+    @State private var holding = false
 
-    private var connectingName: String {
-        switch vm.state {
-        case .waitingForApproval(let name), .waitingForCodeInput(let name, _, _), .verifyingCode(let name):
-            return name
-        default:
-            return vm.externalReceiver?.name ?? vm.pairedDevice?.name ?? "TV"
-        }
-    }
-
-    var body: some View {
-        Group {
-            if vm.isAirPlay {
-                activeShell(name: vm.airPlay.routeName,
-                    subtitle: vm.airPlay.routeAvailable ? "Ready to cast" : "Choose an AirPlay output to resume",
-                    systemImage: "airplayvideo", badge: "AirPlay",
-                    status: vm.airPlay.routeAvailable ? "Selected" : "Disconnected",
-                    statusFilled: vm.airPlay.routeAvailable, secure: nil)
-            } else if case .connected(let name, let secure) = vm.state {
-                activeCard(name: name, secure: secure)
-            } else if vm.nativeReceiverSelected, let row = vm.selectedRemoteTV, row.paired || row.ambiguous {
-                activeShell(name: row.device.name, subtitle: row.ambiguous ? "Pair again" : nil,
-                    systemImage: "tv", badge: nil, status: row.status,
-                    statusFilled: row.tvReachable, secure: nil)
-            } else if vm.connectionIsConnecting {
-                activeShell(
-                    name: connectingName,
-                    subtitle: "Connecting…",
-                    systemImage: vm.isExternalReceiver ? "airplayvideo" : "tv",
-                    badge: vm.externalReceiver?.protocolName,
-                    status: "Connecting",
-                    statusFilled: false,
-                    secure: nil
-                )
-            } else {
-                HStack(spacing: compact ? 10 : 12) {
-                    Image(systemName: "iphone")
-                        .font(Theme.font(size: compact ? 22 : 27))
-                        .foregroundColor(Theme.onSurfaceVariant)
-                        .frame(width: compact ? 38 : 40, height: compact ? 38 : 40)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Nothing selected")
-                            .font(Theme.font(size: 16, weight: .semibold))
-                            .foregroundColor(Theme.onSurface)
-                        Text("Pick a TV below, or play on this phone.")
-                            .font(Theme.font(.caption))
-                            .foregroundColor(Theme.onSurfaceVariant)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(compact ? 12 : 16)
-                .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                guard !holding else { return }
+                holding = true
+                nav.playOnSuppressCount += 1
             }
-        }
-    }
-
-    private func activeCard(name: String, secure: Bool) -> some View {
-        let receiver = vm.externalReceiver
-        let detail: String?
-        if let receiver {
-            detail = receiver.model
-        } else if let paired = vm.pairedDevice {
-            detail = "\(paired.ip):\(secure ? (paired.wssPort ?? paired.port) : paired.port)"
-        } else {
-            detail = nil
-        }
-        return activeShell(
-            name: name,
-            subtitle: detail,
-            systemImage: receiver == nil ? "tv" : "airplayvideo",
-            badge: receiver?.protocolName,
-            status: receiver == nil ? (vm.selectedRemoteTV?.status ?? "PlayBridge") : "Connected",
-            statusFilled: true,
-            secure: receiver == nil ? secure : nil
-        )
-    }
-
-    private func activeShell(
-        name: String,
-        subtitle: String?,
-        systemImage: String,
-        badge: String?,
-        status: String,
-        statusFilled: Bool,
-        secure: Bool?
-    ) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 7 : 10) {
-            HStack(alignment: .center, spacing: compact ? 10 : 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Theme.onSecondaryContainer.opacity(0.09))
-                    Image(systemName: systemImage)
-                        .font(Theme.font(size: compact ? 21 : 28))
-                        .foregroundColor(Theme.onSecondaryContainer)
-                }
-                .frame(width: compact ? 38 : 44, height: compact ? 38 : 44)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(name)
-                        .font(Theme.font(size: 16, weight: .semibold))
-                        .foregroundColor(Theme.onSecondaryContainer)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 6) {
-                        if let badge { ConnectionProtocolBadge(badge) }
-                        ConnectionStatusPill(text: status, filled: statusFilled)
-                    }
-                    if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(Theme.font(.caption))
-                            .foregroundColor(Theme.onSecondaryContainer.opacity(0.8))
-                            .lineLimit(compact ? 2 : nil)
-                    }
-                    if let secure {
-                        Label(secure ? "wss" : "ws", systemImage: secure ? "lock.fill" : "lock.open.fill")
-                            .font(Theme.font(.caption))
-                            .foregroundColor(secure ? ConnectionColors.online : ConnectionColors.warning)
-                    }
-                }
+            .onDisappear {
+                guard holding else { return }
+                holding = false
+                nav.playOnSuppressCount = max(0, nav.playOnSuppressCount - 1)
             }
-
-            if !vm.isConnected, let row = vm.selectedRemoteTV, row.paired, !row.ambiguous {
-                Button("Open PlayBridge on \(row.device.name)") {
-                    vm.requestOpenPlayBridge()
-                    nav.navigate(to: .remote)
-                    dismiss()
-                }.font(Theme.font(.subheadline))
+            .onChange(of: vm.state) { state in
+                guard case .waitingForCodeInput = state, !isPresented else { return }
+                page = .pairing
+                picking = false
+                isPresented = true
             }
-            HStack(spacing: 8) {
-                Spacer()
-                if let onRemote {
-                    Button("Remote", action: onRemote)
-                        .font(Theme.font(size: 14, weight: .semibold))
-                        .foregroundColor(Theme.primary)
-                }
-                Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect", action: onDisconnect)
-                    .font(Theme.font(size: 14, weight: .semibold))
-                    .foregroundColor(Theme.danger)
+            .sheet(isPresented: $isPresented, onDismiss: { page = nil }) {
+                DeviceConnectionSheet(initialPage: page, openedForPicking: picking)
             }
-        }
-        .padding(compact ? 12 : 16)
-        .background(Theme.secondaryContainer.opacity(0.78), in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
-struct ConnectionThisPhoneRow: View {
-    let selected: Bool
-    var compact = false
-    let onSelect: () -> Void
-
-    var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: compact ? 10 : 16) {
-                Image(systemName: "iphone")
-                    .font(Theme.font(size: compact ? 22 : 27))
-                    .foregroundColor(Theme.primary)
-                    .frame(width: compact ? 38 : 40, height: compact ? 38 : 40)
-                Text("This phone")
-                    .font(Theme.font(size: 16, weight: .semibold))
-                    .foregroundColor(Theme.onSurface)
-                Spacer()
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(Theme.font(size: 15, weight: .bold))
-                        .foregroundColor(ConnectionColors.online)
-                }
-            }
-            .padding(.horizontal, compact ? 12 : 16)
-            .padding(.vertical, compact ? 8 : 12)
-            .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-struct ConnectionPairedDeviceRow: View {
-    @EnvironmentObject private var vm: ConnectionViewModel
-    let device: PairedDevice
-    let online: Bool
-    var compact = false
-    let onSelect: () -> Void
-    var onRemove: (() -> Void)?
-
-    var body: some View {
-        ConnectionDeviceRowShell(
-            name: device.name,
-            endpoint: "\(device.ip):\(device.port)",
-            status: vm.remoteTVRows.first { $0.id == AtvReceiverTarget(playBridge: device).endpoint }?.status ?? "Offline",
-            online: online,
-            systemImage: "tv",
-            badge: nil,
-            compact: compact,
-            onSelect: onSelect,
-            onRemove: onRemove
-        )
-    }
-}
-
-struct ConnectionExternalDeviceRow: View {
-    let device: ExternalReceiverDevice
-    let online: Bool
-    var compact = false
-    let onSelect: () -> Void
-    var onRemove: (() -> Void)?
-
-    private var endpoint: String {
-        if let address = device.addresses.first { return "\(address):\(device.port)" }
-        return device.model
-    }
-
-    var body: some View {
-        ConnectionDeviceRowShell(
-            name: device.name,
-            endpoint: endpoint,
-            status: online ? "Online" : "Saved",
-            online: online,
-            systemImage: "airplayvideo",
-            badge: device.protocolName,
-            compact: compact,
-            onSelect: onSelect,
-            onRemove: onRemove
-        )
-    }
-}
-
-private struct ConnectionDeviceRowShell: View {
-    let name: String
-    let endpoint: String
-    let status: String
-    let online: Bool
-    let systemImage: String
-    let badge: String?
-    let compact: Bool
-    let onSelect: () -> Void
-    let onRemove: (() -> Void)?
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onSelect) {
-                HStack(spacing: compact ? 10 : 16) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Theme.primary.opacity(0.10))
-                        Image(systemName: systemImage)
-                            .font(Theme.font(size: compact ? 20 : 25))
-                            .foregroundColor(Theme.primary)
-                    }
-                    .frame(width: compact ? 38 : 44, height: compact ? 38 : 44)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(name)
-                            .font(Theme.font(size: compact ? 15 : 16, weight: .semibold))
-                            .foregroundColor(Theme.onSurface)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(online ? ConnectionColors.online : Theme.onSurfaceVariant.opacity(0.5))
-                                .frame(width: 7, height: 7)
-                            Text("\(status) · \(endpoint)")
-                                .font(Theme.font(.caption))
-                                .foregroundColor(online ? ConnectionColors.online : Theme.onSurfaceVariant)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            if let badge { ConnectionProtocolBadge(badge) }
-                        }
-                    }
-                }
-                .padding(.leading, compact ? 10 : 14)
-                .padding(.vertical, compact ? 9 : 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if let onRemove {
-                Button(action: onRemove) {
-                    Image(systemName: "trash")
-                        .font(Theme.font(size: 17))
-                        .foregroundColor(Theme.danger)
-                        .frame(width: 42, height: 44)
-                }
-                .accessibilityLabel("Remove \(name)")
-            } else {
-                Spacer().frame(width: compact ? 10 : 14)
-            }
-        }
-        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-struct ConnectionProtocolBadge: View {
-    let text: String
-
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text)
-            .font(Theme.font(size: 10, weight: .medium))
-            .foregroundColor(Theme.onSecondaryContainer)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Theme.secondaryContainer, in: RoundedRectangle(cornerRadius: 4))
-            .lineLimit(1)
-    }
-}
-
-private struct ConnectionStatusPill: View {
-    let text: String
-    let filled: Bool
-
-    var body: some View {
-        Text(text)
-            .font(Theme.font(size: 10, weight: .medium))
-            .foregroundColor(filled ? ConnectionColors.online : Theme.onSurfaceVariant)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(
-                (filled ? ConnectionColors.online.opacity(0.18) : Theme.surfaceContainerHighest),
-                in: Capsule()
-            )
-    }
-}
-
-private enum ConnectionColors {
-    static let online = Color(hex: 0x4CAF50)
-    static let warning = Color(hex: 0xFFA000)
-}
-
-func connectionLastSeen(_ date: Date) -> String {
-    let seconds = max(0, Date().timeIntervalSince(date))
-    switch seconds {
-    case ..<60: return "Last seen just now"
-    case ..<3_600: return "Last seen \(Int(seconds / 60))m ago"
-    case ..<86_400: return "Last seen \(Int(seconds / 3_600))h ago"
-    case ..<(7 * 86_400): return "Last seen \(Int(seconds / 86_400))d ago"
-    default: return "Saved"
+extension View {
+    func playOnLocalSheet(isPresented: Binding<Bool>, page: Binding<PlayOnPage?>, picking: Binding<Bool>) -> some View {
+        modifier(PlayOnLocalSheetModifier(isPresented: isPresented, page: page, picking: picking))
     }
 }
 

@@ -7,7 +7,6 @@ struct RemoteControlScreen: View {
     @EnvironmentObject private var atv: AtvRemoteCoordinator
     @State private var showAtvPairing = false
     @State private var showCastLink = false
-    @State private var showDevices = false
     @State private var showTVApps = false
     @State private var checkedSelection = false
     @State private var selectionRevision: UInt64 = 0
@@ -81,7 +80,7 @@ struct RemoteControlScreen: View {
                     Text(RemoteAvailability.offlineMessage).multilineTextAlignment(.center)
                     HStack {
                         Button("Retry") { vm.retryIndependentRemote() }
-                        Button("Switch TV") { showDevices = true }
+                        Button("Switch TV") { nav.openPlayOn() }
                     }
                     if selectedAmbiguous { Text("Pair again").foregroundStyle(Theme.danger) }
                     Spacer()
@@ -91,11 +90,17 @@ struct RemoteControlScreen: View {
         .padding(.horizontal, 16).padding(.bottom, 12)
         .foregroundStyle(Theme.onSurface)
         .background(Theme.surface.ignoresSafeArea())
-        .onAppear { selectionRevision = vm.destinationSelectionRevision; vm.queryContext(); checkSelection() }
+        .onAppear {
+            selectionRevision = vm.destinationSelectionRevision
+            vm.queryContext()
+            checkSelection()
+            presentPendingAtvPairingIfNeeded()
+        }
         .onDisappear { vm.pendingPlayBridgeLaunch = nil }
+        .onChange(of: nav.pendingAtvPairing) { _ in presentPendingAtvPairingIfNeeded() }
+        .onChange(of: nav.playOnRequest?.id) { _ in presentPendingAtvPairingIfNeeded() }
         .onChange(of: vm.remoteTVScanComplete) { _ in checkSelection() }
         .onChange(of: vm.remoteTVRecordsLoaded) { _ in checkSelection() }
-        .sheet(isPresented: $showDevices) { DeviceConnectionSheet() }
         .sheet(isPresented: $showTVApps) {
             AtvAppLaunchSheet { value in vm.sendTVControl(.launch(value), ticket: appTicket) }
         }
@@ -118,6 +123,13 @@ struct RemoteControlScreen: View {
     }
 
     private var selectedAmbiguous: Bool { vm.selectedRemoteTV?.ambiguous == true }
+
+    /// Full TV remote setup asks for the existing Apple TV pairing sheet once Play on has closed.
+    private func presentPendingAtvPairingIfNeeded() {
+        guard nav.pendingAtvPairing, nav.playOnRequest == nil else { return }
+        nav.pendingAtvPairing = false
+        showAtvPairing = true
+    }
     private func checkSelection() {
         guard !checkedSelection else { return }
         guard selectionRevision == vm.destinationSelectionRevision else { checkedSelection = true; return }
@@ -125,7 +137,7 @@ struct RemoteControlScreen: View {
             hasSelection: vm.remoteEndpoint != nil || vm.isExternalReceiver || vm.isAirPlay,
             settled: vm.remoteTVRecordsLoaded && (vm.remoteTVScanComplete || vm.remoteTVRecords.isEmpty)) else { return }
         checkedSelection = true
-        if !vm.prepareIndependentRemote() { showDevices = true }
+        if !vm.prepareIndependentRemote(), !nav.pendingAtvPairing { nav.openPlayOn() }
     }
 
     private var statusChip: some View {
@@ -139,7 +151,7 @@ struct RemoteControlScreen: View {
         let level = (selectedAmbiguous ? "Pair again" : combined.badge) ?? RemoteControlPresentation.controlLevel(policy: vm.nativeRemotePolicy,
             connected: connected, externalProtocol: vm.isAirPlay ? "airplay" : vm.externalReceiver?.protocolID)
         let accessibilityTitle = ([label] + (connected || combined.badge != nil ? [protocolName, level].compactMap { $0 } : [])).joined(separator: ", ") + (combined.televisionOff ? ", TV is off" : "")
-        return Button { showDevices = true } label: {
+        return Button { nav.openPlayOn() } label: {
             HStack(spacing: 8) {
                 Image(systemName: vm.isExternalReceiver || vm.isAirPlay ? "airplayvideo" : "tv")
                     .font(Theme.font(size: 14, weight: .semibold))

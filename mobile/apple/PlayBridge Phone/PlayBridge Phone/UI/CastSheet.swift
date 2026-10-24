@@ -91,6 +91,8 @@ struct CastSheet: View {
     private var streamRoute: StreamRoute { StreamRoute(rawValue: routePreference) ?? .direct }
     @State private var fullscreenPlayerItem: PlayerItem?
     @State private var showDestination = false
+    @State private var playOnPage: PlayOnPage?
+    @State private var playOnPicking = true
     @State private var playbackPreparation: Task<Void, Never>?
     @State private var playbackPreparationID: UUID?
     @State private var playbackError: String?
@@ -166,7 +168,7 @@ struct CastSheet: View {
             .background(Theme.surface.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .accessibilityAction(.escape) { dismiss() }
-            .sheet(isPresented: $showDestination) { DeviceConnectionSheet() }
+            .playOnLocalSheet(isPresented: $showDestination, page: $playOnPage, picking: $playOnPicking)
             .sheet(item: $detailsItem) { item in
                 DetectedMediaDetailsSheet(item: item, headers: exportHeaders(item),
                                           qualities: detector.qualities[item.id] ?? [])
@@ -314,7 +316,11 @@ struct CastSheet: View {
 
             Spacer(minLength: 0)
 
-            Button { showDestination = true } label: {
+            Button {
+                playOnPage = nil
+                playOnPicking = true
+                showDestination = true
+            } label: {
                 Image(systemName: "tv")
                     .font(Theme.font(size: 20))
                     .foregroundColor(vm.isConnected ? Theme.primary : Theme.onSurfaceVariant)
