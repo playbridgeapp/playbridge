@@ -1,0 +1,414 @@
+package com.playbridge.sender.cast
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import com.playbridge.sender.cast.browser.BrowserReceiverRepository
+import com.playbridge.sender.cast.browser.BrowserReceiverSheet
+import com.playbridge.sender.connection.ConnectionMerge
+import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.diagnostics.CastAttempt
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
+import com.playbridge.sender.diagnostics.shareCastAttempt
+import com.playbridge.sender.model.CastProtocol
+import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.ui.LocalNetworkBanners
+import com.playbridge.sender.ui.NowDestinationCard
+import com.playbridge.sender.ui.SectionLabel
+import kotlinx.coroutines.launch
+import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+
+internal val LocalPlayOnRemote = staticCompositionLocalOf<(() -> Unit)?> { null }
+
+/** Avoid stacking a second sheet when pairing starts from an already open picker. */
+internal object PlayOnSheetPresence {
+    var count by mutableIntStateOf(0)
+}
+
+internal enum class PlayOnPage { Devices, Pair, Add, Manual, Actions, Configure, Browser }
+
+internal fun WebSocketClient.ConnectionState.needsPairingPage(): Boolean =
+    this is WebSocketClient.ConnectionState.WaitingForCodeInput ||
+        this is WebSocketClient.ConnectionState.VerifyingCode ||
+        this is WebSocketClient.ConnectionState.WaitingForApproval ||
+        this is WebSocketClient.ConnectionState.PairingDenied
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PlayOnSheet(
+    onDismiss: () -> Unit,
+    showThisDevice: Boolean = true,
+    onPickedThisDevice: (() -> Unit)? = null,
+    onPickedDevice: ((TvDevice) -> Unit)? = null,
+    playBridgeOnly: Boolean = false,
+    picking: Boolean = true,
+    startPairing: Boolean = false,
+) {
+    val viewModel: ConnectionViewModel = koinViewModel()
+    val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
+    val remoteRows by viewModel.remoteTVDirectory.rows.collectAsState()
+    val discovered by viewModel.discoveredDevices.collectAsState()
+    val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
+    val connection by viewModel.connectionState.collectAsState()
+    val tv by viewModel.tvDevice.collectAsState(initial = null)
+    val selectedRemote by viewModel.selectedRemoteDevice.collectAsState()
+    val external by viewModel.activeExternalDevice.collectAsState()
+    val route by viewModel.route.collectAsState()
+    val network by viewModel.networkStatus.collectAsState()
+    val scanning by viewModel.isScanning.collectAsState()
+    val castState by viewModel.castSessionState.collectAsState()
+    val title by viewModel.externalMediaTitle.collectAsState()
+    val streamRoute by viewModel.lastEffectiveStreamRoute.collectAsState()
+    val browser: BrowserReceiverRepository = koinInject()
+    val host by browser.state.collectAsState()
+    val diagnostics: CastAttemptDiagnostics = koinInject()
+    val attempts by diagnostics.attempts.collectAsState()
+    val context = LocalContext.current
+    val openRemote = LocalPlayOnRemote.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    var page by remember { mutableStateOf(if (startPairing) PlayOnPage.Pair else PlayOnPage.Devices) }
+    var managed by remember { mutableStateOf<PlayOnDevice?>(null) }
+    var unavailableExpanded by remember { mutableStateOf(false) }
+    var pendingGoogle by remember { mutableStateOf<TvDevice?>(null) }
+    var pendingNative by remember { mutableStateOf<TvDevice?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    val connected = connection is WebSocketClient.ConnectionState.Connected
+    val nativeSelected = route is CastSessionManager.Route.NativeTv
+    val nativeRow = remoteRows.firstOrNull { row ->
+        (selectedRemote ?: tv)?.let { ConnectionMerge.isSameDevice(row.device, it) } == true
+    }
+    val groups = groupPlayOnDevices(history, discovered, remoteRows, pings,
+        if (host.running) host.ready.map { it.toTvDevice(browser.lanHostIp(), host.port) } else emptyList(), playBridgeOnly)
+    val recentFailure = attempts.firstOrNull {
+        it.outcome == CastAttempt.AttemptOutcome.FAILED &&
+            it.id == viewModel.castSessionManager.currentExternalDiagnosticAttemptId &&
+            System.currentTimeMillis() - it.startedAtMs < 5 * 60 * 1000L
+    }
+    DisposableEffect(viewModel) {
+        PlayOnSheetPresence.count++
+        viewModel.retainDiscovery()
+        viewModel.pingSavedDevices()
+        onDispose { viewModel.releaseDiscovery(); PlayOnSheetPresence.count-- }
+    }
+    LaunchedEffect(Unit) { viewModel.castNotices.collect { notice = it } }
+    fun finish(device: TvDevice) {
+        if (picking) { onPickedDevice?.invoke(device); onDismiss() }
+        else page = PlayOnPage.Devices
+    }
+    fun cancelPairing() {
+        if (page == PlayOnPage.Pair && (connection.needsPairingPage() || pendingNative != null)) {
+            pendingNative = null
+            viewModel.cancelConnectingToThisDevice()
+        }
+    }
+    fun dismiss() {
+        cancelPairing()
+        val pending = pendingGoogle
+        if (pending != null && external?.let { ConnectionMerge.isSameDevice(pending, it) } == true &&
+            !googleCastPickerConnectionComplete(castState.phase)) viewModel.disconnectExternalTarget()
+        pendingGoogle = null
+        onDismiss()
+    }
+    fun back() {
+        cancelPairing()
+        page = if (page == PlayOnPage.Manual || page == PlayOnPage.Browser) PlayOnPage.Add else PlayOnPage.Devices
+    }
+    fun pick(device: TvDevice) {
+        val target = ConnectionMerge.withDiscoveredEndpoint(device, discovered)
+        notice = null
+        pendingGoogle = null
+        pendingNative = null
+        when (target.resolvedProtocol) {
+            CastProtocol.GOOGLE_CAST -> { pendingGoogle = target; viewModel.selectGoogleCastTarget(target) }
+            CastProtocol.PLAYBRIDGE -> {
+                if (connected && tv?.let { ConnectionMerge.isSameDevice(it, target) } == true) {
+                    viewModel.selectNativeRoute(); finish(target)
+                } else {
+                    pendingNative = target
+                    viewModel.connect(target)
+                    page = if (target.token.isEmpty()) PlayOnPage.Pair else PlayOnPage.Devices
+                }
+            }
+            CastProtocol.DLNA -> if (viewModel.selectDlnaTarget(target)) finish(target)
+            CastProtocol.ROKU -> { viewModel.selectRokuTarget(target); finish(target) }
+            CastProtocol.WEB_BROWSER -> { viewModel.selectBrowserTarget(target); finish(target) }
+        }
+    }
+    LaunchedEffect(connection) {
+        if (connection.needsPairingPage()) page = PlayOnPage.Pair
+        if (connection is WebSocketClient.ConnectionState.Connected) {
+            val pending = pendingNative
+            pendingNative = null
+            if (pending != null || page == PlayOnPage.Pair) {
+                page = PlayOnPage.Devices
+                (tv?.takeIf { pending == null || ConnectionMerge.isSameDevice(it, pending) } ?: pending)?.let(::finish)
+            }
+        }
+    }
+    LaunchedEffect(pendingGoogle, external, castState.phase) {
+        val pending = pendingGoogle ?: return@LaunchedEffect
+        if (external?.let { ConnectionMerge.isSameDevice(it, pending) } == true &&
+            googleCastPickerConnectionComplete(castState.phase)) { pendingGoogle = null; finish(pending) }
+    }
+    ModalBottomSheet(onDismissRequest = { if (page != PlayOnPage.Devices) back() else dismiss() }, sheetState = sheetState) {
+        BackHandler(enabled = page != PlayOnPage.Devices) { back() }
+        Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (page != PlayOnPage.Devices) IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                Column(Modifier.weight(1f).padding(8.dp)) {
+                    Text(when (page) {
+                        PlayOnPage.Devices -> "Play on"
+                        PlayOnPage.Pair -> "Pair ${pendingNative?.name ?: tv?.name ?: "TV"}"
+                        PlayOnPage.Add -> "Add a device"
+                        PlayOnPage.Manual -> "PlayBridge TV by IP address"
+                        PlayOnPage.Actions -> managed?.device?.name ?: "Device"
+                        PlayOnPage.Configure -> "Configure TV"
+                        PlayOnPage.Browser -> "Browser on a TV"
+                    }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    if (page == PlayOnPage.Devices) Text(if (network.onLocalNetwork) "Wi-Fi" else "Mobile data",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(onClick = ::dismiss) { Icon(Icons.Default.Close, "Close Play on") }
+            }
+            HorizontalDivider()
+            AnimatedContent(targetState = page, label = "Play on page", transitionSpec = {
+                val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                slideInHorizontally { it * direction } togetherWith slideOutHorizontally { -it * direction }
+            }) { currentPage ->
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    when (currentPage) {
+                        PlayOnPage.Devices -> {
+                            LocalNetworkBanners(network)
+                            if (external != null || (nativeSelected && tv != null) || connected) {
+                                NowDestinationCard(connectionState = connection, route = route, tvDevice = tv, activeExternalDevice = external,
+                                    nativeStatus = nativeRow?.status,
+                                    isConnecting = nativeSelected && (connection is WebSocketClient.ConnectionState.Connecting || connection is WebSocketClient.ConnectionState.Retrying),
+                                    externalMediaTitle = title, externalCasting = castState.phase == SessionPhase.PLAYING,
+                                    externalConnecting = castState.phase == SessionPhase.CONNECTING, externalFailed = castState.phase == SessionPhase.FAILED,
+                                    onCastHere = viewModel::selectNativeRoute,
+                                    onDisconnectNative = { pendingNative = null; viewModel.selectThisDevice(); viewModel.disconnect() },
+                                    onDisconnectExternal = { pendingGoogle = null; viewModel.disconnectExternalTarget() },
+                                    showShareDiagnostics = recentFailure != null,
+                                    onShareDiagnostics = { recentFailure?.let { shareCastAttempt(context, diagnostics.report(it)) } },
+                                    streamRouteLabel = streamRoute?.label, compact = true)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (openRemote != null) TextButton(onClick = { onDismiss(); openRemote() }) { Text("Remote") }
+                                    if (nativeSelected && connected && external == null) TextButton(onClick = { page = PlayOnPage.Configure }) { Text("Configure TV") }
+                                }
+                                if (nativeRow?.status == "TV remote only") TextButton(onClick = { viewModel.openPlayBridge() }) { Text("Open PlayBridge on ${nativeRow.device.name}") }
+                            }
+                            SectionLabel("Devices")
+                            if (showThisDevice) PlayOnRow("This phone", "Play here", phone = true,
+                                selected = route is CastSessionManager.Route.ThisDevice && external == null, onClick = {
+                                    pendingNative = null; pendingGoogle = null
+                                    viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                                })
+                            groups.saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                SectionLabel("Nearby")
+                                if (scanning) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Text("Searching", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
+                            if (groups.unavailable.isNotEmpty()) {
+                                TextButton(onClick = { unavailableExpanded = !unavailableExpanded }) { Text("${if (unavailableExpanded) "▾" else "▸"} Not available now · ${groups.unavailable.size}") }
+                                if (unavailableExpanded) groups.unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                            }
+                            if (groups.saved.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
+                            OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.Add, null); Text("Add a device", Modifier.padding(start = 8.dp))
+                            }
+                        }
+                        PlayOnPage.Pair -> PlayOnPairing(connection, pendingNative?.name ?: tv?.name ?: "TV", viewModel::submitPairingCode) { (pendingNative ?: tv)?.let(::pick) }
+                        PlayOnPage.Add -> {
+                            Text("TVs on your Wi-Fi show up automatically under Nearby. Use these when one doesn’t.")
+                            if (!playBridgeOnly) PlayOnRow("Browser on a TV", "Any smart TV with a web browser — no app needed", onClick = { page = PlayOnPage.Browser })
+                            PlayOnRow("PlayBridge TV by IP address", "When discovery is blocked", onClick = { page = PlayOnPage.Manual })
+                            PlayOnTip("If a TV won’t show up", "1. Open PlayBridge on the TV and leave it on the home screen.\n2. Put the phone and TV on the same Wi-Fi (guest networks often block devices).\n3. Turn off VPN on this phone.")
+                            TextButton(onClick = {
+                                val attempt = diagnostics.latestFailed() ?: attempts.firstOrNull()
+                                if (attempt != null) shareCastAttempt(context, diagnostics.report(attempt)) else notice = "No connection diagnostics yet. Try connecting to a TV first."
+                            }) { Text("Share connection diagnostics") }
+                        }
+                        PlayOnPage.Manual -> PlayOnManual { ip, port ->
+                            val known = history.firstOrNull { it.resolvedProtocol == CastProtocol.PLAYBRIDGE && it.ip == ip && it.port == port }
+                            pick(known ?: TvDevice(ip, port, "", "Manual TV"))
+                        }
+                        PlayOnPage.Actions -> managed?.let { row ->
+                            Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}", style = MaterialTheme.typography.bodySmall)
+                            PlayOnRow("Play on this TV", "Select ${row.device.name}", onClick = { pick(row.device) })
+                            if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE && openRemote != null) PlayOnRow("Full TV remote",
+                                if (row.remotePaired) "Paired" else "Set up · Power, volume and apps", onClick = { viewModel.connect(row.device); onDismiss(); openRemote() })
+                            TextButton(onClick = { row.saved?.let(viewModel::removeDeviceFromHistory); page = PlayOnPage.Devices }, enabled = row.saved != null) {
+                                Text("Forget this ${if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"}", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        PlayOnPage.Configure -> PlayOnConfigure(tv, enabled = connected && nativeSelected && external == null)
+                        PlayOnPage.Browser -> BrowserReceiverSheet(viewModel, embedded = true,
+                            onDismiss = { page = PlayOnPage.Add },
+                            onCastHere = { viewModel.activeExternalDevice.value?.let(::finish) })
+                    }
+                    notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick: () -> Unit, onMore: (() -> Unit)? = null) {
+    val protocol = row.device.resolvedProtocol
+    PlayOnRow(row.device.name, when {
+        row.remoteStatus == "TV remote only" -> "PlayBridge · TV remote only"
+        nearby && protocol == CastProtocol.PLAYBRIDGE -> "PlayBridge · Tap to pair"
+        row.reachable -> "${protocol.displayName} · Ready"
+        else -> "${protocol.displayName} · ${usedRelative(row.device.lastConnected)}"
+    }, onClick = onClick, onMore = onMore, isNew = nearby && protocol == CastProtocol.PLAYBRIDGE)
+}
+
+@Composable
+private fun PlayOnRow(name: String, subtitle: String, onClick: () -> Unit, phone: Boolean = false,
+    selected: Boolean = false, isNew: Boolean = false, onMore: (() -> Unit)? = null) {
+    ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold) }, supportingContent = { Text(subtitle) },
+        leadingContent = { Icon(if (phone) Icons.Default.Smartphone else Icons.Default.Tv, null) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (selected) Icon(Icons.Default.Check, "Selected")
+                if (isNew) Text("New", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
+                if (onMore != null) IconButton(onClick = onMore) { Icon(Icons.Default.MoreHoriz, "More options for $name") }
+            }
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick))
+}
+
+@Composable
+private fun PlayOnTip(title: String, body: String) {
+    Card(shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, fontWeight = FontWeight.SemiBold); Text(body, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, submit: (String) -> Unit, retry: () -> Unit) {
+    var code by remember { mutableStateOf("") }
+    LaunchedEffect(state) { if (state is WebSocketClient.ConnectionState.WaitingForCodeInput && state.lastCodeWrong) code = "" }
+    when (state) {
+        is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
+            Text("Enter the 6-digit code shown on $name.")
+            OutlinedTextField(code, {
+                code = it.filter(Char::isDigit).take(6)
+                if (code.length == 6) submit(code)
+            }, label = { Text("6-digit code") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.fillMaxWidth(), isError = state.lastCodeWrong)
+            if (state.lastCodeWrong) Text("Incorrect code — ${state.attemptsLeft} ${if (state.attemptsLeft == 1) "try" else "tries"} left", color = MaterialTheme.colorScheme.error)
+            Text("Pairs automatically when all six digits are in", style = MaterialTheme.typography.bodySmall)
+        }
+        is WebSocketClient.ConnectionState.WaitingForApproval -> Text("Approve on the TV")
+        is WebSocketClient.ConnectionState.PairingDenied -> { Text("${state.serverName} denied the connection", color = MaterialTheme.colorScheme.error); Button(onClick = retry) { Text("Try again") } }
+        is WebSocketClient.ConnectionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
+        is WebSocketClient.ConnectionState.PinMismatch -> Text("The TV’s certificate changed. Forget the device and pair again.", color = MaterialTheme.colorScheme.error)
+        WebSocketClient.ConnectionState.AuthFailed -> Text("Connection lost — tap the TV to reconnect", color = MaterialTheme.colorScheme.error)
+        else -> { CircularProgressIndicator(Modifier.size(24.dp)); Text(if (state is WebSocketClient.ConnectionState.VerifyingCode) "Verifying code…" else "Connecting to $name…") }
+    }
+}
+
+@Composable
+private fun PlayOnManual(connect: (String, Int) -> Unit) {
+    var ip by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString()) }
+    OutlinedTextField(ip, { ip = it.trim() }, label = { Text("IP address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port") }, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+    Button(onClick = { connect(ip, port.toInt()) }, enabled = ip.isNotBlank() && port.toIntOrNull() in 1..65535,
+        modifier = Modifier.fillMaxWidth()) { Text("Connect") }
+}
+
+@Composable
+private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
+    val settings: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
+    val mode by settings.tvPlayerMode.collectAsState(initial = "tv")
+    val scope = rememberCoroutineScope()
+    Text("${device?.name ?: "TV"} · ${if (enabled) "Connected" else "Disconnected"}")
+    SectionLabel("Playback")
+    Text("Video player", style = MaterialTheme.typography.titleMedium)
+    val options = TvCapabilityOptions.playerOptions(device)
+    val selected = TvCapabilityOptions.coerceSelection(mode, options)
+    options.forEach { (id, label) ->
+        ListItem(headlineContent = { Text(label) }, supportingContent = { Text(when (id) {
+            "exo" -> "Default player, smooth on most streams"
+            "mpv" -> "Plays more formats and subtitle styles"
+            else -> "Use the TV’s ${if (id == "tv") "default player" else label}"
+        }) }, leadingContent = { RadioButton(selected == id, onClick = null, enabled = enabled) },
+            modifier = Modifier.clickable(enabled = enabled) { scope.launch { settings.setTvPlayerMode(id) } })
+    }
+    Text("Changes apply on the TV right away.", style = MaterialTheme.typography.bodySmall)
+}
+
+private fun usedRelative(time: Long): String {
+    val days = ((System.currentTimeMillis() - time) / 86_400_000L).coerceAtLeast(0)
+    return when (days) { 0L -> "Used today"; 1L -> "Used yesterday"; else -> "Used $days days ago" }
+}

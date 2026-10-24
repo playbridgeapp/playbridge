@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -68,11 +69,11 @@ fun BrowserReceiverSheet(
     viewModel: ConnectionViewModel,
     onDismiss: () -> Unit,
     onCastHere: (() -> Unit)? = null,
+    embedded: Boolean = false,
 ) {
     val browserRepo: BrowserReceiverRepository = koinInject()
     val hostState by browserRepo.state.collectAsState()
     val networkStatus by viewModel.networkStatus.collectAsState()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var stopConfirm by remember { mutableStateOf(false) }
@@ -94,11 +95,11 @@ fun BrowserReceiverSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(
+    BrowserReceiverFrame(onDismiss, embedded) {
+        if (!embedded || pairingRequest == null) Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .then(if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState()))
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -266,9 +267,11 @@ fun BrowserReceiverSheet(
         )
     }
 
+    if (embedded) BackHandler(enabled = pairingRequest != null) { pairingRequest = null }
     pairingRequest?.let { request ->
         BrowserPairingCodeSheet(
             request = request,
+            embedded = embedded,
             onDismiss = { pairingRequest = null },
             onApprove = { code ->
                 val result = browserRepo.approve(request.sessionId, code)
@@ -290,6 +293,7 @@ fun BrowserReceiverSheet(
             session.toTvDevice(browserRepo.lanHostIp(), hostState.port),
         )
         browserRepo.clearActivateSession()
+        onCastHere?.invoke()
     }
 }
 
@@ -451,12 +455,12 @@ fun BrowserPairingCodeSheet(
     request: BrowserPairingRequest,
     onDismiss: () -> Unit,
     onApprove: suspend (String) -> Unit,
+    embedded: Boolean = false,
 ) {
     var code by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
     var remaining by remember(request.expiresAtMs) { mutableStateOf(request.remainingMs) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(request.expiresAtMs) {
@@ -466,7 +470,7 @@ fun BrowserPairingCodeSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    BrowserReceiverFrame(onDismiss, embedded) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -671,5 +675,15 @@ private fun humanizePairError(raw: String?): String {
             "Browser host stopped"
         raw.isNullOrBlank() -> "Couldn't approve"
         else -> raw
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BrowserReceiverFrame(onDismiss: () -> Unit, embedded: Boolean, content: @Composable () -> Unit) {
+    if (embedded) content()
+    else {
+        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state) { content() }
     }
 }
