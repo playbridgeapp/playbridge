@@ -2837,11 +2837,16 @@ class BrowserActivity : ComponentActivity() {
                                     ?.let { tabManager.closeTab(it, store, rememberClosed = false) }
                             }
                             val appTabId = if (existingTab != null) {
+                                val liveSession = store.state.tabs.firstOrNull { it.id == existingTab }
+                                    ?.engineState?.engineSession ?: tabManager.sessions[existingTab]
                                 tabManager.selectTab(existingTab, store)
                                 store.state.tabs.firstOrNull { it.id == existingTab }?.let { tab ->
                                     tab.resetBridgedAppToStart(
                                         app.startUrl,
                                         tab.engineState.engineSession ?: tabManager.sessions[existingTab],
+                                        onReopened = { session ->
+                                            if (session === liveSession) Components.notifyBridgedAppReopened(existingTab, session)
+                                        },
                                     )
                                 }
                                 existingTab

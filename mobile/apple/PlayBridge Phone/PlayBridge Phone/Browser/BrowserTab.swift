@@ -742,6 +742,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             load(URLRequest(url: startURL))
         }
     }
+    func notifyBridgedAppReopened() {
+        guard isBridgedApp, let view = loadedWebView, view.url != nil else { return }
+        view.evaluateJavaScript("window.dispatchEvent(new Event('PlayBridgeAppReopened'));", in: nil, in: .page, completionHandler: nil)
+    }
     func goForward() {
         processRecovery.cancelPendingReload()
         stopElementPicker()

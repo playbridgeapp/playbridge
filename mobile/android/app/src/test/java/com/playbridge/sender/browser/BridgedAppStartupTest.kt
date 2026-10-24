@@ -25,9 +25,11 @@ class BridgedAppStartupTest {
     private class RecordingEngineSession : EngineSession() {
         val historyIndices = mutableListOf<Int>()
         val loadedUrls = mutableListOf<String>()
+        val actions = mutableListOf<String>()
 
         override fun goToHistoryIndex(index: Int) {
             historyIndices += index
+            actions += "history:$index"
         }
 
         override fun loadUrl(
@@ -39,6 +41,7 @@ class BridgedAppStartupTest {
             textDirectiveUserActivation: Boolean,
         ) {
             loadedUrls += url
+            actions += "load:$url"
         }
 
         override val settings: Settings get() = TODO()
@@ -120,7 +123,7 @@ class BridgedAppStartupTest {
     }
 
     @Test
-    fun `reopening at start entry is a no-op`() {
+    fun `reopening a live session at the start signals without navigating`() {
         val session = RecordingEngineSession()
         val tab = TabSessionState(
             id = "app-tab",
@@ -134,7 +137,11 @@ class BridgedAppStartupTest {
             ),
             engineState = EngineState(engineSession = session),
         )
-        assertEquals(BridgedAppResetAction.NONE, tab.resetBridgedAppToStart(app.startUrl))
+        assertEquals(BridgedAppResetAction.NONE, tab.resetBridgedAppToStart(app.startUrl, onReopened = {
+            assertSame(session, it)
+            session.actions += "reopened"
+        }))
+        assertEquals(listOf("reopened"), session.actions)
         assertEquals(emptyList<Int>(), session.historyIndices)
         assertEquals(emptyList<String>(), session.loadedUrls)
     }
@@ -158,7 +165,9 @@ class BridgedAppStartupTest {
             ),
             engineState = EngineState(engineSession = session),
         )
-        assertEquals(BridgedAppResetAction.GO_TO_FIRST_HISTORY_ITEM, tab.resetBridgedAppToStart(app.startUrl))
+        assertEquals(BridgedAppResetAction.GO_TO_FIRST_HISTORY_ITEM, tab.resetBridgedAppToStart(app.startUrl,
+            onReopened = { session.actions += "reopened" }))
+        assertEquals(listOf("history:0", "reopened"), session.actions)
         assertEquals(listOf(0), session.historyIndices)
         assertEquals(emptyList<String>(), session.loadedUrls)
         // Root start URLs without or with trailing slash match root history items.
@@ -170,6 +179,14 @@ class BridgedAppStartupTest {
                 firstHistoryUrl = "https://streams.example/#/discover",
             ),
         )
+    }
+
+    @Test
+    fun `a cold app session does not signal reopening`() {
+        val tab = TabSessionState(id = "app-tab", content = ContentState(url = app.startUrl))
+        var notifications = 0
+        tab.resetBridgedAppToStart(app.startUrl, onReopened = { notifications += 1 })
+        assertEquals(0, notifications)
     }
 
     @Test

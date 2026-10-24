@@ -49,6 +49,7 @@ internal fun bridgedAppResetAction(
 internal fun TabSessionState.resetBridgedAppToStart(
     startUrl: String,
     session: EngineSession? = engineState.engineSession,
+    onReopened: (EngineSession) -> Unit = {},
 ): BridgedAppResetAction {
     val action = bridgedAppResetAction(startUrl)
     when (action) {
@@ -56,6 +57,7 @@ internal fun TabSessionState.resetBridgedAppToStart(
         BridgedAppResetAction.GO_TO_FIRST_HISTORY_ITEM -> session?.goToHistoryIndex(0)
         BridgedAppResetAction.LOAD_START_URL -> session?.loadUrl(startUrl)
     }
+    session?.let(onReopened)
     return action
 }
 

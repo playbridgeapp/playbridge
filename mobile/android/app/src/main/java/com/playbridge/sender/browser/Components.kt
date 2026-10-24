@@ -220,6 +220,22 @@ object Components {
         }
     }
 
+    /** Dashboard tile reopens notify only the installed app's current top-level document. */
+    fun notifyBridgedAppReopened(tabId: String, engineSession: EngineSession) {
+        val origin = nativePluginAppOrigin(tabId) ?: return
+        val tab = store.state.tabs.firstOrNull { it.id == tabId } ?: return
+        if (BridgedAppStore.originFor(tab.content.url) != origin) return
+        val session = tabManager.getGeckoSession(engineSession) ?: return
+        val message = JSONObject().put("type", "app_reopened")
+        detectionPolicyPorts.toMap().forEach { (port, owner) ->
+            if (owner == tabId && port.sender.session === session && port.sender.isTopLevel &&
+                port.sender.url?.let(BridgedAppStore::originFor) == origin &&
+                port.sender.environmentType == GeckoWebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT) {
+                runCatching { port.postMessage(message) }
+            }
+        }
+    }
+
     /** Bind policy to the native session, including child frames, rather than matching URLs. */
     fun bindDetectionPolicy(tabId: String, engineSession: EngineSession) {
         val extension = videoDetectorExtension ?: return

@@ -495,8 +495,10 @@ final class BrowserStore: ObservableObject {
             URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }) {
             tab.startupTiming.begin(at: tappedAt)
             if tab.loadedWebView != nil { tab.startupTiming.mark(.sessionReused) }
+            let wasLive = tab.loadedWebView?.url != nil
             select(tab.id)
             tab.resetToStart(app.startURL)
+            if wasLive { tab.notifyBridgedAppReopened() }
             return tab
         }
         let stale = Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id))

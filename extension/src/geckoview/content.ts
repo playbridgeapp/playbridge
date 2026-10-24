@@ -10,11 +10,13 @@ import { LINKED_PAGE_EVENTS, PAGE_API_PORT, normalizeLinkedPageRelay, validPageR
 import { injectPageScriptWithChannel } from "./page-channel";
 import { isSupportedDomImage } from "./detected-media-kind";
 import { installPluginBridge } from "./plugin-bridge";
+import { installAppLifecycleBridge } from "./app-lifecycle";
 
 let detectionEnabled = false;
 let options = detectionOptions();
 let policyUpdate = 0;
 let videoObserver: MutationObserver | undefined;
+let handleAppLifecycle: (message: unknown) => boolean = () => false;
 
 browser.runtime.onMessage.addListener((message: { type?: string }) => {
   if (message?.type === "detector_same_document_navigation" && options.navigationRescans) scanAll();
@@ -208,6 +210,7 @@ function ensurePolicyRelayPort(): any {
 try {
   const policyPort = browser.runtime.connectNative("detectorPolicy");
   policyPort.onMessage.addListener((policy: unknown) => {
+    if (handleAppLifecycle(policy)) return;
     if (!validDetectionPolicy(policy)) return;
     const update = ++policyUpdate;
     const nextOptions = detectionOptions(policy.options);
@@ -326,6 +329,7 @@ installPageApi();
 
 // Only normal browsing pages with detection enabled receive player probes.
 installPluginBridge();
+handleAppLifecycle = installAppLifecycleBridge();
 
 function injectPlayerProbe(): void {
   if (window.top !== window || (!options.visibilityOverrides && !(options.playerProbes && options.videos))) return;
