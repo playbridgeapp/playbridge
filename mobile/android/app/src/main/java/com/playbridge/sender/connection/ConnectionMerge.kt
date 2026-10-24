@@ -13,6 +13,7 @@ object ConnectionMerge {
      * These have no pairing token — persistence is convenience only.
      */
     const val MAX_EXTERNAL_HISTORY = 3
+    private const val MAX_ENDPOINT_ADDRESSES = 6
     /**
      * Returns [device] with its complete endpoint taken from the live [discovered] list
      * when a match is found (by uuid, then ip/port). Receiver ports and DHCP addresses
@@ -25,7 +26,8 @@ object ConnectionMerge {
             ?: return device
         return device.copy(
             ip = match.ip,
-            addresses = match.addresses,
+            addresses = (listOf(match.ip) + match.addresses + listOf(device.ip) + device.addresses)
+                .filter(String::isNotBlank).distinct().take(MAX_ENDPOINT_ADDRESSES),
             port = match.port,
             name = match.name,
             wssPort = match.wssPort,
@@ -38,6 +40,14 @@ object ConnectionMerge {
     fun isSameDevice(a: TvDevice, b: TvDevice): Boolean =
         a.resolvedProtocol == b.resolvedProtocol &&
             ((a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port))
+
+    /** Refresh saved receiver endpoints in place without changing pairing data or recency. */
+    fun refreshHistoryEndpoints(history: List<TvDevice>, discovered: List<TvDevice>): List<TvDevice> =
+        history.map { device ->
+            if (device.resolvedProtocol == CastProtocol.PLAYBRIDGE && device.uuid.isNotEmpty()) {
+                withDiscoveredEndpoint(device, discovered)
+            } else device
+        }
 
     /**
      * Put [device] at the front of its protocol class while replacing older endpoints

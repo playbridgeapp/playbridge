@@ -39,8 +39,14 @@ class RemoteTVCatalogTest {
         assertFalse(ambiguous.paired || ambiguous.tvReachable)
         assertEquals(2, rows(emptyList(), records = listOf(record,second), tv = listOf(live)).size)
     }
-    @Test fun failedReceiverProbeOverridesStickyPlayBridgeDiscovery() {
-        val rows = RemoteTVCatalog.rows(listOf(a),a,listOf(record),listOf(a),listOf(live),emptySet(),null,setOf("playbridge:a"))
-        assertEquals("TV remote only", rows.single().status)
+    @Test fun discoveryByUuidOverridesAFailedProbeOfTheSavedAddress() {
+        val moved = a.copy(ip = "192.0.2.30", port = 8766, wssPort = 8766, token = "")
+        val rows = RemoteTVCatalog.rows(listOf(a),a,listOf(record),listOf(moved),emptyList(),emptySet(),null,setOf("playbridge:a"))
+        assertTrue(rows.single().receiverReachable)
+        assertEquals(moved.ip, rows.single().device.ip)
+        assertEquals(moved.port, rows.single().device.port)
+        assertEquals(a.token, rows.single().device.token)
+        assertFalse(RemoteTVCatalog.rows(listOf(a),a,listOf(record),emptyList(),emptyList(),emptySet(),null,setOf("playbridge:a"))
+            .single().receiverReachable)
     }
 }

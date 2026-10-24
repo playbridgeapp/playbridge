@@ -49,8 +49,8 @@ internal object RemoteTVCatalog {
             if (match.record != null && !fingerprints.add(match.record.fingerprint)) return@mapNotNull null
             if (match.device != null && match.host != null) device = device.copy(ip = match.host, addresses = listOf(match.host))
             RemoteTVRow(device, match.record != null, ambiguous,
-                target.endpoint.toString() !in receiverOffline &&
-                    (discovered.any { ConnectionMerge.isSameDevice(it, device) } || target.endpoint.toString() in receiverOnline),
+                discovered.any { ConnectionMerge.isSameDevice(it, device) } ||
+                    (target.endpoint.toString() !in receiverOffline && target.endpoint.toString() in receiverOnline),
                 !ambiguous && (match.device != null || connectedTV == target.endpoint.toString()))
         }
     }
