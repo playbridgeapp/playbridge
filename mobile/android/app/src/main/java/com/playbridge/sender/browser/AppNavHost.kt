@@ -362,9 +362,11 @@ fun AppNavHost(
     // Device picker opened from the idle cast bar (rendered once at the host level so
     // it survives screen transitions in the AnimatedContent below).
     var showDevicePicker by remember { mutableStateOf(false) }
+    var devicePickerIsPicking by remember { mutableStateOf(false) }
     val playbackPickerRequest by Components.playbackDevicePicker.requests.collectAsStateWithLifecycle()
     LaunchedEffect(playbackPickerRequest) {
         if (Components.playbackDevicePicker.consume(playbackPickerRequest)) {
+            devicePickerIsPicking = true
             showDevicePicker = true
         }
     }
@@ -392,26 +394,18 @@ fun AppNavHost(
         onScreenChange(Screen.Connection)
     }
     if (showDevicePicker) {
-        DeviceConnectionDialog(
-            onDismiss = { showDevicePicker = false },
-            onOpenAllDevices = {
-                showDevicePicker = false
-                openAllDevicesExpanded()
-            },
+        PlayOnSheet(
+            onDismiss = { showDevicePicker = false; devicePickerIsPicking = false },
+            picking = devicePickerIsPicking,
             showThisDevice = true,
         )
     }
     if (linkedPickerVisible) {
-        DeviceConnectionDialog(
+        PlayOnSheet(
             onDismiss = {
                 linkedPickerVisible = false
                 if (!linkedPickerCompleted) Components.onLinkedDevicePickerDismissed?.invoke()
                 linkedPickerCompleted = false
-            },
-            onOpenAllDevices = {
-                linkedPickerVisible = false
-                Components.onLinkedDevicePickerDismissed?.invoke()
-                openAllDevicesExpanded()
             },
             showThisDevice = false,
             playBridgeOnly = true,
@@ -1137,7 +1131,7 @@ fun AppNavHost(
                             }
                         },
                         tvName = tvDevice?.name,
-                        onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
+                        onOpenConnectionScreen = { showDevicePicker = true },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (
                             activeExternalDevice != null || remoteTV?.paired == true ||
@@ -1188,7 +1182,7 @@ fun AppNavHost(
                             if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
                         },
                         onDominantColorChange = { libraryDetailAccent = it },
-                        onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
+                        onOpenConnectionScreen = { showDevicePicker = true },
                         onPlayTrailer = { trailerUrl ->
                             onCastSheetInitialModeChange("browse")
                             onCastSheetBrowseOverrideChange(trailerUrl)
@@ -1637,7 +1631,7 @@ fun AppNavHost(
                         connectedDeviceName = if (externalSelected) activeExternalDevice?.name else tvDevice?.name,
                         remoteSubtitle = remoteTV?.let { "${it.device.name} · ${it.status}" } ?: "Control your TV",
                         onNavigate = { screen ->
-                            onScreenChange(screen)
+                            if (screen == Screen.Connection) showDevicePicker = true else onScreenChange(screen)
                         },
                         onExit = onFullExit,
                         onClose = onDashboardClose,

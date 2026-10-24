@@ -65,7 +65,7 @@ import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.playbridge.sender.cast.CastSessionManager
-import com.playbridge.sender.cast.DeviceConnectionDialog
+import com.playbridge.sender.cast.PlayOnSheet
 import com.playbridge.sender.cast.MediaKind
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
@@ -350,12 +350,8 @@ fun DownloadsScreen(
     }
 
     castPickerFor?.let { item ->
-        DeviceConnectionDialog(
+        PlayOnSheet(
             onDismiss = { castPickerFor = null },
-            onOpenAllDevices = {
-                castPickerFor = null
-                onOpenAllDevices()
-            },
             showThisDevice = true,
             onPickedThisDevice = {
                 castPickerFor = null

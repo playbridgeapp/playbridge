@@ -112,6 +112,8 @@ fun CastSheet(
     val context = LocalContext.current
     val streamProxySettings = remember { StreamProxySettingsStore.load(context) }
     val streamRouteService = remember { StreamRouteService(context.applicationContext) }
+    var showPlayOn by remember { mutableStateOf(false) }
+    if (showPlayOn) PlayOnSheet(onDismiss = { showPlayOn = false })
     val castProtocol = selectedTvDevice?.resolvedProtocol ?: CastProtocol.PLAYBRIDGE
     val isBrowserDestination = castProtocol == CastProtocol.WEB_BROWSER
     var routeMode by remember(castProtocol) {
@@ -796,18 +798,11 @@ fun CastSheet(
                         )
                     }
 
-                    // Destination indicator: shows where we're casting and reports it on tap.
+                    // Destination control keeps the selected media while choosing where to play.
                     // "This device" (phone) gets a phone icon; any remote target gets a TV icon.
                     val isThisDevice = selectedTvDevice == null
                     val currentTarget = selectedTvDevice?.name
-                    IconButton(onClick = {
-                        Toast.makeText(
-                            context,
-                            if (isThisDevice) "Connected to this device"
-                            else "Connected to $currentTarget",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }) {
+                    IconButton(onClick = { showPlayOn = true }) {
                         Icon(
                             imageVector = if (isThisDevice) Icons.Default.Smartphone
                             else Icons.Default.Tv,
