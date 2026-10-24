@@ -4,6 +4,7 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.model.CastProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConnectionMergeTest {
@@ -81,6 +82,34 @@ class ConnectionMergeTest {
         assertEquals(listOf("192.0.2.20", "192.0.2.21", "192.0.2.10", "192.0.2.11"), merged.addresses)
         assertEquals(8766, merged.port)
         assertEquals(8766, merged.wssPort)
+    }
+
+    @Test
+    fun repeatedNetworkChangesKeepOnlySixPreferredAddresses() {
+        val original = dev("192.0.2.1", 8765, uuid = "receiver", token = "fixture-token", cert = "fixture-pin")
+            .copy(lastConnected = 123L)
+        var saved = original
+        for (network in 2..12) {
+            val live = dev("192.0.2.$network", 8766, uuid = saved.uuid, wssPort = 8766)
+                .copy(addresses = listOf("192.0.2.$network", "2001:db8::$network"))
+            saved = ConnectionMerge.withDiscoveredEndpoint(saved, listOf(live))
+            assertEquals(live.addresses, saved.addresses.take(2))
+            assertTrue(saved.addresses.size <= 6)
+        }
+        assertEquals(6, saved.addresses.size)
+        assertTrue(original.ip !in saved.addresses)
+        assertEquals(original.token, saved.token)
+        assertEquals(original.certFingerprint, saved.certFingerprint)
+        assertEquals(original.lastConnected, saved.lastConnected)
+    }
+
+    @Test
+    fun aLargeLiveAddressListIsDeduplicatedAndCappedBeforeSavedFallbacks() {
+        val saved = dev("192.0.2.1", 8765, uuid = "receiver")
+        val addresses = (2..10).map { "192.0.2.$it" }
+        val live = saved.copy(ip = addresses.first(), addresses = listOf("", addresses.first()) + addresses)
+        val merged = ConnectionMerge.withDiscoveredEndpoint(saved, listOf(live))
+        assertEquals(addresses.take(6), merged.addresses)
     }
 
     @Test
