@@ -7,7 +7,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     dial::DialDevice,
     native_discovery,
-    ssdp::{DiscoveryConfig as SsdpConfig, DiscoveryHit, DiscoveryProtocol, DiscoverySession},
+    ssdp::{
+        DiscoveryConfig as SsdpConfig, DiscoveryHit, DiscoveryProtocol, DiscoverySession, SeenHits,
+    },
     upnp::Renderer,
 };
 
@@ -410,7 +412,7 @@ async fn discover_ssdp(
         events: &events,
         cancellation: &cancellation,
         deadline: tokio::time::Instant::now() + timeout,
-        seen: HashSet::new(),
+        seen: SeenHits::default(),
     };
     loop {
         tokio::select! {
@@ -459,7 +461,7 @@ struct SsdpEmitter<'a> {
     events: &'a mpsc::Sender<DiscoveryEvent>,
     cancellation: &'a CancellationToken,
     deadline: tokio::time::Instant,
-    seen: HashSet<(DiscoveryProtocol, String)>,
+    seen: SeenHits,
 }
 
 impl SsdpEmitter<'_> {
@@ -474,11 +476,11 @@ impl SsdpEmitter<'_> {
             return;
         }
         let enrich_timeout = self.enrich_timeout.min(remaining);
-        let uuid = hit.device_usn().map(str::to_owned);
-        let stable = uuid.as_deref().unwrap_or(&hit.location).to_owned();
-        if !self.seen.insert((hit.protocol, stable.clone())) {
+        if !self.seen.insert(&hit) {
             return;
         }
+        let uuid = hit.device_usn().map(str::to_owned);
+        let stable = uuid.as_deref().unwrap_or(&hit.location).to_owned();
         match hit.protocol {
             DiscoveryProtocol::Dlna if self.wants_dlna => {
                 let receiver = Receiver {
@@ -653,7 +655,7 @@ mod tests {
             events: &events,
             cancellation: &cancellation,
             deadline: tokio::time::Instant::now() + Duration::from_secs(10),
-            seen: HashSet::new(),
+            seen: SeenHits::default(),
         };
         let location = format!("{}/device.xml", server.uri());
         for (index, usn) in usns.iter().enumerate() {
@@ -739,14 +741,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn distinct_uuids_at_the_same_ip_and_location_both_emit() {
+    async fn different_uuids_at_the_same_location_emit_and_enrich_once() {
+        let (_, events) = ssdp_events(
+            DiscoveryProtocol::Dlna,
+            &[
+                Some("uuid:root::upnp:rootdevice"),
+                Some("uuid:renderer::urn:schemas-upnp-org:device:MediaRenderer:1"),
+            ],
+            false,
+            1,
+        )
+        .await;
+        let ids: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                DiscoveryEvent::Found(receiver) => Some(receiver.id.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["dlna:uuid:root"]);
+    }
+
+    #[tokio::test]
+    async fn different_uuids_at_the_same_ip_with_different_locations_both_emit() {
         let (_, events) = ssdp_events(
             DiscoveryProtocol::Dlna,
             &[
                 Some("uuid:first::upnp:rootdevice"),
                 Some("uuid:second::upnp:rootdevice"),
             ],
-            false,
+            true,
             2,
         )
         .await;
