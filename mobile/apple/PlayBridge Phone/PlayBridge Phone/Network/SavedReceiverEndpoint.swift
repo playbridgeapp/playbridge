@@ -3,13 +3,16 @@ import Foundation
 /// Discovery updates routing information, never the saved receiver's identity or trust.
 enum SavedReceiverEndpoint {
     static func refresh(_ saved: PairedDevice, from devices: [DiscoveredDevice]) -> PairedDevice {
-        guard let live = devices.first(where: { sameIdentity(saved, $0) && valid($0) }) else { return saved }
+        // Only a saved receiver that already has an id, matched by that id.
+        // Address matching belongs to isLive: a uuid-less record must not take
+        // the name of whoever currently answers at its address.
+        guard !saved.uuid.isEmpty,
+              let live = devices.first(where: { $0.uuid == saved.uuid && valid($0) }) else { return saved }
         var updated = saved
         updated.ip = live.ip
         updated.port = live.port
         if !live.name.isEmpty { updated.name = live.name }
         // A partial/legacy advertisement must not downgrade a pinned WSS receiver.
-        // Identity stays on the saved record: a uuid-less advertiser must not replace it.
         updated.wssPort = live.wssPort ?? saved.wssPort
         return updated
     }

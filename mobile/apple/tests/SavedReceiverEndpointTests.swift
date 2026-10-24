@@ -42,10 +42,15 @@ import Foundation
         var unnamedAtSaved = occupant
         unnamedAtSaved.uuid = ""
         precondition(SavedReceiverEndpoint.sameIdentity(saved, unnamedAtSaved), "address matches when one side has no id")
-        let adopted = SavedReceiverEndpoint.refresh(saved, from: [unnamedAtSaved])
-        precondition(adopted.name == unnamedAtSaved.name && adopted.uuid == saved.uuid && adopted.token == saved.token,
-                     "an id-less advertiser can refresh the endpoint without taking the saved id")
+        precondition(SavedReceiverEndpoint.refresh(saved, from: [unnamedAtSaved]) == saved,
+                     "an id-less advertiser does not rename or move the saved receiver")
         precondition(SavedReceiverEndpoint.isLive(saved, in: [unnamedAtSaved]))
+        let strangerAtLegacy = DiscoveredDevice(ip: legacy.ip, port: legacy.port, name: "MacBook Pro.local", uuid: "mac-uuid")
+        precondition(SavedReceiverEndpoint.refresh(legacy, from: [strangerAtLegacy]) == legacy,
+                     "a saved receiver with no id keeps its name when another receiver sits at its address")
+        precondition(SavedReceiverEndpoint.refreshHistory([legacy], from: [strangerAtLegacy]) == [legacy])
+        precondition(SavedReceiverEndpoint.isLive(legacy, in: [strangerAtLegacy]),
+                     "reachability still matches a uuid-less saved receiver by address")
         let portOnly = DiscoveredDevice(ip: saved.ip, port: saved.port + 1, name: unnamedAtSaved.name, uuid: "")
         precondition(!SavedReceiverEndpoint.sameIdentity(saved, portOnly))
         var first = saved
