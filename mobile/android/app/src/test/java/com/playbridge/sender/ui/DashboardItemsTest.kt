@@ -129,8 +129,9 @@ class DashboardItemsTest {
         val scope = object : SaverScope {
             override fun canBeSaved(value: Any): Boolean = true
         }
-        for (item in dashboardItems().filter { it.app == null }) {
-            val saved = with(Screen.Saver) { scope.save(item.screen) }
+        // The Play on tile opens a sheet rather than a screen, so it has nothing to restore.
+        for (item in dashboardItems().filter { it.app == null && it.screen != null }) {
+            val saved = with(Screen.Saver) { scope.save(requireNotNull(item.screen)) }
             assertTrue("Missing saved destination for ${item.id}", saved != null)
             assertEquals(item.screen, Screen.Saver.restore(requireNotNull(saved)))
         }

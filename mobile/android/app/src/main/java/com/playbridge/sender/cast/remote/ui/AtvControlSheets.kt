@@ -99,12 +99,14 @@ internal fun AtvPairingContent(
     onSubmit: (String) -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    embedded: Boolean = false,
 ) {
     var code by remember { mutableStateOf("") }
     var invalid by remember { mutableStateOf(false) }
     val fieldInView = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())
+    Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding()
+        .then(if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState()))
         .padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Full control", style = MaterialTheme.typography.titleMedium)
         Text("Lets PlayBridge work like your TV remote: any app, Home, typing.")

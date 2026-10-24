@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,6 +77,8 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 
+internal val LocalPlayOnRemoteVisible = staticCompositionLocalOf { false }
+
 internal val LocalPlayOnRemote = staticCompositionLocalOf<(() -> Unit)?> { null }
 
 /** Avoid stacking a second sheet when pairing starts from an already open picker. */
@@ -83,7 +86,7 @@ internal object PlayOnSheetPresence {
     var count by mutableIntStateOf(0)
 }
 
-internal enum class PlayOnPage { Devices, Pair, Add, Manual, Actions, Configure, Browser }
+internal enum class PlayOnPage { Devices, Pair, Add, Manual, Actions, Configure, Browser, Roku, Dlna, FullRemote }
 
 internal fun WebSocketClient.ConnectionState.needsPairingPage(): Boolean =
     this is WebSocketClient.ConnectionState.WaitingForCodeInput ||
@@ -122,8 +125,8 @@ fun PlayOnSheet(
     val diagnostics: CastAttemptDiagnostics = koinInject()
     val attempts by diagnostics.attempts.collectAsState()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val openRemote = LocalPlayOnRemote.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     var page by remember { mutableStateOf(if (startPairing) PlayOnPage.Pair else PlayOnPage.Devices) }
     var managed by remember { mutableStateOf<PlayOnDevice?>(null) }
     var unavailableExpanded by remember { mutableStateOf(false) }
@@ -169,7 +172,11 @@ fun PlayOnSheet(
     }
     fun back() {
         cancelPairing()
-        page = if (page == PlayOnPage.Manual || page == PlayOnPage.Browser) PlayOnPage.Add else PlayOnPage.Devices
+        page = when (page) {
+            PlayOnPage.Manual, PlayOnPage.Browser, PlayOnPage.Roku, PlayOnPage.Dlna -> PlayOnPage.Add
+            PlayOnPage.FullRemote -> PlayOnPage.Actions
+            else -> PlayOnPage.Devices
+        }
     }
     fun pick(device: TvDevice) {
         val target = ConnectionMerge.withDiscoveredEndpoint(device, discovered)
@@ -208,6 +215,13 @@ fun PlayOnSheet(
         if (external?.let { ConnectionMerge.isSameDevice(it, pending) } == true &&
             googleCastPickerConnectionComplete(castState.phase)) { pendingGoogle = null; finish(pending) }
     }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false, confirmValueChange = { next ->
+        if (next == SheetValue.Hidden && page != PlayOnPage.Devices) {
+            back()
+            false
+        } else true
+    })
+    LaunchedEffect(page) { if (page != PlayOnPage.Devices) sheetState.expand() }
     ModalBottomSheet(onDismissRequest = { if (page != PlayOnPage.Devices) back() else dismiss() }, sheetState = sheetState) {
         BackHandler(enabled = page != PlayOnPage.Devices) { back() }
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
@@ -222,6 +236,9 @@ fun PlayOnSheet(
                         PlayOnPage.Actions -> managed?.device?.name ?: "Device"
                         PlayOnPage.Configure -> "Configure TV"
                         PlayOnPage.Browser -> "Browser on a TV"
+                        PlayOnPage.Roku -> "Roku by IP address"
+                        PlayOnPage.Dlna -> "DLNA device by URL"
+                        PlayOnPage.FullRemote -> "Full TV remote"
                     }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     if (page == PlayOnPage.Devices) Text(if (network.onLocalNetwork) "Wi-Fi" else "Mobile data",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -294,24 +311,53 @@ fun PlayOnSheet(
                             Text("TVs on your Wi-Fi show up automatically under Nearby. Use these when one doesn’t.")
                             if (!playBridgeOnly) PlayOnRow("Browser on a TV", "Any smart TV with a web browser — no app needed", onClick = { page = PlayOnPage.Browser })
                             PlayOnRow("PlayBridge TV by IP address", "When discovery is blocked", onClick = { page = PlayOnPage.Manual })
+                            if (!playBridgeOnly) {
+                                PlayOnRow("Roku by IP address", "Find it under Settings › Network on the Roku", onClick = { page = PlayOnPage.Roku })
+                                PlayOnRow("DLNA device by URL", "Paste its description URL", onClick = { page = PlayOnPage.Dlna })
+                            }
                             PlayOnTip("If a TV won’t show up", "1. Open PlayBridge on the TV and leave it on the home screen.\n2. Put the phone and TV on the same Wi-Fi (guest networks often block devices).\n3. Turn off VPN on this phone.")
                             TextButton(onClick = {
                                 val attempt = diagnostics.latestFailed() ?: attempts.firstOrNull()
                                 if (attempt != null) shareCastAttempt(context, diagnostics.report(attempt)) else notice = "No connection diagnostics yet. Try connecting to a TV first."
                             }) { Text("Share connection diagnostics") }
                         }
-                        PlayOnPage.Manual -> PlayOnManual { ip, port ->
-                            val known = history.firstOrNull { it.resolvedProtocol == CastProtocol.PLAYBRIDGE && it.ip == ip && it.port == port }
-                            pick(known ?: TvDevice(ip, port, "", "Manual TV"))
-                        }
+                        PlayOnPage.Manual, PlayOnPage.Roku, PlayOnPage.Dlna -> PlayOnManual(
+                            protocol = when (currentPage) {
+                                PlayOnPage.Roku -> CastProtocol.ROKU
+                                PlayOnPage.Dlna -> CastProtocol.DLNA
+                                else -> CastProtocol.PLAYBRIDGE
+                            },
+                            connect = { device ->
+                                val known = history.firstOrNull { ConnectionMerge.isSameDevice(it, device) }
+                                pick(known ?: device)
+                            },
+                        )
                         PlayOnPage.Actions -> managed?.let { row ->
                             Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}", style = MaterialTheme.typography.bodySmall)
                             PlayOnRow("Play on this TV", "Select ${row.device.name}", onClick = { pick(row.device) })
-                            if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE && openRemote != null) PlayOnRow("Full TV remote",
-                                if (row.remotePaired) "Paired" else "Set up · Power, volume and apps", onClick = { viewModel.connect(row.device); onDismiss(); openRemote() })
-                            TextButton(onClick = { row.saved?.let(viewModel::removeDeviceFromHistory); page = PlayOnPage.Devices }, enabled = row.saved != null) {
+                            val supportsFullRemote = row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
+                                (row.remotePaired || "exo" in row.device.players || remoteRows.any {
+                                    ConnectionMerge.isSameDevice(it.device, row.device) && it.tvReachable
+                                })
+                            if (supportsFullRemote) PlayOnRow("Full TV remote",
+                                if (row.remotePaired) "Paired" else "Set up · Power, volume and apps", onClick = {
+                                    viewModel.selectNativeRemote(row.device)
+                                    if (row.remotePaired && openRemote != null) { onDismiss(); openRemote() }
+                                    else page = PlayOnPage.FullRemote
+                                })
+                            TextButton(onClick = {
+                                scope.launch {
+                                    val removed = viewModel.forgetPlayOnDevice(row.device)
+                                    if (removed) page = PlayOnPage.Devices
+                                    else notice = "Couldn’t forget the TV. Try again."
+                                }
+                            }) {
                                 Text("Forget this ${if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"}", color = MaterialTheme.colorScheme.error)
                             }
+                        }
+                        PlayOnPage.FullRemote -> managed?.let { row ->
+                            PlayOnFullRemote(row.device, onCancel = { page = PlayOnPage.Actions },
+                                onPaired = { page = PlayOnPage.Devices })
                         }
                         PlayOnPage.Configure -> PlayOnConfigure(tv, enabled = connected && nativeSelected && external == null)
                         PlayOnPage.Browser -> BrowserReceiverSheet(viewModel, embedded = true,
@@ -385,19 +431,24 @@ private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, 
 }
 
 @Composable
-private fun PlayOnManual(connect: (String, Int) -> Unit) {
-    var ip by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString()) }
-    OutlinedTextField(ip, { ip = it.trim() }, label = { Text("IP address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port") }, singleLine = true,
+private fun PlayOnManual(protocol: CastProtocol, connect: (TvDevice) -> Unit) {
+    var address by remember(protocol) { mutableStateOf("") }
+    var port by remember(protocol) { mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString()) }
+    val device = manualPlayOnDevice(protocol, address, port.toIntOrNull())
+    OutlinedTextField(address, { address = it.trim() },
+        label = { Text(if (protocol == CastProtocol.DLNA) "Description URL" else "IP address") },
+        singleLine = true, modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = if (protocol == CastProtocol.DLNA) KeyboardType.Uri else KeyboardType.Ascii))
+    if (protocol == CastProtocol.PLAYBRIDGE) OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) },
+        label = { Text("Port") }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-    Button(onClick = { connect(ip, port.toInt()) }, enabled = ip.isNotBlank() && port.toIntOrNull() in 1..65535,
-        modifier = Modifier.fillMaxWidth()) { Text("Connect") }
+    Button(onClick = { device?.let(connect) }, enabled = device != null, modifier = Modifier.fillMaxWidth()) { Text("Connect") }
 }
 
 @Composable
 private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
     val settings: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
+    val controllers: com.playbridge.sender.cast.remote.RemoteControllerRegistry = koinInject()
     val mode by settings.tvPlayerMode.collectAsState(initial = "tv")
     val scope = rememberCoroutineScope()
     Text("${device?.name ?: "TV"} · ${if (enabled) "Connected" else "Disconnected"}")
@@ -411,7 +462,15 @@ private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
             "mpv" -> "Plays more formats and subtitle styles"
             else -> "Use the TV’s ${if (id == "tv") "default player" else label}"
         }) }, leadingContent = { RadioButton(selected == id, onClick = null, enabled = enabled) },
-            modifier = Modifier.clickable(enabled = enabled) { scope.launch { settings.setTvPlayerMode(id) } })
+            modifier = Modifier.clickable(enabled = enabled) {
+                scope.launch {
+                    settings.setTvPlayerMode(id)
+                    val controller = controllers.controller.value
+                    if (id != TvCapabilityOptions.TV_DEFAULT && controller?.sessionId?.endpoint == device?.endpointKey) {
+                        controller?.execute(com.playbridge.sender.cast.remote.RemoteAction.SwitchEngine(id))
+                    }
+                }
+            })
     }
     Text("Changes apply on the TV right away.", style = MaterialTheme.typography.bodySmall)
 }

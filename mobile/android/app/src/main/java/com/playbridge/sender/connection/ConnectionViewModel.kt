@@ -354,6 +354,27 @@ class ConnectionViewModel(
         }
     }
 
+    /** Select the TV for its independent remote without starting PlayBridge pairing. */
+    fun selectNativeRemote(device: TvDevice) {
+        val target = ConnectionMerge.withDiscoveredEndpoint(device, discoveryRepository.devices.value)
+        if (castSessionManager.remoteDevice.value?.endpointKey != target.endpointKey) webSocketClient.disconnect()
+        castSessionManager.selectNativeDevice(target)
+    }
+
+    suspend fun forgetPlayOnDevice(device: TvDevice): Boolean {
+        if (device.resolvedProtocol == CastProtocol.PLAYBRIDGE) {
+            val credentials = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.cast.atv.AtvCredentialStore>()
+            try {
+                credentials.records.value.filter { device.endpointKey.toString() in it.receiverIds }
+                    .forEach { credentials.forget(it.fingerprint) }
+            } catch (_: Exception) { return false }
+        }
+        connectionStore.removeFromHistory(device)
+        val saved = connectionStore.tvDevice.first()
+        if (saved != null && ConnectionMerge.isSameDevice(saved, device)) connectionStore.clearTvDevice()
+        return true
+    }
+
     suspend fun prepareIndependentRemote(onPickRequired: () -> Unit) {
         val revision = castSessionManager.selectionRevision
         val selected = castSessionManager.remoteDevice.value

@@ -2399,7 +2399,7 @@ class BrowserActivity : ComponentActivity() {
                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                 }
                 currentScreen = Screen.Remote
-            }) {
+            }, LocalPlayOnRemoteVisible provides (currentScreen == Screen.Remote)) {
             PlayBridgeTheme {
                 // Bridged Apps and chrome-hidden browsing hide this bar. The engine then
                 // takes the keyboard inset itself (see browserBottomSpace).
