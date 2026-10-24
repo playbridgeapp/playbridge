@@ -4,6 +4,7 @@ import androidx.compose.runtime.saveable.SaverScope
 import com.playbridge.sender.FlavorConfig
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
+import com.playbridge.sender.cast.PlayOnStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,7 +15,7 @@ class DashboardItemsTest {
         Screen.Remote to "remote",
         Screen.Browser to "browser",
         Screen.Library to "library",
-        Screen.Connection to "connection",
+        null to "connection",
         Screen.ScreenMirror to "screen-mirror",
         Screen.PhoneFiles to "phone-files",
         Screen.DebridLibrary to "debrid",
@@ -24,11 +25,11 @@ class DashboardItemsTest {
     )
 
     @Test
-    fun `every production built-in constructs with its stable ID in both connection states and flavors`() {
+    fun `every production built-in constructs with its stable ID in all Play on states and flavors`() {
         for (debridSupported in listOf(false, true)) {
-            for (connected in listOf(false, true)) {
+            for (state in PlayOnStatus.State.entries) {
                 // Exercise the real DashboardItem constructors used on launch, not a parallel fixture.
-                val items = dashboardItems(isConnected = connected, debridSupported = debridSupported)
+                val items = dashboardItems(playOnStatus = PlayOnStatus(state), debridSupported = debridSupported)
                 val builtIns = items.filter { it.id != "bridged-apps" }
                 val expected = builtInIds.filterKeys { debridSupported || it != Screen.DebridLibrary }
                 assertEquals(expected, builtIns.associate { it.screen to it.id })
@@ -42,7 +43,7 @@ class DashboardItemsTest {
     fun `Remote stays visible while disconnected and uses the selected TV subtitle`() {
         for (debridSupported in listOf(false, true)) {
             val items = dashboardItems(
-                isConnected = false,
+                playOnStatus = PlayOnStatus(),
                 remoteSubtitle = "Living Room · TV remote only",
                 debridSupported = debridSupported,
             )
@@ -50,10 +51,21 @@ class DashboardItemsTest {
             assertEquals("remote", remote.id)
             assertEquals("Remote", remote.title)
             assertEquals("Living Room · TV remote only", remote.subtitle)
-            assertEquals("Not connected", items.single { it.screen == Screen.Connection }.subtitle)
+            assertEquals("Not connected", items.single { it.id == "connection" }.subtitle)
             assertEquals(debridSupported, items.any { it.screen == Screen.DebridLibrary })
         }
         assertEquals("Control your TV", dashboardItems().single { it.id == "remote" }.subtitle)
+    }
+
+    @Test
+    fun `Play on tile shows standing by with the connected identity color`() {
+        val connected = dashboardItems(playOnStatus = PlayOnStatus(PlayOnStatus.State.PLAYING_ON))
+            .single { it.id == "connection" }
+        val standby = dashboardItems(playOnStatus = PlayOnStatus(PlayOnStatus.State.STANDING_BY))
+            .single { it.id == "connection" }
+        assertEquals("Connected", connected.subtitle)
+        assertEquals("Standing by", standby.subtitle)
+        assertEquals(connected.gradientColors, standby.gradientColors)
     }
 
     @Test
@@ -129,8 +141,9 @@ class DashboardItemsTest {
         val scope = object : SaverScope {
             override fun canBeSaved(value: Any): Boolean = true
         }
-        for (item in dashboardItems().filter { it.app == null }) {
-            val saved = with(Screen.Saver) { scope.save(item.screen) }
+        // The Play on tile opens a sheet rather than a screen, so it has nothing to restore.
+        for (item in dashboardItems().filter { it.app == null && it.screen != null }) {
+            val saved = with(Screen.Saver) { scope.save(requireNotNull(item.screen)) }
             assertTrue("Missing saved destination for ${item.id}", saved != null)
             assertEquals(item.screen, Screen.Saver.restore(requireNotNull(saved)))
         }

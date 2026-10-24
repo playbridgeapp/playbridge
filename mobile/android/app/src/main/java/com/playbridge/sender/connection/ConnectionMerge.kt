@@ -21,8 +21,8 @@ object ConnectionMerge {
      */
     fun withDiscoveredEndpoint(device: TvDevice, discovered: List<TvDevice>): TvDevice {
         val sameProtocol = discovered.filter { it.resolvedProtocol == device.resolvedProtocol }
-        val match = (if (device.uuid.isNotEmpty()) sameProtocol.find { it.uuid == device.uuid } else null)
-            ?: sameProtocol.find { it.ip == device.ip && it.port == device.port }
+        val match = (if (device.uuid.isNotEmpty()) sameProtocol.find { sameId(it.uuid, device.uuid) } else null)
+            ?: sameProtocol.find { it.ip == device.ip && it.port == device.port && !hasOtherId(device, it) }
             ?: return device
         return device.copy(
             ip = match.ip,
@@ -36,10 +36,24 @@ object ConnectionMerge {
         )
     }
 
-    /** Same protocol endpoint: stable ID match when known, else protocol + ip/port. */
+    /**
+     * Same protocol endpoint: stable ID match when known, else protocol + ip/port.
+     * Two different IDs never match, even at the same address (DHCP can hand one
+     * receiver's old IP to another).
+     */
     fun isSameDevice(a: TvDevice, b: TvDevice): Boolean =
         a.resolvedProtocol == b.resolvedProtocol &&
-            ((a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port))
+            ((a.uuid.isNotEmpty() && sameId(a.uuid, b.uuid)) || (a.ip == b.ip && a.port == b.port && !hasOtherId(a, b)))
+
+    /** Both endpoints advertise an ID and the IDs differ. */
+    fun hasOtherId(a: TvDevice, b: TvDevice): Boolean =
+        a.uuid.isNotEmpty() && b.uuid.isNotEmpty() && !sameId(a.uuid, b.uuid)
+
+    /**
+     * UPnP devices answer each search target with its own USN ("uuid:X::upnp:rootdevice",
+     * "uuid:X::urn:…:MediaRenderer:1"); they are one device, so compare the "uuid:X" part.
+     */
+    private fun sameId(a: String, b: String): Boolean = a.substringBefore("::") == b.substringBefore("::")
 
     /** Refresh saved receiver endpoints in place without changing pairing data or recency. */
     fun refreshHistoryEndpoints(history: List<TvDevice>, discovered: List<TvDevice>): List<TvDevice> =

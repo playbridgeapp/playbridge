@@ -77,7 +77,7 @@ class RemoteReturnTargetTest {
     fun `dashboard close returns to main places but not to screens opened from it`() {
         listOf(Screen.Browser, Screen.Library, Screen.DebridLibrary, Screen.LibraryDetail("tt1", "movie"))
             .forEach { assertEquals(true, isDashboardReturnPlace(it)) }
-        listOf(Screen.Settings, Screen.PhoneFiles, Screen.Connection, Screen.Remote, Screen.Dashboard)
+        listOf(Screen.Settings, Screen.PhoneFiles, Screen.Remote, Screen.Dashboard)
             .forEach { assertEquals(false, isDashboardReturnPlace(it)) }
     }
 }

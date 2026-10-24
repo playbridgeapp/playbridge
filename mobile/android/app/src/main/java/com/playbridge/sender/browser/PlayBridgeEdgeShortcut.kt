@@ -169,7 +169,7 @@ internal fun PlayBridgeEdgeShortcut(
                 )
                 DropdownMenuItem(
                     colors = menuItemColors,
-                    text = { Text("Connect TV") },
+                    text = { Text("Play on") },
                     leadingIcon = { Icon(Icons.Default.Cast, null, Modifier.size(18.dp)) },
                     onClick = { expanded = false; onDevices() },
                 )

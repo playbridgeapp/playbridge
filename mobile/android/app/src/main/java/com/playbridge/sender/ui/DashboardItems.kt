@@ -16,13 +16,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.playbridge.sender.FlavorConfig
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
+import com.playbridge.sender.cast.PlayOnStatus
 
 internal fun dashboardPageCount(bridgedApps: List<BridgedApp>): Int =
     DashboardTileOrder.pageCount(dashboardItems(bridgedApps = bridgedApps).size)
 
 /** Shared by the dashboard, its pager and JVM constructor regression tests. */
 internal fun dashboardItems(
-    isConnected: Boolean = false,
+    playOnStatus: PlayOnStatus = PlayOnStatus(),
     remoteSubtitle: String = "Control your TV",
     bridgedApps: List<BridgedApp> = emptyList(),
     debridSupported: Boolean = FlavorConfig.DEBRID_SUPPORTED,
@@ -51,10 +52,11 @@ internal fun dashboardItems(
         ),
         DashboardItem(
             icon = Icons.Default.Tv,
-            title = "Connection",
-            subtitle = if (isConnected) "Connected" else "Not connected",
-            screen = Screen.Connection,
-            gradientColors = if (isConnected)
+            title = "Play on",
+            subtitle = playOnStatus.tileSubtitle,
+            screen = null,
+            id = "connection", // Preserve the saved dashboard tile order.
+            gradientColors = if (playOnStatus.isConnected)
                 listOf(Color(0xFF2E7D32), Color(0xFF43A047))
             else
                 listOf(Color(0xFF424242), Color(0xFF616161))
@@ -133,13 +135,12 @@ internal data class DashboardItem(
     val icon: ImageVector,
     val title: String,
     val subtitle: String,
-    val screen: Screen,
+    val screen: Screen?,
     val gradientColors: List<Color>,
     val id: String = when (screen) {
         Screen.Remote -> "remote"
         Screen.Browser -> "browser"
         Screen.Library -> "library"
-        Screen.Connection -> "connection"
         Screen.ScreenMirror -> "screen-mirror"
         Screen.PhoneFiles -> "phone-files"
         Screen.DebridLibrary -> "debrid"

@@ -87,17 +87,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.playbridge.sender.R
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.UblockSetupStatus
+import com.playbridge.sender.cast.PlayOnStatus
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DashboardScreen(
+internal fun DashboardScreen(
     pagerState: PagerState,
     currentScreen: Screen,
-    isConnected: Boolean,
-    isSecure: Boolean,
-    connectedDeviceName: String?,
+    playOnStatus: PlayOnStatus,
     remoteSubtitle: String = "Control your TV",
     onNavigate: (Screen) -> Unit,
     onExit: () -> Unit = {},
@@ -106,6 +105,7 @@ fun DashboardScreen(
     onClose: () -> Unit = { onNavigate(currentScreen) },
     /** Global Settings entry (top-right gear). Defaults to [Screen.Settings]. */
     onSettings: () -> Unit = { onNavigate(Screen.Settings) },
+    onPlayOn: () -> Unit = {},
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
@@ -146,7 +146,7 @@ fun DashboardScreen(
             (0 until array.length()).map { array.getString(it) }
         }.getOrDefault(emptyList()))
     }
-    val availableItems = dashboardItems(isConnected, remoteSubtitle, bridgedApps)
+    val availableItems = dashboardItems(playOnStatus, remoteSubtitle, bridgedApps)
     val availableIds = availableItems.map { it.id }
     val orderedIds = remember(savedOrder, availableIds) {
         if (!onboardingPrefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
@@ -336,21 +336,16 @@ fun DashboardScreen(
                 label = "statusAlpha"
             )
 
-            val displayDeviceName = connectedDeviceName?.let {
-                if (it.length > 18) it.take(15) + "..." else it
-            } ?: "TV"
-
-            // Green when connected over wss, amber when connected over plain ws.
-            val accent = if (isSecure) Color(0xFF4CAF50) else Color(0xFFFFA000)
+            val accent = if (playOnStatus.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = if (isConnected)
+                color = if (playOnStatus.isPlayingOn)
                     accent.copy(alpha = 0.15f)
                 else
                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                 border = BorderStroke(
                     1.dp,
-                    if (isConnected) accent.copy(alpha = 0.3f)
+                    if (playOnStatus.isPlayingOn) accent.copy(alpha = 0.3f)
                     else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
                 ),
                 modifier = Modifier
@@ -360,7 +355,7 @@ fun DashboardScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = ripple(bounded = true),
-                        onClick = { onNavigate(Screen.Connection) }
+                        onClick = onPlayOn
                     )
             ) {
                 Row(
@@ -368,7 +363,7 @@ fun DashboardScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    if (isConnected) {
+                    if (playOnStatus.isPlayingOn) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
@@ -384,19 +379,21 @@ fun DashboardScreen(
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
+                    val textColor = if (playOnStatus.isPlayingOn) accent else MaterialTheme.colorScheme.onSurfaceVariant
+                    if (playOnStatus.isPlayingOn) Text(
+                        "Playing on ", style = MaterialTheme.typography.labelMedium, color = textColor,
+                    )
                     Text(
-                        text = when {
-                            isConnected && isSecure -> "Connected to $displayDeviceName securely"
-                            isConnected -> "Connected to $displayDeviceName"
-                            else -> "No device connected"
-                        },
+                        text = if (playOnStatus.isConnected) playOnStatus.deviceName else "No device connected",
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = if (isConnected)
-                            accent
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                        color = textColor,
+                    )
+                    if (playOnStatus.pillSuffix.isNotEmpty()) Text(
+                        playOnStatus.pillSuffix, style = MaterialTheme.typography.labelMedium, color = textColor,
+                        maxLines = 1,
                     )
                 }
             }
@@ -438,13 +435,17 @@ fun DashboardScreen(
                                     DashboardCard(
                                         item = item,
                                         isActive = item.app == null && item.id != "bridged-apps" &&
-                                            isCurrentScreen(currentScreen, item.screen),
+                                            item.screen?.let { isCurrentScreen(currentScreen, it) } == true,
                                         animDelay = 0,
                                         visible = visible,
                                         modifier = Modifier.weight(1f),
                                         tall = rowIndex == 0,
                                         onClick = {
-                                            item.app?.let(onOpenBridgedApp) ?: onNavigate(item.screen)
+                                            when {
+                                                item.app != null -> onOpenBridgedApp(item.app)
+                                                item.screen != null -> onNavigate(item.screen)
+                                                else -> onPlayOn()
+                                            }
                                         },
                                         onLongClick = {
                                             if (item.app != null) appToInspectOrigin = item.app.origin

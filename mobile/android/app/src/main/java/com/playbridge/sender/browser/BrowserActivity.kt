@@ -123,7 +123,6 @@ import com.playbridge.sender.downloads.notifications.openCompletedDownload
 import com.playbridge.sender.downloads.PendingDownload
 import com.playbridge.sender.downloads.PendingPopup
 import com.playbridge.sender.model.TvDevice
-import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import com.playbridge.sender.ui.theme.AppTheme
@@ -759,9 +758,7 @@ class BrowserActivity : ComponentActivity() {
             }
             var remoteOriginBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
             var pluginManagerReturnTabId by rememberSaveable { mutableStateOf<String?>(null) }
-            var connectionInitialTab by remember { mutableStateOf(0) }
             LaunchedEffect(currentScreen) {
-                if (currentScreen != Screen.Connection) connectionInitialTab = 0
                 if (currentScreen != Screen.AddonSettings) pluginManagerReturnTabId = null
             }
             // The place the Dashboard was opened from, so its close (X) returns there. Null on a
@@ -2393,6 +2390,16 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            androidx.compose.runtime.CompositionLocalProvider(LocalPlayOnRemote provides {
+                if (currentScreen != Screen.Remote) {
+                    remoteOrigin = currentScreen
+                    remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
+                }
+                if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                }
+                currentScreen = Screen.Remote
+            }, LocalPlayOnRemoteVisible provides (currentScreen == Screen.Remote)) {
             PlayBridgeTheme {
                 // Bridged Apps and chrome-hidden browsing hide this bar. The engine then
                 // takes the keyboard inset itself (see browserBottomSpace).
@@ -2471,18 +2478,6 @@ class BrowserActivity : ComponentActivity() {
                                         onPlayClick = { showVideoSheet = true },
                                         onPlayLongClick = { performQuickCast() }
                                     )
-
-                                    if (showBrowserConnectDialog) {
-                                        DeviceConnectionDialog(
-                                            onDismiss = { showBrowserConnectDialog = false },
-                                            onOpenAllDevices = {
-                                                showBrowserConnectDialog = false
-                                                connectionInitialTab = 1
-                                                currentScreen = Screen.Connection
-                                            },
-                                            showThisDevice = true,
-                                        )
-                                    }
 
                                     // Find on Page Bar
                                      if (showFindBar) {
@@ -2595,7 +2590,6 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                            Screen.Connection -> {}
                             Screen.History -> {}
                             Screen.CastHistory -> {}
                             Screen.Bookmarks -> {}
@@ -2738,7 +2732,6 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = target
                         },
-                        connectionInitialTab = connectionInitialTab,
                         addonSettingsFromBridgedApp = pluginManagerReturnTabId != null,
                         onAddonSettingsBack = {
                             val appTab = pluginManagerReturnTabId
@@ -3250,11 +3243,7 @@ class BrowserActivity : ComponentActivity() {
                         is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> tvDevice
                         is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> null
                     },
-                    onOpenAllDevices = {
-                        showVideoSheet = false
-                        connectionInitialTab = 1
-                        currentScreen = Screen.Connection
-                    },
+
                     browseUrl = castSheetBrowseOverride ?: currentUrl,
                     onBrowseClick = onBrowseClick@ { selectedMode, desktopMode ->
                         if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
@@ -3601,168 +3590,26 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
 
-                // Pairing/Connection Dialog Popup — the single connection popup. Also shown
-                // across the reconnect retry cycle so the user sees progress and can bail
-                // out: the primary action plays on this device; staying keeps trying.
-                val state = connectionState
-                val reconnect by connectionViewModel.reconnectStatus.collectAsStateWithLifecycle()
-                val isPairingState = state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
-                    state is WebSocketClient.ConnectionState.VerifyingCode
-                if (state is WebSocketClient.ConnectionState.Connecting ||
-                    isPairingState ||
-                    reconnect != null) {
-
-                    var codeText by remember { mutableStateOf("") }
-                    val focusRequester = remember { FocusRequester() }
-
-                    LaunchedEffect(state) {
-                        if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
-                            // After a wrong entry the state is re-emitted; clear the field so the
-                            // user retypes fresh rather than editing the rejected code.
-                            if (state.lastCodeWrong) codeText = ""
-                            delay(100)
-                            focusRequester.requestFocus()
-                        }
+                if (showBrowserConnectDialog) PlayOnSheet(
+                    onDismiss = { showBrowserConnectDialog = false },
+                    picking = false,
+                )
+                var automaticPairing by remember { mutableStateOf(false) }
+                LaunchedEffect(connectionState, PlayOnSheetPresence.count) {
+                    if (connectionState.needsPairingPage() && PlayOnSheetPresence.count == 0) {
+                        automaticPairing = true
                     }
-
-                    AlertDialog(
-                        onDismissRequest = {
-                            if (isPairingState) connectionViewModel.disconnect()
-                            else connectionViewModel.cancelConnectingToThisDevice()
-                        },
-                        title = {
-                            Text(
-                                text = when {
-                                    state is WebSocketClient.ConnectionState.WaitingForCodeInput ->
-                                        "Pairing with ${state.serverName}"
-                                    state is WebSocketClient.ConnectionState.VerifyingCode ->
-                                        "Verifying Code"
-                                    reconnect != null ->
-                                        "Reconnecting to ${reconnect?.deviceName ?: "TV"}"
-                                    state is WebSocketClient.ConnectionState.Connecting ->
-                                        "Connecting to ${state.serverName}"
-                                    else -> "Connecting to TV"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        },
-                        text = {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
-                                    Text(
-                                        text = "Enter the 6-digit code shown on your TV",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        textAlign = TextAlign.Center
-                                    )
-
-                                    OutlinedTextField(
-                                        value = codeText,
-                                        onValueChange = { input ->
-                                            if (input.length <= 6 && input.all { it.isDigit() }) {
-                                                codeText = input
-                                                if (input.length == 6) {
-                                                    connectionViewModel.submitPairingCode(input)
-                                                }
-                                            }
-                                        },
-                                        placeholder = { Text("000 000") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        singleLine = true,
-                                        textStyle = LocalTextStyle.current.copy(
-                                            textAlign = TextAlign.Center,
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 2.sp,
-                                            fontSize = 20.sp
-                                        ),
-                                        modifier = Modifier
-                                            .width(180.dp)
-                                            .focusRequester(focusRequester)
-                                    )
-
-                                    if (state.lastCodeWrong) {
-                                        Text(
-                                            text = "Incorrect code — ${state.attemptsLeft} " +
-                                                if (state.attemptsLeft == 1) "try left" else "tries left",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
-                                    }
-                                    val rc = reconnect
-                                    Text(
-                                        text = when {
-                                            state is WebSocketClient.ConnectionState.VerifyingCode ->
-                                                "Verifying code with ${state.serverName}…"
-                                            rc != null ->
-                                                "Reconnecting… (attempt ${rc.attempt})"
-                                            state is WebSocketClient.ConnectionState.Connecting ->
-                                                "Connecting to ${state.serverName}…"
-                                            else -> "Connecting to TV…"
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    if (rc != null || state is WebSocketClient.ConnectionState.Connecting) {
-                                        Text(
-                                            text = "Stay on this screen to keep trying, or play on this device instead.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            when {
-                                state is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
-                                    Button(
-                                        onClick = { connectionViewModel.submitPairingCode(codeText) },
-                                        enabled = codeText.length == 6
-                                    ) {
-                                        Text("Verify")
-                                    }
-                                }
-                                // Connecting/reconnecting: the primary (default) action is to
-                                // stop chasing the TV and play here. Simply staying on the dialog
-                                // keeps the connection attempts running — so there's no separate
-                                // "keep trying" button.
-                                !isPairingState -> {
-                                    Button(onClick = { connectionViewModel.cancelConnectingToThisDevice() }) {
-                                        Text("Play on this device")
-                                    }
-                                }
-                            }
-                        },
-                        dismissButton = {
-                            // Only pairing dialogs get a Cancel; the connecting/reconnecting
-                            // dialog's single action lives in confirmButton above.
-                            if (isPairingState) {
-                                TextButton(onClick = { connectionViewModel.disconnect() }) {
-                                    Text("Cancel")
-                                }
-                            }
-                        }
-                    )
                 }
+                if (automaticPairing) PlayOnSheet(
+                    onDismiss = { automaticPairing = false },
+                    picking = false,
+                    startPairing = true,
+                )
+
              }
          }
      }
+ }
  }
 
     override fun onDestroy() {

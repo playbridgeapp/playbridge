@@ -127,7 +127,6 @@ fun PhoneFilesScreen(
     viewModel: ConnectionViewModel,
     uiState: PhoneFilesUiState,
     onBack: () -> Unit,
-    onOpenAllDevices: () -> Unit = {},
     onAddToCollection: (PhoneMediaItem) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -467,12 +466,8 @@ fun PhoneFilesScreen(
 
     // Opened when a file is tapped but the cast target was lost mid-flight.
     if (showDevicePicker) {
-        DeviceConnectionDialog(
+        PlayOnSheet(
             onDismiss = { showDevicePicker = false },
-            onOpenAllDevices = {
-                showDevicePicker = false
-                onOpenAllDevices()
-            },
             showThisDevice = true,
         )
     }
