@@ -66,11 +66,20 @@ internal fun groupPlayOnDevices(
 /** Receiver names as people know them: hostnames lose their mDNS ".local" suffix. */
 internal val TvDevice.playOnName: String get() = name.removeSuffix(".local")
 
-internal data class PlayOnStatus(val state: State = State.NOT_CONNECTED, val deviceName: String = "TV") {
+internal data class PlayOnStatus(
+    val state: State = State.NOT_CONNECTED,
+    val deviceName: String = "TV",
+    val secure: Boolean = false,
+) {
     enum class State { NOT_CONNECTED, STANDING_BY, PLAYING_ON }
 
     val isConnected: Boolean get() = state != State.NOT_CONNECTED
     val isPlayingOn: Boolean get() = state == State.PLAYING_ON
+    val pillSuffix: String get() = when {
+        state == State.STANDING_BY -> " · Standing by"
+        isPlayingOn && !secure -> " · not encrypted"
+        else -> ""
+    }
     val tileSubtitle: String get() = when (state) {
         State.NOT_CONNECTED -> "Not connected"
         State.STANDING_BY -> "Standing by"
@@ -85,12 +94,14 @@ internal fun playOnStatus(
     nativeDevice: TvDevice?,
     externalDevice: TvDevice?,
     externalReady: Boolean,
+    socketSecure: Boolean = false,
 ): PlayOnStatus = when (route) {
     is CastSessionManager.Route.External -> if (externalReady) {
-        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, externalDevice?.playOnName ?: route.name.removeSuffix(".local"))
+        // External transports use the neutral green presentation, independent of the native socket.
+        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, externalDevice?.playOnName ?: route.name.removeSuffix(".local"), secure = true)
     } else PlayOnStatus()
     CastSessionManager.Route.NativeTv -> if (socketConnected) {
-        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, nativeDevice?.playOnName ?: "TV")
+        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, nativeDevice?.playOnName ?: "TV", secure = socketSecure)
     } else PlayOnStatus()
     CastSessionManager.Route.ThisDevice -> if (socketConnected) {
         PlayOnStatus(PlayOnStatus.State.STANDING_BY, nativeDevice?.playOnName ?: "TV")

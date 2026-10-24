@@ -24,12 +24,32 @@ class PlayOnStatusTest {
 
     @Test
     fun `connected receiver with this phone route is standing by`() {
-        val status = status(CastSessionManager.Route.ThisDevice, socketConnected = true)
-        assertEquals(PlayOnStatus.State.STANDING_BY, status.state)
-        assertTrue(status.isConnected)
-        assertFalse(status.isPlayingOn)
-        assertEquals("Standing by", status.tileSubtitle)
-        assertEquals("Living-Room-Computer", status.deviceName)
+        for (secure in listOf(false, true)) {
+            val status = status(CastSessionManager.Route.ThisDevice, socketConnected = true, socketSecure = secure)
+            assertEquals(PlayOnStatus.State.STANDING_BY, status.state)
+            assertTrue(status.isConnected)
+            assertFalse(status.isPlayingOn)
+            assertFalse(status.secure)
+            assertEquals(" · Standing by", status.pillSuffix)
+            assertEquals("Standing by", status.tileSubtitle)
+            assertEquals("Living-Room-Computer", status.deviceName)
+        }
+    }
+
+    @Test
+    fun `secure native playback keeps the green presentation without an encryption warning`() {
+        val status = status(CastSessionManager.Route.NativeTv, socketConnected = true, socketSecure = true)
+        assertTrue(status.isPlayingOn)
+        assertTrue(status.secure)
+        assertEquals("", status.pillSuffix)
+    }
+
+    @Test
+    fun `plain native playback carries the amber presentation and encryption warning`() {
+        val status = status(CastSessionManager.Route.NativeTv, socketConnected = true, socketSecure = false)
+        assertTrue(status.isPlayingOn)
+        assertFalse(status.secure)
+        assertEquals(" · not encrypted", status.pillSuffix)
     }
 
     @Test
@@ -39,21 +59,25 @@ class PlayOnStatusTest {
             assertEquals(PlayOnStatus.State.NOT_CONNECTED, status.state)
             assertFalse(status.isConnected)
             assertFalse(status.isPlayingOn)
+            assertEquals("", status.pillSuffix)
             assertEquals("Not connected", status.tileSubtitle)
         }
     }
 
     @Test
-    fun `ready external routes show the external receiver regardless of the native socket`() {
+    fun `ready external routes use green without an encryption warning regardless of the native socket`() {
         for (protocol in listOf(CastProtocol.GOOGLE_CAST, CastProtocol.DLNA, CastProtocol.ROKU, CastProtocol.WEB_BROWSER)) {
             val external = receiver.copy(name = "Bedroom", protocol = protocol)
-            for (socketConnected in listOf(false, true)) {
+            for ((socketConnected, socketSecure) in listOf(false to false, true to false, true to true)) {
                 val status = playOnStatus(
                     CastSessionManager.Route.External(external.endpointKey, external.name),
                     socketConnected, receiver, external, externalReady = true,
+                    socketSecure = socketSecure,
                 )
                 assertEquals(PlayOnStatus.State.PLAYING_ON, status.state)
                 assertTrue(status.isPlayingOn)
+                assertTrue(status.secure)
+                assertEquals("", status.pillSuffix)
                 assertEquals("Connected", status.tileSubtitle)
                 assertEquals("Bedroom", status.deviceName)
             }
@@ -77,7 +101,8 @@ class PlayOnStatusTest {
         assertEquals("Living-Room-Computer", playOnStatus(externalRoute, false, null, null, true).deviceName)
     }
 
-    private fun status(route: CastSessionManager.Route, socketConnected: Boolean) = playOnStatus(
+    private fun status(route: CastSessionManager.Route, socketConnected: Boolean, socketSecure: Boolean = false) = playOnStatus(
         route, socketConnected, receiver, externalDevice = null, externalReady = false,
+        socketSecure = socketSecure,
     )
 }

@@ -1576,6 +1576,7 @@ fun AppNavHost(
                         nativeDevice = tvDevice,
                         externalDevice = activeExternalDevice,
                         externalReady = castSessionState.isReadyForPlayback,
+                        socketSecure = (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
                     )
                     val ublockSetupStatus by Components.ublockOnboarding.status.collectAsStateWithLifecycle()
                     DashboardScreen(

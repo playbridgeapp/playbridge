@@ -336,7 +336,7 @@ internal fun DashboardScreen(
                 label = "statusAlpha"
             )
 
-            val accent = Color(0xFF4CAF50)
+            val accent = if (playOnStatus.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = if (playOnStatus.isPlayingOn)
@@ -391,8 +391,9 @@ internal fun DashboardScreen(
                         overflow = TextOverflow.Ellipsis,
                         color = textColor,
                     )
-                    if (playOnStatus.state == PlayOnStatus.State.STANDING_BY) Text(
-                        " · Standing by", style = MaterialTheme.typography.labelMedium, color = textColor,
+                    if (playOnStatus.pillSuffix.isNotEmpty()) Text(
+                        playOnStatus.pillSuffix, style = MaterialTheme.typography.labelMedium, color = textColor,
+                        maxLines = 1,
                     )
                 }
             }
