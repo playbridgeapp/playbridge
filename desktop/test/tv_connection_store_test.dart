@@ -68,6 +68,44 @@ void main() {
     expect(store.byIdentity(TvProtocol.playBridge, 'shared')?.host,
         '192.168.1.10');
   });
+
+  test('legacy UPnP records and selections match refreshed identities',
+      () async {
+    for (final protocol in [TvProtocol.dlna, TvProtocol.roku]) {
+      final legacyId = '${protocol.name}:uuid:Device-X::upnp:rootdevice';
+      SharedPreferences.setMockInitialValues({
+        preferenceKey: jsonEncode([
+          {..._record(protocol).toJson(), 'uuid': legacyId},
+        ]),
+        'pb.sender.playback_selection': jsonEncode({
+          'kind': 'tv',
+          'protocol': protocol.name,
+          'uuid': legacyId,
+        }),
+      });
+      final store = await TvConnectionStore.load();
+      final currentKey = receiverIdentityKey(protocol, 'uuid:Device-X');
+      expect(store.selection.identityKey, currentKey);
+      expect(store.byIdentity(protocol, 'uuid:Device-X'), isNotNull);
+      await store.markConnected('uuid:Device-X',
+          protocol: protocol, host: '192.0.2.2');
+      expect(store.byIdentity(protocol, 'uuid:Device-X')!.host, '192.0.2.2');
+      expect(store.byIdentity(protocol, 'uuid:Other'), isNull);
+      await store.forget('uuid:Device-X', protocol: protocol);
+      expect(store.tvs, isEmpty);
+      expect(store.selection.isLocal, isTrue);
+    }
+  });
+
+  test('normalized UPnP upsert replaces an older full-USN record', () async {
+    final store = await TvConnectionStore.load();
+    final base = _record(TvProtocol.dlna).toJson();
+    await store.upsert(
+        TvRecord.fromJson({...base, 'uuid': 'uuid:Device-X::upnp:rootdevice'}));
+    await store.upsert(TvRecord.fromJson({...base, 'uuid': 'uuid:Device-X'}));
+    expect(store.tvs, hasLength(1));
+    expect(store.tvs.single.uuid, 'uuid:Device-X');
+  });
 }
 
 TvRecord _record(

@@ -28,7 +28,20 @@ data class EndpointKey(
     val protocol: CastProtocol,
     val stableId: String,
 ) {
-    override fun toString(): String = "${protocol.name.lowercase()}:$stableId"
+    private val identity: String get() {
+        if (protocol == CastProtocol.DLNA || protocol == CastProtocol.ROKU) {
+            val id = stableId.trim().removePrefix("${protocol.name.lowercase()}:")
+            if (id.startsWith("uuid:", ignoreCase = true)) return id.substringBefore("::").trim()
+        }
+        return stableId
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is EndpointKey && protocol == other.protocol && identity == other.identity
+
+    override fun hashCode(): Int = 31 * protocol.hashCode() + identity.hashCode()
+
+    override fun toString(): String = "${protocol.name.lowercase()}:$identity"
 }
 
 /** Network and discovery data for one protocol endpoint. Credentials live separately. */

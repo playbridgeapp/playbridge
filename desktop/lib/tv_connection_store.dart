@@ -61,11 +61,11 @@ class TvRecord {
   });
 
   /// Stable receiver identifier, named explicitly for protocol-neutral code.
-  String get stableId => uuid;
+  String get stableId => receiverStableId(protocol, uuid);
 
   /// Persistent identity. A physical TV may legitimately have one record per
   /// supported protocol.
-  String get identityKey => '${protocol.name}:$stableId';
+  String get identityKey => receiverIdentityKey(protocol, uuid);
 
   List<String> get allAddresses => List.unmodifiable({
         if (host.isNotEmpty) host,
@@ -154,7 +154,8 @@ class PlaybackSelection {
   final TvProtocol? protocol;
   final String? uuid;
   bool get isLocal => protocol == null;
-  String? get identityKey => isLocal ? null : '${protocol!.name}:$uuid';
+  String? get identityKey =>
+      isLocal ? null : receiverIdentityKey(protocol!, uuid!);
 
   Map<String, dynamic> toJson() => isLocal
       ? {'kind': 'local'}
@@ -227,8 +228,9 @@ class TvConnectionStore {
   }
 
   TvRecord? byIdentity(TvProtocol protocol, String uuid) {
+    final key = receiverIdentityKey(protocol, uuid);
     for (final t in tvs) {
-      if (t.protocol == protocol && t.uuid == uuid) return t;
+      if (t.identityKey == key) return t;
     }
     return null;
   }
@@ -275,8 +277,8 @@ class TvConnectionStore {
     Map<String, dynamic>? capabilities,
   }) async {
     final list = tvs.toList();
-    final idx =
-        list.indexWhere((t) => t.protocol == protocol && t.uuid == uuid);
+    final key = receiverIdentityKey(protocol, uuid);
+    final idx = list.indexWhere((t) => t.identityKey == key);
     if (idx < 0) return;
     list[idx] = list[idx].copyWith(
       host: host,
@@ -294,10 +296,10 @@ class TvConnectionStore {
 
   Future<void> forget(String uuid,
       {TvProtocol protocol = TvProtocol.playBridge}) async {
-    final list =
-        tvs.where((t) => t.uuid != uuid || t.protocol != protocol).toList();
+    final key = receiverIdentityKey(protocol, uuid);
+    final list = tvs.where((t) => t.identityKey != key).toList();
     await _save(list);
-    if (selection.identityKey == '${protocol.name}:$uuid') {
+    if (selection.identityKey == key) {
       await setSelection(const PlaybackSelection.local());
     }
   }
