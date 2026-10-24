@@ -62,13 +62,15 @@ internal fun PlayOnNowCard(
         SessionPhase.PLAYING -> mediaTitle?.let { "Casting $it" } ?: "Casting"
         else -> "Connected · ${device?.resolvedProtocol?.displayName.orEmpty()}"
     } else when {
+        // Connected but This phone is the target: the receiver is standing by, not playing.
+        connection is WebSocketClient.ConnectionState.Connected && !nativeSelected -> "Connected · Standing by"
         connection is WebSocketClient.ConnectionState.Connected -> "Connected · PlayBridge"
         nativeStatus == "TV remote only" -> "TV remote only"
         connection is WebSocketClient.ConnectionState.Connecting ||
             connection is WebSocketClient.ConnectionState.Retrying -> "Connecting…"
         else -> "Couldn’t connect"
     }
-    val live = status.startsWith("Connected") || status.startsWith("Casting")
+    val live = (status.startsWith("Connected") || status.startsWith("Casting")) && (external || nativeSelected)
     val tint = if (live) PlayOnGreen else MaterialTheme.colorScheme.onSurfaceVariant
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -97,6 +99,11 @@ internal fun PlayOnNowCard(
                     if (!streamRoute.isNullOrBlank()) Text(streamRoute, style = MaterialTheme.typography.bodySmall)
                 }
             }
+            if (!external && !nativeSelected && connection is WebSocketClient.ConnectionState.Connected) {
+                FilledTonalButton(onClick = onCastHere, modifier = Modifier.fillMaxWidth()) {
+                    Text("Play on ${device?.playOnName ?: "TV"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     // Remote sits on the action row so long names and large text keep the full width above.
@@ -111,9 +118,6 @@ internal fun PlayOnNowCard(
                             contentColor = MaterialTheme.colorScheme.onSurface)) {
                         Icon(Icons.Default.Tune, null, Modifier.size(18.dp))
                         Text("Configure TV", Modifier.padding(start = 6.dp))
-                    }
-                    if (!external && !nativeSelected && connection is WebSocketClient.ConnectionState.Connected) {
-                        TextButton(onClick = onCastHere) { Text("Cast here") }
                     }
                     if (!external && nativeStatus == "TV remote only") {
                         TextButton(onClick = onOpenPlayBridge) { Text("Open PlayBridge on ${device?.playOnName ?: "TV"}") }
