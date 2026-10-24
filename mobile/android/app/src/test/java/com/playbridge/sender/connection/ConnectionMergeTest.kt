@@ -273,4 +273,13 @@ class ConnectionMergeTest {
         assertEquals(false, ConnectionMerge.isSameDevice(saved, live))
         assertEquals(saved, ConnectionMerge.withDiscoveredEndpoint(saved, listOf(live)))
     }
+
+    @Test
+    fun `one UPnP device answering with several USNs is one device`() {
+        val root = dev("192.168.0.28", 0, uuid = "uuid:kodi::upnp:rootdevice").copy(protocol = CastProtocol.DLNA)
+        val renderer = dev("192.168.0.28", 0, uuid = "uuid:kodi::urn:schemas-upnp-org:device:MediaRenderer:1")
+            .copy(protocol = CastProtocol.DLNA)
+        assertEquals(true, ConnectionMerge.isSameDevice(root, renderer))
+        assertEquals(false, ConnectionMerge.hasOtherId(root, renderer))
+    }
 }

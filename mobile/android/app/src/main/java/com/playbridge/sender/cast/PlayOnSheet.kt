@@ -8,6 +8,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontFamily
@@ -362,7 +363,8 @@ fun PlayOnSheet(
                                     Text("Search again", Modifier.padding(start = 6.dp))
                                 }
                             }
-                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
+                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) },
+                                onLongClick = { managed = row; page = PlayOnPage.Actions }) }
                             if (groups.nearby.isEmpty()) Text(if (scanning) "Looking for TVs on this Wi-Fi…" else "No new devices found.",
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (unavailable.isNotEmpty()) {
@@ -420,11 +422,21 @@ fun PlayOnSheet(
                                     contentAlignment = Alignment.Center) {
                                     Icon(row.device.playOnIcon, null, tint = MaterialTheme.colorScheme.primary)
                                 }
-                                Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}",
-                                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Column {
+                                    Text(playOnDeviceSummary(row), style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    playOnShortId(row.device.uuid)?.let { id ->
+                                        Text("ID $id", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                             HorizontalDivider()
-                            PlayOnRow("Play on this TV", null, icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = { pick(row.device) })
+                            val isSaved = row.saved != null || row.remotePaired
+                            val noun = if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"
+                            PlayOnRow(if (!isSaved && row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE && row.device.token.isEmpty())
+                                "Pair this TV" else "Play on this $noun", null,
+                                icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = { pick(row.device) })
                             val supportsFullRemote = row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
                                 (row.remotePaired || "exo" in row.device.players || remoteRows.any {
                                     ConnectionMerge.isSameDevice(it.device, row.device) && it.tvReachable
@@ -435,7 +447,7 @@ fun PlayOnSheet(
                                     if (row.remotePaired && openRemote != null) { onDismiss(); openRemote() }
                                     else page = PlayOnPage.FullRemote
                                 })
-                            PlayOnRow("Forget this ${if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"}", null,
+                            if (isSaved) PlayOnRow("Forget this $noun", null,
                                 icon = Icons.Default.DeleteOutline, danger = true, onClick = {
                                     scope.launch {
                                         val removed = viewModel.forgetPlayOnDevice(row.device)
@@ -461,7 +473,8 @@ fun PlayOnSheet(
 }
 
 @Composable
-private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick: () -> Unit, onMore: (() -> Unit)? = null) {
+private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick: () -> Unit, onMore: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = onMore) {
     val protocol = row.device.resolvedProtocol
     val ready = !nearby && row.reachable && row.remoteStatus != "TV remote only"
     PlayOnRow(row.device.playOnName, when {
@@ -471,7 +484,7 @@ private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick:
         row.reachable -> "${protocol.displayName} · Ready"
         else -> "${protocol.displayName} · ${usedRelative(row.device.lastConnected)}"
     }, onClick = onClick, icon = row.device.playOnIcon, ready = ready, dimmed = !nearby && !row.reachable,
-        onMore = onMore, badge = if (nearby && protocol == CastProtocol.PLAYBRIDGE) "New" else null,
+        onMore = onMore, onLongClick = onLongClick, badge = if (nearby && protocol == CastProtocol.PLAYBRIDGE) "New" else null,
         highlight = nearby && protocol == CastProtocol.PLAYBRIDGE)
 }
 
@@ -495,7 +508,7 @@ private fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
 private fun PlayOnRow(name: String, subtitle: String?, onClick: () -> Unit, phone: Boolean = false,
     icon: ImageVector = Icons.Default.Tv, ready: Boolean = false, dimmed: Boolean = false,
     selected: Boolean = false, badge: String? = null, highlight: Boolean = false, danger: Boolean = false,
-    onMore: (() -> Unit)? = null) {
+    onMore: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null) {
     val accent = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold, color = if (danger) accent else Color.Unspecified) },
         supportingContent = subtitle?.let { {
@@ -518,7 +531,8 @@ private fun PlayOnRow(name: String, subtitle: String?, onClick: () -> Unit, phon
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(14.dp))
             .then(if (highlight) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) else Modifier)
-            .clickable(onClick = onClick)
+            // Long-press opens the device's details (address, ID) — handy when two devices share a name.
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = onLongClick?.let { "Device details" })
             .then(if (dimmed) Modifier.alpha(0.55f) else Modifier))
 }
 
@@ -652,6 +666,20 @@ private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
     }
     Text("Changes apply on the TV right away.", style = MaterialTheme.typography.bodySmall)
 }
+
+/** "<Protocol> · <ip>[:port] · Used …" for saved devices, "· Found nearby" for live ones. */
+private fun playOnDeviceSummary(row: PlayOnDevice): String {
+    val device = row.device
+    val address = device.ip + (device.port.takeIf { it > 0 }?.let { ":$it" }
+        ?: device.descriptionUrl?.let { runCatching { java.net.URI(it).port }.getOrNull()?.takeIf { p -> p > 0 }?.let { p -> ":$p" } }
+        ?: "")
+    val when_ = if (row.saved != null || row.remotePaired) usedRelative(device.lastConnected) else "Found nearby"
+    return "${device.resolvedProtocol.displayName} · $address · $when_"
+}
+
+/** A short, stable ID to tell same-named devices apart ("1e376351…"). */
+internal fun playOnShortId(uuid: String): String? =
+    uuid.substringBefore("::").removePrefix("uuid:").take(8).takeIf { it.length >= 4 }?.let { "$it…" }
 
 private fun usedRelative(time: Long): String {
     val days = ((System.currentTimeMillis() - time) / 86_400_000L).coerceAtLeast(0)
