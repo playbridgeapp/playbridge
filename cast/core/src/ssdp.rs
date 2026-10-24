@@ -63,6 +63,29 @@ pub struct DiscoveryHit {
     pub source: SocketAddr,
 }
 
+/// SSDP search targets append a service suffix to the same device USN.
+pub fn device_usn(usn: &str) -> &str {
+    usn.split_once("::")
+        .map_or(usn, |(device, _)| device)
+        .trim()
+}
+
+impl DiscoveryHit {
+    pub(crate) fn device_usn(&self) -> Option<&str> {
+        self.unique_service_name
+            .as_deref()
+            .map(device_usn)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn identity_key(&self) -> (DiscoveryProtocol, String) {
+        (
+            self.protocol,
+            self.device_usn().unwrap_or(&self.location).to_owned(),
+        )
+    }
+}
+
 /// A lightweight, one-socket SSDP search covering every selected provider.
 pub struct DiscoverySession;
 
@@ -77,7 +100,7 @@ impl DiscoverySession {
                 item = receiver.recv() => {
                     match item {
                         Some(item) => {
-                            hits.insert((item.protocol, item.location.clone()), item);
+                            hits.insert(item.identity_key(), item);
                         }
                         None => {
                             (&mut worker).await?;
@@ -88,7 +111,7 @@ impl DiscoverySession {
                 result = &mut worker => {
                     result?;
                     while let Ok(item) = receiver.try_recv() {
-                        hits.insert((item.protocol, item.location.clone()), item);
+                        hits.insert(item.identity_key(), item);
                     }
                     return Ok(hits.into_values().collect());
                 }
@@ -96,7 +119,7 @@ impl DiscoverySession {
         }
     }
 
-    /// Sends each newly discovered location while the SSDP receive window is open.
+    /// Sends each newly discovered protocol/device while the receive window is open.
     pub async fn search_incremental(
         config: &DiscoveryConfig,
         events: mpsc::Sender<DiscoveryHit>,
@@ -151,7 +174,7 @@ impl DiscoverySession {
                 break;
             };
             if let Some(hit) = parse_response(&packet, source) {
-                let key = (hit.protocol, hit.location.clone());
+                let key = hit.identity_key();
                 if let std::collections::hash_map::Entry::Vacant(entry) = hits.entry(key) {
                     entry.insert(hit.clone());
                     let _ = events.send(hit).await;
@@ -274,6 +297,45 @@ fn parse_response(bytes: &[u8], source: SocketAddr) -> Option<DiscoveryHit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usn_search_targets_share_one_device_identity() {
+        let mut identities = std::collections::HashSet::new();
+        for usn in [
+            " uuid:Device-X::upnp:rootdevice ",
+            "uuid:Device-X::urn:schemas-upnp-org:device:MediaRenderer:1",
+            "uuid:Device-X",
+        ] {
+            let hit = DiscoveryHit {
+                protocol: DiscoveryProtocol::Dlna,
+                location: "http://192.0.2.1/device.xml".into(),
+                search_target: None,
+                unique_service_name: Some(usn.into()),
+                server: None,
+                source: "192.0.2.1:1900".parse().unwrap(),
+            };
+            identities.insert(hit.identity_key());
+        }
+        assert_eq!(identities.len(), 1);
+        assert_eq!(device_usn(" uuid:Device-X "), "uuid:Device-X");
+    }
+
+    #[test]
+    fn different_usns_at_one_location_are_distinct_and_missing_usn_uses_location() {
+        let mut hit = DiscoveryHit {
+            protocol: DiscoveryProtocol::Dlna,
+            location: "http://192.0.2.1/device.xml".into(),
+            search_target: None,
+            unique_service_name: Some("uuid:first::upnp:rootdevice".into()),
+            server: None,
+            source: "192.0.2.1:1900".parse().unwrap(),
+        };
+        let first = hit.identity_key();
+        hit.unique_service_name = Some("uuid:second::upnp:rootdevice".into());
+        assert_ne!(first, hit.identity_key());
+        hit.unique_service_name = None;
+        assert_eq!(hit.identity_key().1, hit.location);
+    }
 
     #[test]
     fn parses_headers_case_insensitively_and_classifies_dial() {

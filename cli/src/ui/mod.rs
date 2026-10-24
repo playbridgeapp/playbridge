@@ -2846,9 +2846,20 @@ fn preferred_address(receiver: &Receiver) -> Option<&str> {
 }
 
 fn receiver_matches_preferred(receiver: &Receiver, preferred: &PreferredDevice) -> bool {
-    receiver.uuid.as_deref() == Some(preferred.uuid.as_str())
-        || receiver.id.0 == preferred.uuid
-        || (receiver.protocol.as_str() == preferred.protocol
+    if receiver.protocol.as_str() != preferred.protocol {
+        return false;
+    }
+    let protocol = receiver.protocol;
+    let preferred_id = protocol.normalize_id(&preferred.uuid);
+    receiver
+        .uuid
+        .as_deref()
+        .is_some_and(|uuid| protocol.normalize_id(uuid) == preferred_id)
+        || protocol.normalize_id(&receiver.id.0) == preferred_id
+        || ((!matches!(
+            protocol,
+            ReceiverProtocol::Dlna | ReceiverProtocol::Dial | ReceiverProtocol::Roku
+        ) || receiver.uuid.is_none())
             && preferred_address(receiver) == Some(preferred.address.as_str()))
 }
 
@@ -2984,6 +2995,33 @@ mod tests {
             location: None,
             uuid: None,
         }
+    }
+
+    #[test]
+    fn preferred_upnp_receiver_matches_legacy_usn_after_dhcp_but_not_another_uuid() {
+        let mut live = receiver(
+            "dlna:uuid:Device-X",
+            ReceiverProtocol::Dlna,
+            "TV",
+            &["192.0.2.2"],
+        );
+        live.uuid = Some("uuid:Device-X".into());
+        let mut preferred = PreferredDevice {
+            uuid: "dlna:uuid:Device-X::upnp:rootdevice".into(),
+            name: "TV".into(),
+            protocol: "dlna".into(),
+            address: "192.0.2.1".into(),
+            port: None,
+            wss_port: None,
+            location: None,
+        };
+        assert!(receiver_matches_preferred(&live, &preferred));
+        preferred.uuid = "uuid:Other::upnp:rootdevice".into();
+        preferred.address = "192.0.2.2".into();
+        assert!(!receiver_matches_preferred(&live, &preferred));
+        preferred.uuid = "uuid:Device-X".into();
+        preferred.protocol = "roku".into();
+        assert!(!receiver_matches_preferred(&live, &preferred));
     }
 
     fn rendered(width: u16, height: u16, section: Section) -> String {
