@@ -17,9 +17,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,8 +89,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -101,6 +97,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.cast.browser.BrowserReceiverRepository
 import com.playbridge.sender.cast.browser.BrowserReceiverSheet
+import com.playbridge.sender.cast.browser.BrowserHostStopAction
 import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
@@ -300,7 +297,13 @@ fun PlayOnSheet(
                                 .padding(horizontal = 8.dp, vertical = 2.dp))
                     }
                 }
-                FilledTonalIconButton(onClick = ::dismiss, modifier = Modifier.size(36.dp)) {
+                if (page == PlayOnPage.Browser) BrowserHostStopAction(host.running, host.busy) {
+                    scope.launch {
+                        if (host.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
+                        // Nothing left to do on a stopped host page; reopening it starts hosting again.
+                        if (browser.stopHost().isSuccess) page = PlayOnPage.Add
+                    }
+                } else FilledTonalIconButton(onClick = ::dismiss, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.Close, "Close Play on", Modifier.size(18.dp))
                 }
             }
@@ -501,7 +504,7 @@ private val TvDevice.playOnIcon: ImageVector get() = when {
 }
 
 @Composable
-private fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
+internal fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(text.uppercase(), modifier, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
@@ -550,7 +553,6 @@ private fun PlayOnTip(title: String, body: String) {
 @Composable
 private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, submit: (String) -> Unit, retry: () -> Unit) {
     var code by remember { mutableStateOf("") }
-    val focus = remember { FocusRequester() }
     LaunchedEffect(state) { if (state is WebSocketClient.ConnectionState.WaitingForCodeInput && state.lastCodeWrong) code = "" }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -571,34 +573,10 @@ private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, 
                     withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(name) }
                     append(".")
                 }, textAlign = TextAlign.Center)
-                BasicTextField(code, {
-                    code = it.filter(Char::isDigit).take(6)
+                PairingCodeInput(code, {
+                    code = it
                     if (code.length == 6) submit(code)
-                }, singleLine = true,
-                    // Number, not NumberPassword: a pairing code shouldn't summon password managers.
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, autoCorrectEnabled = false),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focus)
-                        .semantics { contentDescription = "6-digit code, ${code.length} entered" },
-                    decorationBox = { _ ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            repeat(6) { index ->
-                                val next = index == code.length
-                                val border = when {
-                                    state.lastCodeWrong && code.isEmpty() -> MaterialTheme.colorScheme.error
-                                    next -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.outlineVariant
-                                }
-                                Box(Modifier.weight(1f).height(56.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
-                                    .border(if (next) 2.dp else 1.dp, border, RoundedCornerShape(12.dp)),
-                                    contentAlignment = Alignment.Center) {
-                                    Text(code.getOrNull(index)?.toString().orEmpty(), style = MaterialTheme.typography.headlineSmall)
-                                }
-                            }
-                        }
-                    })
-                // Open the keyboard straight away; the code is the only thing to do on this page.
-                LaunchedEffect(Unit) { focus.requestFocus() }
+                }, isError = state.lastCodeWrong)
                 if (state.lastCodeWrong) Text("Incorrect code — ${state.attemptsLeft} ${if (state.attemptsLeft == 1) "try" else "tries"} left",
                     color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
                 Text("Pairs automatically when all six digits are in", style = MaterialTheme.typography.bodyMedium,
