@@ -1553,7 +1553,11 @@ final class PlayOnPathMonitor: ObservableObject {
         self.monitor = monitor
         monitor.pathUpdateHandler = { [weak self] path in
             let onWiFi = path.status == .satisfied && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet))
-            let vpn = path.availableInterfaces.contains { $0.type == .other }
+            // VPNs appear as tunnel interfaces; other ".other" interfaces (e.g. system links) aren't VPNs.
+            let tunnelPrefixes = ["utun", "ipsec", "ppp", "tun", "tap"]
+            let vpn = path.availableInterfaces.contains { iface in
+                iface.type == .other && tunnelPrefixes.contains { iface.name.hasPrefix($0) }
+            }
             Task { @MainActor in
                 self?.onWiFi = onWiFi
                 self?.vpnActive = onWiFi && vpn
