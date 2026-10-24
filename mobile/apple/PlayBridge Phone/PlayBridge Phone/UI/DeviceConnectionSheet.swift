@@ -15,6 +15,7 @@ struct DeviceConnectionSheet: View {
     private let openedForPicking: Bool
     @State private var path: [PlayOnPage]
     @State private var pairingCode = ""
+    @FocusState private var pairingFieldFocused: Bool
     @State private var showUnavailable = false
     @State private var vpnDismissed = false
     @State private var wifiDismissed = false
@@ -512,72 +513,141 @@ struct DeviceConnectionSheet: View {
 
     private var pairingPage: some View {
         let name = pairingName
-        return VStack(spacing: 18) {
-            Text("Enter the 6-digit code shown on \(name).")
-                .font(Theme.font(size: 15))
-                .foregroundColor(Theme.onSurface)
-                .multilineTextAlignment(.center)
-                .padding(.top, 12)
-            pairingEntry
-            if case .waitingForCodeInput(_, let attempts, true) = vm.state {
-                Text("Incorrect code — \(attempts) \(attempts == 1 ? "try" : "tries") left")
-                    .font(Theme.font(size: 13))
-                    .foregroundColor(Theme.danger)
+        return ScrollView {
+            VStack(spacing: 18) {
+                pairingIllustration
+                if enteringPairingCode {
+                    (Text("Enter the 6-digit code shown on ")
+                        + Text(name).font(Theme.font(size: 15, weight: .semibold))
+                        + Text("."))
+                        .font(Theme.font(size: 15))
+                        .foregroundColor(Theme.onSurface)
+                        .multilineTextAlignment(.center)
+                }
+                pairingEntry
+                if case .waitingForCodeInput(_, let attempts, true) = vm.state {
+                    Text("Incorrect code — \(attempts) \(attempts == 1 ? "try" : "tries") left")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.danger)
+                        .multilineTextAlignment(.center)
+                }
+                if enteringPairingCode {
+                    Text("Pairs automatically when all six digits are in")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
+                    Text("No code on the TV? Make sure the PlayBridge app is open on it, then tap the TV again.")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .multilineTextAlignment(.center)
+                }
             }
-            Text("No code on the TV? Make sure the PlayBridge app is open on it, then tap the TV again.")
-                .font(Theme.font(size: 13))
-                .foregroundColor(Theme.onSurfaceVariant)
-                .multilineTextAlignment(.center)
-            Spacer(minLength: 0)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle("Pair \(name)")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { pairingFieldFocused = true }
+        .onChange(of: vm.state) { state in
+            if case .waitingForCodeInput = state { pairingFieldFocused = true }
+        }
+    }
+
+    private var pairingIllustration: some View {
+        VStack(spacing: 10) {
+            Text("PlayBridge on your TV")
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+            Text("● ● ●  ● ● ●")
+                .font(Theme.font(size: 28, weight: .semibold, design: .monospaced))
+                .foregroundColor(Theme.onSurface)
+        }
+        .padding(.vertical, 22)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity)
+        .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.outlineVariant, lineWidth: 1.5))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Your TV shows a 6-digit code")
+    }
+
+    private var enteringPairingCode: Bool {
+        switch vm.state {
+        case .waitingForApproval, .verifyingCode, .connecting, .retrying, .pairingDenied, .authFailed:
+            return false
+        default:
+            return true
+        }
     }
 
     @ViewBuilder private var pairingEntry: some View {
         switch vm.state {
         case .waitingForApproval:
-            ProgressView()
-            Text("Approve on the TV")
-                .font(Theme.font(size: 16, weight: .semibold))
-                .foregroundColor(Theme.onSurface)
+            pairingStatus("Approve on the TV")
         case .verifyingCode:
-            ProgressView()
-            Text("Checking the code…")
-                .font(Theme.font(size: 16, weight: .semibold))
-                .foregroundColor(Theme.onSurface)
+            pairingStatus("Checking the code…")
+        case .connecting, .retrying:
+            pairingStatus("Connecting…")
+        case .pairingDenied, .authFailed:
+            pairingStatus("The connection wasn’t approved. Try again.", spinning: false, tint: Theme.danger)
         default:
-            ZStack {
-                HStack(spacing: 8) {
-                    ForEach(0..<6, id: \.self) { index in
-                        Text(digit(index))
-                            .font(Theme.font(size: 24, weight: .bold, design: .monospaced))
-                            .foregroundColor(Theme.onSurface)
-                            .frame(maxWidth: .infinity, minHeight: 56)
-                            .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(index == pairingCode.count ? Theme.primary : Theme.outlineVariant, lineWidth: index == pairingCode.count ? 2 : 1))
-                    }
-                }
-                .accessibilityHidden(true)
-                TextField("000000", text: $pairingCode)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .foregroundColor(.clear)
-                    .tint(.clear)
-                    .accessibilityLabel("Pairing code")
-                    .onChange(of: pairingCode) { newValue in
-                        let filtered = String(newValue.filter(\.isNumber).prefix(6))
-                        if filtered != newValue { pairingCode = filtered }
-                        if filtered.count == 6 { vm.submitPairingCode(filtered) }
-                    }
-            }
-            Text("Pairs automatically when all six digits are in")
-                .font(Theme.font(size: 13))
-                .foregroundColor(Theme.onSurfaceVariant)
+            pairingDigits
         }
+    }
+
+    private func pairingStatus(_ title: String, spinning: Bool = true, tint: Color = Theme.onSurface) -> some View {
+        VStack(spacing: 12) {
+            if spinning { ProgressView() }
+            Text(title)
+                .font(Theme.font(size: 16, weight: .semibold))
+                .foregroundColor(tint)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    private var pairingDigits: some View {
+        let rejected = pairingCodeRejected && pairingCode.isEmpty
+        return HStack(spacing: 8) {
+            ForEach(0..<6, id: \.self) { index in
+                let active = !rejected && index == pairingCode.count
+                Text(digit(index))
+                    .font(Theme.font(size: 28, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.onSurface)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(rejected ? Theme.danger : (active ? Theme.primary : Theme.outlineVariant),
+                                    lineWidth: (rejected || active) ? 2 : 1)
+                    )
+            }
+        }
+        .accessibilityHidden(true)
+        .background {
+            TextField("", text: $pairingCode)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($pairingFieldFocused)
+                .opacity(0.02)
+                .accessibilityLabel("Pairing code")
+                .onChange(of: pairingCode) { newValue in
+                    let filtered = String(newValue.filter(\.isNumber).prefix(6))
+                    if filtered != newValue { pairingCode = filtered }
+                    if filtered.count == 6 { vm.submitPairingCode(filtered) }
+                }
+        }
+        .onTapGesture { pairingFieldFocused = true }
+    }
+
+    private var pairingCodeRejected: Bool {
+        if case .waitingForCodeInput(_, _, true) = vm.state { return true }
+        return false
     }
 
     private var addPage: some View {
