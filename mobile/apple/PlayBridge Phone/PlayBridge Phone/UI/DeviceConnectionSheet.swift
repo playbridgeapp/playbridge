@@ -392,33 +392,47 @@ struct DeviceConnectionSheet: View {
         .accessibilityAddTraits(thisPhoneSelected ? .isSelected : [])
     }
 
-    @ViewBuilder private var nearbySection: some View {
-        if scanning || !sections.nearby.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    sectionLabel("Nearby")
-                    Spacer()
-                    if scanning {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Searching")
-                                .font(Theme.font(size: 12))
-                                .foregroundColor(Theme.onSurfaceVariant)
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel("Searching")
+    private var nearbySection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                sectionLabel("Nearby")
+                Spacer()
+                if vm.nearbySearchActive {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Searching")
+                            .font(Theme.font(size: 12))
+                            .foregroundColor(Theme.onSurfaceVariant)
                     }
+                    .frame(minHeight: 44)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Searching")
+                } else {
+                    Button {
+                        vm.rescan()
+                        vm.pingSavedDevices()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.clockwise")
+                            Text("Search again")
+                        }
+                        .font(Theme.font(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.primary)
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Search again")
                 }
-                if scanning && sections.nearby.isEmpty {
-                    Text("Looking for TVs on this Wi‑Fi…")
-                        .font(Theme.font(size: 13))
-                        .foregroundColor(Theme.onSurfaceVariant)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                }
-                ForEach(sections.nearby) { row in
-                    deviceRow(row)
-                }
+            }
+            if sections.nearby.isEmpty {
+                Text(vm.nearbySearchActive ? "Looking for TVs on this Wi‑Fi…" : "No new devices found.")
+                    .font(Theme.font(size: 13))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            }
+            ForEach(sections.nearby) { row in
+                deviceRow(row)
             }
         }
     }

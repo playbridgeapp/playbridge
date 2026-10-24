@@ -97,6 +97,10 @@ final class ConnectionViewModel: ObservableObject {
     private var savedReconnectTimeout: DispatchWorkItem?
     private var savedEndpointRefreshTimeout: DispatchWorkItem?
     private var discoveryOwners = 0
+    /// Nearby shows Searching for this long, then Search again. Bonjour and Google Cast stay up.
+    @Published private(set) var nearbySearchActive = false
+    private var nearbySearchWindow: DispatchWorkItem?
+    private static let nearbySearchWindowSeconds: TimeInterval = 15
     private var savedReceiverPathMonitor: AtvForegroundPathMonitor?
     private lazy var savedReachability = SavedReceiverReachability(
         keyFor: { $0.uuid.isEmpty ? "\($0.ip):\($0.port)" : $0.uuid },
@@ -254,6 +258,7 @@ final class ConnectionViewModel: ObservableObject {
         googleCastBrowser.start()
         dlnaBrowser.start()
         rokuBrowser.start()
+        openNearbySearchWindow()
     }
 
     func stopDiscovery() {
@@ -265,6 +270,36 @@ final class ConnectionViewModel: ObservableObject {
         dlnaBrowser.stop()
         rokuBrowser.stop()
         dialBrowser.stop()
+        closeNearbySearchWindow()
+    }
+
+    /// Search again. A finished SSDP pass starts over. Bonjour and Google Cast are left running
+    /// so devices already found stay on screen.
+    func rescan() {
+        if discoveryOwners == 0 {
+            startDiscovery()
+            return
+        }
+        if !dlnaBrowser.isScanning { dlnaBrowser.start() }
+        if !rokuBrowser.isScanning { rokuBrowser.start() }
+        openNearbySearchWindow()
+    }
+
+    private func openNearbySearchWindow() {
+        nearbySearchWindow?.cancel()
+        nearbySearchActive = true
+        let window = DispatchWorkItem { [weak self] in
+            self?.nearbySearchActive = false
+            self?.nearbySearchWindow = nil
+        }
+        nearbySearchWindow = window
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.nearbySearchWindowSeconds, execute: window)
+    }
+
+    private func closeNearbySearchWindow() {
+        nearbySearchWindow?.cancel()
+        nearbySearchWindow = nil
+        nearbySearchActive = false
     }
 
     // MARK: - Connect
