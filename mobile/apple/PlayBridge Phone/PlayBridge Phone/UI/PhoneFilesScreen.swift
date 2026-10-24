@@ -7,6 +7,7 @@ struct PhoneFilesScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
     @EnvironmentObject private var collections: CollectionsStore
+    @EnvironmentObject private var nav: NavigationViewModel
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("pb_library_category") private var category = "Videos"
     @State private var query = ""
@@ -20,7 +21,6 @@ struct PhoneFilesScreen: View {
     @State private var selectedCollection: MediaCollection?
     @State private var newCollection = false
     @State private var collectionName = ""
-    @State private var showDevices = false
     private let categories = ["Videos", "Audio", "Images", "Collections"]
 
     private var filtered: [PhoneMedia] {
@@ -35,7 +35,7 @@ struct PhoneFilesScreen: View {
                 DashboardNavigationButton()
                 Text("Media Library").font(Theme.font(.title2).bold())
                 Spacer()
-                Button { showDevices = true } label: { Image(systemName: vm.isConnected ? "tv.fill" : "tv") }
+                Button { nav.openPlayOn() } label: { Image(systemName: vm.isConnected ? "tv.fill" : "tv") }
                     .accessibilityLabel("Connect to TV")
                 Menu {
                     Button("Import from Files", systemImage: "folder") { showImporter = true }
@@ -102,7 +102,6 @@ struct PhoneFilesScreen: View {
         .sheet(item: $selectedCollection) { collection in
             NavigationStack { CollectionDetailScreen(collectionId: collection.id, embedded: true).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { selectedCollection = nil } } } }
         }
-        .sheet(isPresented: $showDevices) { DeviceConnectionSheet() }
         .alert("New Collection", isPresented: $newCollection) {
             TextField("Collection name", text: $collectionName)
             Button("Create") { let name = collectionName.trimmingCharacters(in: .whitespacesAndNewlines); if !name.isEmpty { collections.createCollection(name: name) }; collectionName = "" }

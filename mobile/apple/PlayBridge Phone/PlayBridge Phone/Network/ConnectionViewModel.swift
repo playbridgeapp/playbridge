@@ -71,6 +71,8 @@ final class ConnectionViewModel: ObservableObject {
 
     @Published var state: ConnectionState = .disconnected
     @Published private(set) var nativeReceiverSelected = false
+    /// Playback is aimed at the PlayBridge receiver. A live socket can stand by while this is false.
+    @Published private(set) var playBridgeOutputSelected = false
     private(set) var destinationSelectionRevision: UInt64 = 0
     @Published var pairedDevice: PairedDevice?
     /// All TVs we've paired with (history), most-recent first.
@@ -95,6 +97,10 @@ final class ConnectionViewModel: ObservableObject {
     private var savedReconnectTimeout: DispatchWorkItem?
     private var savedEndpointRefreshTimeout: DispatchWorkItem?
     private var discoveryOwners = 0
+    /// Nearby shows Searching for this long, then Search again. Bonjour and Google Cast stay up.
+    @Published private(set) var nearbySearchActive = false
+    private var nearbySearchWindow: DispatchWorkItem?
+    private static let nearbySearchWindowSeconds: TimeInterval = 15
     private var savedReceiverPathMonitor: AtvForegroundPathMonitor?
     private lazy var savedReachability = SavedReceiverReachability(
         keyFor: { $0.uuid.isEmpty ? "\($0.ip):\($0.port)" : $0.uuid },
@@ -139,7 +145,9 @@ final class ConnectionViewModel: ObservableObject {
             savedExternalReceiverDevices = (try? JSONDecoder().decode([ExternalReceiverDevice].self, from: data)) ?? []
         }
         pairedDevice = store.loadPairedDevice()
-        nativeReceiverSelected = pairedDevice != nil && (UserDefaults.standard.string(forKey: "last_receiver_protocol") ?? "playbridge") == "playbridge"
+        let playBridgeRoute = (UserDefaults.standard.string(forKey: "last_receiver_protocol") ?? "playbridge") == "playbridge"
+        nativeReceiverSelected = pairedDevice != nil && playBridgeRoute
+        playBridgeOutputSelected = nativeReceiverSelected
         savedDevices = store.loadSavedDevices()
         // Migrate a pre-existing single paired device into the history list.
         if savedDevices.isEmpty, let p = pairedDevice {
@@ -178,7 +186,12 @@ final class ConnectionViewModel: ObservableObject {
         ws.$state
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
-                guard let self, !isExternalReceiver, !isAirPlay else { return }
+                guard let self else { return }
+                if isExternalReceiver || isAirPlay {
+                    // The sheet reads the socket while AirPlay is the output. Refresh when that link drops.
+                    if !value.isConnected { self.objectWillChange.send() }
+                    return
+                }
                 state = value
                 handleCastConnectionState(value)
                 if !value.isConnected {
@@ -245,6 +258,7 @@ final class ConnectionViewModel: ObservableObject {
         googleCastBrowser.start()
         dlnaBrowser.start()
         rokuBrowser.start()
+        openNearbySearchWindow()
     }
 
     func stopDiscovery() {
@@ -256,6 +270,36 @@ final class ConnectionViewModel: ObservableObject {
         dlnaBrowser.stop()
         rokuBrowser.stop()
         dialBrowser.stop()
+        closeNearbySearchWindow()
+    }
+
+    /// Search again. A finished SSDP pass starts over. Bonjour and Google Cast are left running
+    /// so devices already found stay on screen.
+    func rescan() {
+        if discoveryOwners == 0 {
+            startDiscovery()
+            return
+        }
+        if !dlnaBrowser.isScanning { dlnaBrowser.start() }
+        if !rokuBrowser.isScanning { rokuBrowser.start() }
+        openNearbySearchWindow()
+    }
+
+    private func openNearbySearchWindow() {
+        nearbySearchWindow?.cancel()
+        nearbySearchActive = true
+        let window = DispatchWorkItem { [weak self] in
+            self?.nearbySearchActive = false
+            self?.nearbySearchWindow = nil
+        }
+        nearbySearchWindow = window
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.nearbySearchWindowSeconds, execute: window)
+    }
+
+    private func closeNearbySearchWindow() {
+        nearbySearchWindow?.cancel()
+        nearbySearchWindow = nil
+        nearbySearchActive = false
     }
 
     // MARK: - Connect
@@ -263,9 +307,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Connect to a device found via Bonjour. Reuses a saved token/pin if we've paired with it.
     func connect(to device: DiscoveredDevice) {
         destinationSelectionRevision &+= 1
-        let sameReceiver = !isExternalReceiver && pairedDevice.map { saved in
-            (!device.uuid.isEmpty && saved.uuid == device.uuid) || (saved.ip == device.ip && saved.port == device.port)
-        } == true
+        let sameReceiver = !isExternalReceiver && pairedDevice.map { SavedReceiverEndpoint.sameIdentity($0, device) } == true
         usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         connectingDevice = device
@@ -293,6 +335,7 @@ final class ConnectionViewModel: ObservableObject {
         endSavedReconnectDiscovery()
         let device = (googleCastBrowser.devices + dlnaBrowser.devices + rokuBrowser.devices).first { $0.identity == device.identity } ?? device
         nativeReceiverSelected = false
+        playBridgeOutputSelected = false
         externalReceiver = device
         connectingDevice = nil
         ws.disconnect()
@@ -318,6 +361,7 @@ final class ConnectionViewModel: ObservableObject {
         googleCast.disconnect()
         if !preservingPlayback { routedStreamRegistrations.removeAll() }
         nativeReceiverSelected = true
+        playBridgeOutputSelected = true
         UserDefaults.standard.set("playbridge", forKey: "last_receiver_protocol")
     }
 
@@ -332,6 +376,7 @@ final class ConnectionViewModel: ObservableObject {
     /// user action rather than an automatic retry.
     func reconnectLastReceiverIfNeeded() {
         if isAirPlay { airPlay.refreshRoute(); return }
+        guard PlayOnPreferences.autoConnectEnabled() else { return }
         switch state {
         case .disconnected, .error:
             break
@@ -423,7 +468,7 @@ final class ConnectionViewModel: ObservableObject {
         savedReconnectDiscovery = browser.$devices
             .receive(on: RunLoop.main)
             .sink { [weak self] devices in
-                guard let live = devices.first(where: { $0.uuid == saved.uuid }) else { return }
+                guard let live = devices.first(where: { SavedReceiverEndpoint.sameUUID($0.uuid, saved.uuid) }) else { return }
                 // `$devices` can synchronously emit its current value while the
                 // cancellable is still being assigned. Defer handling so cleanup can
                 // always cancel the installed subscription and prevent duplicate retries.
@@ -581,6 +626,7 @@ final class ConnectionViewModel: ObservableObject {
     func disconnect() {
         destinationSelectionRevision &+= 1
         nativeReceiverSelected = false
+        playBridgeOutputSelected = false
         onUserMediaAction?()
         airPlay.disconnect()
         state = .disconnected
@@ -603,6 +649,37 @@ final class ConnectionViewModel: ObservableObject {
         routedStreamRegistrations.removeAll()
         endSavedReconnectDiscovery()
         ws.disconnect()
+    }
+
+    /// A PlayBridge socket is up. This phone or AirPlay can still be the selected output.
+    var playBridgeLinkConnected: Bool {
+        ws.isConnected && pairedDevice != nil && externalReceiver == nil
+    }
+
+    /// Leave the PlayBridge socket up and aim playback at this phone.
+    func selectThisPhone() {
+        guard playBridgeLinkConnected else { disconnect(); return }
+        destinationSelectionRevision &+= 1
+        if airPlay.selected { airPlay.disconnect() }
+        nativeReceiverSelected = true
+        playBridgeOutputSelected = false
+        UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
+        if ws.state.isConnected { state = ws.state }
+    }
+
+    /// Aim playback at the PlayBridge receiver. An open socket is reused.
+    func selectNativeReceiver() {
+        guard externalReceiver == nil, let device = pairedDevice else { return }
+        destinationSelectionRevision &+= 1
+        if airPlay.selected { airPlay.disconnect() }
+        nativeReceiverSelected = true
+        playBridgeOutputSelected = true
+        UserDefaults.standard.set("playbridge", forKey: "last_receiver_protocol")
+        if ws.isConnected {
+            state = ws.state
+        } else {
+            connectSaved(device)
+        }
     }
 
     /// Submit the 6-digit SAS code the user read off the TV during pairing.
@@ -646,7 +723,10 @@ final class ConnectionViewModel: ObservableObject {
                 do { try await googleCast.load(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
-        } else { ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, mediaKind: kind)) }
+        } else {
+            guard playBridgeOutputSelected else { return }
+            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, mediaKind: kind))
+        }
     }
 
     /// Cast an arbitrary media URL with optional request headers (IPTV channels and
@@ -739,6 +819,7 @@ final class ConnectionViewModel: ObservableObject {
             recordCast(historyCommand)
             return
         }
+        guard playBridgeOutputSelected else { throw StreamRoutingError.message("This phone is the selected output.") }
         if !queue {
             noteNewCast(mediaKind: kind, title: video.displayTitle)
             routedStreamRegistrations.removeAll()
@@ -793,6 +874,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Open a URL on the TV browser.
     func browseTo(url: String, browserMode: String? = nil, desktopMode: Bool = false) {
         guard !isExternalReceiver else { operationError = "This receiver cannot open a browser page."; return }
+        guard playBridgeOutputSelected else { return }
         guard nativeRemotePolicy.allowsLaunch(browserMode) else { return }
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -1097,6 +1179,8 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func sendMediaCommand(_ command: String) {
+        // A standing-by receiver stays connected, but new videos stay on this phone.
+        guard playBridgeOutputSelected || !playBridgeLinkConnected else { return }
         guard isConnected else { operationError = "Connect a device before casting."; return }
         if ws.send(command) {
             if let json = try? JSONSerialization.jsonObject(with: Data(command.utf8)) as? [String: Any],
@@ -1178,6 +1262,7 @@ final class ConnectionViewModel: ObservableObject {
                 try await googleCast.load(url: URL(string: item["url"] as! String)!,
                     title: item["title"] as? String, contentType: item["contentType"] as? String)
             } else {
+                guard playBridgeOutputSelected else { throw StreamRoutingError.message("This phone is the selected output.") }
                 let saved = try JSONSerialization.jsonObject(with: Data(entry.command.utf8)) as? [String: Any]
                 var payload = saved?["action"] as? String == "playlist"
                     ? saved?["payload"] as? [String: Any] ?? [:] : [:]
@@ -1200,13 +1285,19 @@ final class ConnectionViewModel: ObservableObject {
 
     private func adoptAirPlayDestination() {
         destinationSelectionRevision &+= 1
-        nativeReceiverSelected = false
-        endCastSession()
+        let keepLink = playBridgeLinkConnected
+        playBridgeOutputSelected = false
+        if !keepLink {
+            nativeReceiverSelected = false
+            endCastSession()
+        }
         endSavedReconnectDiscovery()
         externalReceiver = nil
         googleCast.disconnect()
-        ws.disconnect()
-        connectingDevice = nil
+        if !keepLink {
+            ws.disconnect()
+            connectingDevice = nil
+        }
         operationError = nil
         UserDefaults.standard.set("airplay", forKey: "last_receiver_protocol")
         updateAirPlayState()
@@ -1337,10 +1428,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Returns nil when there's no match — never falls back to the active device, or we'd
     /// try to validate a new TV against another TV's pin ("fingerprint changed").
     private func matchingSaved(for device: DiscoveredDevice) -> PairedDevice? {
-        savedDevices.first { saved in
-            if !device.uuid.isEmpty, !saved.uuid.isEmpty { return device.uuid == saved.uuid }
-            return saved.ip == device.ip
-        }
+        savedDevices.first { SavedReceiverEndpoint.sameIdentity($0, device) }
     }
 
     private func persistCredentials(_ creds: WebSocketClient.IssuedCredentials) {
@@ -1482,6 +1570,7 @@ extension ConnectionViewModel: PageCastTransport {
     }
 
     func sendWebsiteCommand(action: String, payload: [String: Any]) -> Bool {
+        guard playBridgeOutputSelected else { return false }
         if !nativeRemotePolicy.isLegacy {
             let operation = action == "queue_add" ? "append" : action == "playlist_jump" ? "jump_index" : ""
             guard nativeRemotePolicy.allowsQueue(operation) else { return false }
@@ -1495,7 +1584,7 @@ extension ConnectionViewModel: PageCastTransport {
     func sendWebsitePlaylist(_ request: PageCastRequest, allowedPrivateOrigins: Set<String>) async throws {
         try Task.checkCancellation()
         guard isConnected, ws.isConnected else { throw PageCastError(code: "connect_failed") }
-        guard !isAirPlay, !isExternalReceiver else { throw PageCastError(code: "unsupported_target") }
+        guard playBridgeOutputSelected, !isAirPlay, !isExternalReceiver else { throw PageCastError(code: "unsupported_target") }
         let command = request.playlistCommand(allowedPrivateOrigins: allowedPrivateOrigins)
         guard !command.isEmpty else { throw PageCastError(code: "invalid_request") }
         // Drop the previous queue snapshot before waiting for this playlist's echo.

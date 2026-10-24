@@ -4,6 +4,7 @@ struct IptvDetailScreen: View {
     let playlistId: UUID
 
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var iptv: IptvStore
 
     @State private var search = ""
@@ -133,7 +134,7 @@ struct IptvDetailScreen: View {
     }
 
     private func cast(_ ch: IptvChannel) {
-        guard vm.isConnected else { showToast("Not connected — open Connection first"); return }
+        guard vm.isConnected else { nav.openPlayOn(); return }
         vm.castMedia(url: ch.url, title: ch.name, headers: ch.headers)
         showToast("Casting \(ch.name)")
     }

@@ -13,6 +13,16 @@ Debug phone builds emit `[BridgedStartup]` event labels and elapsed milliseconds
 with no URLs or page data. `paint_opportunity` is the two-frame fallback on WebKit
 versions without Paint Timing; it does not prove that Streams content is ready.
 
+Play on sheet grouping (host model checks, no simulator):
+
+```sh
+bash mobile/apple/tests/run-playon-catalog-checks.sh
+```
+
+Checks saved versus nearby versus not-available, dedupe of a discovery that
+matches a saved receiver by id or address, reachable-first then last-used order,
+and the auto-connect preference default.
+
 Dashboard tile ordering and persistence (host model checks):
 
 ```sh

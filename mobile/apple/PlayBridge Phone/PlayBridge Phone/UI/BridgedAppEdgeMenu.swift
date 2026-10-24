@@ -8,7 +8,6 @@ struct BridgedAppEdgeMenu: View {
     @State private var showMenu = false
     @EnvironmentObject private var store: BrowserStore
     @State private var showSettings = false
-    @State private var showConnection = false
     @State private var pendingAction: (() -> Void)?
     @State private var interfaceOrientation: UIInterfaceOrientation = .unknown
 
@@ -40,7 +39,7 @@ struct BridgedAppEdgeMenu: View {
                 }
                 action("Dashboard", icon: "square.grid.2x2.fill") { nav.navigate(to: .dashboard) }
                 action("Remote", icon: "av.remote") { nav.navigate(to: .remote) }
-                action("Connect TV", icon: "tv") { showConnection = true }
+                action("Play on", icon: "tv") { nav.openPlayOn() }
                 action("Reload", icon: "arrow.clockwise") { tab.reload() }
                 action("App Settings", icon: "gearshape") { showSettings = true }
             }
@@ -49,7 +48,6 @@ struct BridgedAppEdgeMenu: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showConnection) { DeviceConnectionSheet() }
         .sheet(isPresented: $showSettings) {
             BrowserAppSettingsSheet(tab: tab, store: store)
         }

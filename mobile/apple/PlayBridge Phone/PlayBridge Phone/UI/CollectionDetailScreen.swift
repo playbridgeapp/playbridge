@@ -11,6 +11,9 @@ struct CollectionDetailScreen: View {
     @State private var localItem: PhoneMedia?
     var embedded = false
     @State private var toast: String?
+    @State private var showPlayOn = false
+    @State private var playOnPage: PlayOnPage?
+    @State private var playOnPicking = true
 
     private var collection: MediaCollection? { collections.collection(collectionId) }
 
@@ -61,6 +64,7 @@ struct CollectionDetailScreen: View {
         .sheet(isPresented: $showAdd) {
             AddManualItemSheet(collectionId: collectionId)
         }
+        .playOnLocalSheet(isPresented: $showPlayOn, page: $playOnPage, picking: $playOnPicking)
     }
 
     private func header(_ c: MediaCollection) -> some View {
@@ -131,7 +135,12 @@ struct CollectionDetailScreen: View {
             localItem = media
             return
         }
-        guard vm.isConnected else { showToast("Not connected — open Connection first"); return }
+        guard vm.isConnected else {
+            playOnPage = nil
+            playOnPicking = true
+            showPlayOn = true
+            return
+        }
         vm.castMedia(url: item.url, title: item.title, headers: item.headers, contentType: item.mimeType)
         showToast("Casting \(item.title)")
     }

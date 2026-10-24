@@ -55,7 +55,6 @@ private struct ActiveTabView: View {
     @State private var showDetected = false
     @State private var showMenu = false
     @State private var pendingMenuAction: (() -> Void)?
-    @State private var showDeviceSheet = false
     @FocusState private var addressFocused: Bool
     @State private var editingStartAddress = ""
 
@@ -192,11 +191,6 @@ private struct ActiveTabView: View {
                 showMenu = false
             }
         }
-        .sheet(isPresented: $showDeviceSheet) {
-            DeviceConnectionSheet()
-                .environmentObject(vm)
-                .environmentObject(nav)
-        }
         .sheet(item: $tab.prompt) { prompt in
             BrowserPromptView(prompt: prompt) { accepted, text in
                 if tab.prompt?.id == prompt.id { tab.prompt = nil }
@@ -269,7 +263,7 @@ private struct ActiveTabView: View {
     }
 
     private var tvButton: some View {
-        Button { showDeviceSheet = true } label: {
+        Button { nav.openPlayOn() } label: {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "tv")
                     .font(.system(size: 22))
@@ -283,7 +277,7 @@ private struct ActiveTabView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(vm.isConnected ? "Connected TV" : "Connect TV")
+        .accessibilityLabel("Play on")
     }
 
     private var playButton: some View {

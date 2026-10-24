@@ -54,7 +54,7 @@ struct PageCastRequestSheet: View {
                             case .waitingForApproval(let name):
                                 ProgressView("Approve the connection on \(name)…")
                             case .pinMismatch:
-                                Text("This device’s identity changed. Reconnect from Devices before casting.").foregroundColor(Theme.danger)
+                                Text("This device’s identity changed. Reconnect from Play on before casting.").foregroundColor(Theme.danger)
                             case .pairingDenied, .authFailed:
                                 Text("The connection wasn’t approved. Cancel and try again.").foregroundColor(Theme.danger)
                             case .error:
@@ -90,9 +90,7 @@ private struct PageCastDeviceChoices: View {
     @State private var address = ""
     private var discovered: [DiscoveredDevice] {
         vm.browser.devices.filter { device in
-            !vm.savedDevices.contains { saved in
-                (!device.uuid.isEmpty && device.uuid == saved.uuid) || (device.ip == saved.ip && device.port == saved.port)
-            }
+            !vm.savedDevices.contains { SavedReceiverEndpoint.sameIdentity($0, device) }
         }
     }
     var body: some View {

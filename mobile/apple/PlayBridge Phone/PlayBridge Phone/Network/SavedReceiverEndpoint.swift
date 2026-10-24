@@ -3,8 +3,11 @@ import Foundation
 /// Discovery updates routing information, never the saved receiver's identity or trust.
 enum SavedReceiverEndpoint {
     static func refresh(_ saved: PairedDevice, from devices: [DiscoveredDevice]) -> PairedDevice {
+        // Only a saved receiver that already has an id, matched by that id.
+        // Address matching belongs to isLive: a uuid-less record must not take
+        // the name of whoever currently answers at its address.
         guard !saved.uuid.isEmpty,
-              let live = devices.first(where: { $0.uuid == saved.uuid && valid($0) }) else { return saved }
+              let live = devices.first(where: { sameUUID($0.uuid, saved.uuid) && valid($0) }) else { return saved }
         var updated = saved
         updated.ip = live.ip
         updated.port = live.port
@@ -14,19 +17,34 @@ enum SavedReceiverEndpoint {
         return updated
     }
 
+    /// Both non-empty ids must be equal. Address is only an identity when one side has no id.
+    static func sameIdentity(_ saved: PairedDevice, _ live: DiscoveredDevice) -> Bool {
+        if !saved.uuid.isEmpty, !live.uuid.isEmpty { return sameUUID(saved.uuid, live.uuid) }
+        return saved.ip == live.ip && saved.port == live.port
+    }
+
     static func sameAddress(_ lhs: PairedDevice, _ rhs: PairedDevice) -> Bool {
         lhs.ip == rhs.ip && lhs.port == rhs.port && lhs.wssPort == rhs.wssPort
     }
 
     static func isLive(_ saved: PairedDevice, in devices: [DiscoveredDevice]) -> Bool {
-        devices.contains { live in
-            guard valid(live) else { return false }
-            return !saved.uuid.isEmpty ? live.uuid == saved.uuid : (live.ip == saved.ip && live.port == saved.port)
-        }
+        devices.contains { live in valid(live) && sameIdentity(saved, live) }
     }
 
     static func refreshHistory(_ saved: [PairedDevice], from devices: [DiscoveredDevice]) -> [PairedDevice] {
         saved.map { refresh($0, from: devices) }
+    }
+
+    /// UPnP USNs (`uuid:X::upnp:rootdevice` and `uuid:X::urn:…`) are one device.
+    static func sameUUID(_ lhs: String, _ rhs: String) -> Bool {
+        func head(_ id: String) -> String {
+            guard let range = id.range(of: "::") else { return id }
+            let head = String(id[..<range.lowerBound])
+            return head.isEmpty ? id : head
+        }
+        let left = head(lhs)
+        let right = head(rhs)
+        return !left.isEmpty && left == right
     }
 
     private static func valid(_ device: DiscoveredDevice) -> Bool {

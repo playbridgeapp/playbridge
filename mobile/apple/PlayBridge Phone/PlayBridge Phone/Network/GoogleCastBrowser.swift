@@ -15,7 +15,14 @@ struct ExternalReceiverDevice: Identifiable, Codable, Equatable {
     var protocolName: String {
         switch protocolID { case "dlna": return "DLNA"; case "roku": return "Roku"; case "dial": return "DIAL"; default: return "Google Cast" }
     }
-    var identity: String { protocolID + ":" + id }
+    /// Identity ignores a UPnP USN suffix (`::upnp:rootdevice`, `::urn:…`).
+    var identity: String { protocolID + ":" + Self.canonicalID(id) }
+
+    static func canonicalID(_ id: String) -> String {
+        guard let range = id.range(of: "::") else { return id }
+        let head = String(id[..<range.lowerBound])
+        return head.isEmpty ? id : head
+    }
 
     static func parse(serviceName: String, addresses: [String], port: Int, txt: [String: String]) -> ExternalReceiverDevice? {
         guard !addresses.isEmpty, (1...65535).contains(port) else { return nil }
@@ -109,9 +116,10 @@ final class GoogleCastBrowser: NSObject, ObservableObject, NetServiceBrowserDele
     private func publish() {
         var unique: [String: ExternalReceiverDevice] = [:]
         for device in resolved.values {
-            if let old = unique[device.id] {
-                unique[device.id] = .init(id: device.id, name: device.name, addresses: Array(Set(old.addresses + device.addresses)).sorted(), port: device.port, model: device.model)
-            } else { unique[device.id] = device }
+            let key = ExternalReceiverDevice.canonicalID(device.id)
+            if let old = unique[key] {
+                unique[key] = .init(id: device.id, name: device.name, addresses: Array(Set(old.addresses + device.addresses)).sorted(), port: device.port, model: device.model, location: device.location ?? old.location, receiverProtocol: device.receiverProtocol ?? old.receiverProtocol)
+            } else { unique[key] = device }
         }
         devices = unique.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

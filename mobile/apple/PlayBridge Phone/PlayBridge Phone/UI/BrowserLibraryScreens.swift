@@ -14,6 +14,7 @@ struct BrowserSettingsScreen: View {
     @State private var showCastPermissions = false
     @State private var showLicences = false
     @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
+    @State private var autoConnect = PlayOnPreferences.autoConnectEnabled()
 
     var body: some View {
         ZStack {
@@ -32,6 +33,13 @@ struct BrowserSettingsScreen: View {
                 .padding(.vertical, 12)
 
                 Form {
+                    Section("Casting") {
+                        Toggle("Auto-connect to this TV", isOn: $autoConnect)
+                            .tint(Theme.primary)
+                            .onChange(of: autoConnect) { enabled in
+                                UserDefaults.standard.set(enabled, forKey: PlayOnPreferences.autoConnectKey)
+                            }
+                    }
                     Section("Search engine") {
                         Picker("Search engine", selection: $engine) {
                             ForEach(SearchEngine.allCases) { e in Text(e.label).tag(e) }

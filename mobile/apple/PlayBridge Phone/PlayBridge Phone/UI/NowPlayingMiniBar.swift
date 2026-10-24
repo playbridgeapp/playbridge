@@ -6,7 +6,6 @@ struct NowPlayingMiniBar: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var pageCasting: PageCastCoordinator
-    @Binding var showDestinationPicker: Bool
 
     private var playback: TvPlaybackStatus? { vm.coordinator.playback }
     private var playing: Bool {
@@ -42,7 +41,7 @@ struct NowPlayingMiniBar: View {
                         vm.queryContext()
                         nav.navigate(to: .remote)
                     } else {
-                        showDestinationPicker = true
+                        nav.openPlayOn()
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -68,7 +67,7 @@ struct NowPlayingMiniBar: View {
                 .accessibilityLabel(playing ? "Now playing: \(primaryText). Open Remote" : "\(primaryText). Choose a device")
 
                 if playing {
-                    Button { showDestinationPicker = true } label: {
+                    Button { nav.openPlayOn() } label: {
                         Image(systemName: "tv")
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 42, height: 42)

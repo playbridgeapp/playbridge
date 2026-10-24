@@ -1,9 +1,14 @@
 import SwiftUI
 
+struct PlayOnRequest: Identifiable, Equatable {
+    let id = UUID()
+    var page: PlayOnPage?
+    var openedForPicking: Bool
+}
+
 enum AppScreen: Hashable {
     case browser
     case dashboard
-    case connection
     case remote
     case phoneFiles
     case iptv
@@ -22,6 +27,15 @@ final class NavigationViewModel: ObservableObject {
     @Published var lastMainScreen: AppScreen = .browser
     @Published var remoteOrigin: AppScreen? = nil
     @Published var dashboardOrigin: AppScreen? = nil
+    @Published var playOnRequest: PlayOnRequest?
+    @Published var pendingAtvPairing = false
+    var playOnSuppressCount = 0
+    /// Banner dismissals last for this process, including after the sheet closes and reopens.
+    var playOnDismissedBanners = Set<String>()
+
+    func openPlayOn(picking: Bool = true, page: PlayOnPage? = nil) {
+        playOnRequest = PlayOnRequest(page: page, openedForPicking: picking)
+    }
     weak var browserStore: BrowserStore?
     private var remoteAppTabID: UUID?
     private var dashboardAppTabID: UUID?
@@ -42,7 +56,7 @@ final class NavigationViewModel: ObservableObject {
             dashboardAppTabID = currentScreen == .browser && browserStore?.activeBridgedApp != nil
                 ? browserStore?.activeID : nil
         }
-        if target == .browser || target == .connection {
+        if target == .browser {
             lastMainScreen = target
         }
         

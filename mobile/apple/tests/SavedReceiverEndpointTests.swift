@@ -35,6 +35,33 @@ import Foundation
         precondition(!SavedReceiverEndpoint.isLive(legacy, in: [live]))
         let sameLegacy = DiscoveredDevice(ip: legacy.ip, port: legacy.port, name: legacy.name)
         precondition(SavedReceiverEndpoint.isLive(legacy, in: [sameLegacy]))
+        let occupant = DiscoveredDevice(ip: saved.ip, port: saved.port, name: "MacBook Pro.local", uuid: "mac-uuid")
+        precondition(!SavedReceiverEndpoint.sameIdentity(saved, occupant), "two ids at one address are different receivers")
+        precondition(SavedReceiverEndpoint.refresh(saved, from: [occupant]) == saved, "a stranger must not rename or move the saved TV")
+        precondition(!SavedReceiverEndpoint.isLive(saved, in: [occupant]))
+        var unnamedAtSaved = occupant
+        unnamedAtSaved.uuid = ""
+        precondition(SavedReceiverEndpoint.sameIdentity(saved, unnamedAtSaved), "address matches when one side has no id")
+        precondition(SavedReceiverEndpoint.refresh(saved, from: [unnamedAtSaved]) == saved,
+                     "an id-less advertiser does not rename or move the saved receiver")
+        precondition(SavedReceiverEndpoint.isLive(saved, in: [unnamedAtSaved]))
+        let strangerAtLegacy = DiscoveredDevice(ip: legacy.ip, port: legacy.port, name: "MacBook Pro.local", uuid: "mac-uuid")
+        precondition(SavedReceiverEndpoint.refresh(legacy, from: [strangerAtLegacy]) == legacy,
+                     "a saved receiver with no id keeps its name when another receiver sits at its address")
+        precondition(SavedReceiverEndpoint.refreshHistory([legacy], from: [strangerAtLegacy]) == [legacy])
+        precondition(SavedReceiverEndpoint.isLive(legacy, in: [strangerAtLegacy]),
+                     "reachability still matches a uuid-less saved receiver by address")
+        let portOnly = DiscoveredDevice(ip: saved.ip, port: saved.port + 1, name: unnamedAtSaved.name, uuid: "")
+        precondition(!SavedReceiverEndpoint.sameIdentity(saved, portOnly))
+        let rootUSN = DiscoveredDevice(ip: "192.0.2.30", port: 1962, name: "Kodi", uuid: "uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff::upnp:rootdevice")
+        var savedUSN = saved
+        savedUSN.uuid = "uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff::urn:schemas-upnp-org:device:MediaRenderer:1"
+        precondition(SavedReceiverEndpoint.sameIdentity(savedUSN, rootUSN), "UPnP search targets are one receiver")
+        let refreshedUSN = SavedReceiverEndpoint.refresh(savedUSN, from: [rootUSN])
+        precondition(refreshedUSN.uuid == savedUSN.uuid && refreshedUSN.name == "Kodi" && refreshedUSN.ip == "192.0.2.30")
+        let otherUSN = DiscoveredDevice(ip: "192.0.2.30", port: 1962, name: "Other", uuid: "uuid:someone-else::upnp:rootdevice")
+        precondition(!SavedReceiverEndpoint.sameIdentity(savedUSN, otherUSN))
+        precondition(SavedReceiverEndpoint.refresh(savedUSN, from: [otherUSN]) == savedUSN)
         var first = saved
         first.uuid = "other"; first.lastConnected = Date(timeIntervalSince1970: 456)
         let history = SavedReceiverEndpoint.refreshHistory([first, saved], from: [live])
