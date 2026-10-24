@@ -93,7 +93,7 @@ fun BrowserReceiverSheet(
                 BrowserHostStopAction(hostState.running, hostState.busy) {
                     scope.launch {
                         if (hostState.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
-                        browserRepo.stopHost()
+                        if (browserRepo.stopHost().isSuccess) onDismiss()
                     }
                 }
             }
@@ -314,7 +314,7 @@ private fun ReadySessionRow(
         Column {
             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options for ${session.name}") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Disconnect", color = MaterialTheme.colorScheme.error) },
+                DropdownMenuItem(text = { Text("Disconnect") },
                     onClick = { menu = false; onDisconnect() })
                 DropdownMenuItem(text = { Text("Forget", color = MaterialTheme.colorScheme.error) },
                     onClick = { menu = false; onForget() })

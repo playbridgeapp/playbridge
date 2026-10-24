@@ -300,7 +300,8 @@ fun PlayOnSheet(
                 if (page == PlayOnPage.Browser) BrowserHostStopAction(host.running, host.busy) {
                     scope.launch {
                         if (host.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
-                        browser.stopHost()
+                        // Nothing left to do on a stopped host page; reopening it starts hosting again.
+                        if (browser.stopHost().isSuccess) page = PlayOnPage.Add
                     }
                 } else FilledTonalIconButton(onClick = ::dismiss, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.Close, "Close Play on", Modifier.size(18.dp))
