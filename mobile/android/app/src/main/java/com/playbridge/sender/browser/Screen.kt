@@ -10,7 +10,6 @@ sealed class Screen {
     object Browser : Screen()
     object Tabs : Screen()
     object Extensions : Screen()
-    object Connection : Screen()
     object Downloads : Screen()
     object Settings : Screen()
     object History : Screen()
@@ -51,7 +50,6 @@ sealed class Screen {
                         Browser -> "browser"
                         Tabs -> "tabs"
                         Extensions -> "extensions"
-                        Connection -> "connection"
                         Downloads -> "downloads"
                         Settings -> "settings"
                         History -> "history"
@@ -78,7 +76,7 @@ sealed class Screen {
                         "browser" -> Browser
                         "tabs" -> Tabs
                         "extensions" -> Extensions
-                        "connection" -> Connection
+                        "connection" -> Dashboard // Retired Devices route from saved Activity state.
                         "downloads" -> Downloads
                         "settings" -> Settings
                         "history" -> History

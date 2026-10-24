@@ -123,7 +123,6 @@ import com.playbridge.sender.downloads.notifications.openCompletedDownload
 import com.playbridge.sender.downloads.PendingDownload
 import com.playbridge.sender.downloads.PendingPopup
 import com.playbridge.sender.model.TvDevice
-import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import com.playbridge.sender.ui.theme.AppTheme
@@ -759,9 +758,7 @@ class BrowserActivity : ComponentActivity() {
             }
             var remoteOriginBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
             var pluginManagerReturnTabId by rememberSaveable { mutableStateOf<String?>(null) }
-            var connectionInitialTab by remember { mutableStateOf(0) }
             LaunchedEffect(currentScreen) {
-                if (currentScreen != Screen.Connection) connectionInitialTab = 0
                 if (currentScreen != Screen.AddonSettings) pluginManagerReturnTabId = null
             }
             // The place the Dashboard was opened from, so its close (X) returns there. Null on a
@@ -2593,7 +2590,6 @@ class BrowserActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                            Screen.Connection -> {}
                             Screen.History -> {}
                             Screen.CastHistory -> {}
                             Screen.Bookmarks -> {}
@@ -2736,7 +2732,6 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = target
                         },
-                        connectionInitialTab = connectionInitialTab,
                         addonSettingsFromBridgedApp = pluginManagerReturnTabId != null,
                         onAddonSettingsBack = {
                             val appTab = pluginManagerReturnTabId

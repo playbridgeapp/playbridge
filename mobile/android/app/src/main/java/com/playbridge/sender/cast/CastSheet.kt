@@ -95,7 +95,6 @@ fun CastSheet(
     playerMode: String = "tv",
     onPlayerModeChange: (String) -> Unit = {},
     selectedTvDevice: TvDevice? = null,
-    onOpenAllDevices: () -> Unit = {},
     browseUrl: String = "",
     onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,

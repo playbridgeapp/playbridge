@@ -127,7 +127,6 @@ fun PhoneFilesScreen(
     viewModel: ConnectionViewModel,
     uiState: PhoneFilesUiState,
     onBack: () -> Unit,
-    onOpenAllDevices: () -> Unit = {},
     onAddToCollection: (PhoneMediaItem) -> Unit = {},
 ) {
     val context = LocalContext.current

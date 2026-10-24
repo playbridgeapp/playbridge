@@ -42,6 +42,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.ListItem
+import com.playbridge.sender.connection.ConnectionViewModel
+import org.koin.androidx.compose.koinViewModel
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -286,6 +290,16 @@ private fun SettingsHubContent(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         )
+                        if (row.title == "Casting") {
+                            val connections: ConnectionViewModel = koinViewModel()
+                            val autoConnect by connections.autoConnectEnabled.collectAsState()
+                            ListItem(
+                                headlineContent = { Text("Auto-connect to TV") },
+                                supportingContent = { Text("Reconnect to the last PlayBridge TV") },
+                                trailingContent = { Switch(autoConnect, connections::setAutoConnectEnabled) },
+                                modifier = Modifier.clickable { connections.setAutoConnectEnabled(!autoConnect) },
+                            )
+                        }
                     }
                     is SettingsHubRow.Item -> {
                         SettingsNavItem(

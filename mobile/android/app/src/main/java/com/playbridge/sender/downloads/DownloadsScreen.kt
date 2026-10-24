@@ -105,7 +105,6 @@ private fun accentFor(status: String): Accent = when (status) {
 @Composable
 fun DownloadsScreen(
     onBack: () -> Unit,
-    onOpenAllDevices: () -> Unit = {},
     onOpenRemote: () -> Unit = {},
     onOpenUrl: (String) -> Unit = {},
 ) {

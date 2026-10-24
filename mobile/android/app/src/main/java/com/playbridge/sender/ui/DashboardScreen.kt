@@ -106,6 +106,7 @@ fun DashboardScreen(
     onClose: () -> Unit = { onNavigate(currentScreen) },
     /** Global Settings entry (top-right gear). Defaults to [Screen.Settings]. */
     onSettings: () -> Unit = { onNavigate(Screen.Settings) },
+    onPlayOn: () -> Unit = {},
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
@@ -360,7 +361,7 @@ fun DashboardScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = ripple(bounded = true),
-                        onClick = { onNavigate(Screen.Connection) }
+                        onClick = onPlayOn
                     )
             ) {
                 Row(
@@ -438,13 +439,17 @@ fun DashboardScreen(
                                     DashboardCard(
                                         item = item,
                                         isActive = item.app == null && item.id != "bridged-apps" &&
-                                            isCurrentScreen(currentScreen, item.screen),
+                                            item.screen?.let { isCurrentScreen(currentScreen, it) } == true,
                                         animDelay = 0,
                                         visible = visible,
                                         modifier = Modifier.weight(1f),
                                         tall = rowIndex == 0,
                                         onClick = {
-                                            item.app?.let(onOpenBridgedApp) ?: onNavigate(item.screen)
+                                            when {
+                                                item.app != null -> onOpenBridgedApp(item.app)
+                                                item.screen != null -> onNavigate(item.screen)
+                                                else -> onPlayOn()
+                                            }
                                         },
                                         onLongClick = {
                                             if (item.app != null) appToInspectOrigin = item.app.origin

@@ -14,7 +14,7 @@ class DashboardItemsTest {
         Screen.Remote to "remote",
         Screen.Browser to "browser",
         Screen.Library to "library",
-        Screen.Connection to "connection",
+        null to "connection",
         Screen.ScreenMirror to "screen-mirror",
         Screen.PhoneFiles to "phone-files",
         Screen.DebridLibrary to "debrid",
@@ -50,7 +50,7 @@ class DashboardItemsTest {
             assertEquals("remote", remote.id)
             assertEquals("Remote", remote.title)
             assertEquals("Living Room · TV remote only", remote.subtitle)
-            assertEquals("Not connected", items.single { it.screen == Screen.Connection }.subtitle)
+            assertEquals("Not connected", items.single { it.id == "connection" }.subtitle)
             assertEquals(debridSupported, items.any { it.screen == Screen.DebridLibrary })
         }
         assertEquals("Control your TV", dashboardItems().single { it.id == "remote" }.subtitle)

@@ -51,9 +51,10 @@ internal fun dashboardItems(
         ),
         DashboardItem(
             icon = Icons.Default.Tv,
-            title = "Connection",
+            title = "Play on",
             subtitle = if (isConnected) "Connected" else "Not connected",
-            screen = Screen.Connection,
+            screen = null,
+            id = "connection", // Preserve the saved dashboard tile order.
             gradientColors = if (isConnected)
                 listOf(Color(0xFF2E7D32), Color(0xFF43A047))
             else
@@ -133,13 +134,12 @@ internal data class DashboardItem(
     val icon: ImageVector,
     val title: String,
     val subtitle: String,
-    val screen: Screen,
+    val screen: Screen?,
     val gradientColors: List<Color>,
     val id: String = when (screen) {
         Screen.Remote -> "remote"
         Screen.Browser -> "browser"
         Screen.Library -> "library"
-        Screen.Connection -> "connection"
         Screen.ScreenMirror -> "screen-mirror"
         Screen.PhoneFiles -> "phone-files"
         Screen.DebridLibrary -> "debrid"

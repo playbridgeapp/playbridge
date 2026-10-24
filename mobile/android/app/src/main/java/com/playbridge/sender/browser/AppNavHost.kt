@@ -70,7 +70,6 @@ import com.playbridge.sender.history.HistoryScreen
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.settings.SettingsScreen
-import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.dashboardPageCount
 import com.playbridge.sender.cast.mirror.ScreenMirrorScreen
@@ -105,7 +104,6 @@ fun AppNavHost(
     onScreenChange: (Screen) -> Unit,
     lastMainScreen: Screen,
     onLastMainScreenChange: (Screen) -> Unit,
-    connectionInitialTab: Int = 0,
     // Restores the source screen and, when applicable, its bridged app session.
     onRemoteBack: () -> Unit,
     onAddonSettingsBack: () -> Unit = { onScreenChange(Screen.Library) },
@@ -379,20 +377,6 @@ fun AppNavHost(
             linkedPickerVisible = true
         }
     }
-    // "Find more devices" from host-level pickers must expand Other devices even when
-    // the parent left connectionInitialTab at 0 (BrowserActivity only sets tab=1 on some paths).
-    var expandOtherDevices by remember { mutableStateOf(false) }
-    LaunchedEffect(currentScreen) {
-        if (currentScreen != Screen.Connection) expandOtherDevices = false
-    }
-    fun openAllDevicesExpanded() {
-        if (isFullscreen) {
-            onIsFullscreenChange(false)
-            session?.exitFullScreenMode()
-        }
-        expandOtherDevices = true
-        onScreenChange(Screen.Connection)
-    }
     if (showDevicePicker) {
         PlayOnSheet(
             onDismiss = { showDevicePicker = false; devicePickerIsPicking = false },
@@ -456,10 +440,10 @@ fun AppNavHost(
             } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                 slideInVertically { height -> -height } + fadeIn() togetherWith
                         slideOutVertically { height -> height } + fadeOut()
-            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.LibraryDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary || initialState == Screen.Connection)) {
+            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.LibraryDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary)) {
                 androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
                         androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
-            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary || targetState == Screen.Connection) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.LibraryDetail)) {
+            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.LibraryDetail)) {
                 androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
                         androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
             } else {
@@ -1004,31 +988,10 @@ fun AppNavHost(
                         }
                     }
                 }
-                Screen.Connection -> {
-                    BackHandler { onScreenChange(Screen.Dashboard) }
-                    ConnectionScreen(
-                        viewModel = connectionViewModel,
-                        onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onRemoteClick = if (
-                            activeExternalDevice != null || remoteTV?.paired == true ||
-                            (castRoute is CastSessionManager.Route.NativeTv &&
-                                connectionState is WebSocketClient.ConnectionState.Connected)
-                        ) {
-                            {
-                                if (activeExternalDevice == null) {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                }
-                                onScreenChange(Screen.Remote)
-                            }
-                        } else null,
-                        initialTab = if (expandOtherDevices) 1 else connectionInitialTab,
-                    )
-                }
                 Screen.Downloads -> {
                     BackHandler { onScreenChange(lastMainScreen) }
                     DownloadsScreen(
                         onBack = { onScreenChange(lastMainScreen) },
-                        onOpenAllDevices = { openAllDevicesExpanded() },
                         onOpenRemote = { onScreenChange(Screen.Remote) },
                         // New tab: works with no tabs open and keeps the current page.
                         onOpenUrl = { url ->
@@ -1131,7 +1094,6 @@ fun AppNavHost(
                             }
                         },
                         tvName = tvDevice?.name,
-                        onOpenConnectionScreen = { showDevicePicker = true },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
                         onRemoteClick = if (
                             activeExternalDevice != null || remoteTV?.paired == true ||
@@ -1182,7 +1144,6 @@ fun AppNavHost(
                             if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
                         },
                         onDominantColorChange = { libraryDetailAccent = it },
-                        onOpenConnectionScreen = { showDevicePicker = true },
                         onPlayTrailer = { trailerUrl ->
                             onCastSheetInitialModeChange("browse")
                             onCastSheetBrowseOverrideChange(trailerUrl)
@@ -1631,8 +1592,9 @@ fun AppNavHost(
                         connectedDeviceName = if (externalSelected) activeExternalDevice?.name else tvDevice?.name,
                         remoteSubtitle = remoteTV?.let { "${it.device.name} · ${it.status}" } ?: "Control your TV",
                         onNavigate = { screen ->
-                            if (screen == Screen.Connection) showDevicePicker = true else onScreenChange(screen)
+                            onScreenChange(screen)
                         },
+                        onPlayOn = { showDevicePicker = true },
                         onExit = onFullExit,
                         onClose = onDashboardClose,
                         onSettings = {
@@ -1656,7 +1618,6 @@ fun AppNavHost(
                         viewModel = connectionViewModel,
                         uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
-                        onOpenAllDevices = { openAllDevicesExpanded() },
                         onAddToCollection = { media ->
                             onAddToCollection(
                                 com.playbridge.sender.data.collection.CollectionItemDraft(

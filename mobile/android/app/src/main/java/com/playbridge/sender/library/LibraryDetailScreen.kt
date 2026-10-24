@@ -97,7 +97,6 @@ fun LibraryDetailScreen(
     routeTargetsTv: Boolean = false,
     /** Change the authoritative route from this screen's Watch-on-TV / This-Device toggle. */
     onSetWatchRoute: (Boolean) -> Unit = {},
-    onOpenConnectionScreen: () -> Unit = {},
     onSendStreamToTv: (url: String, title: String, headers: Map<String, String>?, contentType: String?) -> Unit = { _, _, _, _ -> },
     onBack: () -> Unit,
     onShare: (title: String, imdbId: String?) -> Unit = { _, _ -> },
@@ -187,7 +186,7 @@ fun LibraryDetailScreen(
     }
 
     // Intentionally NO auto-connect on this screen (entry or Watch/Resume). Connecting
-    // is left to the connection dialog — see onOpenConnectionScreen. Watch only resolves
+    // is left to the Play on sheet. Watch only resolves
     // streams and casts/plays on the current route.
 
     val episodeListState = rememberLazyListState()

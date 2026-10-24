@@ -71,7 +71,6 @@ import com.playbridge.sender.diagnostics.shareCastAttempt
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.LocalNetworkBanners
-import com.playbridge.sender.ui.NowDestinationCard
 import com.playbridge.sender.ui.SectionLabel
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -239,23 +238,32 @@ fun PlayOnSheet(
                     when (currentPage) {
                         PlayOnPage.Devices -> {
                             LocalNetworkBanners(network)
-                            if (external != null || (nativeSelected && tv != null) || connected) {
-                                NowDestinationCard(connectionState = connection, route = route, tvDevice = tv, activeExternalDevice = external,
+                            if (external != null || (nativeSelected && tv != null) || connected || nativeRow?.status == "TV remote only") {
+                                PlayOnNowCard(
+                                    device = external ?: nativeRow?.device ?: tv,
+                                    connection = connection,
+                                    external = external != null,
+                                    castState = castState,
+                                    mediaTitle = title,
                                     nativeStatus = nativeRow?.status,
-                                    isConnecting = nativeSelected && (connection is WebSocketClient.ConnectionState.Connecting || connection is WebSocketClient.ConnectionState.Retrying),
-                                    externalMediaTitle = title, externalCasting = castState.phase == SessionPhase.PLAYING,
-                                    externalConnecting = castState.phase == SessionPhase.CONNECTING, externalFailed = castState.phase == SessionPhase.FAILED,
+                                    nativeSelected = nativeSelected,
+                                    streamRoute = streamRoute?.label,
+                                    onRemote = openRemote?.let { { onDismiss(); it() } },
+                                    onConfigure = if (nativeSelected && connected && external == null) {
+                                        { page = PlayOnPage.Configure }
+                                    } else null,
                                     onCastHere = viewModel::selectNativeRoute,
-                                    onDisconnectNative = { pendingNative = null; viewModel.selectThisDevice(); viewModel.disconnect() },
-                                    onDisconnectExternal = { pendingGoogle = null; viewModel.disconnectExternalTarget() },
-                                    showShareDiagnostics = recentFailure != null,
-                                    onShareDiagnostics = { recentFailure?.let { shareCastAttempt(context, diagnostics.report(it)) } },
-                                    streamRouteLabel = streamRoute?.label, compact = true)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (openRemote != null) TextButton(onClick = { onDismiss(); openRemote() }) { Text("Remote") }
-                                    if (nativeSelected && connected && external == null) TextButton(onClick = { page = PlayOnPage.Configure }) { Text("Configure TV") }
-                                }
-                                if (nativeRow?.status == "TV remote only") TextButton(onClick = { viewModel.openPlayBridge() }) { Text("Open PlayBridge on ${nativeRow.device.name}") }
+                                    onOpenPlayBridge = { viewModel.openPlayBridge() },
+                                    onDisconnect = {
+                                        pendingNative = null
+                                        pendingGoogle = null
+                                        if (external != null) viewModel.disconnectExternalTarget()
+                                        else { viewModel.selectThisDevice(); viewModel.disconnect() }
+                                    },
+                                    onShareDiagnostics = recentFailure?.let { attempt ->
+                                        { shareCastAttempt(context, diagnostics.report(attempt)) }
+                                    },
+                                )
                             }
                             SectionLabel("Devices")
                             if (showThisDevice) PlayOnRow("This phone", "Play here", phone = true,
