@@ -95,6 +95,18 @@ final class ConnectionViewModel: ObservableObject {
     private var savedReconnectTimeout: DispatchWorkItem?
     private var savedEndpointRefreshTimeout: DispatchWorkItem?
     private var discoveryOwners = 0
+    private var savedReceiverPathMonitor: AtvForegroundPathMonitor?
+    private lazy var savedReachability = SavedReceiverReachability(
+        keyFor: { $0.uuid.isEmpty ? "\($0.ip):\($0.port)" : $0.uuid },
+        probe: { device, completion in
+            guard let port = UInt16(exactly: device.wssPort ?? device.port), port > 0 else {
+                completion(false)
+                return {}
+            }
+            return Self.isReachable(host: device.ip, port: port, completion: completion)
+        },
+        publish: { [weak self] results in self?.onlineStatus = results }
+    )
     private static let savedReconnectDiscoveryTimeout: TimeInterval = 10
 
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
@@ -208,6 +220,7 @@ final class ConnectionViewModel: ObservableObject {
             .sink { [weak self] playback in self?.refreshCastPlayback(playback) }
             .store(in: &cancellables)
         browser.$devices
+            .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] devices in self?.refreshSavedEndpoints(devices) }
             .store(in: &cancellables)
@@ -215,6 +228,12 @@ final class ConnectionViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let monitor = AtvForegroundPathMonitor()
+            self.savedReceiverPathMonitor = monitor
+            monitor.start { [weak self] in self?.receiverNetworkChanged() }
+        }
     }
 
     // MARK: - Discovery
@@ -347,6 +366,7 @@ final class ConnectionViewModel: ObservableObject {
     func reconnectSaved(toHost host: String?) {
         let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
         guard route != "google_cast", route != "this_phone" else { return }
+        refreshSavedEndpoints(browser.devices)
         guard let saved = pairedDevice else { return }
         state = .connecting
         endSavedReconnectDiscovery()
@@ -469,7 +489,7 @@ final class ConnectionViewModel: ObservableObject {
         list.removeAll { deviceKey($0) == deviceKey(device) }
         store.saveSavedDevices(list)
         savedDevices = list
-        onlineStatus[deviceKey(device)] = nil
+        savedReachability.recheck(savedDevices)
         if let active = pairedDevice, deviceKey(active) == deviceKey(device) {
             ws.disconnect()
             store.clearPairedDevice()
@@ -493,11 +513,10 @@ final class ConnectionViewModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
         }
         refreshSavedEndpoints(browser.devices)
-        savedDevices.forEach(checkReachability)
     }
 
     private func refreshSavedEndpoints(_ devices: [DiscoveredDevice]) {
-        let refreshed = savedDevices.map { SavedReceiverEndpoint.refresh($0, from: devices) }
+        let refreshed = SavedReceiverEndpoint.refreshHistory(savedDevices, from: devices)
         let changedAddresses = zip(savedDevices, refreshed).compactMap { old, new in
             SavedReceiverEndpoint.sameAddress(old, new) ? nil : new
         }
@@ -512,34 +531,27 @@ final class ConnectionViewModel: ObservableObject {
                 store.savePairedDevice(updated)
             }
         }
-        for device in changedAddresses {
-            onlineStatus[deviceKey(device)] = nil
-            checkReachability(device)
-        }
+        if !changedAddresses.isEmpty { savedReachability.invalidate() }
+        savedReachability.recheck(refreshed)
     }
 
-    private func checkReachability(_ device: PairedDevice) {
-        let key = deviceKey(device)
-        guard let port = UInt16(exactly: device.wssPort ?? device.port), port > 0 else {
-            onlineStatus[key] = false
-            return
-        }
-        Self.isReachable(host: device.ip, port: port) { [weak self] reachable in
-            guard let self,
-                  let current = self.savedDevices.first(where: { self.deviceKey($0) == key }),
-                  SavedReceiverEndpoint.sameAddress(current, device) else { return }
-            // A probe to the previous IP must not overwrite the new endpoint's status.
-            self.onlineStatus[key] = reachable
-        }
+    private func receiverNetworkChanged() {
+        savedReachability.invalidate()
+        browser.restart()
+        pingSavedDevices()
     }
 
-    private static func isReachable(host: String, port: UInt16, timeout: TimeInterval = 2.0, completion: @escaping (Bool) -> Void) {
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else { completion(false); return }
+    private static func isReachable(host: String, port: UInt16, timeout: TimeInterval = 2.0, completion: @escaping (Bool) -> Void) -> () -> Void {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { completion(false); return {} }
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
         var finished = false
+        var pendingTimeout: DispatchWorkItem?
         func finish(_ ok: Bool) {
             if finished { return }
             finished = true
+            pendingTimeout?.cancel()
+            pendingTimeout = nil
+            conn.stateUpdateHandler = nil
             conn.cancel()
             completion(ok)
         }
@@ -551,7 +563,10 @@ final class ConnectionViewModel: ObservableObject {
             }
         }
         conn.start(queue: .main)
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(false) }
+        let deadline = DispatchWorkItem { finish(false) }
+        pendingTimeout = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
+        return { finish(false) }
     }
 
     private func upsertSaved(_ device: PairedDevice) {
@@ -560,6 +575,7 @@ final class ConnectionViewModel: ObservableObject {
         list.insert(device, at: 0)
         store.saveSavedDevices(list)
         savedDevices = list
+        savedReachability.recheck(SavedReceiverEndpoint.refreshHistory(list, from: browser.devices))
     }
 
     func disconnect() {
@@ -1258,6 +1274,7 @@ final class ConnectionViewModel: ObservableObject {
 #endif
 
     func applicationBecameActive() {
+        receiverNetworkChanged()
         castPlaybackSession.tick()
         reconnectLastReceiverIfNeeded()
     }

@@ -18,17 +18,12 @@ final class BonjourBrowser: NSObject, ObservableObject {
     private var scanOwnerCounts: [ScanOwner: Int] = [:]
     /// Services currently resolving — held strongly so they aren't deallocated mid-resolve.
     private var resolving: Set<NetService> = []
+    private var generation = UUID()
 
     func start(owner: ScanOwner = .userInterface) {
         scanOwnerCounts[owner, default: 0] += 1
         guard browser == nil else { return }
-        devices = []
-        resolving = []
-        let b = NetServiceBrowser()
-        b.delegate = self
-        b.searchForServices(ofType: "\(ProtocolConstants.bonjourServiceType).", inDomain: "local.")
-        browser = b
-        isScanning = true
+        startSearch()
     }
 
     func stop(owner: ScanOwner = .userInterface) {
@@ -40,9 +35,32 @@ final class BonjourBrowser: NSObject, ObservableObject {
             }
         }
         guard scanOwnerCounts.isEmpty else { return }
+        stopSearch()
+    }
+
+    func restart() {
+        devices = []
+        guard !scanOwnerCounts.isEmpty else { return }
+        stopSearch()
+        startSearch()
+    }
+
+    private func startSearch() {
+        devices = []
+        resolving = []
+        let b = NetServiceBrowser()
+        b.delegate = self
+        b.searchForServices(ofType: "\(ProtocolConstants.bonjourServiceType).", inDomain: "local.")
+        browser = b
+        isScanning = true
+    }
+
+    private func stopSearch() {
+        generation = UUID()
+        browser?.delegate = nil
         browser?.stop()
         browser = nil
-        resolving.forEach { $0.stop() }
+        resolving.forEach { $0.delegate = nil; $0.stop() }
         resolving = []
         isScanning = false
     }
@@ -59,19 +77,26 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
 extension BonjourBrowser: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        guard self.browser === browser else { return }
         service.delegate = self
         resolving.insert(service)
         service.resolve(withTimeout: 5)
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        guard self.browser === browser else { return }
         let name = service.name
-        DispatchQueue.main.async { self.devices.removeAll { $0.name == name } }
+        DispatchQueue.main.async {
+            guard self.browser === browser else { return }
+            self.devices.removeAll { $0.name == name }
+        }
     }
 }
 
 extension BonjourBrowser: NetServiceDelegate {
     func netServiceDidResolveAddress(_ service: NetService) {
+        guard resolving.contains(service) else { return }
+        let ticket = generation
         defer { resolving.remove(service) }
         guard let ip = BonjourBrowser.firstIPv4(from: service.addresses ?? []) else { return }
 
@@ -89,7 +114,10 @@ extension BonjourBrowser: NetServiceDelegate {
             txt: txt
         )
         let resolved = device
-        DispatchQueue.main.async { self.upsert(resolved) }
+        DispatchQueue.main.async {
+            guard self.generation == ticket else { return }
+            self.upsert(resolved)
+        }
     }
 
     func netService(_ service: NetService, didNotResolve errorDict: [String: NSNumber]) {

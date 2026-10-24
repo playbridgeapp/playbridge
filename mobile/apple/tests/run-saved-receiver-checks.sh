@@ -5,6 +5,6 @@ test_dir="$(mktemp -d /tmp/playbridge-saved-receiver-tests.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
 app="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$test_dir/cache" \
-  "$app/Models/Models.swift" "$app/Network/SavedReceiverEndpoint.swift" \
+  "$app/Models/Models.swift" "$app/Network/SavedReceiverEndpoint.swift" "$app/Network/SavedReceiverReachability.swift" \
   "$repo_root/mobile/apple/tests/SavedReceiverEndpointTests.swift" -o "$test_dir/check"
 "$test_dir/check"
