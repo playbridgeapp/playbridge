@@ -5,10 +5,12 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -23,10 +26,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +67,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -72,7 +85,6 @@ import com.playbridge.sender.diagnostics.shareCastAttempt
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.LocalNetworkBanners
-import com.playbridge.sender.ui.SectionLabel
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
@@ -140,6 +152,13 @@ fun PlayOnSheet(
     }
     val groups = groupPlayOnDevices(history, discovered, remoteRows, pings,
         if (host.running) host.ready.map { it.toTvDevice(browser.lanHostIp(), host.port) } else emptyList(), playBridgeOnly)
+    val nowDevice = (external ?: nativeRow?.device ?: tv).takeIf {
+        external != null || (nativeSelected && tv != null) || connected || nativeRow?.status == "TV remote only"
+    }
+    // The Now card already shows the current device, so the lists don't repeat it.
+    fun notNow(row: PlayOnDevice) = nowDevice == null || !ConnectionMerge.isSameDevice(row.device, nowDevice)
+    val saved = groups.saved.filter(::notNow)
+    val unavailable = groups.unavailable.filter(::notNow)
     val recentFailure = attempts.firstOrNull {
         it.outcome == CastAttempt.AttemptOutcome.FAILED &&
             it.id == viewModel.castSessionManager.currentExternalDiagnosticAttemptId &&
@@ -215,6 +234,7 @@ fun PlayOnSheet(
         if (external?.let { ConnectionMerge.isSameDevice(it, pending) } == true &&
             googleCastPickerConnectionComplete(castState.phase)) { pendingGoogle = null; finish(pending) }
     }
+    val devicesScroll = rememberScrollState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false, confirmValueChange = { next ->
         if (next == SheetValue.Hidden && page != PlayOnPage.Devices) {
             back()
@@ -230,18 +250,23 @@ fun PlayOnSheet(
                 Column(Modifier.weight(1f).padding(8.dp)) {
                     Text(when (page) {
                         PlayOnPage.Devices -> "Play on"
-                        PlayOnPage.Pair -> "Pair ${pendingNative?.name ?: tv?.name ?: "TV"}"
+                        PlayOnPage.Pair -> "Pair ${(pendingNative ?: tv)?.playOnName ?: "TV"}"
                         PlayOnPage.Add -> "Add a device"
                         PlayOnPage.Manual -> "PlayBridge TV by IP address"
-                        PlayOnPage.Actions -> managed?.device?.name ?: "Device"
+                        PlayOnPage.Actions -> managed?.device?.playOnName ?: "Device"
                         PlayOnPage.Configure -> "Configure TV"
                         PlayOnPage.Browser -> "Browser on a TV"
                         PlayOnPage.Roku -> "Roku by IP address"
                         PlayOnPage.Dlna -> "DLNA device by URL"
                         PlayOnPage.FullRemote -> "Full TV remote"
                     }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    if (page == PlayOnPage.Devices) Text(if (network.onLocalNetwork) "Wi-Fi" else "Mobile data",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (page == PlayOnPage.Devices) Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (network.onLocalNetwork) Icon(Icons.Default.Wifi, null, Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (network.onLocalNetwork) "Wi-Fi" else "Mobile data",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 IconButton(onClick = ::dismiss) { Icon(Icons.Default.Close, "Close Play on") }
             }
@@ -250,14 +275,16 @@ fun PlayOnSheet(
                 val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
                 slideInHorizontally { it * direction } togetherWith slideOutHorizontally { -it * direction }
             }) { currentPage ->
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                // Page 1 keeps its scroll position while a sub-page is open.
+                val pageScroll = if (currentPage == PlayOnPage.Devices) devicesScroll else rememberScrollState()
+                Column(Modifier.fillMaxWidth().verticalScroll(pageScroll).padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     when (currentPage) {
                         PlayOnPage.Devices -> {
                             LocalNetworkBanners(network)
-                            if (external != null || (nativeSelected && tv != null) || connected || nativeRow?.status == "TV remote only") {
+                            if (nowDevice != null) {
                                 PlayOnNowCard(
-                                    device = external ?: nativeRow?.device ?: tv,
+                                    device = nowDevice,
                                     connection = connection,
                                     external = external != null,
                                     castState = castState,
@@ -266,7 +293,8 @@ fun PlayOnSheet(
                                     nativeSelected = nativeSelected,
                                     streamRoute = streamRoute?.label,
                                     onRemote = openRemote?.let { { onDismiss(); it() } },
-                                    onConfigure = if (nativeSelected && connected && external == null) {
+                                    onConfigure = if (nativeSelected && connected && external == null &&
+                                        TvCapabilityOptions.playerOptions(tv).size > 2) {
                                         { page = PlayOnPage.Configure }
                                     } else null,
                                     onCastHere = viewModel::selectNativeRoute,
@@ -282,38 +310,54 @@ fun PlayOnSheet(
                                     },
                                 )
                             }
-                            SectionLabel("Devices")
+                            PlayOnSectionLabel("Devices")
                             if (showThisDevice) PlayOnRow("This phone", "Play here", phone = true,
                                 selected = route is CastSessionManager.Route.ThisDevice && external == null, onClick = {
                                     pendingNative = null; pendingGoogle = null
                                     viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
                                 })
-                            groups.saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                SectionLabel("Nearby")
-                                if (scanning) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    Text("Searching", style = MaterialTheme.typography.labelSmall)
+                            saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                            if (groups.nearby.isNotEmpty() || scanning) {
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween) {
+                                    PlayOnSectionLabel("Nearby")
+                                    if (scanning) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                        Text("Searching", style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
+                                groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
                             }
-                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
-                            if (groups.unavailable.isNotEmpty()) {
-                                TextButton(onClick = { unavailableExpanded = !unavailableExpanded }) { Text("${if (unavailableExpanded) "▾" else "▸"} Not available now · ${groups.unavailable.size}") }
-                                if (unavailableExpanded) groups.unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                            if (unavailable.isNotEmpty()) {
+                                HorizontalDivider(Modifier.padding(top = 8.dp))
+                                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .clickable(onClickLabel = if (unavailableExpanded) "Collapse" else "Expand") {
+                                        unavailableExpanded = !unavailableExpanded
+                                    },
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    PlayOnSectionLabel("Not available now · ${unavailable.size}", Modifier.weight(1f))
+                                    Icon(if (unavailableExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (unavailableExpanded) unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             }
                             if (groups.saved.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
                             OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth()) {
                                 Icon(Icons.Default.Add, null); Text("Add a device", Modifier.padding(start = 8.dp))
                             }
                         }
-                        PlayOnPage.Pair -> PlayOnPairing(connection, pendingNative?.name ?: tv?.name ?: "TV", viewModel::submitPairingCode) { (pendingNative ?: tv)?.let(::pick) }
+                        PlayOnPage.Pair -> PlayOnPairing(connection, (pendingNative ?: tv)?.playOnName ?: "TV", viewModel::submitPairingCode) { (pendingNative ?: tv)?.let(::pick) }
                         PlayOnPage.Add -> {
                             Text("TVs on your Wi-Fi show up automatically under Nearby. Use these when one doesn’t.")
-                            if (!playBridgeOnly) PlayOnRow("Browser on a TV", "Any smart TV with a web browser — no app needed", onClick = { page = PlayOnPage.Browser })
+                            if (!playBridgeOnly) PlayOnRow("Browser on a TV", "Any smart TV with a web browser — no app needed",
+                                icon = Icons.Default.Language, onClick = { page = PlayOnPage.Browser })
                             PlayOnRow("PlayBridge TV by IP address", "When discovery is blocked", onClick = { page = PlayOnPage.Manual })
                             if (!playBridgeOnly) {
-                                PlayOnRow("Roku by IP address", "Find it under Settings › Network on the Roku", onClick = { page = PlayOnPage.Roku })
-                                PlayOnRow("DLNA device by URL", "Paste its description URL", onClick = { page = PlayOnPage.Dlna })
+                                PlayOnRow("Roku by IP address", "Find it under Settings › Network on the Roku",
+                                    icon = Icons.Default.Cast, onClick = { page = PlayOnPage.Roku })
+                                PlayOnRow("DLNA device by URL", "Paste its description URL",
+                                    icon = Icons.Default.Speaker, onClick = { page = PlayOnPage.Dlna })
                             }
                             PlayOnTip("If a TV won’t show up", "1. Open PlayBridge on the TV and leave it on the home screen.\n2. Put the phone and TV on the same Wi-Fi (guest networks often block devices).\n3. Turn off VPN on this phone.")
                             TextButton(onClick = {
@@ -334,7 +378,7 @@ fun PlayOnSheet(
                         )
                         PlayOnPage.Actions -> managed?.let { row ->
                             Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}", style = MaterialTheme.typography.bodySmall)
-                            PlayOnRow("Play on this TV", "Select ${row.device.name}", onClick = { pick(row.device) })
+                            PlayOnRow("Play on this TV", "Select ${row.device.playOnName}", icon = row.device.playOnIcon, onClick = { pick(row.device) })
                             val supportsFullRemote = row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
                                 (row.remotePaired || "exo" in row.device.players || remoteRows.any {
                                     ConnectionMerge.isSameDevice(it.device, row.device) && it.tvReachable
@@ -374,26 +418,53 @@ fun PlayOnSheet(
 @Composable
 private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick: () -> Unit, onMore: (() -> Unit)? = null) {
     val protocol = row.device.resolvedProtocol
-    PlayOnRow(row.device.name, when {
+    val ready = !nearby && row.reachable && row.remoteStatus != "TV remote only"
+    PlayOnRow(row.device.playOnName, when {
         row.remoteStatus == "TV remote only" -> "PlayBridge · TV remote only"
         nearby && protocol == CastProtocol.PLAYBRIDGE -> "PlayBridge · Tap to pair"
+        nearby -> protocol.displayName
         row.reachable -> "${protocol.displayName} · Ready"
         else -> "${protocol.displayName} · ${usedRelative(row.device.lastConnected)}"
-    }, onClick = onClick, onMore = onMore, isNew = nearby && protocol == CastProtocol.PLAYBRIDGE)
+    }, onClick = onClick, icon = row.device.playOnIcon, ready = ready, dimmed = !nearby && !row.reachable,
+        onMore = onMore, isNew = nearby && protocol == CastProtocol.PLAYBRIDGE)
+}
+
+private val TvDevice.playOnIcon: ImageVector get() = when {
+    isDesktopReceiver -> Icons.Default.Laptop
+    resolvedProtocol == CastProtocol.GOOGLE_CAST -> Icons.Default.Cast
+    resolvedProtocol == CastProtocol.DLNA -> Icons.Default.Speaker
+    resolvedProtocol == CastProtocol.WEB_BROWSER -> Icons.Default.Language
+    else -> Icons.Default.Tv
+}
+
+private val ReadyGreen = Color(0xFF46D483)
+
+@Composable
+private fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(text.uppercase(), modifier, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
 private fun PlayOnRow(name: String, subtitle: String, onClick: () -> Unit, phone: Boolean = false,
+    icon: ImageVector = Icons.Default.Tv, ready: Boolean = false, dimmed: Boolean = false,
     selected: Boolean = false, isNew: Boolean = false, onMore: (() -> Unit)? = null) {
-    ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold) }, supportingContent = { Text(subtitle) },
-        leadingContent = { Icon(if (phone) Icons.Default.Smartphone else Icons.Default.Tv, null) },
+    ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold) },
+        supportingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (ready) Spacer(Modifier.padding(end = 6.dp).size(7.dp).background(ReadyGreen, CircleShape))
+                Text(subtitle)
+            }
+        },
+        leadingContent = { Icon(if (phone) Icons.Default.Smartphone else icon, null) },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (selected) Icon(Icons.Default.Check, "Selected")
                 if (isNew) Text("New", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                 if (onMore != null) IconButton(onClick = onMore) { Icon(Icons.Default.MoreHoriz, "More options for $name") }
             }
-        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick))
+        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick)
+            .then(if (dimmed) Modifier.alpha(0.55f) else Modifier))
 }
 
 @Composable
@@ -451,8 +522,8 @@ private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
     val controllers: com.playbridge.sender.cast.remote.RemoteControllerRegistry = koinInject()
     val mode by settings.tvPlayerMode.collectAsState(initial = "tv")
     val scope = rememberCoroutineScope()
-    Text("${device?.name ?: "TV"} · ${if (enabled) "Connected" else "Disconnected"}")
-    SectionLabel("Playback")
+    Text("${device?.playOnName ?: "TV"} · ${if (enabled) "Connected" else "Disconnected"}")
+    PlayOnSectionLabel("Playback")
     Text("Video player", style = MaterialTheme.typography.titleMedium)
     val options = TvCapabilityOptions.playerOptions(device)
     val selected = TvCapabilityOptions.coerceSelection(mode, options)

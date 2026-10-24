@@ -265,4 +265,12 @@ class ConnectionMergeTest {
         val (_, action) = ConnectionMerge.resolveAuthFailure(failed = failedSameIp, saved = savedA)!!
         assertEquals(ConnectionMerge.AuthFailureAction.WIPE_SAVED_TOKEN, action)
     }
+
+    @Test
+    fun `different receiver ids at the same address are different devices`() {
+        val saved = dev("192.168.0.28", 8765, uuid = "apple-tv", token = "t")
+        val live = dev("192.168.0.28", 8765, uuid = "mac")
+        assertEquals(false, ConnectionMerge.isSameDevice(saved, live))
+        assertEquals(saved, ConnectionMerge.withDiscoveredEndpoint(saved, listOf(live)))
+    }
 }

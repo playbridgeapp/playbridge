@@ -26,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +47,11 @@ internal fun SectionLabel(text: String) {
     )
 }
 
+/** A dismissed VPN tip stays dismissed for the app session, across sheets and screens. */
+private object NetworkBannerSession {
+    var vpnDismissed by mutableStateOf(false)
+}
+
 /**
  * Sticky cast/discovery banners for missing Wi‑Fi/Ethernet and active VPN.
  * Used on the Devices screen and the cast sheet.
@@ -58,15 +62,13 @@ fun LocalNetworkBanners(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var vpnDismissed by remember { mutableStateOf(false) }
-
     // Re-show the VPN tip if the VPN toggles off then on again this session.
     LaunchedEffect(status.vpnActive) {
-        if (!status.vpnActive) vpnDismissed = false
+        if (!status.vpnActive) NetworkBannerSession.vpnDismissed = false
     }
 
     val showWifi = !status.onLocalNetwork
-    val showVpn = status.onLocalNetwork && status.vpnActive && !vpnDismissed
+    val showVpn = status.onLocalNetwork && status.vpnActive && !NetworkBannerSession.vpnDismissed
     if (!showWifi && !showVpn) return
 
     Column(
@@ -98,7 +100,7 @@ fun LocalNetworkBanners(
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 actionLabel = null,
                 onAction = null,
-                onDismiss = { vpnDismissed = true },
+                onDismiss = { NetworkBannerSession.vpnDismissed = true },
             )
         }
     }

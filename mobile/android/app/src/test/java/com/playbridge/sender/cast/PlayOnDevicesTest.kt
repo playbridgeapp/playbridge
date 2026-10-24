@@ -65,4 +65,22 @@ class PlayOnDevicesTest {
         assertEquals(49152, dlna.port)
         assertNull(manualPlayOnDevice(CastProtocol.DLNA, "ftp://192.168.0.60/description.xml"))
     }
+
+    @Test
+    fun `a saved TV whose old address now belongs to another receiver is not available`() {
+        val appleTv = tv("Apple TV 4K", "192.168.0.28", uuid = "atv", lastConnected = 2)
+        val mac = tv("Atuls-MacBook-Air.local", "192.168.0.28", uuid = "mac")
+        val pings = mapOf(appleTv.endpointKey.toString() to true)
+        val groups = groupPlayOnDevices(listOf(appleTv), listOf(mac), emptyList(), pings)
+        assertTrue(groups.saved.isEmpty())
+        assertEquals(listOf("Apple TV 4K"), groups.unavailable.map { it.device.name })
+        assertEquals(listOf("Atuls-MacBook-Air.local"), groups.nearby.map { it.device.name })
+    }
+
+    @Test
+    fun `desktop hostnames drop the local suffix`() {
+        val mac = tv("Atuls-MacBook-Air.local", "10.0.0.9")
+        assertEquals("Atuls-MacBook-Air", mac.playOnName)
+        assertTrue(mac.isDesktopReceiver)
+    }
 }

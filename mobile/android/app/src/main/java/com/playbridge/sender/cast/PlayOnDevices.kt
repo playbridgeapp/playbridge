@@ -34,12 +34,16 @@ internal fun groupPlayOnDevices(
         if (playBridgeOnly && entry.resolvedProtocol != CastProtocol.PLAYBRIDGE) return@forEach
         if (saved.any { ConnectionMerge.isSameDevice(it.device, entry) }) return@forEach
         val remote = remoteRows.firstOrNull { ConnectionMerge.isSameDevice(it.device, entry) }
+        // A ping only proves something answers at that address; a different live receiver may hold it now.
+        val addressTaken = live.any {
+            it.ip == entry.ip && it.port == entry.port && ConnectionMerge.hasOtherId(it, entry)
+        }
         saved += PlayOnDevice(
             device = ConnectionMerge.withDiscoveredEndpoint(remote?.device ?: entry, live),
             saved = history.firstOrNull { ConnectionMerge.isSameDevice(it, entry) },
             reachable = live.any { ConnectionMerge.isSameDevice(it, entry) } ||
                 remote?.receiverReachable == true || remote?.tvReachable == true ||
-                pings[entry.endpointKey.toString()] == true,
+                (!addressTaken && pings[entry.endpointKey.toString()] == true),
             remoteStatus = remote?.status,
             remotePaired = remote?.paired == true,
         )
@@ -58,3 +62,10 @@ internal fun groupPlayOnDevices(
         nearby.sortedBy { protocolOrder.indexOf(it.device.resolvedProtocol) },
         ordered.filterNot { it.reachable })
 }
+
+/** Receiver names as people know them: hostnames lose their mDNS ".local" suffix. */
+internal val TvDevice.playOnName: String get() = name.removeSuffix(".local")
+
+/** Desktop receivers advertise their hostname and no TV player engines. */
+internal val TvDevice.isDesktopReceiver: Boolean
+    get() = resolvedProtocol == CastProtocol.PLAYBRIDGE && name.endsWith(".local")
