@@ -321,7 +321,7 @@ struct DeviceConnectionSheet: View {
         case .manualRoku: manualRokuPage
         case .manualDLNA: manualDLNAPage
         case .browserTV:
-            BrowserReceiverPage(controller: vm.browserReceiver) { device in
+            BrowserReceiverPage(controller: vm.browserReceiver, onWiFi: pathMonitor.onWiFi) { device in
                 pickExternal(device)
             }
         }
@@ -683,39 +683,14 @@ struct DeviceConnectionSheet: View {
     }
 
     private var pairingDigits: some View {
-        let rejected = pairingCodeRejected && pairingCode.isEmpty
-        return HStack(spacing: 8) {
-            ForEach(0..<6, id: \.self) { index in
-                let active = !rejected && index == pairingCode.count
-                Text(digit(index))
-                    .font(Theme.font(size: 28, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.onSurface)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(rejected ? Theme.danger : (active ? Theme.primary : Theme.outlineVariant),
-                                    lineWidth: (rejected || active) ? 2 : 1)
-                    )
-            }
+        PairingCodeBoxes(
+            code: $pairingCode,
+            rejected: pairingCodeRejected,
+            focus: $pairingFieldFocused,
+            accessibilityLabel: "Pairing code"
+        ) { code in
+            vm.submitPairingCode(code)
         }
-        .accessibilityHidden(true)
-        .background {
-            TextField("", text: $pairingCode)
-                .keyboardType(.numberPad)
-                .textContentType(.oneTimeCode)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($pairingFieldFocused)
-                .opacity(0.02)
-                .accessibilityLabel("Pairing code")
-                .onChange(of: pairingCode) { newValue in
-                    let filtered = String(newValue.filter(\.isNumber).prefix(6))
-                    if filtered != newValue { pairingCode = filtered }
-                    if filtered.count == 6 { vm.submitPairingCode(filtered) }
-                }
-        }
-        .onTapGesture { pairingFieldFocused = true }
     }
 
     private var pairingCodeRejected: Bool {
@@ -1425,12 +1400,6 @@ struct DeviceConnectionSheet: View {
         }
     }
 
-    private func digit(_ index: Int) -> String {
-        guard index < pairingCode.count else { return "" }
-        let character = pairingCode[pairingCode.index(pairingCode.startIndex, offsetBy: index)]
-        return String(character)
-    }
-
     private func select(_ row: PlayOnSheetRow) {
         if let device = row.playBridge {
             userPicked = true
@@ -1504,7 +1473,7 @@ private struct PlayOnSheetRow: Identifiable {
     var id: String { listed.id }
 }
 
-private enum PlayOnStatusGreen {
+enum PlayOnStatusGreen {
     /// Ready green from the Play on mockup. Theme has no success token.
     static let color = Color(hex: 0x46D483)
 }
