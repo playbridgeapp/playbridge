@@ -277,7 +277,7 @@ private struct ActiveTabView: View {
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(vm.isConnected ? "Connected TV" : "Connect TV")
+        .accessibilityLabel("Play on")
     }
 
     private var playButton: some View {

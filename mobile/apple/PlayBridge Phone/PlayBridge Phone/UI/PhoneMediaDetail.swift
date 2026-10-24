@@ -42,7 +42,7 @@ struct PhoneMediaDetail: View {
                         if castsToSelectedReceiver { Task { await cast() } } else { openPlayOn() }
                     } label: {
                         if sending { ProgressView() }
-                        else { Label(castsToSelectedReceiver ? "Cast to TV" : "Connect TV", systemImage: "play.tv") }
+                        else { Label(castsToSelectedReceiver ? "Cast to TV" : "Play on…", systemImage: "play.tv") }
                     }.buttonStyle(.borderedProminent).disabled(url == nil || sending)
                 }
                 if let url { ShareLink(item: url).padding(.bottom, 8) }
