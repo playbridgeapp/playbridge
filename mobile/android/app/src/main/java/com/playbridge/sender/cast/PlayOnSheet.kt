@@ -77,6 +77,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -354,7 +356,7 @@ fun PlayOnSheet(
                                 }
                                 if (unavailableExpanded) unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             }
-                            if (groups.saved.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
+                            if (groups.saved.isEmpty() && groups.nearby.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
                             OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)) {
@@ -508,6 +510,7 @@ private fun PlayOnTip(title: String, body: String) {
 @Composable
 private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, submit: (String) -> Unit, retry: () -> Unit) {
     var code by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
     LaunchedEffect(state) { if (state is WebSocketClient.ConnectionState.WaitingForCodeInput && state.lastCodeWrong) code = "" }
     when (state) {
         is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
@@ -517,7 +520,9 @@ private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, 
                 if (code.length == 6) submit(code)
             }, label = { Text("6-digit code") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth(), isError = state.lastCodeWrong)
+                modifier = Modifier.fillMaxWidth().focusRequester(focus), isError = state.lastCodeWrong)
+            // Open the keyboard straight away; the code is the only thing to do on this page.
+            LaunchedEffect(Unit) { focus.requestFocus() }
             if (state.lastCodeWrong) Text("Incorrect code — ${state.attemptsLeft} ${if (state.attemptsLeft == 1) "try" else "tries"} left", color = MaterialTheme.colorScheme.error)
             Text("Pairs automatically when all six digits are in", style = MaterialTheme.typography.bodySmall)
         }
