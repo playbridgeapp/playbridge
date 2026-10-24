@@ -18,6 +18,17 @@ enum SavedReceiverEndpoint {
         lhs.ip == rhs.ip && lhs.port == rhs.port && lhs.wssPort == rhs.wssPort
     }
 
+    static func isLive(_ saved: PairedDevice, in devices: [DiscoveredDevice]) -> Bool {
+        devices.contains { live in
+            guard valid(live) else { return false }
+            return !saved.uuid.isEmpty ? live.uuid == saved.uuid : (live.ip == saved.ip && live.port == saved.port)
+        }
+    }
+
+    static func refreshHistory(_ saved: [PairedDevice], from devices: [DiscoveredDevice]) -> [PairedDevice] {
+        saved.map { refresh($0, from: devices) }
+    }
+
     private static func valid(_ device: DiscoveredDevice) -> Bool {
         !device.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (1...65535).contains(device.port)

@@ -42,12 +42,10 @@ enum RemoteTVCatalog {
             let ambiguous = associations.count > 1
             let match = AtvDeviceMatcher.match(receiver: target, devices: tvDevices, records: records)
             if let record = match.record, !fingerprints.insert(record.fingerprint).inserted { return nil }
+            let receiverLive = SavedReceiverEndpoint.isLive(device, in: discovered)
             if match.device != nil, let host = match.host { device.ip = host }
-            let receiverLive = discovered.contains { live in
-                !device.uuid.isEmpty ? live.uuid == device.uuid : live.ip == device.ip && live.port == device.port
-            }
             return RemoteTVRow(device: device, paired: match.record != nil, ambiguous: ambiguous,
-                receiverReachable: !receiverOffline.contains(target.endpoint) && (receiverLive || receiverOnline.contains(target.endpoint)),
+                receiverReachable: receiverLive || (!receiverOffline.contains(target.endpoint) && receiverOnline.contains(target.endpoint)),
                 tvReachable: !ambiguous && (match.device != nil || connectedTV == target.endpoint))
         }
     }

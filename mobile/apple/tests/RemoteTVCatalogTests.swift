@@ -27,10 +27,15 @@ enum RemoteTVCatalogTests {
         let ambiguous = rows([a], records: [record,conflict], tv: [live])
         precondition(ambiguous.count == 1 && ambiguous[0].ambiguous && !ambiguous[0].paired && !ambiguous[0].tvReachable)
         precondition(rows([], records: [record,second], tv: [live]).count == 2)
-        let stalePB = DiscoveredDevice(ip: a.ip, port: a.port, name: a.name, uuid: a.uuid)
-        let dead = RemoteTVCatalog.rows(saved: [a], selected: a, records: [record], discovered: [stalePB], tvDevices: [live],
+        let freshPB = DiscoveredDevice(ip: "192.0.2.30", port: 8766, name: a.name, uuid: a.uuid, wssPort: 8766)
+        let reachable = RemoteTVCatalog.rows(saved: [a], selected: a, records: [record], discovered: [freshPB], tvDevices: [],
             receiverOnline: [], connectedTV: nil, receiverOffline: ["playbridge:a"])
-        precondition(dead[0].status == "TV remote only", "A failed receiver probe overrides sticky discovery")
+        precondition(reachable[0].receiverReachable, "A failed saved-address probe cannot override live UUID discovery")
+        precondition(reachable[0].device.ip == freshPB.ip && reachable[0].device.wssPort == freshPB.wssPort)
+        precondition(reachable[0].device.token == a.token)
+        let dead = RemoteTVCatalog.rows(saved: [a], selected: a, records: [record], discovered: [], tvDevices: [live],
+            receiverOnline: [], connectedTV: nil, receiverOffline: ["playbridge:a"])
+        precondition(dead[0].status == "TV remote only", "Without receiver discovery or a successful probe, only the TV channel is reachable")
         print("PASS: saved/history/ATV-only TV catalog, one row per paired identity, relocation, exact connected ownership and refused ambiguity")
     }
 }

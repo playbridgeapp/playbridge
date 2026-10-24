@@ -29,6 +29,64 @@ import Foundation
         precondition(SavedReceiverEndpoint.refresh(saved, from: [invalid]) == saved)
         precondition(SavedReceiverEndpoint.refresh(updated, from: [live]) == updated)
         precondition(SavedReceiverEndpoint.refresh(updated, from: []) == updated)
+        precondition(SavedReceiverEndpoint.isLive(saved, in: [live]), "UUID discovery wins over the saved address")
+        precondition(!SavedReceiverEndpoint.isLive(saved, in: [reusedAddress]))
+        precondition(!SavedReceiverEndpoint.isLive(saved, in: [invalid]))
+        precondition(!SavedReceiverEndpoint.isLive(legacy, in: [live]))
+        let sameLegacy = DiscoveredDevice(ip: legacy.ip, port: legacy.port, name: legacy.name)
+        precondition(SavedReceiverEndpoint.isLive(legacy, in: [sameLegacy]))
+        var first = saved
+        first.uuid = "other"; first.lastConnected = Date(timeIntervalSince1970: 456)
+        let history = SavedReceiverEndpoint.refreshHistory([first, saved], from: [live])
+        precondition(history == [first, updated], "Address refresh preserves ordering, credentials and lastConnected")
+        checkReachability(saved: saved, refreshed: updated)
         print("PASS: UUID endpoint updates, credential/capability preservation, no IP/name identity fallback, WSS preservation and invalid advertisements")
+    }
+
+    private static func checkReachability(saved: PairedDevice, refreshed: PairedDevice) {
+        final class Work {
+            let action: () -> Void
+            var cancelled = false
+            init(_ action: @escaping () -> Void) { self.action = action }
+        }
+        var work: [Work] = []
+        var probes: [PairedDevice] = []
+        var replies: [(Bool) -> Void] = []
+        var cancellations = 0
+        var published: [String: Bool] = [:]
+        var publications = 0
+        let reachability = SavedReceiverReachability(keyFor: { $0.uuid }, probe: { device, reply in
+            probes.append(device); replies.append(reply)
+            return { cancellations += 1; reply(false) }
+        }, publish: { published = $0; publications += 1 }, schedule: { delay, action in
+            precondition(delay == 0.35)
+            let item = Work(action); work.append(item)
+            return { item.cancelled = true }
+        })
+
+        reachability.recheck([saved])
+        reachability.recheck([refreshed])
+        precondition(work[0].cancelled && probes.isEmpty, "Discovery bursts debounce before opening sockets")
+        work.removeFirst().action()
+        precondition(probes.isEmpty, "A cancelled queued batch cannot probe the stale address")
+        work.removeFirst().action()
+        precondition(probes == [refreshed], "Checks use the live endpoint and retain pairing data")
+        replies[0](false)
+        precondition(published == [saved.uuid: false])
+
+        reachability.invalidate()
+        precondition(published.isEmpty && cancellations == 1, "A new path clears old failures and cancels probes immediately")
+        let count = publications
+        replies[0](true)
+        precondition(publications == count && published.isEmpty, "An old path callback cannot republish even at the same IP")
+        reachability.recheck([refreshed])
+        work.removeFirst().action()
+        replies[1](true)
+        precondition(published == [saved.uuid: true])
+        reachability.recheck([])
+        precondition(published.isEmpty, "Forgetting a receiver removes its cached result")
+        replies[1](false)
+        precondition(published.isEmpty, "Forgotten receivers reject late probes")
+        print("PASS: debounced live-address probes, path invalidation, cancellation, stale callbacks and forgotten receivers")
     }
 }
