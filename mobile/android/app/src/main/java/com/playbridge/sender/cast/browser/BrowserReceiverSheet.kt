@@ -3,43 +3,46 @@ package com.playbridge.sender.cast.browser
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,21 +52,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.playbridge.sender.cast.PairingCodeInput
+import com.playbridge.sender.cast.PlayOnGreen
+import com.playbridge.sender.cast.PlayOnSectionLabel
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.NetworkStatusRepository
-import com.playbridge.sender.ui.LocalNetworkBanners
 import com.playbridge.sender.ui.SectionLabel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserReceiverSheet(
     viewModel: ConnectionViewModel,
@@ -76,293 +80,129 @@ fun BrowserReceiverSheet(
     val networkStatus by viewModel.networkStatus.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    var stopConfirm by remember { mutableStateOf(false) }
-    var pairingRequest by remember { mutableStateOf<BrowserPairingRequest?>(null) }
-    var snackMessage by remember { mutableStateOf<String?>(null) }
-    var otherExpanded by remember { mutableStateOf(false) }
-
-    // Auto-open code sheet when exactly one pending request appears.
-    LaunchedEffect(hostState.pending) {
-        if (pairingRequest == null && hostState.pending.size == 1) {
-            pairingRequest = hostState.pending.first()
-        }
-    }
-
-    LaunchedEffect(snackMessage) {
-        if (snackMessage != null) {
-            delay(2_500)
-            snackMessage = null
-        }
-    }
 
     BrowserReceiverFrame(onDismiss, embedded) {
-        if (!embedded || pairingRequest == null) Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(if (embedded) Modifier else Modifier.verticalScroll(rememberScrollState()))
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
+        Column(Modifier.fillMaxWidth()) {
+            if (!embedded) Row(
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(
-                    text = "Cast to browser",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                if (hostState.running) {
-                    OutlinedButton(
-                        onClick = {
-                            if (hostState.ready.isNotEmpty()) stopConfirm = true
-                            else scope.launch {
-                                browserRepo.stopHost()
-                            }
-                        },
-                        enabled = !hostState.busy,
-                    ) {
-                        Text("Stop host")
+                IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                Text("Browser on a TV", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold)
+                BrowserHostStopAction(hostState.running, hostState.busy) {
+                    scope.launch {
+                        if (hostState.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
+                        browserRepo.stopHost()
                     }
                 }
             }
-
-            LocalNetworkBanners(status = networkStatus)
-
-            if (!hostState.running) {
-                Text(
-                    text = "Use a browser on a TV, console, or computer as a temporary receiver. This phone will host a page on your Wi‑Fi.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val result = browserRepo.startHost()
-                            if (result.isFailure) {
-                                snackMessage = browserRepo.state.value.lastError
-                                    ?: result.exceptionOrNull()?.message
-                                    ?: "Couldn't start browser host"
-                            }
-                        }
-                    },
-                    // Allow start off Wi‑Fi only with the banner above as warning; bind may still fail.
-                    enabled = !hostState.busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (hostState.busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text("Start browser host")
-                    }
-                }
-                if (!networkStatus.onLocalNetwork) {
-                    Text(
-                        text = "Requires same Wi‑Fi as the TV.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            } else {
-                BrowserHostUrlCard(
-                    primaryUrl = hostState.primaryUrl,
-                    port = hostState.port,
-                    otherUrls = hostState.otherUrls,
-                    otherExpanded = otherExpanded,
-                    onToggleOther = { otherExpanded = !otherExpanded },
-                    onCopy = { url ->
-                        copyToClipboard(context, url)
-                        snackMessage = "Link copied"
-                    },
-                )
-
-                Text(
-                    text = "Steps",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "1. Connect the TV to the same Wi‑Fi\n2. Open the address above in the TV’s browser\n3. Enter the 6-digit code shown on the TV",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                SectionLabel("Waiting to pair")
-                if (hostState.pending.isEmpty()) {
-                    Text(
-                        text = "Waiting for a browser to open the link…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    hostState.pending.forEach { request ->
-                        PendingPairRow(
-                            request = request,
-                            onEnterCode = { pairingRequest = request },
-                        )
-                    }
-                }
-
-                if (hostState.ready.isNotEmpty()) {
-                    SectionLabel("Ready")
-                    hostState.ready.forEach { session ->
-                        ReadySessionRow(
-                            session = session,
-                            onCastHere = {
-                                viewModel.selectBrowserTarget(
-                                    session.toTvDevice(browserRepo.lanHostIp(), hostState.port),
-                                )
-                                onCastHere?.invoke()
-                                onDismiss()
-                            },
-                            onForget = {
-                                scope.launch { browserRepo.forget(session.receiverId) }
-                            },
-                        )
-                    }
-                }
-            }
-
-            hostState.lastError?.let { err ->
-                Text(
-                    text = err,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            snackMessage?.let { msg ->
-                Text(
-                    text = msg,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
+            BrowserReceiverContent(
+                hostState = hostState,
+                onLocalNetwork = networkStatus.onLocalNetwork,
+                onStart = { scope.launch { browserRepo.startHost() } },
+                onCopy = { copyToClipboard(context, it) },
+                onApprove = { request, code -> browserRepo.approve(request.sessionId, code).getOrThrow() },
+                onPlayHere = { session ->
+                    viewModel.selectBrowserTarget(session.toTvDevice(browserRepo.lanHostIp(), hostState.port))
+                    onCastHere?.invoke()
+                    onDismiss()
+                },
+                onDisconnect = { session -> scope.launch { browserRepo.disconnect(session.sessionId) } },
+                onForget = { session -> scope.launch { browserRepo.forget(session.receiverId) } },
+                modifier = if (embedded) Modifier else Modifier
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            )
         }
-    }
-
-    if (stopConfirm) {
-        AlertDialog(
-            onDismissRequest = { stopConfirm = false },
-            title = { Text("Stop hosting?") },
-            text = { Text("The TV browser will disconnect.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        stopConfirm = false
-                        scope.launch {
-                            viewModel.disconnectExternalTarget()
-                            browserRepo.stopHost()
-                        }
-                    },
-                ) { Text("Stop host") }
-            },
-            dismissButton = {
-                TextButton(onClick = { stopConfirm = false }) { Text("Cancel") }
-            },
-        )
-    }
-
-    if (embedded) BackHandler(enabled = pairingRequest != null) { pairingRequest = null }
-    pairingRequest?.let { request ->
-        BrowserPairingCodeSheet(
-            request = request,
-            embedded = embedded,
-            onDismiss = { pairingRequest = null },
-            onApprove = { code ->
-                val result = browserRepo.approve(request.sessionId, code)
-                if (result.isFailure) {
-                    throw result.exceptionOrNull()
-                        ?: IllegalStateException("Incorrect code")
-                }
-                pairingRequest = null
-                snackMessage = "Ready to cast"
-            },
-        )
     }
 
     // After approve, activate the browser as NOW when the host confirms connected.
     val activate by browserRepo.activateSession.collectAsState()
     LaunchedEffect(activate) {
         val session = activate ?: return@LaunchedEffect
-        viewModel.selectBrowserTarget(
-            session.toTvDevice(browserRepo.lanHostIp(), hostState.port),
-        )
+        viewModel.selectBrowserTarget(session.toTvDevice(browserRepo.lanHostIp(), hostState.port))
         browserRepo.clearActivateSession()
         onCastHere?.invoke()
     }
 }
 
 @Composable
-private fun BrowserHostUrlCard(
-    primaryUrl: String?,
-    port: Int,
-    otherUrls: List<String>,
-    otherExpanded: Boolean,
-    onToggleOther: () -> Unit,
-    onCopy: (String) -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-        ),
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Open on the TV browser",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
-            )
-            Text(
-                text = primaryUrl ?: "Starting…",
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val host = primaryUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }
-            if (host != null) {
-                Text(
-                    text = "IP $host  ·  port ${if (port > 0) port else runCatching { java.net.URI(primaryUrl).port }.getOrDefault(8770)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                )
+internal fun BrowserHostStopAction(running: Boolean, busy: Boolean, onStop: () -> Unit) {
+    var confirm by remember { mutableStateOf(false) }
+    if (running) TextButton(onClick = { confirm = true }, enabled = !busy) { Text("Stop") }
+    if (confirm && running) AlertDialog(
+        onDismissRequest = { confirm = false },
+        title = { Text("Stop hosting?") },
+        text = { Text("The TV browser will disconnect.") },
+        confirmButton = {
+            TextButton(onClick = { confirm = false; onStop() }) {
+                Text("Stop host", color = MaterialTheme.colorScheme.error)
             }
-            if (primaryUrl != null) {
-                FilledTonalButton(onClick = { onCopy(primaryUrl) }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text("Copy link")
+        },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
+    )
+}
+
+@Composable
+internal fun BrowserReceiverContent(
+    hostState: BrowserHostState,
+    onLocalNetwork: Boolean,
+    onStart: () -> Unit,
+    onCopy: (String) -> Unit,
+    onApprove: suspend (BrowserPairingRequest, String) -> Unit,
+    onPlayHere: (BrowserReadySession) -> Unit,
+    onDisconnect: (BrowserReadySession) -> Unit,
+    onForget: (BrowserReadySession) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var dismissedRequests by remember { mutableStateOf(emptySet<BrowserPairingRequest>()) }
+    val pending = hostState.pending.filterNot { it in dismissedRequests }
+    // Opening this page starts hosting once; stopping it must not immediately restart it.
+    LaunchedEffect(onLocalNetwork) {
+        if (onLocalNetwork && !hostState.running && !hostState.busy) onStart()
+    }
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Use any TV browser as a receiver. This phone hosts a page on your Wi‑Fi.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        when {
+            !onLocalNetwork -> Text("Connect this phone to Wi‑Fi to use a TV browser.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            hostState.busy && !hostState.running -> BrowserProgress("Starting…")
+            else -> {
+                hostState.lastError?.let { error ->
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    if (!hostState.running) Button(onClick = onStart) { Text("Try again") }
+                }
+                if (hostState.running) {
+                    val address = hostState.primaryUrl?.trimEnd('/')
+                    if (address != null) BrowserHostUrlCard(address, onCopy)
+                    else BrowserProgress("Starting…")
                 }
             }
-            if (otherUrls.isNotEmpty()) {
-                Text(
-                    text = if (otherExpanded) "Other addresses ▾" else "Other addresses ▸",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable(onClick = onToggleOther),
-                )
-                if (otherExpanded) {
-                    otherUrls.forEach { url ->
-                        Text(
-                            text = url,
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable { onCopy(url) },
-                        )
+        }
+        Text("1. Connect the TV to the same Wi‑Fi\n2. Open the address above in the TV's browser\n3. Enter the 6‑digit code shown on the TV",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (hostState.running && onLocalNetwork) {
+            if (pending.isEmpty() && hostState.ready.isEmpty()) Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                BrowserProgress("Waiting for the TV…", Modifier.padding(14.dp))
+            }
+            pending.forEachIndexed { index, request ->
+                key(request.sessionId, request.expiresAtMs) {
+                    BrowserPairingCard(request, autoFocus = index == 0,
+                        onApprove = { code -> onApprove(request, code) },
+                        onCancel = { dismissedRequests = dismissedRequests + request })
+                }
+            }
+            if (hostState.ready.isNotEmpty()) {
+                PlayOnSectionLabel("CONNECTED")
+                hostState.ready.forEach { session ->
+                    key(session.sessionId) {
+                        ReadySessionRow(session, onPlayHere = { onPlayHere(session) },
+                            onDisconnect = { onDisconnect(session) }, onForget = { onForget(session) })
                     }
                 }
             }
@@ -371,41 +211,82 @@ private fun BrowserHostUrlCard(
 }
 
 @Composable
-private fun PendingPairRow(
-    request: BrowserPairingRequest,
-    onEnterCode: () -> Unit,
-) {
-    var remaining by remember(request.sessionId, request.expiresAtMs) {
-        mutableStateOf(request.remainingMs)
+private fun BrowserProgress(text: String, modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+@Composable
+private fun BrowserHostUrlCard(address: String, onCopy: (String) -> Unit) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Open this on the TV's browser", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SelectionContainer {
+                Text(address, style = MaterialTheme.typography.headlineSmall.copy(
+                    fontFamily = FontFamily.Monospace, fontSize = 20.sp, fontWeight = FontWeight.Bold))
+            }
+            TextButton(onClick = { onCopy(address) }) {
+                Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("Copy address")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun BrowserPairingCard(
+    request: BrowserPairingRequest,
+    autoFocus: Boolean,
+    onApprove: suspend (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var code by remember(request.sessionId, request.expiresAtMs) { mutableStateOf("") }
+    var error by remember(request.sessionId, request.expiresAtMs) { mutableStateOf<String?>(null) }
+    var submitting by remember(request.sessionId, request.expiresAtMs) { mutableStateOf(false) }
+    var remaining by remember(request.sessionId, request.expiresAtMs) { mutableStateOf(request.remainingMs) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(request.sessionId, request.expiresAtMs) {
         while (remaining > 0) {
             delay(1_000)
             remaining = request.remainingMs
         }
     }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(request.name, fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = if (remaining > 0) {
-                        "${formatCountdown(remaining)} left"
-                    } else {
-                        "Code expired — reload the page on the TV"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Language, null, tint = MaterialTheme.colorScheme.primary)
+                Text("${request.name} wants to connect", fontWeight = FontWeight.SemiBold)
             }
-            Button(onClick = onEnterCode, enabled = remaining > 0) {
-                Text("Enter code")
+            PairingCodeInput(code, { digits ->
+                code = digits
+                error = null
+                if (digits.length == 6 && !submitting && remaining > 0) {
+                    submitting = true
+                    scope.launch {
+                        try {
+                            onApprove(digits)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            code = ""
+                            error = humanizePairError(e.message)
+                        } finally {
+                            submitting = false
+                        }
+                    }
+                }
+            }, isError = error != null, enabled = !submitting && remaining > 0, autoFocus = autoFocus)
+            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            Text(if (remaining > 0) "Expires in ${formatCountdown(remaining)}" else "Code expired — reload the page on the TV.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (submitting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                TextButton(onClick = onCancel, enabled = !submitting) { Text("Cancel") }
             }
         }
     }
@@ -414,131 +295,29 @@ private fun PendingPairRow(
 @Composable
 private fun ReadySessionRow(
     session: BrowserReadySession,
-    onCastHere: () -> Unit,
+    onPlayHere: () -> Unit,
+    onDisconnect: () -> Unit,
     onForget: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Language,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(Modifier.size(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(session.name, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Ready to cast",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onCastHere) { Text("Cast here") }
-                TextButton(onClick = onForget) { Text("Forget") }
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Icon(Icons.Default.Language, null, tint = MaterialTheme.colorScheme.primary)
+        Column(Modifier.weight(1f)) {
+            Text(session.name, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Spacer(Modifier.size(7.dp).background(PlayOnGreen, CircleShape))
+                Text("Ready", style = MaterialTheme.typography.bodySmall, color = PlayOnGreen)
             }
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun BrowserPairingCodeSheet(
-    request: BrowserPairingRequest,
-    onDismiss: () -> Unit,
-    onApprove: suspend (String) -> Unit,
-    embedded: Boolean = false,
-) {
-    var code by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var submitting by remember { mutableStateOf(false) }
-    var remaining by remember(request.expiresAtMs) { mutableStateOf(request.remainingMs) }
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(request.expiresAtMs) {
-        while (remaining > 0) {
-            delay(1_000)
-            remaining = request.remainingMs
-        }
-    }
-
-    BrowserReceiverFrame(onDismiss, embedded) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = "Pair browser",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = request.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                value = code,
-                onValueChange = { input ->
-                    code = input.filter { it.isDigit() }.take(6)
-                    error = null
-                },
-                label = { Text("6-digit code") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth(),
-                isError = error != null,
-                supportingText = {
-                    when {
-                        error != null -> Text(error!!)
-                        remaining <= 0L -> Text("Code expired — reload the page on the TV")
-                        else -> Text("Expires in ${formatCountdown(remaining)}")
-                    }
-                },
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
-                Spacer(Modifier.size(8.dp))
-                Button(
-                    onClick = {
-                        if (code.length != 6) {
-                            error = "Enter the 6-digit code"
-                            return@Button
-                        }
-                        scope.launch {
-                            submitting = true
-                            try {
-                                onApprove(code)
-                            } catch (e: Exception) {
-                                error = humanizePairError(e.message)
-                            } finally {
-                                submitting = false
-                            }
-                        }
-                    },
-                    enabled = !submitting && remaining > 0 && code.length == 6,
-                ) {
-                    if (submitting) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Approve")
-                    }
-                }
+        FilledTonalButton(onClick = onPlayHere) { Text("Play here") }
+        Column {
+            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More options for ${session.name}") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text("Disconnect", color = MaterialTheme.colorScheme.error) },
+                    onClick = { menu = false; onDisconnect() })
+                DropdownMenuItem(text = { Text("Forget", color = MaterialTheme.colorScheme.error) },
+                    onClick = { menu = false; onForget() })
             }
         }
     }
