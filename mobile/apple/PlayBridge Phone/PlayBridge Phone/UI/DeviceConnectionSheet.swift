@@ -26,6 +26,7 @@ struct DeviceConnectionSheet: View {
     @State private var dlnaLocation = ""
     @State private var showAtvPairing = false
     @State private var showPairedTVs = false
+    @State private var actionsRowID: String?
 
     init(initialPage: PlayOnPage? = nil, openedForPicking: Bool = true) {
         self.openedForPicking = openedForPicking
@@ -37,41 +38,10 @@ struct DeviceConnectionSheet: View {
             mainPage
                 .navigationTitle("Play on")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        VStack(spacing: 0) {
-                            Text("Play on")
-                                .font(Theme.font(size: 17, weight: .bold))
-                                .foregroundColor(Theme.onSurface)
-                            HStack(spacing: 4) {
-                                Image(systemName: pathMonitor.onWiFi ? "wifi" : "antenna.radiowaves.left.and.right")
-                                    .font(Theme.font(size: 11, weight: .semibold))
-                                    .accessibilityHidden(true)
-                                Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
-                            }
-                            .font(Theme.font(size: 12))
-                            .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
-                        }
-                        .accessibilityElement(children: .combine)
-                    }
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(action: close) {
-                            Image(systemName: "xmark")
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("Close")
-                    }
-                }
+                .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: PlayOnPage.self) { page in
-                    switch page {
-                    case .pairing: pairingPage
-                    case .add: addPage
-                    case .actions(let id): actionsPage(id)
-                    case .configure: configurePage
-                    case .manualPlayBridge: manualPlayBridgePage
-                    case .manualRoku: manualRokuPage
-                    case .manualDLNA: manualDLNAPage
-                    }
+                    playOnDestination(page)
+                        .toolbar(.visible, for: .navigationBar)
                 }
         }
         .presentationDetents([.medium, .large])
@@ -79,6 +49,11 @@ struct DeviceConnectionSheet: View {
         .accessibilityIdentifier("play-on-sheet")
         .sheet(isPresented: $showAtvPairing) { AtvPairingSheet(coordinator: atv) }
         .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
+        .sheet(isPresented: actionsSheetPresented) {
+            actionsPage(actionsRowID ?? "")
+                .presentationDetents([.height(380)])
+                .presentationDragIndicator(.visible)
+        }
         .onAppear {
             nav.playOnSuppressCount += 1
             vm.startDiscovery()
@@ -130,6 +105,7 @@ struct DeviceConnectionSheet: View {
 
     private var mainPage: some View {
         VStack(spacing: 0) {
+            sheetHeader
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     networkBanners
@@ -150,6 +126,39 @@ struct DeviceConnectionSheet: View {
                 .padding(.bottom, 12)
         }
         .background(Theme.surface.ignoresSafeArea())
+    }
+
+    private var sheetHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Play on")
+                    .font(Theme.font(size: 22, weight: .bold))
+                    .foregroundColor(Theme.onSurface)
+                HStack(spacing: 4) {
+                    Image(systemName: pathMonitor.onWiFi ? "wifi" : "antenna.radiowaves.left.and.right")
+                        .font(Theme.font(size: 11, weight: .semibold))
+                        .accessibilityHidden(true)
+                    Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
+                }
+                .font(Theme.font(size: 12))
+                .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
+            }
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(Theme.font(size: 13, weight: .bold))
+                    .foregroundColor(Theme.onSecondaryContainer)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.secondaryContainer, in: Circle())
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder private var networkBanners: some View {
@@ -182,44 +191,33 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
+        let tint = nowCardAccented ? PlayOnStatusGreen.color : Theme.onSurface
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 Image(systemName: nowSymbol)
-                    .font(Theme.font(size: 22))
-                    .foregroundColor(Theme.onSecondaryContainer)
-                    .frame(width: 40, height: 40)
-                    .background(Theme.onSecondaryContainer.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(tint)
+                    .frame(width: 44, height: 44)
+                    .background(tint.opacity(nowCardAccented ? 0.18 : 0.08), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(nowName)
                         .font(Theme.font(size: 16, weight: .semibold))
-                        .foregroundColor(Theme.onSecondaryContainer)
-                        .lineLimit(1)
+                        .foregroundColor(tint)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     nowStatusLine
                     if let failureDetail {
                         Text(failureDetail)
                             .font(Theme.font(size: 12))
-                            .foregroundColor(Theme.onSecondaryContainer.opacity(0.85))
+                            .foregroundColor(Theme.onSurfaceVariant)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Button {
-                    nav.navigate(to: .remote)
-                    dismiss()
-                } label: {
-                    Label("Remote", systemImage: "av.remote")
-                        .font(Theme.font(size: 14, weight: .semibold))
-                        .frame(minHeight: 44)
-                }
-                .accessibilityLabel("Remote")
             }
-            HStack(spacing: 8) {
-                if showConfigure {
-                    Button { path.append(.configure) } label: {
-                        Label("Configure TV", systemImage: "slider.horizontal.3")
-                            .font(Theme.font(size: 14, weight: .semibold))
-                            .frame(minHeight: 44)
-                    }
+            VStack(alignment: .leading, spacing: 4) {
+                ViewThatFits(in: .horizontal) {
+                    nowActionRow(stacks: false)
+                    nowActionRow(stacks: true)
                 }
                 if let row = vm.selectedRemoteTV, row.paired, !row.ambiguous, !vm.isConnected {
                     Button {
@@ -227,36 +225,113 @@ struct DeviceConnectionSheet: View {
                         nav.navigate(to: .remote)
                         dismiss()
                     } label: {
-                        Text("Open PlayBridge on \(row.device.name)")
+                        Text("Open PlayBridge on \(shown(row.device.name))")
                             .font(Theme.font(size: 14, weight: .semibold))
-                            .frame(minHeight: 44)
+                            .frame(minHeight: 44, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundColor(nowCardAccented ? PlayOnStatusGreen.color : Theme.primary)
                 }
-                Spacer(minLength: 0)
-                Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect") {
-                    vm.disconnect()
-                }
-                .font(Theme.font(size: 14, weight: .semibold))
-                .foregroundColor(Theme.danger)
-                .frame(minHeight: 44)
-            }
-            if showsFailure && !vm.isConnected {
-                ShareLink(item: diagnosticsText) {
-                    Label("Share diagnostics", systemImage: "square.and.arrow.up")
-                        .font(Theme.font(size: 14, weight: .semibold))
-                        .frame(minHeight: 44)
+                if showsFailure && !vm.isConnected {
+                    ShareLink(item: diagnosticsText) {
+                        Label("Share diagnostics", systemImage: "square.and.arrow.up")
+                            .font(Theme.font(size: 14, weight: .semibold))
+                            .frame(minHeight: 44, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(Theme.onSurface)
                 }
             }
         }
         .padding(14)
-        .background(Theme.secondaryContainer.opacity(0.78), in: RoundedRectangle(cornerRadius: 16))
+        .background {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(nowCardAccented ? PlayOnStatusGreen.color.opacity(0.12) : Theme.surfaceContainer)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(nowCardAccented ? PlayOnStatusGreen.color.opacity(0.35) : Theme.outlineVariant, lineWidth: 1)
+        }
+    }
+
+    private func nowActionRow(stacks: Bool) -> some View {
+        let remoteTint = nowCardAccented ? PlayOnStatusGreen.color : Theme.onSurface
+        let capsules = HStack(spacing: 8) {
+            outlinedCapsule("Remote", systemImage: "av.remote", tint: remoteTint) {
+                nav.navigate(to: .remote)
+                dismiss()
+            }
+            .accessibilityLabel("Remote")
+            if showConfigure {
+                filledCapsule("Configure TV", systemImage: "slider.horizontal.3") {
+                    path.append(.configure)
+                }
+            }
+        }
+        let disconnect = Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect") {
+            vm.disconnect()
+        }
+        .buttonStyle(.plain)
+        .font(Theme.font(size: 14, weight: .semibold))
+        .foregroundColor(Theme.danger)
+        .frame(minHeight: 44)
+        return Group {
+            if stacks {
+                VStack(alignment: .leading, spacing: 4) {
+                    capsules
+                    disconnect.frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    capsules.fixedSize(horizontal: true, vertical: false)
+                    Spacer(minLength: 8)
+                    disconnect.fixedSize(horizontal: true, vertical: false)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func playOnDestination(_ page: PlayOnPage) -> some View {
+        switch page {
+        case .pairing: pairingPage
+        case .add: addPage
+        case .actions(let id): actionsPage(id)
+        case .configure: configurePage
+        case .manualPlayBridge: manualPlayBridgePage
+        case .manualRoku: manualRokuPage
+        case .manualDLNA: manualDLNAPage
+        }
+    }
+
+    private func outlinedCapsule(_ title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(tint)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .overlay(Capsule().stroke(tint.opacity(0.85), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func filledCapsule(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(PlayOnStatusGreen.color)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(PlayOnStatusGreen.color.opacity(0.22), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var devicesSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             sectionLabel("Devices")
             phoneRow
-            AirPlayDestinationRow()
+            AirPlayDestinationRow(flat: true)
             ForEach(sections.ready) { row in
                 deviceRow(row)
             }
@@ -290,7 +365,7 @@ struct DeviceConnectionSheet: View {
                         .accessibilityLabel("Selected")
                 }
             }
-            .frame(minHeight: 56)
+            .frame(minHeight: 64)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -313,6 +388,13 @@ struct DeviceConnectionSheet: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("Searching")
                     }
+                }
+                if scanning && sections.nearby.isEmpty {
+                    Text("Looking for TVs on this Wi‑Fi…")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
                 }
                 ForEach(sections.nearby) { row in
                     deviceRow(row)
@@ -373,11 +455,12 @@ struct DeviceConnectionSheet: View {
         }
         .buttonStyle(.plain)
         .foregroundColor(Theme.primary)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.outlineVariant))
+        .overlay(Capsule().stroke(Theme.primary, lineWidth: 1))
     }
 
     private func deviceRow(_ row: PlayOnSheetRow, badge: String? = nil, dimmed: Bool = false) -> some View {
         let newBadge = badge ?? (row.listed.kind == .playBridge && row.listed.needsPairing ? "New" : nil)
+        let highlighted = newBadge != nil && !dimmed
         return HStack(spacing: 0) {
             Button { select(row) } label: {
                 HStack(spacing: 12) {
@@ -397,23 +480,31 @@ struct DeviceConnectionSheet: View {
                     if let newBadge {
                         Text(newBadge)
                             .font(Theme.font(size: 12, weight: .semibold))
-                            .foregroundColor(Theme.onSecondaryContainer)
-                            .padding(.horizontal, 9)
+                            .foregroundColor(Theme.primary)
+                            .padding(.horizontal, 10)
                             .frame(minHeight: 24)
-                            .background(Theme.secondaryContainer, in: Capsule())
+                            .background(Theme.primary.opacity(0.18), in: Capsule())
                     }
                 }
-                .frame(minHeight: 56)
+                .frame(minHeight: 64)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if row.listed.saved {
-                Button { path.append(.actions(row.id)) } label: {
-                    Image(systemName: "ellipsis")
+                Button { actionsRowID = row.id } label: {
+                    Image(systemName: "ellipsis.vertical")
+                        .font(Theme.font(size: 16, weight: .semibold))
+                        .foregroundColor(Theme.onSurfaceVariant)
                         .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("More options for \(row.listed.name)")
+            }
+        }
+        .padding(.horizontal, highlighted ? 10 : 0)
+        .background {
+            if highlighted {
+                RoundedRectangle(cornerRadius: 14).fill(Theme.primary.opacity(0.10))
             }
         }
         .opacity(dimmed ? 0.5 : 1)
@@ -532,60 +623,87 @@ struct DeviceConnectionSheet: View {
 
     private func actionsPage(_ id: String) -> some View {
         let row = rowIndex[id]
-        return VStack(alignment: .leading, spacing: 8) {
-            if let row {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.listed.name)
-                        .font(Theme.font(size: 20, weight: .semibold))
-                        .foregroundColor(Theme.onSurface)
-                    Text(PlayOnCatalog.actionsSubtitle(protocolName: row.listed.protocolName, address: row.listed.address, used: usedText(row.listed.lastConnected)))
-                        .font(Theme.font(size: 13))
-                        .foregroundColor(Theme.onSurfaceVariant)
-                }
-                .padding(.bottom, 8)
-                actionButton("Play on this TV", systemImage: "play.tv") { select(row) }
-                if row.playBridge != nil {
-                    Button { openFullTVRemote(row) } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "av.remote").frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Full TV remote")
-                                    .font(Theme.font(size: 15, weight: .semibold))
-                                Text("Power, volume and apps — pair once with a code")
-                                    .font(Theme.font(size: 13))
-                                    .foregroundColor(Theme.onSurfaceVariant)
-                            }
-                            Spacer()
-                            Text(row.paired && !row.ambiguous ? "Paired" : "Set up")
-                                .font(Theme.font(size: 12, weight: .semibold))
-                                .foregroundColor(Theme.onSecondaryContainer)
-                                .padding(.horizontal, 9)
-                                .frame(minHeight: 24)
-                                .background(Theme.secondaryContainer, in: Capsule())
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                if let row {
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: PlayOnCatalog.symbol(kind: row.listed.kind, desktop: row.desktop))
+                            .font(Theme.font(size: 20))
+                            .foregroundColor(Theme.primary)
+                            .frame(width: 44, height: 44)
+                            .background(Theme.primary.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.listed.name)
+                                .font(Theme.font(size: 17, weight: .semibold))
+                                .foregroundColor(Theme.onSurface)
+                                .lineLimit(2)
+                            Text(PlayOnCatalog.actionsSubtitle(protocolName: row.listed.protocolName, address: row.listed.address, used: usedText(row.listed.lastConnected)))
+                                .font(Theme.font(size: 13))
+                                .foregroundColor(Theme.onSurfaceVariant)
+                                .lineLimit(2)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-                        .contentShape(Rectangle())
+                    }
+                    .padding(.bottom, 8)
+                    Divider().overlay(Theme.outlineVariant)
+                    actionButton("Play on this TV", systemImage: "arrow.right") {
+                        actionsRowID = nil
+                        select(row)
+                    }
+                    if row.playBridge != nil {
+                        let paired = row.paired && !row.ambiguous
+                        Button { openFullTVRemote(row) } label: {
+                            HStack(alignment: .center, spacing: 12) {
+                                Image(systemName: "av.remote")
+                                    .foregroundColor(Theme.primary)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Full TV remote")
+                                        .font(Theme.font(size: 15, weight: .semibold))
+                                        .foregroundColor(Theme.onSurface)
+                                    Text("Power, volume and apps — pair once with a code")
+                                        .font(Theme.font(size: 13))
+                                        .foregroundColor(Theme.onSurfaceVariant)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 8)
+                                if paired {
+                                    Text("Paired")
+                                        .font(Theme.font(size: 13, weight: .semibold))
+                                        .foregroundColor(Theme.onSurfaceVariant)
+                                } else {
+                                    Text("Set up")
+                                        .font(Theme.font(size: 12, weight: .semibold))
+                                        .foregroundColor(Theme.primary)
+                                        .padding(.horizontal, 10)
+                                        .frame(minHeight: 28)
+                                        .background(Theme.primary.opacity(0.18), in: Capsule())
+                                }
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Full TV remote, \(paired ? "Paired" : "Set up")")
+                    }
+                    Button(role: .destructive) { forget(row) } label: {
+                        Label(row.playBridge == nil ? "Forget this device" : "Forget this TV", systemImage: "trash")
+                            .font(Theme.font(size: 15, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Full TV remote, \(row.paired && !row.ambiguous ? "Paired" : "Set up")")
+                    .foregroundColor(Theme.danger)
+                } else {
+                    Text("This device is no longer available.")
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
-                Button(role: .destructive) { forget(row) } label: {
-                    Label(row.playBridge == nil ? "Forget this device" : "Forget this TV", systemImage: "trash")
-                        .font(Theme.font(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-                }
-                .foregroundColor(Theme.danger)
-            } else {
-                Text("This device is no longer available.")
-                    .foregroundColor(Theme.onSurfaceVariant)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.surface.ignoresSafeArea())
-        .navigationTitle("Device")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var configurePage: some View {
@@ -737,10 +855,17 @@ struct DeviceConnectionSheet: View {
 
     private func actionButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(Theme.font(size: 15, weight: .semibold))
-                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 28)
+                Text(title)
+                    .font(Theme.font(size: 15, weight: .semibold))
+                    .foregroundColor(Theme.onSurface)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -875,6 +1000,23 @@ struct DeviceConnectionSheet: View {
 
     private var thisPhoneSelected: Bool {
         !vm.nativeReceiverSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.isConnected && !vm.connectionIsConnecting
+    }
+
+    /// Connected playback uses the green card. Connecting and failures stay neutral.
+    private var nowCardAccented: Bool {
+        guard !showsFailure else { return false }
+        if vm.isConnected { return true }
+        return vm.isAirPlay && vm.airPlay.routeAvailable
+    }
+
+    private var nowStatusColor: Color {
+        if showsFailure && !vm.isConnected { return Theme.danger }
+        if nowCardAccented { return PlayOnStatusGreen.color }
+        return Theme.onSurfaceVariant
+    }
+
+    private var actionsSheetPresented: Binding<Bool> {
+        Binding(get: { actionsRowID != nil }, set: { if !$0 { actionsRowID = nil } })
     }
 
     private var showNowCard: Bool {
@@ -1028,7 +1170,7 @@ struct DeviceConnectionSheet: View {
             Text(nowStatusText)
         }
         .font(Theme.font(size: 13))
-        .foregroundColor(showsFailure && !vm.isConnected ? Theme.danger : Theme.onSecondaryContainer)
+        .foregroundColor(nowStatusColor)
         .accessibilityElement(children: .combine)
     }
 
@@ -1091,7 +1233,11 @@ struct DeviceConnectionSheet: View {
     private func forget(_ row: PlayOnSheetRow) {
         if let device = row.playBridge { vm.forget(device) }
         if let device = row.external { vm.forgetExternalReceiver(device) }
-        if !path.isEmpty { path.removeLast() }
+        if actionsRowID != nil {
+            actionsRowID = nil
+        } else if !path.isEmpty {
+            path.removeLast()
+        }
     }
 
     private func openFullTVRemote(_ row: PlayOnSheetRow) {
@@ -1104,6 +1250,7 @@ struct DeviceConnectionSheet: View {
             userPicked = false
             vm.connectSaved(device)
         }
+        actionsRowID = nil
         nav.pendingAtvPairing = true
         nav.navigate(to: .remote)
         dismiss()
@@ -1139,7 +1286,8 @@ private struct PlayOnSheetRow: Identifiable {
 }
 
 private enum PlayOnStatusGreen {
-    static let color = Color(hex: 0x4CAF50)
+    /// Ready green from the Play on mockup. Theme has no success token.
+    static let color = Color(hex: 0x46D483)
 }
 
 /// Keeps page 1's scroll offset when an in-sheet page covers the list and the scroll view is rebuilt.

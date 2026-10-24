@@ -23,21 +23,32 @@ struct AirPlayRoutePicker: UIViewRepresentable {
 }
 
 struct AirPlayDestinationRow: View {
+    var flat = false
     @EnvironmentObject private var vm: ConnectionViewModel
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "airplayvideo").font(Theme.font(.title2)).foregroundStyle(Theme.primary)
+            Image(systemName: "airplayvideo")
+                .font(flat ? Theme.font(size: 20) : Theme.font(.title2))
+                .foregroundStyle(Theme.primary)
+                .frame(width: flat ? 28 : nil, height: flat ? 28 : nil)
             VStack(alignment: .leading, spacing: 3) {
-                Text(vm.isAirPlay ? vm.airPlay.routeName : "AirPlay").font(Theme.font(.headline))
+                Text(vm.isAirPlay ? vm.airPlay.routeName : "AirPlay")
+                    .font(flat ? Theme.font(size: 15, weight: .semibold) : Theme.font(.headline))
                 Text(vm.isAirPlay ? (vm.airPlay.routeAvailable ? "Selected · Change output" : "Disconnected · Choose a device") : "Choose a TV or speaker")
-                    .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                    .font(flat ? Theme.font(size: 13) : Theme.font(.caption))
+                    .foregroundStyle(Theme.onSurfaceVariant)
             }
             Spacer(minLength: 0)
             AirPlayRoutePicker(controller: vm.airPlay).frame(width: 48, height: 48)
                 .accessibilityLabel("Choose AirPlay device")
         }
-        .padding(12)
-        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
+        .padding(flat ? 0 : 12)
+        .frame(maxWidth: .infinity, minHeight: flat ? 64 : nil, alignment: .leading)
+        .background {
+            if !flat {
+                RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainer)
+            }
+        }
     }
 }
 
