@@ -320,6 +320,10 @@ struct DeviceConnectionSheet: View {
         case .manualPlayBridge: manualPlayBridgePage
         case .manualRoku: manualRokuPage
         case .manualDLNA: manualDLNAPage
+        case .browserTV:
+            BrowserReceiverPage(controller: vm.browserReceiver, onWiFi: pathMonitor.onWiFi) { device in
+                pickExternal(device)
+            }
         }
     }
 
@@ -679,39 +683,14 @@ struct DeviceConnectionSheet: View {
     }
 
     private var pairingDigits: some View {
-        let rejected = pairingCodeRejected && pairingCode.isEmpty
-        return HStack(spacing: 8) {
-            ForEach(0..<6, id: \.self) { index in
-                let active = !rejected && index == pairingCode.count
-                Text(digit(index))
-                    .font(Theme.font(size: 28, weight: .bold, design: .monospaced))
-                    .foregroundColor(Theme.onSurface)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(rejected ? Theme.danger : (active ? Theme.primary : Theme.outlineVariant),
-                                    lineWidth: (rejected || active) ? 2 : 1)
-                    )
-            }
+        PairingCodeBoxes(
+            code: $pairingCode,
+            rejected: pairingCodeRejected,
+            focus: $pairingFieldFocused,
+            accessibilityLabel: "Pairing code"
+        ) { code in
+            vm.submitPairingCode(code)
         }
-        .accessibilityHidden(true)
-        .background {
-            TextField("", text: $pairingCode)
-                .keyboardType(.numberPad)
-                .textContentType(.oneTimeCode)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($pairingFieldFocused)
-                .opacity(0.02)
-                .accessibilityLabel("Pairing code")
-                .onChange(of: pairingCode) { newValue in
-                    let filtered = String(newValue.filter(\.isNumber).prefix(6))
-                    if filtered != newValue { pairingCode = filtered }
-                    if filtered.count == 6 { vm.submitPairingCode(filtered) }
-                }
-        }
-        .onTapGesture { pairingFieldFocused = true }
     }
 
     private var pairingCodeRejected: Bool {
@@ -726,6 +705,9 @@ struct DeviceConnectionSheet: View {
                     .font(Theme.font(size: 14))
                     .foregroundColor(Theme.onSurfaceVariant)
                 VStack(spacing: 0) {
+                    addLink(.browserTV, title: "Browser on a TV",
+                            subtitle: "Any smart TV with a web browser — no app needed",
+                            systemImage: "globe")
                     addLink(.manualPlayBridge, title: "PlayBridge TV by IP address",
                             subtitle: "When it’s on another network segment or discovery is blocked",
                             systemImage: "tv")
@@ -1119,7 +1101,7 @@ struct DeviceConnectionSheet: View {
                 desktop: PlayOnCatalog.isDesktopName(device.name)))
         }
         let liveIDs = Set((vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices).map(\.identity))
-        for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" {
+        for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" && device.protocolID != "browser" {
             let id = "ex:\(device.identity)"
             if id == activeExternalID { continue }
             let address = externalAddress(device)
@@ -1156,6 +1138,18 @@ struct DeviceConnectionSheet: View {
                                             reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity], uuid: device.id),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
+        for session in BrowserReceiverState.uniqueReceivers(vm.browserReceiver.state.ready) {
+            let device = vm.browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
+            let id = browserRowID(session)
+            if id == activeExternalID { continue }
+            var keys: Set<String> = [id, device.identity]
+            if !session.receiverId.isEmpty { keys.insert(session.receiverId) }
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: .browser, address: externalAddress(device),
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: false,
+                                            matchKeys: keys, uuid: session.receiverId.isEmpty ? device.id : session.receiverId),
+                playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
+        }
         return rows
     }
 
@@ -1168,7 +1162,16 @@ struct DeviceConnectionSheet: View {
 
     private var activeExternalID: String? {
         guard let device = vm.externalReceiver, vm.isConnected || vm.connectionIsConnecting || showsFailure else { return nil }
+        if device.protocolID == "browser" {
+            let key = vm.selectedBrowserReceiverId.flatMap { $0.isEmpty ? nil : $0 } ?? device.id
+            return "ex:browser:\(key)"
+        }
         return "ex:\(device.identity)"
+    }
+
+    private func browserRowID(_ session: BrowserReadySession) -> String {
+        let key = session.receiverId.isEmpty ? session.sessionId : session.receiverId
+        return "ex:browser:\(key)"
     }
 
     private var scanning: Bool {
@@ -1258,6 +1261,7 @@ struct DeviceConnectionSheet: View {
         if receiverStandingBy {
             return PlayOnCatalog.isDesktopName(vm.pairedDevice?.name ?? "") ? "laptopcomputer" : "tv"
         }
+        if vm.externalReceiver?.protocolID == "browser" { return "globe" }
         if vm.isAirPlay || vm.isExternalReceiver { return "airplayvideo" }
         if PlayOnCatalog.isDesktopName(connectedRawName) { return "laptopcomputer" }
         return "tv"
@@ -1391,14 +1395,9 @@ struct DeviceConnectionSheet: View {
         switch protocolID {
         case "dlna": return .dlna
         case "roku": return .roku
+        case "browser": return .browser
         default: return .googleCast
         }
-    }
-
-    private func digit(_ index: Int) -> String {
-        guard index < pairingCode.count else { return "" }
-        let character = pairingCode[pairingCode.index(pairingCode.startIndex, offsetBy: index)]
-        return String(character)
     }
 
     private func select(_ row: PlayOnSheetRow) {
@@ -1474,7 +1473,7 @@ private struct PlayOnSheetRow: Identifiable {
     var id: String { listed.id }
 }
 
-private enum PlayOnStatusGreen {
+enum PlayOnStatusGreen {
     /// Ready green from the Play on mockup. Theme has no success token.
     static let color = Color(hex: 0x46D483)
 }

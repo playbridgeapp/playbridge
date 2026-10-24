@@ -36,23 +36,36 @@ final class PhoneProxyRegistration {
 final class PhoneSenderServices: @unchecked Sendable {
     static let shared = PhoneSenderServices()
     private let worker = DispatchQueue(label: "com.playbridge.sender-services")
+    private let workerMarker = DispatchSpecificKey<UInt8>()
     private var generation = UUID()
     private let listenerCheck: (URL) async throws -> Void
+    private var pumping = false
+    private var handlers: [UUID: ([String: Any]) -> Void] = [:]
+    private var waiters: [String: CommandWaiter] = [:]
 
     init(listenerCheck: @escaping (URL) async throws -> Void = PhoneSenderServices.checkListener) {
         self.listenerCheck = listenerCheck
+        worker.setSpecific(key: workerMarker, value: 1)
+    }
+
+    private final class CommandWaiter {
+        let continuation: CheckedContinuation<[String: Any], Error>
+        init(_ continuation: CheckedContinuation<[String: Any], Error>) { self.continuation = continuation }
     }
 #if canImport(PlayBridgeCastCore)
     private var handle: OpaquePointer?
 #endif
 
     enum ServiceError: LocalizedError {
-        case unavailable, failed, timedOut
+        case unavailable, failed, timedOut, rejected(String)
         var errorDescription: String? {
             switch self {
             case .unavailable: return "The native streaming service is unavailable in this build."
             case .failed: return "Couldn’t prepare the stream for playback. Please try again."
             case .timedOut: return "The streaming service did not respond in time."
+            case .rejected(let message):
+                let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? "The streaming service rejected the command." : trimmed
             }
         }
     }
@@ -126,36 +139,98 @@ final class PhoneSenderServices: @unchecked Sendable {
             self.handle = nil
         }
 #endif
+        pumping = false
         generation = UUID()
+        let pending = waiters
+        waiters.removeAll()
+        pending.values.forEach { $0.continuation.resume(throwing: ServiceError.failed) }
     }
 
     fileprivate func renew(_ id: String, generation expected: UUID) {
         worker.async { [self] in
             guard generation == expected else { return }
-            _ = try? execute(["command": "proxy_renew", "id": id])
+            try? enqueue(["command": "proxy_renew", "id": id])
         }
     }
 
     fileprivate func revoke(_ id: String, generation expected: UUID) {
         worker.async { [self] in
             guard generation == expected else { return }
-            _ = try? execute(["command": "proxy_revoke", "id": id])
+            try? enqueue(["command": "proxy_revoke", "id": id])
         }
+    }
+
+    /// Submit one sender-services command and wait for its operation result.
+    /// Browser events that arrive in between are delivered to event handlers.
+    func submitCommand(_ command: [String: Any]) async throws -> [String: Any] {
+        try await submit(command)
+    }
+
+    /// Events are delivered on the sender-services queue. Hop before touching UI state.
+    func addServicesEventHandler(_ handler: @escaping ([String: Any]) -> Void) -> UUID {
+        let id = UUID()
+        worker.async { [self] in
+            handlers[id] = handler
+            ensurePump()
+        }
+        return id
+    }
+
+    func removeServicesEventHandler(_ id: UUID) {
+        worker.async { [self] in handlers.removeValue(forKey: id) }
     }
 
     private func submit(_ command: [String: Any]) async throws -> [String: Any] {
         try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { continuation in
-            worker.async { [self] in
-                do { continuation.resume(returning: try execute(command)) }
-                catch { continuation.resume(throwing: error) }
-            }
+            worker.async { [self] in begin(command, continuation: continuation) }
         }
     }
 
-    deinit { retireHost() }
+    deinit {
+        if DispatchQueue.getSpecific(key: workerMarker) != nil {
+            retireHost()
+        } else {
+            worker.sync { retireHost() }
+        }
+    }
 
-    private func execute(_ command: [String: Any]) throws -> [String: Any] {
+    private func begin(_ command: [String: Any], continuation: CheckedContinuation<[String: Any], Error>) {
+        let waiter = CommandWaiter(continuation)
+        do {
+            try ensureStarted()
+            let requestID = UUID().uuidString
+            var request = command
+            request["request_id"] = requestID
+            waiters[requestID] = waiter
+            do {
+                try write(request)
+            } catch {
+                waiters.removeValue(forKey: requestID)
+                throw error
+            }
+            ensurePump()
+            worker.asyncAfter(deadline: .now() + 15) { [self] in
+                guard let waiter = waiters.removeValue(forKey: requestID) else { return }
+                // The worker accepted a command whose result was lost.
+                // Retire this host, including its grants, before allowing retry.
+                retireHost()
+                waiter.continuation.resume(throwing: ServiceError.timedOut)
+            }
+        } catch {
+            continuation.resume(throwing: error)
+        }
+    }
+
+    private func enqueue(_ command: [String: Any]) throws {
+        try ensureStarted()
+        var request = command
+        request["request_id"] = UUID().uuidString
+        try write(request)
+        ensurePump()
+    }
+
+    private func ensureStarted() throws {
 #if canImport(PlayBridgeCastCore)
         if handle == nil {
             guard pb_sender_services_abi_version() == 2 else { throw ServiceError.unavailable }
@@ -163,39 +238,77 @@ final class PhoneSenderServices: @unchecked Sendable {
             guard let started = pb_sender_services_start() else { throw ServiceError.failed }
             handle = started
         }
+#else
+        throw ServiceError.unavailable
+#endif
+    }
+
+    private func write(_ request: [String: Any]) throws {
+#if canImport(PlayBridgeCastCore)
         guard let handle else { throw ServiceError.unavailable }
-        let requestID = UUID().uuidString
-        var request = command
-        request["request_id"] = requestID
         let bytes = try JSONSerialization.data(withJSONObject: request)
         let json = String(decoding: bytes, as: UTF8.self)
         guard json.withCString({ pb_sender_services_submit_json(handle, $0) }) else {
             throw ServiceError.failed
         }
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline {
-            guard let pointer = pb_sender_services_next_json(handle, 200) else { continue }
-            let eventBytes = Data(String(cString: pointer).utf8)
-            pb_string_free(pointer)
-            guard let event = try JSONSerialization.jsonObject(with: eventBytes) as? [String: Any] else { continue }
-            if event["event"] as? String == "error", event["operation"] as? String == "start" {
-                retireHost()
-                throw ServiceError.failed
-            }
-            guard event["requestId"] as? String == requestID else { continue }
-            guard event["event"] as? String == "operation", let data = event["data"] as? [String: Any] else {
-                throw ServiceError.failed
-            }
-            var result = data
-            result["hostGeneration"] = generation
-            return result
-        }
-        // The worker might have accepted a registration whose result was lost.
-        // Retire this failed host, including its grants, before allowing retry.
-        retireHost()
-        throw ServiceError.timedOut
 #else
         throw ServiceError.unavailable
 #endif
+    }
+
+    /// One pump drains the shared native queue so a browser event cannot be
+    /// dropped while a proxy command is waiting, and a proxy result cannot fill
+    /// the queue while the browser host is idle.
+    private func ensurePump() {
+#if canImport(PlayBridgeCastCore)
+        guard handle != nil, !pumping else { return }
+        pumping = true
+        worker.async { [self] in pump() }
+#endif
+    }
+
+    private func pump() {
+#if canImport(PlayBridgeCastCore)
+        guard pumping, let handle else { pumping = false; return }
+        var drained = false
+        if let pointer = pb_sender_services_next_json(handle, 0) {
+            consume(pointer)
+            drained = true
+        }
+        guard pumping, self.handle != nil else { pumping = false; return }
+        if drained || !waiters.isEmpty || !handlers.isEmpty {
+            worker.asyncAfter(deadline: .now() + .milliseconds(50)) { [self] in pump() }
+        } else {
+            pumping = false
+        }
+#endif
+    }
+
+    private func consume(_ pointer: UnsafeMutablePointer<CChar>) {
+#if canImport(PlayBridgeCastCore)
+        let eventBytes = Data(String(cString: pointer).utf8)
+        pb_string_free(pointer)
+        guard let event = try? JSONSerialization.jsonObject(with: eventBytes) as? [String: Any] else { return }
+        deliver(event)
+#endif
+    }
+
+    private func deliver(_ event: [String: Any]) {
+        let callbacks = Array(handlers.values)
+        if event["event"] as? String == "error", event["operation"] as? String == "start" {
+            callbacks.forEach { $0(event) }
+            retireHost()
+            return
+        }
+        if let requestID = event["requestId"] as? String, let waiter = waiters.removeValue(forKey: requestID) {
+            if event["event"] as? String == "operation" {
+                var result = event["data"] as? [String: Any] ?? [:]
+                result["hostGeneration"] = generation
+                waiter.continuation.resume(returning: result)
+            } else {
+                waiter.continuation.resume(throwing: ServiceError.rejected(event["message"] as? String ?? ""))
+            }
+        }
+        callbacks.forEach { $0(event) }
     }
 }

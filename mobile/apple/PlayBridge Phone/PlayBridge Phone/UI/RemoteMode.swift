@@ -11,7 +11,7 @@ enum RemoteMode {
     }
 
     static func supportsExternalSeek(externalProtocol: String?) -> Bool {
-        externalProtocol == "google_cast" || externalProtocol == "dlna" || externalProtocol == "airplay"
+        externalProtocol == "google_cast" || externalProtocol == "dlna" || externalProtocol == "airplay" || externalProtocol == "browser"
     }
 
     static func canSeek(context: String, externalProtocol: String?, duration: Int64, isLive: Bool, isSeekable: Bool, isImage: Bool = false) -> Bool {

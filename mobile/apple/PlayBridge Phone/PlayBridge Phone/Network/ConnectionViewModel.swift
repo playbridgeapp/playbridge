@@ -16,9 +16,12 @@ final class ConnectionViewModel: ObservableObject {
     let rokuBrowser = DLNABrowser(kind: .roku)
     let dialBrowser = DLNABrowser(kind: .dial)
     let googleCast = GoogleCastController()
+    let browserReceiver = BrowserReceiverController()
     let airPlay = AirPlayController()
     var isAirPlay: Bool { airPlay.selected }
     @Published private(set) var externalReceiver: ExternalReceiverDevice?
+    /// Stable id of the selected browser page. Session ids change on reload.
+    var selectedBrowserReceiverId: String?
     @Published private(set) var savedExternalReceiverDevices: [ExternalReceiverDevice] = []
     @Published var operationError: String?
     var isExternalReceiver: Bool { externalReceiver != nil }
@@ -55,7 +58,13 @@ final class ConnectionViewModel: ObservableObject {
         if isAirPlay { return kind == "video" || kind == "audio" }
         return isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
     }
-    var destinationID: String? { isAirPlay ? "airplay" : externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey) }
+    var destinationID: String? {
+        if isAirPlay { return "airplay" }
+        if externalReceiver?.protocolID == "browser", let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty {
+            return "browser:" + receiverId
+        }
+        return externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey)
+    }
     var receiverName: String? {
         if isAirPlay { return airPlay.routeName }
         if case .connected(let name, _) = state { return name }
@@ -201,7 +210,7 @@ final class ConnectionViewModel: ObservableObject {
             }
             .store(in: &cancellables)
         googleCast.$state.receive(on: RunLoop.main).sink { [weak self] value in
-            guard let self, isExternalReceiver else { return }
+            guard let self, isExternalReceiver, externalReceiver?.protocolID != "browser" else { return }
             state = value
             handleCastConnectionState(value)
             if case .connected(let name, _) = value, var device = externalReceiver {
@@ -216,10 +225,27 @@ final class ConnectionViewModel: ObservableObject {
             // reconnects. The casting session owns bounded retention and cleanup.
         }.store(in: &cancellables)
         googleCast.$playback.receive(on: RunLoop.main).sink { [weak self] playback in
-            guard let self, isExternalReceiver, let playback else { return }
+            guard let self, isExternalReceiver, externalReceiver?.protocolID != "browser", let playback else { return }
             coordinator.playback = playback
             coordinator.activeContext = playback.state == "stopped" ? "idle" : "player"
         }.store(in: &cancellables)
+        // The view model is created on the main actor from the app scene.
+        MainActor.assumeIsolated {
+            browserReceiver.onActivate = { [weak self] session in
+                guard let self else { return }
+                let device = browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
+                adoptBrowserReceiver(device, preservingPlayback: false, browserReceiverId: session.receiverId)
+            }
+            browserReceiver.onPlayback = { [weak self] sessionId, playback in
+                self?.applyBrowserPlayback(sessionId, playback)
+            }
+            browserReceiver.onReadyChanged = { [weak self] in
+                self?.syncBrowserConnection()
+            }
+            browserReceiver.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in
+                self?.objectWillChange.send()
+            }.store(in: &cancellables)
+        }
         rokuBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         dialBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         dlnaBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
@@ -327,6 +353,16 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func connectExternalReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool = false) {
+        if device.protocolID == "browser" {
+            MainActor.assumeIsolated {
+                let match = browserReceiver.state.ready.last { $0.sessionId == device.id }
+                    ?? browserReceiver.state.ready.last { !$0.receiverId.isEmpty && $0.receiverId == selectedBrowserReceiverId }
+                let target = match.map { browserReceiver.receiver(for: $0, lanHost: LocalFileServer.lanIPAddress()) } ?? device
+                adoptBrowserReceiver(target, preservingPlayback: preservingPlayback, browserReceiverId: match?.receiverId)
+            }
+            return
+        }
+        selectedBrowserReceiverId = nil
         destinationSelectionRevision &+= 1
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
         airPlay.disconnect()
@@ -638,6 +674,7 @@ final class ConnectionViewModel: ObservableObject {
         subtitleFileServers.removeAll()
         if isExternalReceiver {
             // Clear routing intent before the transport publishes its disconnect state.
+            selectedBrowserReceiverId = nil
             externalReceiver = nil
             googleCast.disconnect()
             state = .disconnected
@@ -720,7 +757,7 @@ final class ConnectionViewModel: ObservableObject {
         noteNewCast(mediaKind: kind, title: title)
         if isExternalReceiver, let mediaURL = URL(string: url) {
             Task { @MainActor in
-                do { try await googleCast.load(url: mediaURL, title: title, contentType: contentType) }
+                do { _ = try await externalLoad(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
         } else {
@@ -813,9 +850,10 @@ final class ConnectionViewModel: ObservableObject {
             guard !queue, subtitles.isEmpty else { throw StreamRoutingError.message("Queueing and external subtitles are not supported by this receiver adapter yet.") }
             let target = destinationID
             noteNewCast(mediaKind: kind, title: video.displayTitle)
-            try await googleCast.load(url: media.url, title: video.displayTitle, contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : contentType)
-            guard destinationID == target, isExternalReceiver, googleCast.state.isConnected else { throw CancellationError() }
-            routedStreamRegistrations = [media.registration].compactMap { $0 }
+            let extra = try await externalLoad(url: media.url, title: video.displayTitle,
+                contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : contentType, headers: media.headers)
+            guard destinationID == target, isExternalReceiver, isConnected else { throw CancellationError() }
+            routedStreamRegistrations = [media.registration, extra].compactMap { $0 }
             recordCast(historyCommand)
             return
         }
@@ -927,7 +965,11 @@ final class ConnectionViewModel: ObservableObject {
         let target = destinationID
         Task { @MainActor in
             do {
-                try await googleCast.control(command)
+                if externalReceiver?.protocolID == "browser" {
+                    try await controlBrowser(command)
+                } else {
+                    try await googleCast.control(command)
+                }
                 if destinationID == target { onSent?() }
                 if destinationID == target, command == "stop" || command == "end_receiver" {
                     castPlaybackSession.stopLocally()
@@ -989,25 +1031,227 @@ final class ConnectionViewModel: ObservableObject {
 
     func setCastVolume(_ level: Double) {
         guard isExternalReceiver else { return }
+        if externalReceiver?.protocolID == "browser" {
+            let fraction = min(1, max(0, level))
+            Task { @MainActor in
+                guard let sessionId = alignedBrowserSessionID() else { return }
+                do { try await browserReceiver.control(sessionId: sessionId, action: "set_volume", value: fraction) }
+                catch { operationError = error.localizedDescription }
+            }
+            return
+        }
         Task { @MainActor in
             do { try await googleCast.setVolume(level) }
             catch { operationError = error.localizedDescription }
         }
     }
 
-    private func sendExternalReceiverURL(_ url: String, title: String?, contentType: String?, headers: [String: String]) {
-        let target = destinationID
+    private func adoptBrowserReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool, browserReceiverId: String? = nil) {
+        let nextReceiverId = browserReceiverId.flatMap { $0.isEmpty ? nil : $0 }
+        let sameBrowser = externalReceiver?.protocolID == "browser" && nextReceiverId != nil && nextReceiverId == selectedBrowserReceiverId
+        destinationSelectionRevision &+= 1
+        let keep = (preservingPlayback || castPlaybackSession.isActive) && (externalReceiver?.identity == device.identity || sameBrowser)
+        if !keep { endCastSession() }
+        airPlay.disconnect()
+        nativeReceiverSelected = false
+        playBridgeOutputSelected = false
+        externalReceiver = device
+        if let nextReceiverId { selectedBrowserReceiverId = nextReceiverId }
+        connectingDevice = nil
+        googleCast.disconnect()
+        ws.disconnect()
+        if !keep {
+            coordinator.clear()
+            coordinator.activeContext = "idle"
+        }
+        operationError = nil
+        state = .connected(serverName: device.name.isEmpty ? "Browser" : device.name, secure: true)
+        UserDefaults.standard.set("browser", forKey: "last_receiver_protocol")
+    }
+
+    @MainActor
+    private func syncBrowserConnection() {
+        guard externalReceiver?.protocolID == "browser" else { return }
+        let ready = browserReceiver.state.ready
+        let running = browserReceiver.state.running
+        let followed: BrowserOutputFollow
+        if let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty {
+            followed = BrowserReceiverState.follow(receiverId: receiverId, ready: ready, hostRunning: running)
+        } else if !running {
+            followed = .stopped
+        } else if let id = externalReceiver?.id, let match = ready.last(where: { $0.sessionId == id }) {
+            followed = .connected(match)
+        } else {
+            followed = .connecting
+        }
+        switch followed {
+        case .connected(let session):
+            let device = browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
+            let changed = externalReceiver?.id != device.id || externalReceiver?.name != device.name
+            if changed { externalReceiver = device }
+            if !session.receiverId.isEmpty { selectedBrowserReceiverId = session.receiverId }
+            if changed || !isConnected {
+                state = .connected(serverName: device.name.isEmpty ? "Browser" : device.name, secure: true)
+            }
+        case .connecting:
+            if isConnected { state = .connecting }
+        case .stopped:
+            clearBrowserOutput()
+        }
+    }
+
+    /// Session id to send with browser_load and browser_control. A reloaded page
+    /// has a new session id and the same receiver id.
+    @MainActor
+    private func alignedBrowserSessionID() -> String? {
+        guard externalReceiver?.protocolID == "browser" else { return nil }
+        if let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty,
+           let match = browserReceiver.state.ready.last(where: { $0.receiverId == receiverId }) {
+            if externalReceiver?.id != match.sessionId || externalReceiver?.name != match.name {
+                externalReceiver = browserReceiver.receiver(for: match, lanHost: LocalFileServer.lanIPAddress())
+            }
+            return match.sessionId
+        }
+        return externalReceiver?.id
+    }
+
+    private func clearBrowserOutput() {
+        guard externalReceiver?.protocolID == "browser" else { return }
+        selectedBrowserReceiverId = nil
+        externalReceiver = nil
+        state = .disconnected
+        castPlaybackSession.stopLocally()
+        releaseCastResources()
+        coordinator.clear()
+        coordinator.activeContext = "idle"
+        if UserDefaults.standard.string(forKey: "last_receiver_protocol") == "browser" {
+            UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
+        }
+    }
+
+    @MainActor
+    private func applyBrowserPlayback(_ sessionId: String, _ playback: BrowserPlaybackSnapshot) {
+        guard externalReceiver?.protocolID == "browser" else { return }
+        let readyMatch = selectedBrowserReceiverId.flatMap { id in
+            id.isEmpty ? nil : browserReceiver.state.ready.last { $0.receiverId == id }
+        }
+        if let readyMatch {
+            guard sessionId == readyMatch.sessionId else { return }
+            if externalReceiver?.id != readyMatch.sessionId || externalReceiver?.name != readyMatch.name {
+                externalReceiver = browserReceiver.receiver(for: readyMatch, lanHost: LocalFileServer.lanIPAddress())
+            }
+        } else if browserReceiver.state.running {
+            // The old session ended while the host is still up. Keep the last
+            // playback snapshot until this same browser connects again.
+            return
+        } else if sessionId != externalReceiver?.id {
+            return
+        }
+        let status = TvPlaybackStatus(state: playback.state, positionMs: playback.positionMs, durationMs: playback.durationMs, title: playback.title)
+        coordinator.playback = status
+        coordinator.activeContext = playback.state == "stopped" ? "idle" : "player"
+        coordinator.playerIsSeekable = playback.durationMs > 0
+        coordinator.playerIsLive = false
+        refreshCastPlayback(status)
+    }
+
+    /// Browser casts keep header-bound streams on the phone proxy. A Via proxy
+    /// failure uses Via phone so the TV page never receives the raw credentials.
+    @MainActor
+    private func prepareExternal(url: String, headers: [String: String], contentType: String?) async throws -> RoutedStream {
         let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
         let configuration = StreamProxySettingsStore.load()
+        let service = StreamRouteService()
+        if externalReceiver?.protocolID != "browser" {
+            return try await service.prepare(url: url, headers: headers, contentType: contentType, route: route, configuration: configuration)
+        }
+        do {
+            return try await service.prepare(url: url, headers: headers, contentType: contentType, route: route, configuration: configuration)
+        } catch {
+            guard route == .proxy else { throw error }
+            return try await service.prepare(url: url, headers: headers, contentType: contentType, route: .phone, configuration: configuration)
+        }
+    }
+
+    /// Loads the URL on the selected external receiver. Header-bound browser
+    /// streams are registered Via phone first. The returned registration is an
+    /// extra phone route the caller must retain.
+    @MainActor
+    private func externalLoad(url: URL, title: String?, contentType: String?, headers: [String: String] = [:], startPositionMs: Int? = nil) async throws -> PhoneProxyRegistration? {
+        if externalReceiver?.protocolID != "browser" {
+            try await googleCast.load(url: url, title: title, contentType: contentType)
+            if let startPositionMs, startPositionMs > 0 {
+                try await googleCast.control("seek_to:\(startPositionMs)")
+            }
+            return nil
+        }
+        var playURL = url
+        var extra: PhoneProxyRegistration?
+        if !headers.isEmpty {
+            let packaged = try await StreamRouteService().prepare(url: url.absoluteString, headers: headers,
+                contentType: contentType, route: .phone, configuration: StreamProxySettingsStore.load())
+            playURL = packaged.url
+            extra = packaged.registration
+        }
+        guard let sessionId = alignedBrowserSessionID() else {
+            throw StreamRoutingError.message("Browser receiver is not selected.")
+        }
+        try await browserReceiver.load(sessionId: sessionId, url: playURL, title: title, contentType: contentType, startPositionMs: startPositionMs)
+        coordinator.playback = TvPlaybackStatus(state: "playing", positionMs: Int64(startPositionMs ?? 0), durationMs: 0, title: title)
+        coordinator.activeContext = "player"
+        coordinator.playerIsSeekable = true
+        coordinator.playerIsLive = false
+        return extra
+    }
+
+    @MainActor
+    private func controlBrowser(_ command: String) async throws {
+        guard let sessionId = alignedBrowserSessionID() else { return }
+        switch command {
+        case "play", "pause", "stop":
+            try await browserReceiver.control(sessionId: sessionId, action: command, value: nil)
+            let stateName = command == "play" ? "playing" : command == "pause" ? "paused" : "stopped"
+            if var playback = coordinator.playback {
+                playback.state = stateName
+                coordinator.playback = playback
+            }
+            coordinator.activeContext = command == "stop" ? "idle" : "player"
+        case "end_receiver":
+            try await browserReceiver.disconnect(sessionId: sessionId)
+            clearBrowserOutput()
+        case "seek_back", "seek_forward":
+            let delta: Int64 = command == "seek_forward" ? 10_000 : -10_000
+            let position = max(0, (coordinator.playback?.positionMs ?? 0) + delta)
+            try await browserReceiver.control(sessionId: sessionId, action: "seek", value: Double(position))
+            if var playback = coordinator.playback {
+                playback.positionMs = position
+                coordinator.playback = playback
+            }
+        case let value where value.hasPrefix("seek_to:"):
+            guard let milliseconds = Double(value.dropFirst("seek_to:".count)), milliseconds >= 0 else {
+                throw StreamRoutingError.message("Invalid seek position.")
+            }
+            try await browserReceiver.control(sessionId: sessionId, action: "seek", value: milliseconds)
+            if var playback = coordinator.playback {
+                playback.positionMs = Int64(milliseconds)
+                coordinator.playback = playback
+            }
+        default:
+            throw StreamRoutingError.message("This control is unavailable on this receiver.")
+        }
+    }
+
+    private func sendExternalReceiverURL(_ url: String, title: String?, contentType: String?, headers: [String: String]) {
+        let target = destinationID
         Task { @MainActor in
             do {
-                let media = try await StreamRouteService().prepare(url: url, headers: headers, contentType: contentType, route: route, configuration: configuration)
+                let media = try await prepareExternal(url: url, headers: headers, contentType: contentType)
                 guard destinationID == target, isExternalReceiver else { return }
                 if media.registration != nil && media.url.host == "127.0.0.1" { throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.") }
                 noteNewCast(mediaKind: contentType?.hasPrefix("image/") == true ? "image" : contentType?.hasPrefix("audio/") == true ? "audio" : "video", title: title)
-                try await googleCast.load(url: media.url, title: title, contentType: contentType)
+                let extra = try await externalLoad(url: media.url, title: title, contentType: contentType, headers: media.headers)
                 guard destinationID == target, isExternalReceiver else { return }
-                routedStreamRegistrations = [media.registration].compactMap { $0 }
+                routedStreamRegistrations = [media.registration, extra].compactMap { $0 }
                 recordCast(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, headers: headers))
             } catch { if destinationID == target { operationError = error.localizedDescription } }
         }
@@ -1238,9 +1482,11 @@ final class ConnectionViewModel: ObservableObject {
             var registrations: [PhoneProxyRegistration] = []
             for original in items {
                 var item = original
-                let media = try await StreamRouteService().prepare(url: original["url"] as! String,
-                    headers: original["headers"] as? [String: String] ?? [:],
-                    contentType: original["contentType"] as? String, route: route, configuration: configuration)
+                let sourceHeaders = original["headers"] as? [String: String] ?? [:]
+                let media = try await externalReceiver?.protocolID == "browser"
+                    ? prepareExternal(url: original["url"] as! String, headers: sourceHeaders, contentType: original["contentType"] as? String)
+                    : StreamRouteService().prepare(url: original["url"] as! String, headers: sourceHeaders,
+                        contentType: original["contentType"] as? String, route: route, configuration: configuration)
                 item["url"] = media.url.absoluteString
                 item["headers"] = media.headers
                 if let registration = media.registration { registrations.append(registration) }
@@ -1259,8 +1505,10 @@ final class ConnectionViewModel: ObservableObject {
             noteNewCast(mediaKind: prepared.first?["mediaKind"] as? String ?? "video", title: prepared.first?["title"] as? String)
             if isExternalReceiver {
                 let item = prepared[0]
-                try await googleCast.load(url: URL(string: item["url"] as! String)!,
-                    title: item["title"] as? String, contentType: item["contentType"] as? String)
+                let extra = try await externalLoad(url: URL(string: item["url"] as! String)!,
+                    title: item["title"] as? String, contentType: item["contentType"] as? String,
+                    headers: item["headers"] as? [String: String] ?? [:])
+                if let extra { registrations.append(extra) }
             } else {
                 guard playBridgeOutputSelected else { throw StreamRoutingError.message("This phone is the selected output.") }
                 let saved = try JSONSerialization.jsonObject(with: Data(entry.command.utf8)) as? [String: Any]
@@ -1367,6 +1615,7 @@ final class ConnectionViewModel: ObservableObject {
     func applicationBecameActive() {
         receiverNetworkChanged()
         castPlaybackSession.tick()
+        Task { @MainActor in self.browserReceiver.resumeIfNeeded() }
         reconnectLastReceiverIfNeeded()
     }
 
@@ -1491,13 +1740,20 @@ extension ConnectionViewModel: PageCastTransport {
         for resource in resources { if let url = resource["url"] as? String, !urls.contains(url) { urls.append(url) } }
         guard isAirPlay || urls.isEmpty else { throw PageCastError(code: "unsupported_subtitles") }
         let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
-        let media = try await StreamRouteService().prepare(url: item["url"] as! String,
-            headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
-            route: route, configuration: StreamProxySettingsStore.load())
+        let media: RoutedStream
+        if externalReceiver?.protocolID == "browser" {
+            media = try await prepareExternal(url: item["url"] as! String,
+                headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String)
+        } else {
+            media = try await StreamRouteService().prepare(url: item["url"] as! String,
+                headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
+                route: route, configuration: StreamProxySettingsStore.load())
+        }
         let routed = try await prepareAirPlayMedia(media, contentType: item["contentType"] as? String)
         try Task.checkCancellation()
         guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
         let resume = item["start_position_ms"] as? Int ?? 0
+        var browserRegistration: PhoneProxyRegistration?
         if isAirPlay {
             let attempt = airPlay.beginRequest(queue: false)
             let subtitles = urls.enumerated().map { offset, raw -> AirPlaySubtitleSource in
@@ -1509,14 +1765,14 @@ extension ConnectionViewModel: PageCastTransport {
                 kind: item["mediaKind"] as? String ?? "video", subtitles: subtitles, queue: false, request: attempt,
                 resumeAt: Double(resume) / 1000)
         } else {
-            try await googleCast.load(url: routed.url, title: item["title"] as? String, contentType: item["contentType"] as? String)
-            if resume > 0 { try await googleCast.control("seek_to:\(resume)") }
+            browserRegistration = try await externalLoad(url: routed.url, title: item["title"] as? String,
+                contentType: item["contentType"] as? String, headers: routed.headers, startPositionMs: resume)
             noteNewCast(mediaKind: item["mediaKind"] as? String ?? "video", title: item["title"] as? String)
-            coordinator.playback = googleCast.playback
+            if externalReceiver?.protocolID != "browser" { coordinator.playback = googleCast.playback }
         }
         try Task.checkCancellation()
         guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
-        routedStreamRegistrations = [routed.registration, media.registration].compactMap { $0 }
+        routedStreamRegistrations = [routed.registration, media.registration, browserRegistration].compactMap { $0 }
         recordCast(request.playlistCommand(allowedPrivateOrigins: []))
     }
     @MainActor var websiteLocalState: [String: Any]? { websitePhonePlayback?.snapshot() }

@@ -373,4 +373,5 @@ enum PlayOnPage: Hashable {
     case manualPlayBridge
     case manualRoku
     case manualDLNA
+    case browserTV
 }
