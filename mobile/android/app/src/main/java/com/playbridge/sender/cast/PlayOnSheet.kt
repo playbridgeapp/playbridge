@@ -165,6 +165,7 @@ fun PlayOnSheet(
     var page by remember { mutableStateOf(if (startPairing) PlayOnPage.Pair else PlayOnPage.Devices) }
     var managed by remember { mutableStateOf<PlayOnDevice?>(null) }
     var unavailableExpanded by remember { mutableStateOf(false) }
+    var vpnInfo by remember { mutableStateOf(false) }
     var pendingGoogle by remember { mutableStateOf<TvDevice?>(null) }
     var pendingNative by remember { mutableStateOf<TvDevice?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -289,6 +290,11 @@ fun PlayOnSheet(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(if (network.onLocalNetwork) "Wi-Fi" else "Mobile data",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (network.onLocalNetwork && network.vpnActive) Text("VPN",
+                            style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = VpnAmber,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(VpnAmber.copy(alpha = 0.16f))
+                                .clickable(onClickLabel = "About VPN and casting") { vpnInfo = !vpnInfo }
+                                .padding(horizontal = 8.dp, vertical = 2.dp))
                     }
                 }
                 FilledTonalIconButton(onClick = ::dismiss, modifier = Modifier.size(36.dp)) {
@@ -305,7 +311,9 @@ fun PlayOnSheet(
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     when (currentPage) {
                         PlayOnPage.Devices -> {
-                            LocalNetworkBanners(network)
+                            // VPN: the full tip only when it is likely the cause (nothing reachable after a search) or asked for.
+                            val nothingFound = !scanning && groups.nearby.isEmpty() && groups.saved.isEmpty()
+                            LocalNetworkBanners(network, vpnBanner = vpnInfo || nothingFound, vpnDismissible = false)
                             if (nowDevice != null) {
                                 PlayOnNowCard(
                                     device = nowDevice,
@@ -466,6 +474,8 @@ private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick:
         onMore = onMore, badge = if (nearby && protocol == CastProtocol.PLAYBRIDGE) "New" else null,
         highlight = nearby && protocol == CastProtocol.PLAYBRIDGE)
 }
+
+private val VpnAmber = Color(0xFFFFB74D)
 
 private val TvDevice.playOnIcon: ImageVector get() = when {
     isDesktopReceiver -> Icons.Default.Laptop

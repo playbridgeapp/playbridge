@@ -60,6 +60,9 @@ private object NetworkBannerSession {
 fun LocalNetworkBanners(
     status: NetworkStatusRepository.Status,
     modifier: Modifier = Modifier,
+    // Play on shows VPN as a header pill and only asks for the full tip when discovery comes up empty.
+    vpnBanner: Boolean = true,
+    vpnDismissible: Boolean = true,
 ) {
     val context = LocalContext.current
     // Re-show the VPN tip if the VPN toggles off then on again this session.
@@ -68,7 +71,8 @@ fun LocalNetworkBanners(
     }
 
     val showWifi = !status.onLocalNetwork
-    val showVpn = status.onLocalNetwork && status.vpnActive && !NetworkBannerSession.vpnDismissed
+    val showVpn = vpnBanner && status.onLocalNetwork && status.vpnActive &&
+        (!vpnDismissible || !NetworkBannerSession.vpnDismissed)
     if (!showWifi && !showVpn) return
 
     Column(
@@ -100,7 +104,7 @@ fun LocalNetworkBanners(
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 actionLabel = null,
                 onAction = null,
-                onDismiss = { NetworkBannerSession.vpnDismissed = true },
+                onDismiss = if (vpnDismissible) ({ NetworkBannerSession.vpnDismissed = true }) else null,
             )
         }
     }
