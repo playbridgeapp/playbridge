@@ -1188,7 +1188,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowStatusText: String {
-        if receiverStandingBy { return "Connected · Videos play on this phone" }
+        if receiverStandingBy { return "Connected · Standing by" }
         if vm.isConnected || vm.connectionIsConnecting || (showsFailure && !vm.isAirPlay) {
             return PlayOnCatalog.nowStatus(connecting: vm.connectionIsConnecting && !vm.isConnected,
                                             failed: showsFailure && !vm.isConnected,

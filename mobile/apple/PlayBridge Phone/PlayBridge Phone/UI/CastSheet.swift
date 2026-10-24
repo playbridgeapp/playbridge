@@ -284,7 +284,7 @@ struct CastSheet: View {
 
     private var destinationDescription: String {
         if vm.playBridgeLinkConnected && !vm.playBridgeOutputSelected && !vm.isAirPlay && !vm.isExternalReceiver {
-            return "Videos play on this phone"
+            return "Connected · Standing by"
         }
         if vm.isConnected, let name = vm.receiverName {
             return "Connected to \(name)"
