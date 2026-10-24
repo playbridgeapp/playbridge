@@ -466,6 +466,8 @@ class ConnectionViewModel(
 
     fun disconnectExternalTarget() = castSessionManager.stopAndClearExternalTarget()
 
+    fun disconnectBrowserTarget() = castSessionManager.stopAndClearBrowserTarget()
+
     fun castToSelectedExternal(media: MediaItem): Boolean = castSessionManager.load(media)
 
     fun externalPlay() = castSessionManager.play()

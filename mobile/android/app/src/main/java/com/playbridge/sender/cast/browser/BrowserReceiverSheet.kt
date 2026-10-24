@@ -92,7 +92,7 @@ fun BrowserReceiverSheet(
                     fontWeight = FontWeight.Bold)
                 BrowserHostStopAction(hostState.running, hostState.busy) {
                     scope.launch {
-                        if (hostState.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
+                        viewModel.disconnectBrowserTarget()
                         if (browserRepo.stopHost().isSuccess) onDismiss()
                     }
                 }
