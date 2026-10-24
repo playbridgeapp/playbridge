@@ -8,6 +8,17 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -512,26 +523,75 @@ private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, 
     var code by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(state) { if (state is WebSocketClient.ConnectionState.WaitingForCodeInput && state.lastCodeWrong) code = "" }
-    when (state) {
-        is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
-            Text("Enter the 6-digit code shown on $name.")
-            OutlinedTextField(code, {
-                code = it.filter(Char::isDigit).take(6)
-                if (code.length == 6) submit(code)
-            }, label = { Text("6-digit code") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus), isError = state.lastCodeWrong)
-            // Open the keyboard straight away; the code is the only thing to do on this page.
-            LaunchedEffect(Unit) { focus.requestFocus() }
-            if (state.lastCodeWrong) Text("Incorrect code — ${state.attemptsLeft} ${if (state.attemptsLeft == 1) "try" else "tries"} left", color = MaterialTheme.colorScheme.error)
-            Text("Pairs automatically when all six digits are in", style = MaterialTheme.typography.bodySmall)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // What the TV shows; dots rather than digits so nobody types the example.
+        Column(Modifier.padding(top = 4.dp).widthIn(min = 200.dp)
+            .border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest, RoundedCornerShape(16.dp))
+            .padding(horizontal = 28.dp, vertical = 22.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "Your TV shows a 6-digit code" },
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("PlayBridge on your TV", style = MaterialTheme.typography.labelMedium, color = muted)
+            Text("● ● ●   ● ● ●", style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace)
         }
-        is WebSocketClient.ConnectionState.WaitingForApproval -> Text("Approve on the TV")
-        is WebSocketClient.ConnectionState.PairingDenied -> { Text("${state.serverName} denied the connection", color = MaterialTheme.colorScheme.error); Button(onClick = retry) { Text("Try again") } }
-        is WebSocketClient.ConnectionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
-        is WebSocketClient.ConnectionState.PinMismatch -> Text("The TV’s certificate changed. Forget the device and pair again.", color = MaterialTheme.colorScheme.error)
-        WebSocketClient.ConnectionState.AuthFailed -> Text("Connection lost — tap the TV to reconnect", color = MaterialTheme.colorScheme.error)
-        else -> { CircularProgressIndicator(Modifier.size(24.dp)); Text(if (state is WebSocketClient.ConnectionState.VerifyingCode) "Verifying code…" else "Connecting to $name…") }
+        when (state) {
+            is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
+                Text(buildAnnotatedString {
+                    append("Enter the 6-digit code shown on ")
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(name) }
+                    append(".")
+                }, textAlign = TextAlign.Center)
+                BasicTextField(code, {
+                    code = it.filter(Char::isDigit).take(6)
+                    if (code.length == 6) submit(code)
+                }, singleLine = true,
+                    // Number, not NumberPassword: a pairing code shouldn't summon password managers.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, autoCorrectEnabled = false),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus)
+                        .semantics { contentDescription = "6-digit code, ${code.length} entered" },
+                    decorationBox = { _ ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            repeat(6) { index ->
+                                val next = index == code.length
+                                val border = when {
+                                    state.lastCodeWrong && code.isEmpty() -> MaterialTheme.colorScheme.error
+                                    next -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                }
+                                Box(Modifier.weight(1f).height(56.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(12.dp))
+                                    .border(if (next) 2.dp else 1.dp, border, RoundedCornerShape(12.dp)),
+                                    contentAlignment = Alignment.Center) {
+                                    Text(code.getOrNull(index)?.toString().orEmpty(), style = MaterialTheme.typography.headlineSmall)
+                                }
+                            }
+                        }
+                    })
+                // Open the keyboard straight away; the code is the only thing to do on this page.
+                LaunchedEffect(Unit) { focus.requestFocus() }
+                if (state.lastCodeWrong) Text("Incorrect code — ${state.attemptsLeft} ${if (state.attemptsLeft == 1) "try" else "tries"} left",
+                    color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                Text("Pairs automatically when all six digits are in", style = MaterialTheme.typography.bodyMedium,
+                    color = muted, textAlign = TextAlign.Center)
+                Text("No code on the TV? Make sure the PlayBridge app is open on it, then tap the TV again.",
+                    style = MaterialTheme.typography.bodyMedium, color = muted, textAlign = TextAlign.Center)
+            }
+            is WebSocketClient.ConnectionState.WaitingForApproval -> Text("Approve on the TV", style = MaterialTheme.typography.titleMedium)
+            is WebSocketClient.ConnectionState.PairingDenied -> {
+                Text("${state.serverName} denied the connection", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                Button(onClick = retry) { Text("Try again") }
+            }
+            is WebSocketClient.ConnectionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            is WebSocketClient.ConnectionState.PinMismatch -> Text("The TV’s certificate changed. Forget the device and pair again.",
+                color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            WebSocketClient.ConnectionState.AuthFailed -> Text("Connection lost — tap the TV to reconnect",
+                color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            else -> {
+                CircularProgressIndicator(Modifier.size(24.dp))
+                Text(if (state is WebSocketClient.ConnectionState.VerifyingCode) "Verifying code…" else "Connecting to $name…")
+            }
+        }
     }
 }
 
