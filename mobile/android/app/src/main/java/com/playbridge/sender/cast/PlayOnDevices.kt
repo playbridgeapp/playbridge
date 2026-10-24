@@ -66,6 +66,37 @@ internal fun groupPlayOnDevices(
 /** Receiver names as people know them: hostnames lose their mDNS ".local" suffix. */
 internal val TvDevice.playOnName: String get() = name.removeSuffix(".local")
 
+internal data class PlayOnStatus(val state: State = State.NOT_CONNECTED, val deviceName: String = "TV") {
+    enum class State { NOT_CONNECTED, STANDING_BY, PLAYING_ON }
+
+    val isConnected: Boolean get() = state != State.NOT_CONNECTED
+    val isPlayingOn: Boolean get() = state == State.PLAYING_ON
+    val tileSubtitle: String get() = when (state) {
+        State.NOT_CONNECTED -> "Not connected"
+        State.STANDING_BY -> "Standing by"
+        State.PLAYING_ON -> "Connected"
+    }
+}
+
+/** Presentation follows the selected route; a live socket alone may just be standing by. */
+internal fun playOnStatus(
+    route: CastSessionManager.Route,
+    socketConnected: Boolean,
+    nativeDevice: TvDevice?,
+    externalDevice: TvDevice?,
+    externalReady: Boolean,
+): PlayOnStatus = when (route) {
+    is CastSessionManager.Route.External -> if (externalReady) {
+        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, externalDevice?.playOnName ?: route.name.removeSuffix(".local"))
+    } else PlayOnStatus()
+    CastSessionManager.Route.NativeTv -> if (socketConnected) {
+        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, nativeDevice?.playOnName ?: "TV")
+    } else PlayOnStatus()
+    CastSessionManager.Route.ThisDevice -> if (socketConnected) {
+        PlayOnStatus(PlayOnStatus.State.STANDING_BY, nativeDevice?.playOnName ?: "TV")
+    } else PlayOnStatus()
+}
+
 /** Desktop receivers advertise their hostname and no TV player engines. */
 internal val TvDevice.isDesktopReceiver: Boolean
     get() = resolvedProtocol == CastProtocol.PLAYBRIDGE && name.endsWith(".local")

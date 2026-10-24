@@ -1570,12 +1570,13 @@ fun AppNavHost(
                         }
                     }
                     val castSessionState by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
-                    val externalSelected = castRoute is CastSessionManager.Route.External
-                    val isConnected = if (externalSelected) {
-                        castSessionState.isReadyForPlayback
-                    } else {
-                        connectionState is WebSocketClient.ConnectionState.Connected
-                    }
+                    val playOnStatus = playOnStatus(
+                        route = castRoute,
+                        socketConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                        nativeDevice = tvDevice,
+                        externalDevice = activeExternalDevice,
+                        externalReady = castSessionState.isReadyForPlayback,
+                    )
                     val ublockSetupStatus by Components.ublockOnboarding.status.collectAsStateWithLifecycle()
                     DashboardScreen(
                         pagerState = dashboardPagerState,
@@ -1586,10 +1587,7 @@ fun AppNavHost(
                         canFinishUblockSetup = { Components.ublockOnboarding.canFinish() },
                         onOnboardingVisible = { Components.extensionPrompts.reShowPendingPrompt() },
                         currentScreen = lastMainScreen,
-                        isConnected = isConnected,
-                        isSecure = !externalSelected &&
-                            (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
-                        connectedDeviceName = if (externalSelected) activeExternalDevice?.name else tvDevice?.name,
+                        playOnStatus = playOnStatus,
                         remoteSubtitle = remoteTV?.let { "${it.device.name} · ${it.status}" } ?: "Control your TV",
                         onNavigate = { screen ->
                             onScreenChange(screen)
