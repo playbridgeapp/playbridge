@@ -20,6 +20,8 @@ final class ConnectionViewModel: ObservableObject {
     let airPlay = AirPlayController()
     var isAirPlay: Bool { airPlay.selected }
     @Published private(set) var externalReceiver: ExternalReceiverDevice?
+    /// Stable id of the selected browser page. Session ids change on reload.
+    var selectedBrowserReceiverId: String?
     @Published private(set) var savedExternalReceiverDevices: [ExternalReceiverDevice] = []
     @Published var operationError: String?
     var isExternalReceiver: Bool { externalReceiver != nil }
@@ -56,7 +58,13 @@ final class ConnectionViewModel: ObservableObject {
         if isAirPlay { return kind == "video" || kind == "audio" }
         return isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
     }
-    var destinationID: String? { isAirPlay ? "airplay" : externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey) }
+    var destinationID: String? {
+        if isAirPlay { return "airplay" }
+        if externalReceiver?.protocolID == "browser", let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty {
+            return "browser:" + receiverId
+        }
+        return externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey)
+    }
     var receiverName: String? {
         if isAirPlay { return airPlay.routeName }
         if case .connected(let name, _) = state { return name }
@@ -226,7 +234,7 @@ final class ConnectionViewModel: ObservableObject {
             browserReceiver.onActivate = { [weak self] session in
                 guard let self else { return }
                 let device = browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
-                adoptBrowserReceiver(device, preservingPlayback: false)
+                adoptBrowserReceiver(device, preservingPlayback: false, browserReceiverId: session.receiverId)
             }
             browserReceiver.onPlayback = { [weak self] sessionId, playback in
                 self?.applyBrowserPlayback(sessionId, playback)
@@ -346,9 +354,15 @@ final class ConnectionViewModel: ObservableObject {
 
     func connectExternalReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool = false) {
         if device.protocolID == "browser" {
-            adoptBrowserReceiver(device, preservingPlayback: preservingPlayback)
+            MainActor.assumeIsolated {
+                let match = browserReceiver.state.ready.last { $0.sessionId == device.id }
+                    ?? browserReceiver.state.ready.last { !$0.receiverId.isEmpty && $0.receiverId == selectedBrowserReceiverId }
+                let target = match.map { browserReceiver.receiver(for: $0, lanHost: LocalFileServer.lanIPAddress()) } ?? device
+                adoptBrowserReceiver(target, preservingPlayback: preservingPlayback, browserReceiverId: match?.receiverId)
+            }
             return
         }
+        selectedBrowserReceiverId = nil
         destinationSelectionRevision &+= 1
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
         airPlay.disconnect()
@@ -660,6 +674,7 @@ final class ConnectionViewModel: ObservableObject {
         subtitleFileServers.removeAll()
         if isExternalReceiver {
             // Clear routing intent before the transport publishes its disconnect state.
+            selectedBrowserReceiverId = nil
             externalReceiver = nil
             googleCast.disconnect()
             state = .disconnected
@@ -1017,9 +1032,9 @@ final class ConnectionViewModel: ObservableObject {
     func setCastVolume(_ level: Double) {
         guard isExternalReceiver else { return }
         if externalReceiver?.protocolID == "browser" {
-            guard let sessionId = externalReceiver?.id else { return }
             let fraction = min(1, max(0, level))
             Task { @MainActor in
+                guard let sessionId = alignedBrowserSessionID() else { return }
                 do { try await browserReceiver.control(sessionId: sessionId, action: "set_volume", value: fraction) }
                 catch { operationError = error.localizedDescription }
             }
@@ -1031,14 +1046,17 @@ final class ConnectionViewModel: ObservableObject {
         }
     }
 
-    private func adoptBrowserReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool) {
+    private func adoptBrowserReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool, browserReceiverId: String? = nil) {
+        let nextReceiverId = browserReceiverId.flatMap { $0.isEmpty ? nil : $0 }
+        let sameBrowser = externalReceiver?.protocolID == "browser" && nextReceiverId != nil && nextReceiverId == selectedBrowserReceiverId
         destinationSelectionRevision &+= 1
-        let keep = (preservingPlayback || castPlaybackSession.isActive) && externalReceiver?.identity == device.identity
+        let keep = (preservingPlayback || castPlaybackSession.isActive) && (externalReceiver?.identity == device.identity || sameBrowser)
         if !keep { endCastSession() }
         airPlay.disconnect()
         nativeReceiverSelected = false
         playBridgeOutputSelected = false
         externalReceiver = device
+        if let nextReceiverId { selectedBrowserReceiverId = nextReceiverId }
         connectingDevice = nil
         googleCast.disconnect()
         ws.disconnect()
@@ -1053,20 +1071,53 @@ final class ConnectionViewModel: ObservableObject {
 
     @MainActor
     private func syncBrowserConnection() {
-        guard externalReceiver?.protocolID == "browser", let id = externalReceiver?.id else { return }
-        if browserReceiver.state.ready.contains(where: { $0.sessionId == id }) {
-            if !isConnected {
-                state = .connected(serverName: externalReceiver?.name ?? "Browser", secure: true)
-            }
-        } else if browserReceiver.state.running {
-            if isConnected { state = .connecting }
+        guard externalReceiver?.protocolID == "browser" else { return }
+        let ready = browserReceiver.state.ready
+        let running = browserReceiver.state.running
+        let followed: BrowserOutputFollow
+        if let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty {
+            followed = BrowserReceiverState.follow(receiverId: receiverId, ready: ready, hostRunning: running)
+        } else if !running {
+            followed = .stopped
+        } else if let id = externalReceiver?.id, let match = ready.last(where: { $0.sessionId == id }) {
+            followed = .connected(match)
         } else {
+            followed = .connecting
+        }
+        switch followed {
+        case .connected(let session):
+            let device = browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
+            let changed = externalReceiver?.id != device.id || externalReceiver?.name != device.name
+            if changed { externalReceiver = device }
+            if !session.receiverId.isEmpty { selectedBrowserReceiverId = session.receiverId }
+            if changed || !isConnected {
+                state = .connected(serverName: device.name.isEmpty ? "Browser" : device.name, secure: true)
+            }
+        case .connecting:
+            if isConnected { state = .connecting }
+        case .stopped:
             clearBrowserOutput()
         }
     }
 
+    /// Session id to send with browser_load and browser_control. A reloaded page
+    /// has a new session id and the same receiver id.
+    @MainActor
+    private func alignedBrowserSessionID() -> String? {
+        guard externalReceiver?.protocolID == "browser" else { return nil }
+        if let receiverId = selectedBrowserReceiverId, !receiverId.isEmpty,
+           let match = browserReceiver.state.ready.last(where: { $0.receiverId == receiverId }) {
+            if externalReceiver?.id != match.sessionId || externalReceiver?.name != match.name {
+                externalReceiver = browserReceiver.receiver(for: match, lanHost: LocalFileServer.lanIPAddress())
+            }
+            return match.sessionId
+        }
+        return externalReceiver?.id
+    }
+
     private func clearBrowserOutput() {
         guard externalReceiver?.protocolID == "browser" else { return }
+        selectedBrowserReceiverId = nil
         externalReceiver = nil
         state = .disconnected
         castPlaybackSession.stopLocally()
@@ -1078,8 +1129,24 @@ final class ConnectionViewModel: ObservableObject {
         }
     }
 
+    @MainActor
     private func applyBrowserPlayback(_ sessionId: String, _ playback: BrowserPlaybackSnapshot) {
-        guard externalReceiver?.protocolID == "browser", externalReceiver?.id == sessionId else { return }
+        guard externalReceiver?.protocolID == "browser" else { return }
+        let readyMatch = selectedBrowserReceiverId.flatMap { id in
+            id.isEmpty ? nil : browserReceiver.state.ready.last { $0.receiverId == id }
+        }
+        if let readyMatch {
+            guard sessionId == readyMatch.sessionId else { return }
+            if externalReceiver?.id != readyMatch.sessionId || externalReceiver?.name != readyMatch.name {
+                externalReceiver = browserReceiver.receiver(for: readyMatch, lanHost: LocalFileServer.lanIPAddress())
+            }
+        } else if browserReceiver.state.running {
+            // The old session ended while the host is still up. Keep the last
+            // playback snapshot until this same browser connects again.
+            return
+        } else if sessionId != externalReceiver?.id {
+            return
+        }
         let status = TvPlaybackStatus(state: playback.state, positionMs: playback.positionMs, durationMs: playback.durationMs, title: playback.title)
         coordinator.playback = status
         coordinator.activeContext = playback.state == "stopped" ? "idle" : "player"
@@ -1126,7 +1193,7 @@ final class ConnectionViewModel: ObservableObject {
             playURL = packaged.url
             extra = packaged.registration
         }
-        guard let sessionId = externalReceiver?.id else {
+        guard let sessionId = alignedBrowserSessionID() else {
             throw StreamRoutingError.message("Browser receiver is not selected.")
         }
         try await browserReceiver.load(sessionId: sessionId, url: playURL, title: title, contentType: contentType, startPositionMs: startPositionMs)
@@ -1139,7 +1206,7 @@ final class ConnectionViewModel: ObservableObject {
 
     @MainActor
     private func controlBrowser(_ command: String) async throws {
-        guard let sessionId = externalReceiver?.id else { return }
+        guard let sessionId = alignedBrowserSessionID() else { return }
         switch command {
         case "play", "pause", "stop":
             try await browserReceiver.control(sessionId: sessionId, action: command, value: nil)

@@ -4,6 +4,7 @@ import Foundation
     static func main() {
         testPageURL()
         testEvents()
+        testOutputFollowsReceiver()
         print("PASS browser receiver state")
     }
 
@@ -89,6 +90,34 @@ import Foundation
             "data": ["urls": ["http://10.0.0.2:8770"], "port": 8770],
         ], now: now, pendingActivation: &activation)
         precondition(state.ready.isEmpty && state.urls == ["http://192.168.1.20:8770"], "Command results do not rewrite the host snapshot")
+    }
+
+    static func testOutputFollowsReceiver() {
+        let reconnected = [BrowserReadySession(sessionId: "session-b", receiverId: "mac-1", name: "MacIntel Browser")]
+        let same = BrowserReceiverState.follow(receiverId: "mac-1", ready: reconnected, hostRunning: true)
+        guard case .connected(let session) = same else {
+            preconditionFailure("A new session id for the same browser stays connected")
+        }
+        precondition(session.sessionId == "session-b" && session.name == "MacIntel Browser")
+
+        let other = BrowserReceiverState.follow(receiverId: "mac-1", ready: [
+            BrowserReadySession(sessionId: "session-c", receiverId: "other-tv", name: "Other")
+        ], hostRunning: true)
+        guard case .connecting = other else {
+            preconditionFailure("A different browser does not take the selected output")
+        }
+
+        guard case .stopped = BrowserReceiverState.follow(receiverId: "mac-1", ready: reconnected, hostRunning: false) else {
+            preconditionFailure("A stopped host clears the browser output")
+        }
+
+        let shown = BrowserReceiverState.uniqueReceivers([
+            BrowserReadySession(sessionId: "session-a", receiverId: "mac-1", name: "MacIntel Browser"),
+            BrowserReadySession(sessionId: "session-b", receiverId: "mac-1", name: "MacIntel Browser"),
+            BrowserReadySession(sessionId: "session-c", receiverId: "other-tv", name: "Other"),
+        ])
+        precondition(shown.count == 2 && shown[0].sessionId == "session-b" && shown[1].receiverId == "other-tv",
+                     "One browser shows once across reconnects")
     }
 
     static func session(_ id: String, name: String, state: String = "idle", position: Int = 0, duration: Int = 0, title: String? = nil) -> [String: Any] {

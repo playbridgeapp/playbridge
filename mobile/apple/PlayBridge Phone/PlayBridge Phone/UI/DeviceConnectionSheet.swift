@@ -1163,14 +1163,16 @@ struct DeviceConnectionSheet: View {
                                             reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity], uuid: device.id),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
-        for session in vm.browserReceiver.state.ready {
+        for session in BrowserReceiverState.uniqueReceivers(vm.browserReceiver.state.ready) {
             let device = vm.browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
-            let id = "ex:\(device.identity)"
+            let id = browserRowID(session)
             if id == activeExternalID { continue }
+            var keys: Set<String> = [id, device.identity]
+            if !session.receiverId.isEmpty { keys.insert(session.receiverId) }
             rows.append(PlayOnSheetRow(
                 listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: .browser, address: externalAddress(device),
                                             reachable: true, saved: false, lastConnected: nil, needsPairing: false,
-                                            matchKeys: [id, device.identity], uuid: device.id),
+                                            matchKeys: keys, uuid: session.receiverId.isEmpty ? device.id : session.receiverId),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
@@ -1185,7 +1187,16 @@ struct DeviceConnectionSheet: View {
 
     private var activeExternalID: String? {
         guard let device = vm.externalReceiver, vm.isConnected || vm.connectionIsConnecting || showsFailure else { return nil }
+        if device.protocolID == "browser" {
+            let key = vm.selectedBrowserReceiverId.flatMap { $0.isEmpty ? nil : $0 } ?? device.id
+            return "ex:browser:\(key)"
+        }
         return "ex:\(device.identity)"
+    }
+
+    private func browserRowID(_ session: BrowserReadySession) -> String {
+        let key = session.receiverId.isEmpty ? session.sessionId : session.receiverId
+        return "ex:browser:\(key)"
     }
 
     private var scanning: Bool {

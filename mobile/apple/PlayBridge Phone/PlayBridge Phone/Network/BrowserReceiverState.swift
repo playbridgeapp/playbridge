@@ -42,9 +42,38 @@ struct BrowserReduceResult: Equatable {
 }
 
 /// Pure host snapshot. Event JSON matches `BrowserReceiverEvent` from sender services.
+/// What the selected browser output should do after a host or page update.
+/// The page mints a new session id on reload; the receiver id does not.
+enum BrowserOutputFollow: Equatable {
+    case connected(BrowserReadySession)
+    case connecting
+    case stopped
+}
+
 enum BrowserReceiverState {
     static let preferredPort = 8770
     static let keepOpenNote = "Keep PlayBridge open while the TV browser is connected. Playback pauses if you leave the app."
+
+    /// Keep the output on the selected browser across a new session id.
+    /// A different receiver stays connecting. A stopped host drops the output.
+    static func follow(receiverId: String, ready: [BrowserReadySession], hostRunning: Bool) -> BrowserOutputFollow {
+        guard hostRunning else { return .stopped }
+        let id = receiverId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, let match = ready.last(where: { $0.receiverId == id }) else { return .connecting }
+        return .connected(match)
+    }
+
+    /// One row per browser. The newest session id for that receiver wins.
+    static func uniqueReceivers(_ sessions: [BrowserReadySession]) -> [BrowserReadySession] {
+        var order: [String] = []
+        var latest: [String: BrowserReadySession] = [:]
+        for session in sessions {
+            let key = session.receiverId.isEmpty ? "session:" + session.sessionId : "receiver:" + session.receiverId
+            if latest[key] == nil { order.append(key) }
+            latest[key] = session
+        }
+        return order.compactMap { latest[$0] }
+    }
 
     /// Page address for the TV browser. Prefer the Wi-Fi IPv4 host, and never attach a stream or credential.
     static func pageURL(urls: [String], port: Int, lanHost: String?) -> String? {
