@@ -4,6 +4,7 @@ import UIKit
 /// Play on → Add a device → Browser on a TV. The TV opens this phone's page and shows a code.
 struct BrowserReceiverPage: View {
     @ObservedObject var controller: BrowserReceiverController
+    @Environment(\.dismiss) private var dismiss
     var onWiFi: Bool
     var castHere: (ExternalReceiverDevice) -> Void
     @State private var codes: [String: String] = [:]
@@ -66,7 +67,13 @@ struct BrowserReceiverPage: View {
         }
         .onChange(of: pendingIDs) { _ in syncPending() }
         .alert("Stop hosting?", isPresented: $confirmStop) {
-            Button("Stop host", role: .destructive) { Task { await controller.stopHost() } }
+            Button("Stop host", role: .destructive) {
+                Task {
+                    await controller.stopHost()
+                    // Nothing left to do on a stopped host page; reopening it starts hosting again.
+                    if !controller.state.running { dismiss() }
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The TV browser will disconnect.")
