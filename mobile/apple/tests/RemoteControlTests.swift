@@ -29,6 +29,8 @@ struct RemoteControlTests {
         precondition(!RemoteMode.canSeek(context: "player", externalProtocol: "roku", duration: 1000, isLive: false, isSeekable: true))
         precondition(RemoteMode.canSeek(context: "player", externalProtocol: "google_cast", duration: 1000, isLive: false, isSeekable: true))
         precondition(RemoteMode.canSeek(context: "player", externalProtocol: "airplay", duration: 1000, isLive: false, isSeekable: true))
+        precondition(RemoteMode.canSeek(context: "player", externalProtocol: "browser", duration: 1000, isLive: false, isSeekable: true))
+        precondition(!RemoteMode.canSeek(context: "player", externalProtocol: "browser", duration: 0, isLive: false, isSeekable: true))
         precondition(!RemoteMode.canSeek(context: "player", externalProtocol: "airplay", duration: 0, isLive: true, isSeekable: false))
         precondition(!RemoteMode.supportsRemote(externalProtocol: "airplay") && !RemoteMode.supportsVolume(externalProtocol: "airplay"),
                      "AirPlay uses the system volume control and has no TV navigation commands")

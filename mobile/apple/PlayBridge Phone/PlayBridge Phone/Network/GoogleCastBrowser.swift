@@ -13,7 +13,13 @@ struct ExternalReceiverDevice: Identifiable, Codable, Equatable {
     var protocolID: String { receiverProtocol ?? (location != nil ? "dlna" : "google_cast") }
     var isDLNA: Bool { protocolID == "dlna" }
     var protocolName: String {
-        switch protocolID { case "dlna": return "DLNA"; case "roku": return "Roku"; case "dial": return "DIAL"; default: return "Google Cast" }
+        switch protocolID {
+        case "dlna": return "DLNA"
+        case "roku": return "Roku"
+        case "dial": return "DIAL"
+        case "browser": return "Browser"
+        default: return "Google Cast"
+        }
     }
     /// Identity ignores a UPnP USN suffix (`::upnp:rootdevice`, `::urn:…`).
     var identity: String { protocolID + ":" + Self.canonicalID(id) }

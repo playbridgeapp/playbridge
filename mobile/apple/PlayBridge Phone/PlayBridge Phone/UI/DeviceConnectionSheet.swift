@@ -320,6 +320,10 @@ struct DeviceConnectionSheet: View {
         case .manualPlayBridge: manualPlayBridgePage
         case .manualRoku: manualRokuPage
         case .manualDLNA: manualDLNAPage
+        case .browserTV:
+            BrowserReceiverPage(controller: vm.browserReceiver) { device in
+                pickExternal(device)
+            }
         }
     }
 
@@ -726,6 +730,9 @@ struct DeviceConnectionSheet: View {
                     .font(Theme.font(size: 14))
                     .foregroundColor(Theme.onSurfaceVariant)
                 VStack(spacing: 0) {
+                    addLink(.browserTV, title: "Browser on a TV",
+                            subtitle: "Any smart TV with a web browser — no app needed",
+                            systemImage: "globe")
                     addLink(.manualPlayBridge, title: "PlayBridge TV by IP address",
                             subtitle: "When it’s on another network segment or discovery is blocked",
                             systemImage: "tv")
@@ -1119,7 +1126,7 @@ struct DeviceConnectionSheet: View {
                 desktop: PlayOnCatalog.isDesktopName(device.name)))
         }
         let liveIDs = Set((vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices).map(\.identity))
-        for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" {
+        for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" && device.protocolID != "browser" {
             let id = "ex:\(device.identity)"
             if id == activeExternalID { continue }
             let address = externalAddress(device)
@@ -1154,6 +1161,16 @@ struct DeviceConnectionSheet: View {
             rows.append(PlayOnSheetRow(
                 listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: kind(device.protocolID), address: address,
                                             reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity], uuid: device.id),
+                playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
+        }
+        for session in vm.browserReceiver.state.ready {
+            let device = vm.browserReceiver.receiver(for: session, lanHost: LocalFileServer.lanIPAddress())
+            let id = "ex:\(device.identity)"
+            if id == activeExternalID { continue }
+            rows.append(PlayOnSheetRow(
+                listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: .browser, address: externalAddress(device),
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: false,
+                                            matchKeys: [id, device.identity], uuid: device.id),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
@@ -1258,6 +1275,7 @@ struct DeviceConnectionSheet: View {
         if receiverStandingBy {
             return PlayOnCatalog.isDesktopName(vm.pairedDevice?.name ?? "") ? "laptopcomputer" : "tv"
         }
+        if vm.externalReceiver?.protocolID == "browser" { return "globe" }
         if vm.isAirPlay || vm.isExternalReceiver { return "airplayvideo" }
         if PlayOnCatalog.isDesktopName(connectedRawName) { return "laptopcomputer" }
         return "tv"
@@ -1391,6 +1409,7 @@ struct DeviceConnectionSheet: View {
         switch protocolID {
         case "dlna": return .dlna
         case "roku": return .roku
+        case "browser": return .browser
         default: return .googleCast
         }
     }
