@@ -53,6 +53,15 @@ import Foundation
                      "reachability still matches a uuid-less saved receiver by address")
         let portOnly = DiscoveredDevice(ip: saved.ip, port: saved.port + 1, name: unnamedAtSaved.name, uuid: "")
         precondition(!SavedReceiverEndpoint.sameIdentity(saved, portOnly))
+        let rootUSN = DiscoveredDevice(ip: "192.0.2.30", port: 1962, name: "Kodi", uuid: "uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff::upnp:rootdevice")
+        var savedUSN = saved
+        savedUSN.uuid = "uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff::urn:schemas-upnp-org:device:MediaRenderer:1"
+        precondition(SavedReceiverEndpoint.sameIdentity(savedUSN, rootUSN), "UPnP search targets are one receiver")
+        let refreshedUSN = SavedReceiverEndpoint.refresh(savedUSN, from: [rootUSN])
+        precondition(refreshedUSN.uuid == savedUSN.uuid && refreshedUSN.name == "Kodi" && refreshedUSN.ip == "192.0.2.30")
+        let otherUSN = DiscoveredDevice(ip: "192.0.2.30", port: 1962, name: "Other", uuid: "uuid:someone-else::upnp:rootdevice")
+        precondition(!SavedReceiverEndpoint.sameIdentity(savedUSN, otherUSN))
+        precondition(SavedReceiverEndpoint.refresh(savedUSN, from: [otherUSN]) == savedUSN)
         var first = saved
         first.uuid = "other"; first.lastConnected = Date(timeIntervalSince1970: 456)
         let history = SavedReceiverEndpoint.refreshHistory([first, saved], from: [live])

@@ -67,7 +67,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
 
     private func upsert(_ device: DiscoveredDevice) {
         devices.removeAll { existing in
-            if !device.uuid.isEmpty, !existing.uuid.isEmpty { return existing.uuid == device.uuid }
+            if !device.uuid.isEmpty, !existing.uuid.isEmpty { return SavedReceiverEndpoint.sameUUID(existing.uuid, device.uuid) }
             return existing.ip == device.ip && existing.port == device.port
         }
         devices.append(device)

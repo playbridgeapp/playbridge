@@ -468,7 +468,7 @@ final class ConnectionViewModel: ObservableObject {
         savedReconnectDiscovery = browser.$devices
             .receive(on: RunLoop.main)
             .sink { [weak self] devices in
-                guard let live = devices.first(where: { $0.uuid == saved.uuid }) else { return }
+                guard let live = devices.first(where: { SavedReceiverEndpoint.sameUUID($0.uuid, saved.uuid) }) else { return }
                 // `$devices` can synchronously emit its current value while the
                 // cancellable is still being assigned. Defer handling so cleanup can
                 // always cancel the installed subscription and prevent duplicate retries.

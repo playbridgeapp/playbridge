@@ -91,9 +91,11 @@ struct PlayOnDashboardStatus: Equatable {
 
 enum PlayOnCatalog {
     /// Saved rows split by reachability, most recently used first.
-    /// Nearby drops a discovery only when it is the same receiver as a saved row.
+    /// Nearby drops a discovery only when it is the same receiver as a saved row,
+    /// and collapses UPnP search targets that share one device id.
     /// Two PlayBridge receivers that both have ids never match on address alone.
     static func group(saved: [PlayOnListedDevice], discovered: [PlayOnListedDevice]) -> PlayOnGroups {
+        let discovered = unique(discovered)
         let nearby = discovered.filter { device in
             !saved.contains { sameReceiver($0, device) }
         }.sorted(by: nearbyOrder)
@@ -104,21 +106,35 @@ enum PlayOnCatalog {
         )
     }
 
+    /// UPnP answers each search target with its own USN (`uuid:X::upnp:rootdevice`,
+    /// `uuid:X::urn:…:MediaRenderer:1`). The device is the part before `::`.
+    static func canonicalReceiverID(_ id: String) -> String {
+        guard let range = id.range(of: "::") else { return id }
+        let head = String(id[..<range.lowerBound])
+        return head.isEmpty ? id : head
+    }
+
+    static func sameReceiverID(_ lhs: String, _ rhs: String) -> Bool {
+        let left = canonicalReceiverID(lhs)
+        let right = canonicalReceiverID(rhs)
+        return !left.isEmpty && left == right
+    }
+
     /// UUID match when both sides have one. Address match only when one side has no id.
     static func sameReceiver(_ saved: PlayOnListedDevice, _ live: PlayOnListedDevice) -> Bool {
         if saved.kind == .playBridge, live.kind == .playBridge {
-            if !saved.uuid.isEmpty, !live.uuid.isEmpty { return saved.uuid == live.uuid }
+            if !saved.uuid.isEmpty, !live.uuid.isEmpty { return sameReceiverID(saved.uuid, live.uuid) }
             if !saved.address.isEmpty, saved.address == live.address { return true }
         }
-        if saved.id == live.id { return true }
-        return !saved.matchKeys.isDisjoint(with: live.matchKeys.union([live.id]))
+        if sameReceiverID(saved.id, live.id) { return true }
+        return !canonicalKeys(saved).isDisjoint(with: canonicalKeys(live))
     }
 
     /// A different identified receiver currently advertised at the saved address.
     static func addressHeldByOther(savedUUID: String, savedAddress: String, sightings: [(uuid: String, address: String)]) -> Bool {
         guard !savedUUID.isEmpty, !savedAddress.isEmpty else { return false }
         return sightings.contains { sighting in
-            !sighting.uuid.isEmpty && sighting.uuid != savedUUID && sighting.address == savedAddress
+            !sighting.uuid.isEmpty && !sameReceiverID(sighting.uuid, savedUUID) && sighting.address == savedAddress
         }
     }
 
@@ -130,8 +146,10 @@ enum PlayOnCatalog {
         return probe || remoteReachable
     }
 
-    /// Hostnames lose a trailing mDNS suffix. ".local-ipv6" is a different suffix and stays.
+    /// Hostnames lose a trailing mDNS suffix, including one wrapped in brackets.
+    /// ".local-ipv6" is a different suffix and stays.
     static func displayName(_ name: String) -> String {
+        let name = name.replacingOccurrences(of: ".local)", with: ")", options: .caseInsensitive)
         guard name.lowercased().hasSuffix(".local") else { return name }
         let trimmed = String(name.dropLast(".local".count))
         return trimmed.isEmpty ? name : trimmed
@@ -163,12 +181,42 @@ enum PlayOnCatalog {
         return protocolName
     }
 
-    static func actionsSubtitle(protocolName: String, address: String, used: String?) -> String {
+    static func actionsSubtitle(protocolName: String, address: String, used: String?, saved: Bool = true) -> String {
         var parts = [protocolName]
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if !address.isEmpty { parts.append(address) }
-        if let used, !used.isEmpty { parts.append(used) }
+        if saved {
+            if let used, !used.isEmpty { parts.append(used) }
+        } else {
+            parts.append("Found nearby")
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// Host plus port. A missing device port can still come from the description URL.
+    static func endpointLabel(host: String, port: Int, location: String?) -> String {
+        let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if (1...65535).contains(port), !host.isEmpty { return "\(host):\(port)" }
+        if let location, let url = URL(string: location) {
+            let urlHost = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let name = urlHost.isEmpty ? host : urlHost
+            if let urlPort = url.port, (1...65535).contains(urlPort), !name.isEmpty { return "\(name):\(urlPort)" }
+            return name
+        }
+        return host
+    }
+
+    /// First 8 characters of the device id, without a `uuid:` prefix or a USN suffix.
+    static func shortID(_ uuid: String) -> String? {
+        var stem = canonicalReceiverID(uuid.trimmingCharacters(in: .whitespacesAndNewlines))
+        if stem.hasPrefix("uuid:") { stem = String(stem.dropFirst("uuid:".count)) }
+        guard stem.count >= 4 else { return nil }
+        return String(stem.prefix(8)) + "…"
+    }
+
+    static func detailsAction(saved: Bool, kind: PlayOnListedDevice.Kind, needsPairing: Bool) -> String {
+        if !saved, kind == .playBridge, needsPairing { return "Pair this TV" }
+        return kind == .playBridge ? "Play on this TV" : "Play on this device"
     }
 
     /// Wi-Fi name only when the caller already has it. iOS does not gain a new entitlement here.
@@ -248,6 +296,21 @@ enum PlayOnCatalog {
         let right = nearbyRank(rhs)
         if left != right { return left < right }
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    private static func unique(_ devices: [PlayOnListedDevice]) -> [PlayOnListedDevice] {
+        var kept: [PlayOnListedDevice] = []
+        for device in devices where !kept.contains(where: { sameReceiver($0, device) }) {
+            kept.append(device)
+        }
+        return kept
+    }
+
+    private static func canonicalKeys(_ device: PlayOnListedDevice) -> Set<String> {
+        var keys = device.matchKeys
+        keys.insert(device.id)
+        if !device.uuid.isEmpty { keys.insert(device.uuid) }
+        return Set(keys.map(canonicalReceiverID).filter { !$0.isEmpty })
     }
 
     private static func nearbyRank(_ device: PlayOnListedDevice) -> Int {

@@ -94,6 +94,35 @@ import Foundation
         precondition(PlayOnCatalog.displayName("Living Room") == "Living Room")
         precondition(PlayOnCatalog.displayName("fe80.local-ipv6") == "fe80.local-ipv6")
         precondition(PlayOnCatalog.displayName(".local") == ".local")
+        precondition(PlayOnCatalog.displayName("Kodi (Atuls-MacBook-Air.local)") == "Kodi (Atuls-MacBook-Air)")
+        precondition(PlayOnCatalog.displayName("Kodi (Atuls-MacBook-Air.LOCAL)") == "Kodi (Atuls-MacBook-Air)")
+
+        let usn = "uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff"
+        let root = device(
+            "ex:dlna:\(usn)::upnp:rootdevice", name: "Kodi", kind: .dlna, address: "192.168.0.28:1962",
+            reachable: true, saved: false,
+            matchKeys: ["dlna:\(usn)::upnp:rootdevice"], uuid: "\(usn)::upnp:rootdevice")
+        let renderer = device(
+            "ex:dlna:\(usn)::urn:schemas-upnp-org:device:MediaRenderer:1", name: "Kodi", kind: .dlna,
+            address: "192.168.0.28:1962", reachable: true, saved: false,
+            matchKeys: ["dlna:\(usn)::urn:schemas-upnp-org:device:MediaRenderer:1"],
+            uuid: "\(usn)::urn:schemas-upnp-org:device:MediaRenderer:1")
+        let plain = device(
+            "ex:dlna:\(usn)", name: "Kodi", kind: .dlna, address: "192.168.0.28:1962",
+            reachable: true, saved: false, matchKeys: ["dlna:\(usn)"], uuid: usn)
+        let kodi = PlayOnCatalog.group(saved: [], discovered: [root, renderer, plain])
+        precondition(kodi.nearby.count == 1 && kodi.nearby[0].id == root.id, "one UPnP device answers several search targets")
+        precondition(PlayOnCatalog.sameReceiver(root, renderer) && PlayOnCatalog.sameReceiver(renderer, plain))
+        let other = device("ex:dlna:uuid:someone-else", name: "Other", kind: .dlna, address: "192.168.0.28:1962",
+                           reachable: true, saved: false, uuid: "uuid:someone-else")
+        precondition(!PlayOnCatalog.sameReceiver(root, other))
+        precondition(PlayOnCatalog.group(saved: [], discovered: [root, other]).nearby.count == 2)
+        let savedKodi = device("ex:dlna:\(usn)", name: "Kodi", kind: .dlna, address: "192.168.0.28:1962",
+                               reachable: true, saved: true, matchKeys: ["dlna:\(usn)"], uuid: usn)
+        precondition(PlayOnCatalog.group(saved: [savedKodi], discovered: [root, renderer]).nearby.isEmpty)
+        precondition(!PlayOnCatalog.addressHeldByOther(
+            savedUUID: "\(usn)::upnp:rootdevice", savedAddress: "192.168.0.28:1962",
+            sightings: [(uuid: "\(usn)::urn:schemas-upnp-org:device:MediaRenderer:1", address: "192.168.0.28:1962")]))
         precondition(PlayOnCatalog.isDesktopName("Mac.local") && !PlayOnCatalog.isDesktopName("Living Room"))
         precondition(PlayOnCatalog.symbol(kind: .playBridge, desktop: true) == "laptopcomputer")
         precondition(PlayOnCatalog.symbol(kind: .playBridge, desktop: false) == "tv")
@@ -110,6 +139,17 @@ import Foundation
         precondition(PlayOnCatalog.nearbySubtitle(kind: .dlna, needsPairing: false, protocolName: "DLNA") == "DLNA")
         precondition(PlayOnCatalog.actionsSubtitle(protocolName: "PlayBridge", address: "192.168.0.41", used: "Used today") == "PlayBridge · 192.168.0.41 · Used today")
         precondition(PlayOnCatalog.actionsSubtitle(protocolName: "Roku", address: "", used: nil) == "Roku")
+        precondition(PlayOnCatalog.actionsSubtitle(protocolName: "DLNA", address: "192.168.0.28:1962", used: nil, saved: false) == "DLNA · 192.168.0.28:1962 · Found nearby")
+        precondition(PlayOnCatalog.endpointLabel(host: "192.168.0.28", port: 1962, location: nil) == "192.168.0.28:1962")
+        precondition(PlayOnCatalog.endpointLabel(host: "", port: 0, location: "http://192.168.0.28:1962/description.xml") == "192.168.0.28:1962")
+        precondition(PlayOnCatalog.endpointLabel(host: "192.168.0.28", port: 0, location: "http://192.168.0.28/description.xml") == "192.168.0.28")
+        precondition(PlayOnCatalog.shortID("uuid:1e376351-aaaa-bbbb-cccc-ddddeeeeffff::upnp:rootdevice") == "1e376351…")
+        precondition(PlayOnCatalog.shortID("uuid:kodi") == "kodi…")
+        precondition(PlayOnCatalog.shortID("abc") == nil)
+        precondition(PlayOnCatalog.shortID("") == nil)
+        precondition(PlayOnCatalog.detailsAction(saved: false, kind: .playBridge, needsPairing: true) == "Pair this TV")
+        precondition(PlayOnCatalog.detailsAction(saved: true, kind: .playBridge, needsPairing: false) == "Play on this TV")
+        precondition(PlayOnCatalog.detailsAction(saved: false, kind: .dlna, needsPairing: false) == "Play on this device")
         precondition(PlayOnPlayerCopy.detail(for: "exo") == "Default player, smooth on most streams")
         precondition(PlayOnPlayerCopy.detail(for: "mpv") == "Plays more formats and subtitle styles")
     }

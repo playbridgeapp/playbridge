@@ -28,6 +28,7 @@ struct DeviceConnectionSheet: View {
     @State private var showAtvPairing = false
     @State private var showPairedTVs = false
     @State private var actionsRowID: String?
+    @State private var suppressRowTap = false
 
     init(initialPage: PlayOnPage? = nil, openedForPicking: Bool = true) {
         self.openedForPicking = openedForPicking
@@ -509,7 +510,13 @@ struct DeviceConnectionSheet: View {
         let newBadge = badge ?? (row.listed.kind == .playBridge && row.listed.needsPairing ? "New" : nil)
         let highlighted = newBadge != nil && !dimmed
         return HStack(spacing: 0) {
-            Button { select(row) } label: {
+            Button {
+                if suppressRowTap {
+                    suppressRowTap = false
+                    return
+                }
+                select(row)
+            } label: {
                 HStack(spacing: 12) {
                     Image(systemName: PlayOnCatalog.symbol(kind: row.listed.kind, desktop: row.desktop))
                         .font(Theme.font(size: 20))
@@ -537,6 +544,7 @@ struct DeviceConnectionSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityAction(named: "Device details") { actionsRowID = row.id }
             if row.listed.saved {
                 Button { actionsRowID = row.id } label: {
                     Image(systemName: "ellipsis.vertical")
@@ -555,6 +563,11 @@ struct DeviceConnectionSheet: View {
             }
         }
         .opacity(dimmed ? 0.5 : 1)
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+            suppressRowTap = true
+            actionsRowID = row.id
+            DispatchQueue.main.async { suppressRowTap = false }
+        })
     }
 
     private var pairingPage: some View {
@@ -595,6 +608,16 @@ struct DeviceConnectionSheet: View {
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle("Pair \(name)")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Pair \(name)")
+                    .font(Theme.font(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.onSurface)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.center)
+            }
+        }
         .onAppear { pairingFieldFocused = true }
         .onChange(of: vm.state) { state in
             if case .waitingForCodeInput = state { pairingFieldFocused = true }
@@ -736,6 +759,16 @@ struct DeviceConnectionSheet: View {
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle("Add a device")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Add a device")
+                    .font(Theme.font(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.onSurface)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.center)
+            }
+        }
     }
 
     private func actionsPage(_ id: String) -> some View {
@@ -755,15 +788,23 @@ struct DeviceConnectionSheet: View {
                                 .font(Theme.font(size: 17, weight: .semibold))
                                 .foregroundColor(Theme.onSurface)
                                 .lineLimit(2)
-                            Text(PlayOnCatalog.actionsSubtitle(protocolName: row.listed.protocolName, address: row.listed.address, used: usedText(row.listed.lastConnected)))
+                                .truncationMode(.tail)
+                            Text(PlayOnCatalog.actionsSubtitle(protocolName: row.listed.protocolName, address: row.listed.address, used: usedText(row.listed.lastConnected), saved: row.listed.saved))
                                 .font(Theme.font(size: 13))
                                 .foregroundColor(Theme.onSurfaceVariant)
                                 .lineLimit(2)
+                                .truncationMode(.tail)
+                            if let shortID = PlayOnCatalog.shortID(row.listed.uuid) {
+                                Text("ID \(shortID)")
+                                    .font(Theme.font(size: 12))
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                     .padding(.bottom, 8)
                     Divider().overlay(Theme.outlineVariant)
-                    actionButton("Play on this TV", systemImage: "arrow.right") {
+                    actionButton(PlayOnCatalog.detailsAction(saved: row.listed.saved, kind: row.listed.kind, needsPairing: row.listed.needsPairing), systemImage: "arrow.right") {
                         actionsRowID = nil
                         select(row)
                     }
@@ -803,13 +844,15 @@ struct DeviceConnectionSheet: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Full TV remote, \(paired ? "Paired" : "Set up")")
                     }
-                    Button(role: .destructive) { forget(row) } label: {
-                        Label(row.playBridge == nil ? "Forget this device" : "Forget this TV", systemImage: "trash")
-                            .font(Theme.font(size: 15, weight: .semibold))
-                            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                    if row.listed.saved {
+                        Button(role: .destructive) { forget(row) } label: {
+                            Label(row.playBridge == nil ? "Forget this device" : "Forget this TV", systemImage: "trash")
+                                .font(Theme.font(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(Theme.danger)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundColor(Theme.danger)
                 } else {
                     Text("This device is no longer available.")
                         .foregroundColor(Theme.onSurfaceVariant)
@@ -886,6 +929,8 @@ struct DeviceConnectionSheet: View {
                     Text("\(nowName) · Connected")
                         .font(Theme.font(size: 12))
                         .foregroundColor(Theme.onSurfaceVariant)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -945,6 +990,16 @@ struct DeviceConnectionSheet: View {
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(title)
+                    .font(Theme.font(size: 17, weight: .semibold))
+                    .foregroundColor(Theme.onSurface)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.center)
+            }
+        }
     }
 
     private func addLink(_ page: PlayOnPage, title: String, subtitle: String, systemImage: String) -> some View {
@@ -1067,12 +1122,12 @@ struct DeviceConnectionSheet: View {
         for (index, device) in vm.savedExternalReceiverDevices.enumerated() where device.protocolID != "dial" {
             let id = "ex:\(device.identity)"
             if id == activeExternalID { continue }
-            let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
+            let address = externalAddress(device)
             rows.append(PlayOnSheetRow(
                 listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: kind(device.protocolID), address: address,
                                             reachable: liveIDs.contains(device.identity), saved: true,
                                             lastConnected: Date(timeIntervalSince1970: TimeInterval(1_000_000 - index)),
-                                            needsPairing: false, matchKeys: [id, device.identity]),
+                                            needsPairing: false, matchKeys: [id, device.identity], uuid: device.id),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
@@ -1095,10 +1150,10 @@ struct DeviceConnectionSheet: View {
         for device in vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices where device.protocolID != "dial" {
             let id = "ex:\(device.identity)"
             if id == activeExternalID { continue }
-            let address = device.addresses.first.map { "\($0):\(device.port)" } ?? device.model
+            let address = externalAddress(device)
             rows.append(PlayOnSheetRow(
                 listed: PlayOnListedDevice(id: id, name: shown(device.name), kind: kind(device.protocolID), address: address,
-                                            reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity]),
+                                            reachable: true, saved: false, lastConnected: nil, needsPairing: false, matchKeys: [id, device.identity], uuid: device.id),
                 playBridge: nil, external: device, paired: false, ambiguous: false, desktop: false))
         }
         return rows
@@ -1321,6 +1376,11 @@ struct DeviceConnectionSheet: View {
     private func clearDismissedBanner(_ key: String) {
         nav.playOnDismissedBanners.remove(key)
         if key == "wifi" { wifiDismissed = false }
+    }
+
+    private func externalAddress(_ device: ExternalReceiverDevice) -> String {
+        let label = PlayOnCatalog.endpointLabel(host: device.addresses.first ?? "", port: Int(device.port), location: device.location)
+        return label.isEmpty ? device.model : label
     }
 
     private func usedText(_ date: Date?) -> String? {

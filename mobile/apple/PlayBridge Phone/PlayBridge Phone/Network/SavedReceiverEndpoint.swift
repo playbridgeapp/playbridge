@@ -7,7 +7,7 @@ enum SavedReceiverEndpoint {
         // Address matching belongs to isLive: a uuid-less record must not take
         // the name of whoever currently answers at its address.
         guard !saved.uuid.isEmpty,
-              let live = devices.first(where: { $0.uuid == saved.uuid && valid($0) }) else { return saved }
+              let live = devices.first(where: { sameUUID($0.uuid, saved.uuid) && valid($0) }) else { return saved }
         var updated = saved
         updated.ip = live.ip
         updated.port = live.port
@@ -19,7 +19,7 @@ enum SavedReceiverEndpoint {
 
     /// Both non-empty ids must be equal. Address is only an identity when one side has no id.
     static func sameIdentity(_ saved: PairedDevice, _ live: DiscoveredDevice) -> Bool {
-        if !saved.uuid.isEmpty, !live.uuid.isEmpty { return saved.uuid == live.uuid }
+        if !saved.uuid.isEmpty, !live.uuid.isEmpty { return sameUUID(saved.uuid, live.uuid) }
         return saved.ip == live.ip && saved.port == live.port
     }
 
@@ -33,6 +33,18 @@ enum SavedReceiverEndpoint {
 
     static func refreshHistory(_ saved: [PairedDevice], from devices: [DiscoveredDevice]) -> [PairedDevice] {
         saved.map { refresh($0, from: devices) }
+    }
+
+    /// UPnP USNs (`uuid:X::upnp:rootdevice` and `uuid:X::urn:…`) are one device.
+    static func sameUUID(_ lhs: String, _ rhs: String) -> Bool {
+        func head(_ id: String) -> String {
+            guard let range = id.range(of: "::") else { return id }
+            let head = String(id[..<range.lowerBound])
+            return head.isEmpty ? id : head
+        }
+        let left = head(lhs)
+        let right = head(rhs)
+        return !left.isEmpty && left == right
     }
 
     private static func valid(_ device: DiscoveredDevice) -> Bool {
