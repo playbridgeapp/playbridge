@@ -45,6 +45,9 @@ struct DeviceConnectionSheet: View {
                         .toolbar(.visible, for: .navigationBar)
                 }
         }
+        // Pushed pages use the system bar. Drop it the same 20pt the root header uses under the grabber.
+        .padding(.top, path.isEmpty ? 0 : 20)
+        .background(Theme.surface.ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("play-on-sheet")
@@ -115,16 +118,15 @@ struct DeviceConnectionSheet: View {
                     nearbySection
                     unavailableSection
                     if !showNowCard { firstRunTip }
+                    addDeviceButton
+                        .padding(.top, 4)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 20)
                 .padding(.top, 8)
-                .padding(.bottom, 12)
+                .padding(.bottom, 20)
                 .background(PlayOnListOffset(offset: $listOffset, restore: path.isEmpty))
             }
             .refreshable { vm.pingSavedDevices() }
-            addDeviceButton
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
         }
         .background(Theme.surface.ignoresSafeArea())
     }
@@ -157,8 +159,8 @@ struct DeviceConnectionSheet: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Close")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
         .padding(.bottom, 4)
     }
 
@@ -192,19 +194,19 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowCard: some View {
-        let tint = nowCardAccented ? PlayOnStatusGreen.color : Theme.onSurface
+        let iconTint = nowCardAccented ? PlayOnStatusGreen.color : Theme.onSurface
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: nowSymbol)
                     .font(Theme.font(size: 20))
-                    .foregroundColor(tint)
+                    .foregroundColor(iconTint)
                     .frame(width: 44, height: 44)
-                    .background(tint.opacity(nowCardAccented ? 0.18 : 0.08), in: RoundedRectangle(cornerRadius: 12))
+                    .background(iconTint.opacity(nowCardAccented ? 0.18 : 0.08), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(nowName)
                         .font(Theme.font(size: 16, weight: .semibold))
-                        .foregroundColor(tint)
+                        .foregroundColor(Theme.onSurface)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     nowStatusLine
@@ -269,14 +271,17 @@ struct DeviceConnectionSheet: View {
                 }
             }
         }
-        let disconnect = Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect") {
+        let disconnect = Button(receiverStandingBy || !vm.isAirPlay ? "Disconnect" : "Stop using AirPlay") {
             vm.disconnect()
         }
         .buttonStyle(.plain)
         .font(Theme.font(size: 14, weight: .semibold))
         .foregroundColor(Theme.danger)
         .frame(minHeight: 44)
-        return Group {
+        return VStack(alignment: .leading, spacing: 8) {
+            if receiverStandingBy {
+                tonalCapsule("Play on \(nowName)") { vm.selectNativeReceiver() }
+            }
             if stacks {
                 VStack(alignment: .leading, spacing: 4) {
                     capsules
@@ -328,6 +333,19 @@ struct DeviceConnectionSheet: View {
         .buttonStyle(.plain)
     }
 
+    private func tonalCapsule(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(Theme.onSecondaryContainer)
+                .lineLimit(1)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Theme.secondaryContainer, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var devicesSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             sectionLabel("Devices")
@@ -341,8 +359,9 @@ struct DeviceConnectionSheet: View {
 
     private var phoneRow: some View {
         Button {
-            vm.disconnect()
-            dismiss()
+            let linked = vm.playBridgeLinkConnected
+            vm.selectThisPhone()
+            if !linked { dismiss() }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "iphone")
@@ -542,7 +561,7 @@ struct DeviceConnectionSheet: View {
                         .multilineTextAlignment(.center)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)
             .padding(.top, 12)
             .frame(maxWidth: .infinity)
         }
@@ -684,7 +703,8 @@ struct DeviceConnectionSheet: View {
                         .frame(maxWidth: .infinity, minHeight: 44)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
         }
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle("Add a device")
@@ -769,8 +789,8 @@ struct DeviceConnectionSheet: View {
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
             .padding(.bottom, 16)
         }
         .background(Theme.surface.ignoresSafeArea())
@@ -825,7 +845,8 @@ struct DeviceConnectionSheet: View {
                     .foregroundColor(Theme.onSurfaceVariant)
                     .padding(.horizontal, 4)
             }
-            .padding(16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
         }
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle("Configure TV")
@@ -891,7 +912,8 @@ struct DeviceConnectionSheet: View {
                 .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Spacer(minLength: 0)
         }
-        .padding(16)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.surface.ignoresSafeArea())
         .navigationTitle(title)
@@ -1054,8 +1076,9 @@ struct DeviceConnectionSheet: View {
     }
 
     private var activePlayBridgeID: String? {
-        guard vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
-        guard vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV != nil || showsFailure else { return nil }
+        guard !vm.isExternalReceiver, let device = vm.pairedDevice else { return nil }
+        let live = vm.isConnected || vm.connectionIsConnecting || vm.selectedRemoteTV != nil || showsFailure
+        guard receiverStandingBy || (vm.nativeReceiverSelected && !vm.isAirPlay && live) else { return nil }
         return "pb:\(vm.deviceKey(device))"
     }
 
@@ -1069,12 +1092,18 @@ struct DeviceConnectionSheet: View {
     }
 
     private var thisPhoneSelected: Bool {
-        !vm.nativeReceiverSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.isConnected && !vm.connectionIsConnecting
+        !vm.playBridgeOutputSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.connectionIsConnecting
+            && (!vm.isConnected || receiverStandingBy)
     }
 
-    /// Connected playback uses the green card. Connecting and failures stay neutral.
+    /// The receiver socket is up, but This phone or AirPlay is the selected output.
+    private var receiverStandingBy: Bool {
+        vm.playBridgeLinkConnected && !vm.playBridgeOutputSelected && vm.externalReceiver == nil
+    }
+
+    /// Connected playback uses the green card. Connecting, standby, and failures stay neutral.
     private var nowCardAccented: Bool {
-        guard !showsFailure else { return false }
+        guard !showsFailure, !receiverStandingBy else { return false }
         if vm.isConnected { return true }
         return vm.isAirPlay && vm.airPlay.routeAvailable
     }
@@ -1096,9 +1125,9 @@ struct DeviceConnectionSheet: View {
     }
 
     private var showConfigure: Bool {
-        guard vm.isConnected, vm.nativeReceiverSelected, !vm.isExternalReceiver, !vm.isAirPlay else { return false }
-        // TV Default is always present. A desktop that offers nothing else has no choice to make.
-        return TvCapabilityOptions.playerOptions(for: vm.pairedDevice).count >= 2
+        guard vm.isConnected, vm.playBridgeOutputSelected, !vm.isExternalReceiver, !vm.isAirPlay else { return false }
+        // TV Default is always first. Configure needs two real engines past that.
+        return TvCapabilityOptions.playerOptions(for: vm.pairedDevice).count > 2
     }
 
     private var showsFailure: Bool {
@@ -1109,6 +1138,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowName: String {
+        if receiverStandingBy, let name = vm.pairedDevice?.name, !name.isEmpty { return shown(name) }
         if vm.isAirPlay { return shown(vm.airPlay.routeName) }
         switch vm.state {
         case .connected(let name, _): return shown(name)
@@ -1141,6 +1171,9 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowSymbol: String {
+        if receiverStandingBy {
+            return PlayOnCatalog.isDesktopName(vm.pairedDevice?.name ?? "") ? "laptopcomputer" : "tv"
+        }
         if vm.isAirPlay || vm.isExternalReceiver { return "airplayvideo" }
         if PlayOnCatalog.isDesktopName(connectedRawName) { return "laptopcomputer" }
         return "tv"
@@ -1155,6 +1188,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private var nowStatusText: String {
+        if receiverStandingBy { return "Connected · Videos play on this phone" }
         if vm.isConnected || vm.connectionIsConnecting || (showsFailure && !vm.isAirPlay) {
             return PlayOnCatalog.nowStatus(connecting: vm.connectionIsConnecting && !vm.isConnected,
                                             failed: showsFailure && !vm.isConnected,
@@ -1235,7 +1269,7 @@ struct DeviceConnectionSheet: View {
         let connected = nowStatusText.hasPrefix("Connected")
         return HStack(spacing: 4) {
             if connected {
-                Circle().fill(PlayOnStatusGreen.color).frame(width: 6, height: 6).accessibilityHidden(true)
+                Circle().fill(nowStatusColor).frame(width: 6, height: 6).accessibilityHidden(true)
             }
             Text(nowStatusText)
         }

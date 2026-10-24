@@ -106,14 +106,19 @@ struct CastSheet: View {
     private var media: [DetectedVideo] { streams + audio + images }
     private var preferredMedia: DetectedVideo? { sortedStreams(streams).first ?? audio.first ?? images.first }
 
+    /// AirPlay, an external receiver, or the PlayBridge output. A standing-by socket is not a send target.
+    private var sendsToSelectedReceiver: Bool {
+        vm.isConnected && (vm.isAirPlay || vm.isExternalReceiver || vm.playBridgeOutputSelected)
+    }
+
     private var sendEnabled: Bool {
         if playbackPreparationID != nil { return false }
         if castAction == "browse" {
-            return vm.isConnected && !browseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return sendsToSelectedReceiver && !browseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } else {
             guard let selectedVideo else { return false }
             let kind = selectedVideo.isAudio ? "audio" : selectedVideo.isImage ? "image" : "video"
-            return vm.isConnected && vm.supportsNativeMediaKind(kind)
+            return sendsToSelectedReceiver && vm.supportsNativeMediaKind(kind)
         }
     }
 
@@ -278,6 +283,9 @@ struct CastSheet: View {
     }
 
     private var destinationDescription: String {
+        if vm.playBridgeLinkConnected && !vm.playBridgeOutputSelected && !vm.isAirPlay && !vm.isExternalReceiver {
+            return "Videos play on this phone"
+        }
         if vm.isConnected, let name = vm.receiverName {
             return "Connected to \(name)"
         }
@@ -289,7 +297,7 @@ struct CastSheet: View {
             Menu {
                 Picker("Action", selection: $castAction) {
                     Label("Play", systemImage: "play.fill").tag("play")
-                    if vm.isConnected && vm.supportsQueue && vm.coordinator.activeContext == "player" {
+                    if sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
                         Label("Queue", systemImage: "text.badge.plus").tag("queue")
                     }
                     if vm.supportsBrowser {

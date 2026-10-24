@@ -39,10 +39,10 @@ struct PhoneMediaDetail: View {
                 HStack {
                     Button { showCollections = true } label: { Label("Collection", systemImage: "folder.badge.plus") }.buttonStyle(.bordered)
                     Button {
-                        if vm.isConnected { Task { await cast() } } else { openPlayOn() }
+                        if castsToSelectedReceiver { Task { await cast() } } else { openPlayOn() }
                     } label: {
                         if sending { ProgressView() }
-                        else { Label(vm.isConnected ? "Cast to TV" : "Connect TV", systemImage: "play.tv") }
+                        else { Label(castsToSelectedReceiver ? "Cast to TV" : "Connect TV", systemImage: "play.tv") }
                     }.buttonStyle(.borderedProminent).disabled(url == nil || sending)
                 }
                 if let url { ShareLink(item: url).padding(.bottom, 8) }
@@ -82,8 +82,12 @@ struct PhoneMediaDetail: View {
             }
         } catch { self.error = error.localizedDescription }
     }
+    private var castsToSelectedReceiver: Bool {
+        vm.isConnected && (vm.isAirPlay || vm.isExternalReceiver || vm.playBridgeOutputSelected)
+    }
+
     @MainActor private func cast() async {
-        guard let url, vm.isConnected else { return }
+        guard let url, castsToSelectedReceiver else { return }
         sending = true; sent = false
         defer { sending = false }
         let target = vm.destinationID
