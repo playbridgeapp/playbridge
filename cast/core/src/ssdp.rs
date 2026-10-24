@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     time::{Duration, Instant},
@@ -63,6 +63,45 @@ pub struct DiscoveryHit {
     pub source: SocketAddr,
 }
 
+/// SSDP search targets append a service suffix to the same device USN.
+pub fn device_usn(usn: &str) -> &str {
+    usn.split_once("::")
+        .map_or(usn, |(device, _)| device)
+        .trim()
+}
+
+impl DiscoveryHit {
+    pub(crate) fn device_usn(&self) -> Option<&str> {
+        self.unique_service_name
+            .as_deref()
+            .map(device_usn)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn identity_key(&self) -> (DiscoveryProtocol, String) {
+        (
+            self.protocol,
+            self.device_usn().unwrap_or(&self.location).to_owned(),
+        )
+    }
+}
+
+/// Root and embedded-device USNs may describe the same renderer at one location.
+#[derive(Default)]
+pub(crate) struct SeenHits {
+    identities: HashSet<(DiscoveryProtocol, String)>,
+    locations: HashSet<(DiscoveryProtocol, String)>,
+}
+
+impl SeenHits {
+    pub(crate) fn insert(&mut self, hit: &DiscoveryHit) -> bool {
+        // Remember both aliases even when one already identifies a duplicate.
+        let new_identity = self.identities.insert(hit.identity_key());
+        let new_location = self.locations.insert((hit.protocol, hit.location.clone()));
+        new_identity && new_location
+    }
+}
+
 /// A lightweight, one-socket SSDP search covering every selected provider.
 pub struct DiscoverySession;
 
@@ -72,12 +111,15 @@ impl DiscoverySession {
         let worker = Self::search_incremental(config, sender);
         tokio::pin!(worker);
         let mut hits = HashMap::<(DiscoveryProtocol, String), DiscoveryHit>::new();
+        let mut seen = SeenHits::default();
         loop {
             tokio::select! {
                 item = receiver.recv() => {
                     match item {
                         Some(item) => {
-                            hits.insert((item.protocol, item.location.clone()), item);
+                            if seen.insert(&item) {
+                                hits.insert(item.identity_key(), item);
+                            }
                         }
                         None => {
                             (&mut worker).await?;
@@ -88,7 +130,9 @@ impl DiscoverySession {
                 result = &mut worker => {
                     result?;
                     while let Ok(item) = receiver.try_recv() {
-                        hits.insert((item.protocol, item.location.clone()), item);
+                        if seen.insert(&item) {
+                            hits.insert(item.identity_key(), item);
+                        }
                     }
                     return Ok(hits.into_values().collect());
                 }
@@ -96,7 +140,7 @@ impl DiscoverySession {
         }
     }
 
-    /// Sends each newly discovered location while the SSDP receive window is open.
+    /// Sends each newly discovered protocol/device while the receive window is open.
     pub async fn search_incremental(
         config: &DiscoveryConfig,
         events: mpsc::Sender<DiscoveryHit>,
@@ -141,7 +185,7 @@ impl DiscoverySession {
         drop(packet_sender);
 
         let deadline = Instant::now() + config.timeout;
-        let mut hits = HashMap::<(DiscoveryProtocol, String), DiscoveryHit>::new();
+        let mut seen = SeenHits::default();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -150,12 +194,10 @@ impl DiscoverySession {
             let Ok(Some((packet, source))) = time::timeout(remaining, packets.recv()).await else {
                 break;
             };
-            if let Some(hit) = parse_response(&packet, source) {
-                let key = (hit.protocol, hit.location.clone());
-                if let std::collections::hash_map::Entry::Vacant(entry) = hits.entry(key) {
-                    entry.insert(hit.clone());
-                    let _ = events.send(hit).await;
-                }
+            if let Some(hit) = parse_response(&packet, source)
+                && seen.insert(&hit)
+            {
+                let _ = events.send(hit).await;
             }
         }
         readers.abort_all();
@@ -274,6 +316,92 @@ fn parse_response(bytes: &[u8], source: SocketAddr) -> Option<DiscoveryHit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usn_search_targets_share_one_device_identity() {
+        let mut seen = SeenHits::default();
+        let mut accepted = 0;
+        for (index, usn) in [
+            " uuid:Device-X::upnp:rootdevice ",
+            "uuid:Device-X::urn:schemas-upnp-org:device:MediaRenderer:1",
+            "uuid:Device-X",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let hit = DiscoveryHit {
+                protocol: DiscoveryProtocol::Dlna,
+                location: format!("http://192.0.2.1/device-{index}.xml"),
+                search_target: None,
+                unique_service_name: Some(usn.into()),
+                server: None,
+                source: "192.0.2.1:1900".parse().unwrap(),
+            };
+            if seen.insert(&hit) {
+                accepted += 1;
+            }
+        }
+        assert_eq!(accepted, 1);
+        assert_eq!(device_usn(" uuid:Device-X "), "uuid:Device-X");
+    }
+
+    #[test]
+    fn different_usns_at_one_location_are_duplicates_and_missing_usn_uses_location() {
+        let mut hit = DiscoveryHit {
+            protocol: DiscoveryProtocol::Dlna,
+            location: "http://192.0.2.1/device.xml".into(),
+            search_target: None,
+            unique_service_name: Some("uuid:first::upnp:rootdevice".into()),
+            server: None,
+            source: "192.0.2.1:1900".parse().unwrap(),
+        };
+        let mut seen = SeenHits::default();
+        assert!(seen.insert(&hit));
+        hit.unique_service_name = Some("uuid:second::upnp:rootdevice".into());
+        assert!(!seen.insert(&hit));
+        hit.unique_service_name = None;
+        assert_eq!(hit.identity_key().1, hit.location);
+        assert!(!seen.insert(&hit));
+    }
+
+    #[test]
+    fn different_usns_at_one_ip_with_different_locations_are_distinct() {
+        let mut hit = DiscoveryHit {
+            protocol: DiscoveryProtocol::Dlna,
+            location: "http://192.0.2.1/first.xml".into(),
+            search_target: None,
+            unique_service_name: Some("uuid:first::upnp:rootdevice".into()),
+            server: None,
+            source: "192.0.2.1:1900".parse().unwrap(),
+        };
+        let mut seen = SeenHits::default();
+        assert!(seen.insert(&hit));
+        hit.unique_service_name = Some("uuid:second::upnp:rootdevice".into());
+        hit.location = "http://192.0.2.1/second.xml".into();
+        assert!(seen.insert(&hit));
+    }
+
+    #[test]
+    fn duplicates_register_both_aliases_and_keep_protocols_separate() {
+        let mut hit = DiscoveryHit {
+            protocol: DiscoveryProtocol::Dlna,
+            location: "http://192.0.2.1/first.xml".into(),
+            search_target: None,
+            unique_service_name: Some("uuid:first".into()),
+            server: None,
+            source: "192.0.2.1:1900".parse().unwrap(),
+        };
+        let mut seen = SeenHits::default();
+        assert!(seen.insert(&hit));
+        hit.unique_service_name = Some("uuid:embedded".into());
+        assert!(!seen.insert(&hit));
+        hit.location = "http://192.0.2.1/other.xml".into();
+        assert!(!seen.insert(&hit));
+        hit.unique_service_name = Some("uuid:another".into());
+        assert!(!seen.insert(&hit));
+        hit.protocol = DiscoveryProtocol::Dial;
+        assert!(seen.insert(&hit));
+    }
 
     #[test]
     fn parses_headers_case_insensitively_and_classifies_dial() {

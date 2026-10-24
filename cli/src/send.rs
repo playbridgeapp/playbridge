@@ -1505,15 +1505,27 @@ fn receiver_from_preferred(preferred: &PreferredDevice) -> Result<Receiver, Stri
         .protocol
         .parse::<ReceiverProtocol>()
         .map_err(|error| error.to_string())?;
+    let uuid = protocol.normalize_id(&preferred.uuid).to_owned();
+    let id = if matches!(
+        protocol,
+        ReceiverProtocol::Dlna | ReceiverProtocol::Dial | ReceiverProtocol::Roku
+    ) && uuid
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("uuid:"))
+    {
+        format!("{}:{uuid}", protocol.as_str())
+    } else {
+        uuid.clone()
+    };
     Ok(Receiver {
-        id: ReceiverId(preferred.uuid.clone()),
+        id: ReceiverId(id),
         protocol,
         name: preferred.name.clone(),
         addresses: vec![preferred.address.clone()],
         port: preferred.port,
         wss_port: preferred.wss_port,
         location: preferred.location.clone(),
-        uuid: Some(preferred.uuid.clone()),
+        uuid: Some(uuid),
     })
 }
 
@@ -1543,13 +1555,21 @@ fn receiver_matches_device(receiver: &Receiver, selector: &str) -> bool {
     if selector.is_empty() {
         return false;
     }
-    receiver.id.0.eq_ignore_ascii_case(selector)
+    receiver_matches_identity(receiver, selector)
+        || receiver.name.eq_ignore_ascii_case(selector)
+        || receiver.addresses.iter().any(|address| address == selector)
+}
+
+fn receiver_matches_identity(receiver: &Receiver, selector: &str) -> bool {
+    let protocol = receiver.protocol;
+    let selector = protocol.normalize_id(selector);
+    protocol
+        .normalize_id(&receiver.id.0)
+        .eq_ignore_ascii_case(selector)
         || receiver
             .uuid
             .as_deref()
-            .is_some_and(|uuid| uuid.eq_ignore_ascii_case(selector))
-        || receiver.name.eq_ignore_ascii_case(selector)
-        || receiver.addresses.iter().any(|address| address == selector)
+            .is_some_and(|uuid| protocol.normalize_id(uuid).eq_ignore_ascii_case(selector))
 }
 
 fn select_receiver_by_selector(
@@ -1559,13 +1579,7 @@ fn select_receiver_by_selector(
     let selector = selector.trim();
     let exact = discovered
         .iter()
-        .filter(|receiver| {
-            receiver.id.0.eq_ignore_ascii_case(selector)
-                || receiver
-                    .uuid
-                    .as_deref()
-                    .is_some_and(|uuid| uuid.eq_ignore_ascii_case(selector))
-        })
+        .filter(|receiver| receiver_matches_identity(receiver, selector))
         .cloned()
         .collect::<Vec<_>>();
     match exact.as_slice() {
@@ -4035,6 +4049,17 @@ mod tests {
     }
 
     #[test]
+    fn restored_upnp_receiver_uses_the_current_id_and_device_uuid() {
+        for protocol in ["dlna", "dial", "roku"] {
+            let mut preferred = preferred_device(protocol);
+            preferred.uuid = format!("{protocol}:uuid:Device-X::upnp:rootdevice");
+            let receiver = receiver_from_preferred(&preferred).unwrap();
+            assert_eq!(receiver.id.0, format!("{protocol}:uuid:Device-X"));
+            assert_eq!(receiver.uuid.as_deref(), Some("uuid:Device-X"));
+        }
+    }
+
+    #[test]
     fn unreachable_detects_timeouts_and_ignores_auth_failures() {
         assert!(is_unreachable(
             "protocol operation failed: PlayBridge WebSocket connection timed out"
@@ -4051,6 +4076,40 @@ mod tests {
         assert!(receiver_matches_device(&receiver, "Living Room"));
         assert!(receiver_matches_device(&receiver, "192.168.1.20"));
         assert!(!receiver_matches_device(&receiver, "Kitchen"));
+    }
+
+    #[test]
+    fn legacy_upnp_selectors_resolve_the_normalized_device() {
+        for protocol in [
+            ReceiverProtocol::Dlna,
+            ReceiverProtocol::Dial,
+            ReceiverProtocol::Roku,
+        ] {
+            let mut device = receiver_from_preferred(&preferred_device("playbridge")).unwrap();
+            device.protocol = protocol;
+            device.id = ReceiverId(format!("{}:uuid:Device-X", protocol.as_str()));
+            device.uuid = Some("uuid:Device-X".into());
+            let mut other = device.clone();
+            other.id = ReceiverId(format!("{}:uuid:Other", protocol.as_str()));
+            other.uuid = Some("uuid:Other".into());
+            let discovered = vec![device.clone(), other];
+            for selector in [
+                "uuid:Device-X::upnp:rootdevice".to_owned(),
+                format!(
+                    "{}:uuid:Device-X::urn:schemas-upnp-org:device:MediaRenderer:1",
+                    protocol.as_str()
+                ),
+            ] {
+                assert!(receiver_matches_device(&device, &selector));
+                assert_eq!(
+                    select_receiver_by_selector(&discovered, &selector)
+                        .unwrap()
+                        .unwrap()
+                        .id,
+                    device.id
+                );
+            }
+        }
     }
 
     #[test]

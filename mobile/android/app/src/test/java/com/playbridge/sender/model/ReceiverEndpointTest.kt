@@ -7,6 +7,33 @@ import com.playbridge.shared.protocol.protocolJson
 
 class ReceiverEndpointTest {
     @Test
+    fun `legacy UPnP endpoint keys match normalized discovery and map lookups`() {
+        for (protocol in listOf(CastProtocol.DLNA, CastProtocol.ROKU)) {
+            val current = EndpointKey(protocol, "uuid:Device-X")
+            for (id in listOf("uuid:Device-X::upnp:rootdevice",
+                "${protocol.name.lowercase()}:uuid:Device-X::urn:schemas-upnp-org:device:MediaRenderer:1")) {
+                val legacy = protocolJson.decodeFromString<EndpointKey>(
+                    """{"protocol":"${protocol.name}","stableId":"$id"}""",
+                )
+                assertEquals(current, legacy)
+                assertEquals(current.hashCode(), legacy.hashCode())
+                assertEquals(current.toString(), legacy.toString())
+                assertEquals("saved", mapOf(legacy to "saved")[current])
+            }
+            assertEquals(false, current == EndpointKey(protocol, "uuid:Other"))
+        }
+    }
+
+    @Test
+    fun `UPnP compatibility leaves other protocols and IPv6 location identities intact`() {
+        for (protocol in listOf(CastProtocol.PLAYBRIDGE, CastProtocol.GOOGLE_CAST, CastProtocol.WEB_BROWSER)) {
+            assertEquals(false, EndpointKey(protocol, "id::suffix") == EndpointKey(protocol, "id"))
+        }
+        val location = "dlna:http://[2001:db8::1]/device.xml"
+        assertEquals("dlna:$location", EndpointKey(CastProtocol.DLNA, location).toString())
+    }
+
+    @Test
     fun `endpoint identity includes protocol`() {
         val native = EndpointKey(CastProtocol.PLAYBRIDGE, "tv-1")
         val dlna = EndpointKey(CastProtocol.DLNA, "tv-1")

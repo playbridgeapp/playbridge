@@ -28,6 +28,23 @@ enum TvProtocol {
       };
 }
 
+/// Legacy UPnP service USNs and current device UUIDs identify the same receiver.
+String receiverStableId(TvProtocol protocol, String id) {
+  if (protocol == TvProtocol.dlna || protocol == TvProtocol.roku) {
+    final trimmed = id.trim();
+    final prefix = '${protocol.name}:';
+    final raw =
+        trimmed.startsWith(prefix) ? trimmed.substring(prefix.length) : trimmed;
+    if (raw.toLowerCase().startsWith('uuid:')) {
+      return raw.split('::').first.trim();
+    }
+  }
+  return id;
+}
+
+String receiverIdentityKey(TvProtocol protocol, String id) =>
+    '${protocol.name}:${receiverStableId(protocol, id)}';
+
 /// A receiver found on the LAN by Rust discovery or the PlayBridge mDNS
 /// fallback.
 @immutable
@@ -70,8 +87,8 @@ class DiscoveredTv {
     this.location,
   });
 
-  String get stableId => uuid;
-  String get identityKey => '${protocol.name}:$stableId';
+  String get stableId => receiverStableId(protocol, uuid);
+  String get identityKey => receiverIdentityKey(protocol, uuid);
   List<String> get allAddresses => List.unmodifiable({
         if (host.isNotEmpty) host,
         ...addresses.where((address) => address.isNotEmpty),
@@ -229,7 +246,7 @@ class TvDiscoveryBrowser {
             case ReceiverUpdated(:final receiver):
               final device = discoveredTvFromRust(receiver);
               if (device != null) {
-                _rustResults.update(receiver.id, device);
+                _rustResults.update(device.identityKey, device);
                 _emit();
               }
             case DiscoveryError():
@@ -417,7 +434,7 @@ List<DiscoveredTv> mergeDiscoveredDevices({
 }) {
   final merged = <String, DiscoveredTv>{};
   for (final device in rust) {
-    merged['${device.protocol.name}:${device.uuid}'] = device;
+    merged[device.identityKey] = device;
   }
   for (final device in bonjourFallback) {
     final key = '${TvProtocol.playBridge.name}:${device.uuid}';

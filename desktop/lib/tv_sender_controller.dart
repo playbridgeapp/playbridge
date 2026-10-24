@@ -830,17 +830,18 @@ class TvSenderController extends ChangeNotifier {
     String uuid, {
     TvProtocol protocol = TvProtocol.playBridge,
   }) async {
-    if ((_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) ||
-        (_pending?.uuid == uuid && _pending?.protocol == protocol) ||
-        (_retryTarget?.uuid == uuid && _retryTarget?.protocol == protocol)) {
+    final key = receiverIdentityKey(protocol, uuid);
+    if (_activeTv?.identityKey == key ||
+        _pending?.identityKey == key ||
+        _retryTarget?.identityKey == key) {
       _beginUserClose();
       await _transport.disconnect();
     }
     await _store.forget(uuid, protocol: protocol);
-    if (_selection.identityKey == '${protocol.name}:$uuid') {
+    if (_selection.identityKey == key) {
       await _setSelection(const PlaybackSelection.local());
     }
-    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+    if (_activeTv?.identityKey == key) {
       _activeTv = null;
     }
     notifyListeners();
@@ -2036,8 +2037,9 @@ class TvSenderController extends ChangeNotifier {
   }
 
   DiscoveredTv? _discoveredByIdentity(TvProtocol protocol, String uuid) {
+    final key = receiverIdentityKey(protocol, uuid);
     for (final d in _discoveredRaw) {
-      if (d.protocol == protocol && d.uuid == uuid) return d;
+      if (d.identityKey == key) return d;
     }
     return null;
   }

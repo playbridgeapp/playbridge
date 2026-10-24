@@ -7,7 +7,9 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     dial::DialDevice,
     native_discovery,
-    ssdp::{DiscoveryConfig as SsdpConfig, DiscoveryHit, DiscoveryProtocol, DiscoverySession},
+    ssdp::{
+        DiscoveryConfig as SsdpConfig, DiscoveryHit, DiscoveryProtocol, DiscoverySession, SeenHits,
+    },
     upnp::Renderer,
 };
 
@@ -21,6 +23,25 @@ pub enum ReceiverProtocol {
 }
 
 impl ReceiverProtocol {
+    /// Accept legacy protocol-qualified UPnP IDs and full USNs when matching saved devices.
+    /// Other protocol IDs and location fallbacks (including IPv6 URLs) stay unchanged.
+    pub fn normalize_id(self, id: &str) -> &str {
+        if matches!(self, Self::Dlna | Self::Dial | Self::Roku) {
+            let trimmed = id.trim();
+            let unqualified = trimmed
+                .strip_prefix(self.as_str())
+                .and_then(|value| value.strip_prefix(':'))
+                .unwrap_or(trimmed);
+            if unqualified
+                .get(..5)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("uuid:"))
+            {
+                return crate::ssdp::device_usn(unqualified);
+            }
+        }
+        id
+    }
+
     pub const DEFAULTS: [Self; 4] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::GoogleCast];
     pub const ALL: [Self; 5] = [
         Self::PlayBridge,
@@ -382,7 +403,7 @@ async fn discover_ssdp(
     let (hit_sender, mut hit_receiver) = mpsc::channel(64);
     let search = DiscoverySession::search_incremental(&ssdp_config, hit_sender);
     tokio::pin!(search);
-    let emitter = SsdpEmitter {
+    let mut emitter = SsdpEmitter {
         wants_dlna,
         wants_roku,
         wants_generic_dial,
@@ -391,6 +412,7 @@ async fn discover_ssdp(
         events: &events,
         cancellation: &cancellation,
         deadline: tokio::time::Instant::now() + timeout,
+        seen: SeenHits::default(),
     };
     loop {
         tokio::select! {
@@ -439,10 +461,11 @@ struct SsdpEmitter<'a> {
     events: &'a mpsc::Sender<DiscoveryEvent>,
     cancellation: &'a CancellationToken,
     deadline: tokio::time::Instant,
+    seen: SeenHits,
 }
 
 impl SsdpEmitter<'_> {
-    async fn emit(&self, hit: DiscoveryHit) {
+    async fn emit(&mut self, hit: DiscoveryHit) {
         if self.cancellation.is_cancelled() {
             return;
         }
@@ -453,11 +476,11 @@ impl SsdpEmitter<'_> {
             return;
         }
         let enrich_timeout = self.enrich_timeout.min(remaining);
-        let stable = hit
-            .unique_service_name
-            .as_deref()
-            .unwrap_or(&hit.location)
-            .to_owned();
+        if !self.seen.insert(&hit) {
+            return;
+        }
+        let uuid = hit.device_usn().map(str::to_owned);
+        let stable = uuid.as_deref().unwrap_or(&hit.location).to_owned();
         match hit.protocol {
             DiscoveryProtocol::Dlna if self.wants_dlna => {
                 let receiver = Receiver {
@@ -468,7 +491,7 @@ impl SsdpEmitter<'_> {
                     port: None,
                     wss_port: None,
                     location: Some(hit.location.clone()),
-                    uuid: hit.unique_service_name.clone(),
+                    uuid,
                 };
                 send(self.events, DiscoveryEvent::Found(receiver.clone())).await;
                 let loaded = tokio::select! {
@@ -502,7 +525,7 @@ impl SsdpEmitter<'_> {
                     port,
                     wss_port: None,
                     location: Some(hit.location),
-                    uuid: hit.unique_service_name,
+                    uuid,
                 };
                 send(self.events, DiscoveryEvent::Found(receiver.clone())).await;
                 let client = crate::roku::RokuClient::new(
@@ -557,7 +580,7 @@ impl SsdpEmitter<'_> {
                                         .and_then(|url| url.port_or_known_default()),
                                     wss_port: None,
                                     location: Some(hit.location),
-                                    uuid: hit.unique_service_name,
+                                    uuid,
                                 }),
                             )
                             .await;
@@ -595,6 +618,197 @@ async fn report_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    async fn ssdp_events(
+        protocol: DiscoveryProtocol,
+        usns: &[Option<&str>],
+        different_locations: bool,
+        expected_requests: u64,
+    ) -> (String, Vec<DiscoveryEvent>) {
+        let server = MockServer::start().await;
+        let description = r#"<root><device>
+            <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
+            <friendlyName>Test receiver</friendlyName>
+            <friendly-device-name>Test receiver</friendly-device-name>
+            <serviceList><service>
+                <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+                <serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>
+                <SCPDURL>/avtransport.xml</SCPDURL><controlURL>/control</controlURL>
+                <eventSubURL>/events</eventSubURL>
+            </service></serviceList>
+        </device></root>"#;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(description))
+            .expect(expected_requests)
+            .mount(&server)
+            .await;
+        let (events, mut receiver) = mpsc::channel(64);
+        let cancellation = CancellationToken::new();
+        let http = Client::new();
+        let mut emitter = SsdpEmitter {
+            wants_dlna: true,
+            wants_roku: true,
+            wants_generic_dial: true,
+            enrich_timeout: Duration::from_secs(3),
+            http: &http,
+            events: &events,
+            cancellation: &cancellation,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            seen: SeenHits::default(),
+        };
+        let location = format!("{}/device.xml", server.uri());
+        for (index, usn) in usns.iter().enumerate() {
+            emitter
+                .emit(DiscoveryHit {
+                    protocol,
+                    location: if different_locations {
+                        format!("{}/device-{index}.xml", server.uri())
+                    } else {
+                        location.clone()
+                    },
+                    search_target: None,
+                    unique_service_name: usn.map(str::to_owned),
+                    server: None,
+                    source: *server.address(),
+                })
+                .await;
+        }
+        let mut result = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            result.push(event);
+        }
+        server.verify().await;
+        (location, result)
+    }
+
+    #[tokio::test]
+    async fn usn_variants_emit_and_enrich_once_per_protocol_even_at_different_locations() {
+        for (protocol, prefix) in [
+            (DiscoveryProtocol::Dlna, "dlna"),
+            (DiscoveryProtocol::Dial, "dial"),
+            (DiscoveryProtocol::Roku, "roku"),
+        ] {
+            let (_, events) = ssdp_events(
+                protocol,
+                &[
+                    Some(" uuid:Device-X ::upnp:rootdevice "),
+                    Some("uuid:Device-X::urn:schemas-upnp-org:device:MediaRenderer:1"),
+                    Some("uuid:Device-X"),
+                ],
+                true,
+                1,
+            )
+            .await;
+            let found: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    DiscoveryEvent::Found(receiver) => Some(receiver),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].id.0, format!("{prefix}:uuid:Device-X"));
+            assert_eq!(found[0].uuid.as_deref(), Some("uuid:Device-X"));
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !matches!(event, DiscoveryEvent::Error { .. }))
+            );
+            for event in events {
+                if let DiscoveryEvent::Updated(receiver) = event {
+                    assert_eq!(receiver.id.0, format!("{prefix}:uuid:Device-X"));
+                    assert_eq!(receiver.uuid.as_deref(), Some("uuid:Device-X"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_usn_retains_location_fallback_and_no_uuid() {
+        let (location, events) =
+            ssdp_events(DiscoveryProtocol::Dlna, &[None, None], false, 1).await;
+        let found: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                DiscoveryEvent::Found(receiver) => Some(receiver),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id.0, format!("dlna:{location}"));
+        assert_eq!(found[0].uuid, None);
+    }
+
+    #[tokio::test]
+    async fn different_uuids_at_the_same_location_emit_and_enrich_once() {
+        let (_, events) = ssdp_events(
+            DiscoveryProtocol::Dlna,
+            &[
+                Some("uuid:root::upnp:rootdevice"),
+                Some("uuid:renderer::urn:schemas-upnp-org:device:MediaRenderer:1"),
+            ],
+            false,
+            1,
+        )
+        .await;
+        let ids: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                DiscoveryEvent::Found(receiver) => Some(receiver.id.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["dlna:uuid:root"]);
+    }
+
+    #[tokio::test]
+    async fn different_uuids_at_the_same_ip_with_different_locations_both_emit() {
+        let (_, events) = ssdp_events(
+            DiscoveryProtocol::Dlna,
+            &[
+                Some("uuid:first::upnp:rootdevice"),
+                Some("uuid:second::upnp:rootdevice"),
+            ],
+            true,
+            2,
+        )
+        .await;
+        let ids: HashSet<_> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                DiscoveryEvent::Found(receiver) => Some(receiver.id.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            HashSet::from(["dlna:uuid:first".into(), "dlna:uuid:second".into()])
+        );
+    }
+
+    #[test]
+    fn legacy_upnp_ids_match_without_changing_other_protocols_or_ipv6_fallbacks() {
+        for protocol in [
+            ReceiverProtocol::Dlna,
+            ReceiverProtocol::Dial,
+            ReceiverProtocol::Roku,
+        ] {
+            let old = format!("{}:uuid:Device-X::upnp:rootdevice", protocol.as_str());
+            assert_eq!(protocol.normalize_id(&old), "uuid:Device-X");
+            assert_eq!(protocol.normalize_id("uuid:Device-X"), "uuid:Device-X");
+            let location = format!("{}:http://[2001:db8::1]/device.xml", protocol.as_str());
+            assert_eq!(protocol.normalize_id(&location), location);
+        }
+        assert_eq!(
+            ReceiverProtocol::GoogleCast.normalize_id("cast::service"),
+            "cast::service"
+        );
+        assert_eq!(
+            ReceiverProtocol::PlayBridge.normalize_id("native::service"),
+            "native::service"
+        );
+    }
 
     #[tokio::test]
     async fn cancellation_closes_discovery_stream() {

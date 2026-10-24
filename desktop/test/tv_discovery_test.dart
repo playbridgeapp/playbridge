@@ -3,6 +3,32 @@ import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 import 'package:playbridge_desktop/tv_discovery.dart';
 
 void main() {
+  test('UPnP USN identity is protocol scoped and leaves other ids untouched',
+      () {
+    for (final protocol in [TvProtocol.dlna, TvProtocol.roku]) {
+      expect(receiverStableId(protocol, ' uuid:Device-X::upnp:rootdevice '),
+          'uuid:Device-X');
+      expect(
+          receiverStableId(
+              protocol, '${protocol.name}:uuid:Device-X::urn:service'),
+          'uuid:Device-X');
+      expect(receiverStableId(protocol, 'uuid:Device-X'), 'uuid:Device-X');
+      expect(
+          receiverStableId(
+              protocol, '${protocol.name}:http://[2001:db8::1]/device.xml'),
+          '${protocol.name}:http://[2001:db8::1]/device.xml');
+    }
+    for (final protocol in [
+      TvProtocol.googleCast,
+      TvProtocol.playBridge,
+      TvProtocol.webBrowser
+    ]) {
+      expect(receiverStableId(protocol, 'id::service'), 'id::service');
+    }
+    expect(receiverIdentityKey(TvProtocol.dlna, 'uuid:Device-X'),
+        isNot(receiverIdentityKey(TvProtocol.roku, 'uuid:Device-X')));
+  });
+
   test('keeps a location-only DLNA receiver connectable', () {
     final device = discoveredTvFromRust(const ReceiverInfo(
       id: 'dlna:receiver-1',
