@@ -17,7 +17,7 @@ struct DeviceConnectionSheet: View {
     @State private var pairingCode = ""
     @FocusState private var pairingFieldFocused: Bool
     @State private var showUnavailable = false
-    @State private var vpnDismissed = false
+    @State private var vpnInfo = false
     @State private var wifiDismissed = false
     @State private var listOffset: CGFloat = 0
     @State private var userPicked = false
@@ -70,9 +70,6 @@ struct DeviceConnectionSheet: View {
             pathMonitor.stop()
         }
         .onAppear { restoreDismissedBanners() }
-        .onChange(of: pathMonitor.vpnActive) { active in
-            if !active { clearDismissedBanner("vpn") }
-        }
         .onChange(of: pathMonitor.onWiFi) { onWiFi in
             if onWiFi { clearDismissedBanner("wifi") }
         }
@@ -137,16 +134,30 @@ struct DeviceConnectionSheet: View {
                 Text("Play on")
                     .font(Theme.font(size: 22, weight: .bold))
                     .foregroundColor(Theme.onSurface)
-                HStack(spacing: 4) {
-                    Image(systemName: pathMonitor.onWiFi ? "wifi" : "antenna.radiowaves.left.and.right")
-                        .font(Theme.font(size: 11, weight: .semibold))
-                        .accessibilityHidden(true)
-                    Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
+                HStack(spacing: 6) {
+                    HStack(spacing: 4) {
+                        Image(systemName: pathMonitor.onWiFi ? "wifi" : "antenna.radiowaves.left.and.right")
+                            .font(Theme.font(size: 11, weight: .semibold))
+                            .accessibilityHidden(true)
+                        Text(PlayOnCatalog.networkSubtitle(onWiFi: pathMonitor.onWiFi, wifiName: nil))
+                    }
+                    .font(Theme.font(size: 12))
+                    .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
+                    .accessibilityElement(children: .combine)
+                    if pathMonitor.onWiFi && pathMonitor.vpnActive {
+                        Button { vpnInfo.toggle() } label: {
+                            Text("VPN")
+                                .font(Theme.font(size: 11, weight: .bold))
+                                .foregroundColor(Color(hex: 0xFFB74D))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Color(hex: 0xFFB74D).opacity(0.16), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("About VPN and casting")
+                    }
                 }
-                .font(Theme.font(size: 12))
-                .foregroundColor(pathMonitor.onWiFi ? Theme.onSurfaceVariant : Theme.tertiary)
             }
-            .accessibilityElement(children: .combine)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: close) {
                 Image(systemName: "xmark")
@@ -180,17 +191,19 @@ struct DeviceConnectionSheet: View {
                     .accessibilityLabel("Dismiss")
                 }
             }
-        } else if pathMonitor.vpnActive && !vpnBannerHidden {
+        } else if pathMonitor.vpnActive && (vpnInfo || vpnNothingFound) {
             banner(title: "VPN may block casting",
                    message: "Some VPNs hide your local network. If devices don’t appear, pause the VPN and try again.",
                    systemImage: "shield",
                    tint: Theme.primary) {
-                Button { dismissBanner("vpn") } label: {
-                    Image(systemName: "xmark").frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("Dismiss")
+                EmptyView()
             }
         }
+    }
+
+    /// The tip stands in for a failed search. The header pill can open it before that.
+    private var vpnNothingFound: Bool {
+        !vm.nearbySearchActive && sections.nearby.isEmpty && sections.ready.isEmpty
     }
 
     private var nowCard: some View {
@@ -999,7 +1012,9 @@ struct DeviceConnectionSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
                 Text(message).font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
-                accessory()
+                if Accessory.self != EmptyView.self {
+                    accessory()
+                }
             }
             Spacer(minLength: 0)
         }
@@ -1293,23 +1308,19 @@ struct DeviceConnectionSheet: View {
     }
 
     private var wifiBannerHidden: Bool { wifiDismissed || nav.playOnDismissedBanners.contains("wifi") }
-    private var vpnBannerHidden: Bool { vpnDismissed || nav.playOnDismissedBanners.contains("vpn") }
 
     private func restoreDismissedBanners() {
         if nav.playOnDismissedBanners.contains("wifi") { wifiDismissed = true }
-        if nav.playOnDismissedBanners.contains("vpn") { vpnDismissed = true }
     }
 
     private func dismissBanner(_ key: String) {
         nav.playOnDismissedBanners.insert(key)
         if key == "wifi" { wifiDismissed = true }
-        if key == "vpn" { vpnDismissed = true }
     }
 
     private func clearDismissedBanner(_ key: String) {
         nav.playOnDismissedBanners.remove(key)
         if key == "wifi" { wifiDismissed = false }
-        if key == "vpn" { vpnDismissed = false }
     }
 
     private func usedText(_ date: Date?) -> String? {
