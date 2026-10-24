@@ -13,14 +13,34 @@ struct DashboardScreen: View {
     @ScaledMetric(relativeTo: .body) private var largeTileHeight = 150.0
     @ScaledMetric(relativeTo: .body) private var smallTileHeight = 120.0
 
-    private var isConnected: Bool { vm.isConnected }
-    private var isSecure: Bool {
-        if case .connected(_, let secure) = vm.state { return secure }
-        return false
-    }
-    private var connectedDeviceName: String? {
-        if case .connected(let name, _) = vm.state { return name }
-        return vm.pairedDevice?.name
+    /// Socket security only counts while playback is aimed at the PlayBridge receiver.
+    /// AirPlay writes `secure: false` into `state` and must not amber a standing-by pill.
+    private var playOnDashboard: PlayOnDashboardStatus {
+        let route: PlayOnRoute
+        if vm.isExternalReceiver {
+            route = .external
+        } else if vm.isAirPlay {
+            route = .airPlay
+        } else if vm.playBridgeOutputSelected {
+            route = .playBridge
+        } else {
+            route = .thisPhone
+        }
+        let socketSecure: Bool
+        if vm.playBridgeOutputSelected, case .connected(_, let secure) = vm.state {
+            socketSecure = secure
+        } else {
+            socketSecure = false
+        }
+        return PlayOnCatalog.dashboardStatus(
+            route: route,
+            socketConnected: vm.playBridgeLinkConnected,
+            nativeName: vm.pairedDevice?.name,
+            externalName: vm.isAirPlay ? vm.airPlay.routeName : vm.externalReceiver?.name,
+            externalReady: vm.isExternalReceiver && vm.isConnected,
+            airPlayReady: vm.isAirPlay && vm.airPlay.routeAvailable,
+            socketSecure: socketSecure
+        )
     }
 
     private func isSource(_ destination: AppScreen) -> Bool {
@@ -55,12 +75,7 @@ struct DashboardScreen: View {
                     Spacer().frame(height: 16)
 
                     // ── Interactive Connection Status Pill ────────────────────────────
-                    StatusPill(
-                        isConnected: isConnected,
-                        isSecure: isSecure,
-                        name: connectedDeviceName,
-                        action: { nav.openPlayOn() }
-                    )
+                    StatusPill(status: playOnDashboard, action: { nav.openPlayOn() })
 
                     Spacer().frame(height: 36)
 
@@ -99,9 +114,9 @@ struct DashboardScreen: View {
             DashboardTile(id: "browser", title: "Browser", subtitle: "Browse the web", systemImage: "globe",
                           gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)], isActive: isSource(.browser),
                           action: { nav.openBrowser() }),
-            DashboardTile(id: "connection", title: "Connection", subtitle: isConnected ? "Connected" : "Not connected",
+            DashboardTile(id: "connection", title: "Play on", subtitle: playOnDashboard.tileSubtitle,
                           systemImage: "tv",
-                          gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
+                          gradient: playOnDashboard.isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
                           isActive: false, action: { nav.openPlayOn() }),
             DashboardTile(id: "phone-files", title: "Media Library", subtitle: "Videos, images & audio", systemImage: "folder",
                           gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)], isActive: isSource(.phoneFiles),
@@ -504,52 +519,43 @@ struct MeshBackground: View {
 
 
 struct StatusPill: View {
-    let isConnected: Bool
-    let isSecure: Bool
-    let name: String?
+    let status: PlayOnDashboardStatus
     let action: () -> Void
 
     @State private var pulse = false
+
+    private var accent: Color { status.secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000) }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant.opacity(0.4))
+                    .fill(status.isPlayingOn ? accent : Theme.onSurfaceVariant.opacity(0.4))
                     .frame(width: 8, height: 8)
-                    .opacity(isConnected ? (pulse ? 0.4 : 1.0) : 1.0)
-                    .animation(isConnected ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default, value: pulse)
+                    .opacity(status.isPlayingOn ? (pulse ? 0.4 : 1.0) : 1.0)
+                    .animation(status.isPlayingOn ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default, value: pulse)
 
-                Text(text)
+                Text(status.pillLabel)
                     .font(Theme.font(size: 12, weight: .medium))
-                    .foregroundColor(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant)
+                    .foregroundColor(status.isPlayingOn ? accent : Theme.onSurfaceVariant)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
+            .frame(maxWidth: 280)
             .background(
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(isConnected ? (isSecure ? Color(hex: 0x4CAF50).opacity(0.15) : Color(hex: 0xFFA000).opacity(0.15)) : Theme.surfaceContainer.opacity(0.6))
+                    .fill(status.isPlayingOn ? accent.opacity(0.15) : Theme.surfaceContainer.opacity(0.6))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(isConnected ? (isSecure ? Color(hex: 0x4CAF50).opacity(0.3) : Color(hex: 0xFFA000).opacity(0.3)) : Theme.outlineVariant.opacity(0.2), lineWidth: 1)
+                    .stroke(status.isPlayingOn ? accent.opacity(0.3) : Theme.outlineVariant.opacity(0.2), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
-        .onAppear {
-            pulse = true
-        }
-    }
-
-    private var text: String {
-        if isConnected {
-            let displayName = name ?? "TV"
-            let truncatedName = displayName.count > 18 ? String(displayName.prefix(15)) + "..." : displayName
-            return isSecure ? "Connected to \(truncatedName) securely" : "Connected to \(displayName)"
-        } else {
-            return "No device connected"
-        }
+        .onAppear { pulse = status.isPlayingOn }
+        .onChange(of: status.isPlayingOn) { playing in pulse = playing }
     }
 }
 

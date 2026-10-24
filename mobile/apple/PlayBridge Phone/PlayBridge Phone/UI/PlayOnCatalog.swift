@@ -41,6 +41,54 @@ struct PlayOnGroups: Equatable {
     var unavailable: [PlayOnListedDevice]
 }
 
+/// The output the dashboard is describing. AirPlay with a live PlayBridge socket stands by.
+enum PlayOnRoute: Equatable {
+    case thisPhone
+    case playBridge
+    case airPlay
+    case external
+}
+
+/// Dashboard pill and Play on tile. A live socket is standing by until that receiver is the selected route.
+struct PlayOnDashboardStatus: Equatable {
+    enum State: Equatable {
+        case notConnected
+        case standingBy
+        case playingOn
+    }
+
+    var state: State = .notConnected
+    var deviceName: String = "TV"
+    var secure: Bool = false
+
+    var isConnected: Bool { state != .notConnected }
+    var isPlayingOn: Bool { state == .playingOn }
+
+    var pillSuffix: String {
+        switch state {
+        case .standingBy: return " · Standing by"
+        case .playingOn where !secure: return " · not encrypted"
+        default: return ""
+        }
+    }
+
+    var tileSubtitle: String {
+        switch state {
+        case .notConnected: return "Not connected"
+        case .standingBy: return "Standing by"
+        case .playingOn: return "Connected"
+        }
+    }
+
+    var pillLabel: String {
+        switch state {
+        case .notConnected: return "No device connected"
+        case .playingOn: return "Playing on \(deviceName)\(pillSuffix)"
+        case .standingBy: return "\(deviceName)\(pillSuffix)"
+        }
+    }
+}
+
 enum PlayOnCatalog {
     /// Saved rows split by reachability, most recently used first.
     /// Nearby drops a discovery only when it is the same receiver as a saved row.
@@ -136,6 +184,42 @@ enum PlayOnCatalog {
         let title = castingTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !title.isEmpty { return "Casting \(title)" }
         return "Connected · \(protocolName)"
+    }
+
+    /// Presentation follows the selected route. A live PlayBridge socket can stand by for This phone or AirPlay.
+    /// External and ready AirPlay routes stay secure even when the native socket is plain WebSocket.
+    static func dashboardStatus(
+        route: PlayOnRoute,
+        socketConnected: Bool,
+        nativeName: String?,
+        externalName: String?,
+        externalReady: Bool,
+        airPlayReady: Bool = false,
+        socketSecure: Bool = false
+    ) -> PlayOnDashboardStatus {
+        switch route {
+        case .external:
+            guard externalReady else { return PlayOnDashboardStatus() }
+            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(externalName), secure: true)
+        case .airPlay:
+            if socketConnected {
+                return PlayOnDashboardStatus(state: .standingBy, deviceName: receiverName(nativeName))
+            }
+            guard airPlayReady else { return PlayOnDashboardStatus() }
+            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(externalName), secure: true)
+        case .playBridge:
+            guard socketConnected else { return PlayOnDashboardStatus() }
+            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(nativeName), secure: socketSecure)
+        case .thisPhone:
+            guard socketConnected else { return PlayOnDashboardStatus() }
+            return PlayOnDashboardStatus(state: .standingBy, deviceName: receiverName(nativeName))
+        }
+    }
+
+    private static func receiverName(_ name: String?) -> String {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let shown = displayName(trimmed)
+        return shown.isEmpty ? "TV" : shown
     }
 
     /// Redacted status for the existing share sheet. No tokens, URLs, or headers.

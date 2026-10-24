@@ -6,9 +6,10 @@ import Foundation
         identity()
         subtitles()
         networkAndStatus()
+        dashboardStatus()
         relativeTime()
         preferences()
-        print("PASS: Play on grouping, subtitles, network label, and auto-connect default")
+        print("PASS: Play on grouping, subtitles, network label, auto-connect default, and dashboard status")
     }
 
     private static func device(
@@ -124,6 +125,81 @@ import Foundation
         precondition(PlayOnCatalog.nowStatus(connecting: false, failed: false, castingTitle: nil, protocolName: "Google Cast") == "Connected · Google Cast")
         let report = PlayOnCatalog.connectionDiagnostics(state: "error", destination: "Living Room", protocolName: "PlayBridge", scanning: true)
         precondition(report.contains("State: error") && report.contains("Destination: Living Room") && !report.contains("http"), "diagnostics stay free of URLs")
+    }
+
+    private static func dashboardStatus() {
+        let receiver = "Living-Room-Computer.local"
+        func status(
+            _ route: PlayOnRoute,
+            socket: Bool,
+            secure: Bool = false,
+            native: String? = receiver,
+            external: String? = nil,
+            externalReady: Bool = false,
+            airPlayReady: Bool = false
+        ) -> PlayOnDashboardStatus {
+            PlayOnCatalog.dashboardStatus(
+                route: route, socketConnected: socket, nativeName: native, externalName: external,
+                externalReady: externalReady, airPlayReady: airPlayReady, socketSecure: secure
+            )
+        }
+
+        let playing = status(.playBridge, socket: true)
+        precondition(playing.state == .playingOn && playing.isConnected && playing.isPlayingOn)
+        precondition(playing.tileSubtitle == "Connected")
+        precondition(playing.deviceName == "Living-Room-Computer")
+        precondition(playing.pillLabel == "Playing on Living-Room-Computer · not encrypted")
+
+        for secure in [false, true] {
+            let standing = status(.thisPhone, socket: true, secure: secure)
+            precondition(standing.state == .standingBy && standing.isConnected && !standing.isPlayingOn && !standing.secure)
+            precondition(standing.pillSuffix == " · Standing by" && standing.tileSubtitle == "Standing by")
+            precondition(standing.deviceName == "Living-Room-Computer")
+            precondition(standing.pillLabel == "Living-Room-Computer · Standing by")
+        }
+
+        let securePlay = status(.playBridge, socket: true, secure: true)
+        precondition(securePlay.isPlayingOn && securePlay.secure && securePlay.pillSuffix.isEmpty)
+        precondition(securePlay.pillLabel == "Playing on Living-Room-Computer")
+
+        let plain = status(.playBridge, socket: true, secure: false)
+        precondition(plain.isPlayingOn && !plain.secure && plain.pillSuffix == " · not encrypted")
+        precondition(plain.pillLabel == "Playing on Living-Room-Computer · not encrypted")
+
+        for route in [PlayOnRoute.thisPhone, .playBridge] {
+            let idle = status(route, socket: false)
+            precondition(idle.state == .notConnected && !idle.isConnected && !idle.isPlayingOn)
+            precondition(idle.pillSuffix.isEmpty && idle.tileSubtitle == "Not connected")
+            precondition(idle.pillLabel == "No device connected")
+        }
+
+        for pair in [(false, false), (true, false), (true, true)] {
+            let external = status(.external, socket: pair.0, secure: pair.1, external: "Bedroom", externalReady: true)
+            precondition(external.state == .playingOn && external.isPlayingOn && external.secure)
+            precondition(external.pillSuffix.isEmpty && external.tileSubtitle == "Connected")
+            precondition(external.deviceName == "Bedroom" && external.pillLabel == "Playing on Bedroom")
+        }
+        let stripped = status(.external, socket: false, external: "Bedroom.local", externalReady: true)
+        precondition(stripped.deviceName == "Bedroom" && stripped.secure && stripped.pillSuffix.isEmpty)
+
+        let notReady = status(.external, socket: true, secure: true, external: receiver, externalReady: false)
+        precondition(notReady == PlayOnDashboardStatus())
+
+        precondition(status(.playBridge, socket: true, native: nil).deviceName == "TV")
+        precondition(status(.playBridge, socket: true, native: "   ").deviceName == "TV")
+        precondition(status(.playBridge, socket: true, native: "  Office.local  ").deviceName == "Office")
+        precondition(status(.external, socket: false, native: nil, external: receiver, externalReady: true).deviceName == "Living-Room-Computer")
+        precondition(status(.external, socket: false, native: nil, external: nil, externalReady: true).deviceName == "TV")
+
+        let airStandby = status(.airPlay, socket: true, secure: true, external: "Kitchen Speaker", airPlayReady: true)
+        precondition(airStandby.state == .standingBy && !airStandby.secure && airStandby.deviceName == "Living-Room-Computer")
+        precondition(airStandby.pillLabel == "Living-Room-Computer · Standing by")
+
+        let airPlay = status(.airPlay, socket: false, external: "Kitchen Speaker.local", airPlayReady: true)
+        precondition(airPlay.state == .playingOn && airPlay.secure && airPlay.deviceName == "Kitchen Speaker")
+        precondition(airPlay.pillSuffix.isEmpty && airPlay.pillLabel == "Playing on Kitchen Speaker")
+
+        precondition(status(.airPlay, socket: false, external: "Kitchen Speaker", airPlayReady: false) == PlayOnDashboardStatus())
     }
 
     private static func relativeTime() {
