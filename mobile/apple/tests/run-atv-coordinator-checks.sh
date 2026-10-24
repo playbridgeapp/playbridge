@@ -20,7 +20,7 @@ ui = (app/'UI/AtvPairingViews.swift').read_text()
 for value in ['Pairing code', 'Retry pairing', 'Cancel pairing', 'Pair TV', '6 hexadecimal characters', 'Open PlayBridge settings for Local Network access', 'privacySensitive()', 'coordinator.cancelPairing()', 'coordinator.forget(record.fingerprint)']:
     assert value in ui, value
 assert 'UIApplication.openSettingsURLString' in ui
-assert 'AtvPairedTVsSheet' in (app/'UI/ConnectionScreen.swift').read_text()
+assert 'AtvPairedTVsSheet' in (app/'UI/DeviceConnectionSheet.swift').read_text()
 assert 'AtvPairedTVsSheet' in (app/'UI/RemoteControlView.swift').read_text()
 assert 'AtvPairingPresentation.pairingAction' in (app/'UI/RemoteControlScreen.swift').read_text()
 print('PASS: pairing accessibility/actions, Settings recovery and receiver-management integration fixtures')
