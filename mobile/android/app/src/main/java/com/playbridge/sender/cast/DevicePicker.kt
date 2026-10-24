@@ -379,10 +379,6 @@ fun DeviceConnectionDialog(
         onDispose { viewModel.releaseDiscovery() }
     }
 
-    LaunchedEffect(history) {
-        viewModel.pingSavedDevices(history)
-    }
-
     fun isActive(device: TvDevice): Boolean {
         val external = activeExternalDevice
         if (external != null && ConnectionMerge.isSameDevice(device, external)) {
@@ -561,7 +557,7 @@ fun DeviceConnectionDialog(
             ) {
                 SectionLabel("PlayBridge")
                 IconButton(onClick = {
-                    viewModel.pingSavedDevices(history)
+                    viewModel.pingSavedDevices()
                     viewModel.rescan()
                 }) {
                     Icon(

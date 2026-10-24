@@ -158,10 +158,6 @@ fun ConnectionScreen(
         onDispose { viewModel.releaseDiscovery() }
     }
 
-    LaunchedEffect(history) {
-        viewModel.pingSavedDevices(history)
-    }
-
     val playBridgeSaved = remoteTVRows.map { row ->
         UnifiedDevice(row.device, history.firstOrNull { ConnectionMerge.isSameDevice(it, row.device) },
             row.receiverReachable || row.tvReachable, row.device.lastConnected, row.status)

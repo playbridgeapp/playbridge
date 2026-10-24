@@ -21,6 +21,7 @@ class NetworkStatusRepository(context: Context) {
     data class Status(
         val onLocalNetwork: Boolean = true,
         val vpnActive: Boolean = false,
+        val networkHandle: Long? = null,
     )
 
     private val appContext = context.applicationContext
@@ -92,7 +93,7 @@ class NetworkStatusRepository(context: Context) {
         if (networks.isEmpty()) {
             onLocal = false
         }
-        return Status(onLocalNetwork = onLocal, vpnActive = vpn)
+        return Status(onLocalNetwork = onLocal, vpnActive = vpn, networkHandle = cm.activeNetwork?.networkHandle)
     }
 
     companion object {

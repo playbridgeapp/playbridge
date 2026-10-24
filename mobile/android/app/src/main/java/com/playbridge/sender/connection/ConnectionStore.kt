@@ -77,6 +77,25 @@ class ConnectionStore(private val context: Context) {
         }
     }
 
+    /** Discovery refreshes endpoints, not the order or last-connected time of saved receivers. */
+    suspend fun refreshDiscoveredEndpoints(discovered: List<TvDevice>) {
+        context.dataStore.edit { prefs ->
+            val history = readHistory(prefs)
+            val refreshed = ConnectionMerge.refreshHistoryEndpoints(history, discovered)
+            if (refreshed != history) writeHistory(prefs, refreshed)
+
+            val saved = prefs[TV_DEVICE]?.let {
+                runCatching { unprotect(protocolJson.decodeFromString<TvDevice>(it)) }.getOrNull()
+            }
+            if (saved != null) {
+                val updated = ConnectionMerge.refreshHistoryEndpoints(listOf(saved), discovered).single()
+                if (updated != saved) {
+                    prefs[TV_DEVICE] = protocolJson.encodeToString(TvDevice.serializer(), protect(updated))
+                }
+            }
+        }
+    }
+
     /**
      * Wipe the stored pairing token of the matching history entry (by uuid, falling
      * back to ip/port) without touching any other saved TV. Used when a TV rejects

@@ -31,8 +31,9 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.net.Socket
 import java.net.InetSocketAddress
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 class ConnectionViewModel(
     application: Application,
@@ -69,41 +70,46 @@ class ConnectionViewModel(
     private val _savedDevicesOnlineStatus = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val savedDevicesOnlineStatus: StateFlow<Map<String, Boolean>> = _savedDevicesOnlineStatus.asStateFlow()
 
-    fun pingSavedDevices(devices: List<TvDevice>) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val results = devices.map { device ->
-                async {
-                    val descriptionPort = device.descriptionUrl?.let { url ->
-                        runCatching {
-                            java.net.URI(url).let { uri ->
-                                uri.port.takeIf { it > 0 }
-                                    ?: when (uri.scheme?.lowercase()) {
-                                        "https" -> 443
-                                        "http" -> 80
-                                        else -> null
-                                    }
-                            }
-                        }.getOrNull()
-                    }
-                    val portToPing = device.wssPort ?: device.port.takeIf { it > 0 } ?: descriptionPort
-                    val online = portToPing != null && device.addresses.ifEmpty { listOf(device.ip) }
-                        .filter(String::isNotBlank)
-                        .any { address ->
-                            try {
-                                Socket().use { socket ->
-                                    socket.connect(InetSocketAddress(address, portToPing), 600)
-                                    true
-                                }
-                            } catch (_: Exception) {
-                                false
-                            }
+    private val savedDeviceReachability = SavedDeviceReachability(
+        scope = viewModelScope,
+        saved = deviceHistory,
+        discovered = discoveredDevices,
+        network = networkStatus.map { it.networkHandle },
+        probe = ::pingSavedDevice,
+    ) { results ->
+        _savedDevicesOnlineStatus.value = results
+        remoteTVDirectory.updatePings(results)
+    }
+
+    fun pingSavedDevices() = savedDeviceReachability.retry()
+
+    private suspend fun pingSavedDevice(device: TvDevice): Boolean = withContext(Dispatchers.IO) {
+        val descriptionPort = device.descriptionUrl?.let { url ->
+            runCatching {
+                java.net.URI(url).let { uri ->
+                    uri.port.takeIf { it > 0 }
+                        ?: when (uri.scheme?.lowercase()) {
+                            "https" -> 443
+                            "http" -> 80
+                            else -> null
                         }
-                    device.endpointKey.toString() to online
                 }
-            }.awaitAll().toMap()
-            _savedDevicesOnlineStatus.value = results
-            remoteTVDirectory.updatePings(results)
+            }.getOrNull()
         }
+        val portToPing = device.wssPort ?: device.port.takeIf { it > 0 } ?: descriptionPort
+        portToPing != null && device.addresses.ifEmpty { listOf(device.ip) }
+            .filter(String::isNotBlank)
+            .any { address ->
+                currentCoroutineContext().ensureActive()
+                try {
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress(address, portToPing), 600)
+                        true
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+            }
     }
 
     private val _autoConnectEnabled = MutableStateFlow(prefs.getBoolean("auto_connect_tv", true))
@@ -204,7 +210,7 @@ class ConnectionViewModel(
 
         // Handle Rust discovery updates for the saved native TV.
         viewModelScope.launch {
-            discoveryRepository.devices.combine(tvDevice) { devices, savedDevice ->
+            combine(discoveryRepository.devices, tvDevice, deviceHistory) { devices, savedDevice, _ ->
                 Pair(devices, savedDevice)
             }.collect { (devices, savedDevice) ->
                 if (savedDevice != null && savedDevice.uuid.isNotEmpty()) {
@@ -228,10 +234,9 @@ class ConnectionViewModel(
                             Log.i(TAG, "Saved TV endpoint changed (${savedDevice.ip}:${savedDevice.port} → ${updatedDevice.ip}:${updatedDevice.port}); re-arming auto-connect")
                             hasAttemptedInitialConnect = false
                         }
-                        connectionStore.saveTvDevice(updatedDevice)
-                        connectionStore.addToHistory(updatedDevice)
                     }
                 }
+                connectionStore.refreshDiscoveredEndpoints(devices)
             }
         }
 

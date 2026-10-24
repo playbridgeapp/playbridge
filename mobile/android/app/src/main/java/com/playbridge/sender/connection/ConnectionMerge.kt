@@ -25,7 +25,8 @@ object ConnectionMerge {
             ?: return device
         return device.copy(
             ip = match.ip,
-            addresses = match.addresses,
+            addresses = (listOf(match.ip) + match.addresses + listOf(device.ip) + device.addresses)
+                .filter(String::isNotBlank).distinct(),
             port = match.port,
             name = match.name,
             wssPort = match.wssPort,
@@ -38,6 +39,14 @@ object ConnectionMerge {
     fun isSameDevice(a: TvDevice, b: TvDevice): Boolean =
         a.resolvedProtocol == b.resolvedProtocol &&
             ((a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port))
+
+    /** Refresh saved receiver endpoints in place without changing pairing data or recency. */
+    fun refreshHistoryEndpoints(history: List<TvDevice>, discovered: List<TvDevice>): List<TvDevice> =
+        history.map { device ->
+            if (device.resolvedProtocol == CastProtocol.PLAYBRIDGE && device.uuid.isNotEmpty()) {
+                withDiscoveredEndpoint(device, discovered)
+            } else device
+        }
 
     /**
      * Put [device] at the front of its protocol class while replacing older endpoints
