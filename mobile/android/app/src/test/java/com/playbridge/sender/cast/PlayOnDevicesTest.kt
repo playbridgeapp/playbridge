@@ -81,6 +81,7 @@ class PlayOnDevicesTest {
     fun `desktop hostnames drop the local suffix`() {
         val mac = tv("Atuls-MacBook-Air.local", "10.0.0.9")
         assertEquals("Atuls-MacBook-Air", mac.playOnName)
+        assertEquals("Kodi (Atuls-MacBook-Air)", tv("Kodi (Atuls-MacBook-Air.local)", "10.0.0.9").playOnName)
         assertTrue(mac.isDesktopReceiver)
     }
 }

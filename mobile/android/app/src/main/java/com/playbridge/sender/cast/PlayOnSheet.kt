@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -284,7 +285,8 @@ fun PlayOnSheet(
                         PlayOnPage.Roku -> "Roku by IP address"
                         PlayOnPage.Dlna -> "DLNA device by URL"
                         PlayOnPage.FullRemote -> "Full TV remote"
-                    }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (page == PlayOnPage.Devices) Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (network.onLocalNetwork) Icon(Icons.Default.Wifi, null, Modifier.size(14.dp),

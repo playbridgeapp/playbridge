@@ -63,8 +63,8 @@ internal fun groupPlayOnDevices(
         ordered.filterNot { it.reachable })
 }
 
-/** Receiver names as people know them: hostnames lose their mDNS ".local" suffix. */
-internal val TvDevice.playOnName: String get() = name.removeSuffix(".local")
+/** Receiver names as people know them: hostnames lose their mDNS ".local", also inside "Kodi (Host.local)". */
+internal val TvDevice.playOnName: String get() = name.replace(".local)", ")").removeSuffix(".local")
 
 internal data class PlayOnStatus(
     val state: State = State.NOT_CONNECTED,
