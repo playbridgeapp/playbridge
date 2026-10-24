@@ -5,9 +5,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cast
@@ -32,7 +35,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Laptop
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tv
@@ -40,11 +45,14 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -68,6 +76,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -245,7 +254,7 @@ fun PlayOnSheet(
     ModalBottomSheet(onDismissRequest = { if (page != PlayOnPage.Devices) back() else dismiss() }, sheetState = sheetState) {
         BackHandler(enabled = page != PlayOnPage.Devices) { back() }
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
-            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (page != PlayOnPage.Devices) IconButton(onClick = ::back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 Column(Modifier.weight(1f).padding(8.dp)) {
                     Text(when (page) {
@@ -268,9 +277,10 @@ fun PlayOnSheet(
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                IconButton(onClick = ::dismiss) { Icon(Icons.Default.Close, "Close Play on") }
+                FilledTonalIconButton(onClick = ::dismiss, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Close, "Close Play on", Modifier.size(18.dp))
+                }
             }
-            HorizontalDivider()
             AnimatedContent(targetState = page, label = "Play on page", transitionSpec = {
                 val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
                 slideInHorizontally { it * direction } togetherWith slideOutHorizontally { -it * direction }
@@ -328,6 +338,8 @@ fun PlayOnSheet(
                                     }
                                 }
                                 groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) }) }
+                                if (groups.nearby.isEmpty()) Text("Looking for TVs on this Wi-Fi…",
+                                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (unavailable.isNotEmpty()) {
                                 HorizontalDivider(Modifier.padding(top = 8.dp))
@@ -343,8 +355,10 @@ fun PlayOnSheet(
                                 if (unavailableExpanded) unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             }
                             if (groups.saved.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
-                            OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth()) {
-                                Icon(Icons.Default.Add, null); Text("Add a device", Modifier.padding(start = 8.dp))
+                            OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary)) {
+                                Icon(Icons.Default.Add, null); Text("Add a device", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
                             }
                         }
                         PlayOnPage.Pair -> PlayOnPairing(connection, (pendingNative ?: tv)?.playOnName ?: "TV", viewModel::submitPairingCode) { (pendingNative ?: tv)?.let(::pick) }
@@ -377,27 +391,34 @@ fun PlayOnSheet(
                             },
                         )
                         PlayOnPage.Actions -> managed?.let { row ->
-                            Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}", style = MaterialTheme.typography.bodySmall)
-                            PlayOnRow("Play on this TV", "Select ${row.device.playOnName}", icon = row.device.playOnIcon, onClick = { pick(row.device) })
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(Modifier.size(44.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), RoundedCornerShape(12.dp)),
+                                    contentAlignment = Alignment.Center) {
+                                    Icon(row.device.playOnIcon, null, tint = MaterialTheme.colorScheme.primary)
+                                }
+                                Text("${row.device.resolvedProtocol.displayName} · ${row.device.ip} · ${usedRelative(row.device.lastConnected)}",
+                                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            HorizontalDivider()
+                            PlayOnRow("Play on this TV", null, icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = { pick(row.device) })
                             val supportsFullRemote = row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
                                 (row.remotePaired || "exo" in row.device.players || remoteRows.any {
                                     ConnectionMerge.isSameDevice(it.device, row.device) && it.tvReachable
                                 })
-                            if (supportsFullRemote) PlayOnRow("Full TV remote",
-                                if (row.remotePaired) "Paired" else "Set up · Power, volume and apps", onClick = {
+                            if (supportsFullRemote) PlayOnRow("Full TV remote", "Power, volume and apps — pair once with a code",
+                                icon = Icons.Default.SettingsRemote, badge = if (row.remotePaired) "Paired" else "Set up", onClick = {
                                     viewModel.selectNativeRemote(row.device)
                                     if (row.remotePaired && openRemote != null) { onDismiss(); openRemote() }
                                     else page = PlayOnPage.FullRemote
                                 })
-                            TextButton(onClick = {
-                                scope.launch {
-                                    val removed = viewModel.forgetPlayOnDevice(row.device)
-                                    if (removed) page = PlayOnPage.Devices
-                                    else notice = "Couldn’t forget the TV. Try again."
-                                }
-                            }) {
-                                Text("Forget this ${if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"}", color = MaterialTheme.colorScheme.error)
-                            }
+                            PlayOnRow("Forget this ${if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"}", null,
+                                icon = Icons.Default.DeleteOutline, danger = true, onClick = {
+                                    scope.launch {
+                                        val removed = viewModel.forgetPlayOnDevice(row.device)
+                                        if (removed) page = PlayOnPage.Devices
+                                        else notice = "Couldn’t forget the TV. Try again."
+                                    }
+                                })
                         }
                         PlayOnPage.FullRemote -> managed?.let { row ->
                             PlayOnFullRemote(row.device, onCancel = { page = PlayOnPage.Actions },
@@ -426,7 +447,8 @@ private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick:
         row.reachable -> "${protocol.displayName} · Ready"
         else -> "${protocol.displayName} · ${usedRelative(row.device.lastConnected)}"
     }, onClick = onClick, icon = row.device.playOnIcon, ready = ready, dimmed = !nearby && !row.reachable,
-        onMore = onMore, isNew = nearby && protocol == CastProtocol.PLAYBRIDGE)
+        onMore = onMore, badge = if (nearby && protocol == CastProtocol.PLAYBRIDGE) "New" else null,
+        highlight = nearby && protocol == CastProtocol.PLAYBRIDGE)
 }
 
 private val TvDevice.playOnIcon: ImageVector get() = when {
@@ -437,8 +459,6 @@ private val TvDevice.playOnIcon: ImageVector get() = when {
     else -> Icons.Default.Tv
 }
 
-private val ReadyGreen = Color(0xFF46D483)
-
 @Composable
 private fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(text.uppercase(), modifier, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
@@ -446,24 +466,33 @@ private fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlayOnRow(name: String, subtitle: String, onClick: () -> Unit, phone: Boolean = false,
+private fun PlayOnRow(name: String, subtitle: String?, onClick: () -> Unit, phone: Boolean = false,
     icon: ImageVector = Icons.Default.Tv, ready: Boolean = false, dimmed: Boolean = false,
-    selected: Boolean = false, isNew: Boolean = false, onMore: (() -> Unit)? = null) {
-    ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold) },
-        supportingContent = {
+    selected: Boolean = false, badge: String? = null, highlight: Boolean = false, danger: Boolean = false,
+    onMore: (() -> Unit)? = null) {
+    val accent = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold, color = if (danger) accent else Color.Unspecified) },
+        supportingContent = subtitle?.let { {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (ready) Spacer(Modifier.padding(end = 6.dp).size(7.dp).background(ReadyGreen, CircleShape))
+                if (ready) Spacer(Modifier.padding(end = 6.dp).size(7.dp).background(PlayOnGreen, CircleShape))
                 Text(subtitle)
             }
-        },
-        leadingContent = { Icon(if (phone) Icons.Default.Smartphone else icon, null) },
+        } },
+        leadingContent = { Icon(if (phone) Icons.Default.Smartphone else icon, null, tint = accent) },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (selected) Icon(Icons.Default.Check, "Selected")
-                if (isNew) Text("New", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
-                if (onMore != null) IconButton(onClick = onMore) { Icon(Icons.Default.MoreHoriz, "More options for $name") }
+                if (selected) Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
+                if (badge != null) Text(badge, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f), RoundedCornerShape(50))
+                        .padding(horizontal = 12.dp, vertical = 5.dp))
+                if (onMore != null) IconButton(onClick = onMore) { Icon(Icons.Default.MoreVert, "More options for $name") }
             }
-        }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick)
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(14.dp))
+            .then(if (highlight) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) else Modifier)
+            .clickable(onClick = onClick)
             .then(if (dimmed) Modifier.alpha(0.55f) else Modifier))
 }
 
