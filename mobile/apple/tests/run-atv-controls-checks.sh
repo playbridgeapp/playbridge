@@ -23,15 +23,16 @@ import sys
 p=Path(sys.argv[1])
 header=(p/'UI/RemoteControlScreen.swift').read_text()
 assert 'atv-connection-state' not in header
-for value in ['showDevices = true', 'combined.badge', 'Open app…', 'TV menu', 'Power off', 'atv-pairing-entry']:
+for value in ['nav.openPlayOn()', 'combined.badge', 'Open app…', 'TV menu', 'Power off', 'atv-pairing-entry']:
     assert value in header, value
 keyboard=(p/'UI/RemoteKeyboardSheet.swift').read_text()
 for value in ['markedTextRange', 'unmarkText()', 'dismantleUIView', 'privacySensitive()', 'Send Enter to TV']:
     assert value in keyboard, value
-assert 'Paired TVs · Full control' in (p/'UI/ConnectionScreen.swift').read_text()
+play_on=(p/'UI/DeviceConnectionSheet.swift').read_text()
+assert 'Full TV remote' in play_on and 'AtvPairedTVsSheet' in play_on
 remote=(p/'UI/RemoteControlView.swift').read_text()
 assert 'combined.fullControlReady && !vm.isConnected' in remote
 assert 'fullControl: combined.fullControlReady' in remote
 assert 'keyboardSheet' in remote and 'vm.remote("text:"' not in remote
-print('PASS: single-screen/header/TV-menu/keyboard-composition/Devices-row integration fixtures')
+print('PASS: single-screen/header/TV-menu/keyboard-composition/Play on full-remote integration fixtures')
 PY

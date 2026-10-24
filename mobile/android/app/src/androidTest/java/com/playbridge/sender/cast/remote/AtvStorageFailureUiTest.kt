@@ -73,7 +73,7 @@ class AtvStorageFailureUiTest {
             receiver = RemoteReceiver(endpoint, "Fixture TV", RemoteProfile.AndroidTv),
             fullControl = FullControlStatus(available = true, needsRepair = true, storageFailure = true),
         )
-        compose.setContent { MaterialTheme { RemoteHeader(state) {} } }
+        compose.setContent { MaterialTheme { RemoteHeader(state, dispatch = {}) } }
         compose.onNodeWithText("Pair again").assertIsDisplayed()
         compose.onNodeWithText(ATV_SAVE_ERROR).assertIsDisplayed()
     }

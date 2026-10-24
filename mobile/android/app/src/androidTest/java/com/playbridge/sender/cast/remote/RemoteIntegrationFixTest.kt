@@ -35,7 +35,7 @@ class RemoteIntegrationFixTest {
         val reducer = RemoteStateReducer { 0L }
         val state = mutableStateOf(reducer.observe(RemoteReceiverSnapshot(state())))
         val dispatch: (RemoteAction) -> Unit = { state.value = reducer.local(it) }
-        compose.setContent { MaterialTheme { RemoteScreen(state.value, dispatch) } }
+        compose.setContent { MaterialTheme { RemoteScreen(state.value, dispatch = dispatch) } }
         compose.onNodeWithTag("remote.gesturePad").assertIsDisplayed()
         compose.onNodeWithContentDescription("Pad settings").assertDoesNotExist()
         compose.onNodeWithContentDescription("Switch to button pad").performClick()

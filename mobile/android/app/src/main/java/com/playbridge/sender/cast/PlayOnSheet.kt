@@ -299,7 +299,7 @@ fun PlayOnSheet(
                 }
                 if (page == PlayOnPage.Browser) BrowserHostStopAction(host.running, host.busy) {
                     scope.launch {
-                        if (host.ready.isNotEmpty()) viewModel.disconnectExternalTarget()
+                        viewModel.disconnectBrowserTarget()
                         // Nothing left to do on a stopped host page; reopening it starts hosting again.
                         if (browser.stopHost().isSuccess) page = PlayOnPage.Add
                     }

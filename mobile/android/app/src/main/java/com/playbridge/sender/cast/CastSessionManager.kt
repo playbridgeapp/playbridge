@@ -1150,6 +1150,11 @@ class CastSessionManager(
     /** Stop media before releasing transports that disconnect on release (notably CastV2). */
     fun stopAndClearExternalTarget() = detachExternalTarget(stopFirst = true)
 
+    /** Stops the external target only when it is a phone-hosted browser; DLNA, Roku and Cast are left alone. */
+    fun stopAndClearBrowserTarget() {
+        if (_externalTarget.value is BrowserCastTarget) stopAndClearExternalTarget()
+    }
+
     private fun detachExternalTarget(stopFirst: Boolean) {
         castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
         activeExternalAttemptId = null

@@ -44,7 +44,7 @@ class RemoteAdaptiveScreenTest {
             val density = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(density, 1f)) {
                 MaterialTheme { Box(Modifier.requiredSize(412.dp, 892.dp)) {
-                    RemoteScreen(player().copy(queue = RemoteQueueState(items = List(3) { RemoteQueueItem(it, "Episode $it") })), {})
+                    RemoteScreen(player().copy(queue = RemoteQueueState(items = List(3) { RemoteQueueItem(it, "Episode $it") })), dispatch = {})
                 } }
             }
         }
@@ -62,7 +62,7 @@ class RemoteAdaptiveScreenTest {
 
     @Test fun navAlwaysMountedAcrossBrowserVideoNoVideoAndIdle() {
         val state = mutableStateOf(player())
-        compose.setContent { MaterialTheme { RemoteScreen(state.value, {}) } }
+        compose.setContent { MaterialTheme { RemoteScreen(state.value, dispatch = {}) } }
         for (context in listOf(RemoteContext.Player, RemoteContext.Browser, RemoteContext.Idle)) {
             compose.runOnIdle { state.value = state.value.copy(context = context,
                 capabilities = nativeRemoteCapabilities(RemoteProfile.AndroidTv, context, RemoteMediaKind.Video)) }
@@ -99,7 +99,7 @@ class RemoteAdaptiveScreenTest {
 
     @Test fun landscapeInputIsLeftOfMediaAndNavSpansBothColumns() {
         compose.setContent {
-            MaterialTheme { Box(Modifier.requiredSize(800.dp, 420.dp)) { RemoteScreen(player(wholeDevice = true), {}) } }
+            MaterialTheme { Box(Modifier.requiredSize(800.dp, 420.dp)) { RemoteScreen(player(wholeDevice = true), dispatch = {}) } }
         }
         compose.onNodeWithTag("remote.columns").assertIsDisplayed()
         val input = compose.onNodeWithTag("remote.input").fetchSemanticsNode().boundsInRoot
@@ -111,7 +111,7 @@ class RemoteAdaptiveScreenTest {
 
     @Test fun disconnectedChipAndRetryUseTypedActionWhileReceiverControlsDisable() {
         val actions = mutableListOf<RemoteAction>()
-        compose.setContent { MaterialTheme { RemoteScreen(player().copy(connection = RemoteConnection.Disconnected), actions::add) } }
+        compose.setContent { MaterialTheme { RemoteScreen(player().copy(connection = RemoteConnection.Disconnected), dispatch = actions::add) } }
         compose.onNodeWithText("Reconnecting…").assertIsDisplayed()
         compose.onNodeWithText("Retry").performClick()
         compose.onNodeWithContentDescription("More player settings").assertIsNotEnabled()
@@ -126,7 +126,7 @@ class RemoteAdaptiveScreenTest {
         val state = mutableStateOf(player().copy(queue = RemoteQueueState(items = listOf(RemoteQueueItem(0, "First episode"), RemoteQueueItem(1, "Second episode")))))
         compose.setContent {
             MaterialTheme { Box(Modifier.requiredSize(360.dp, 440.dp)) {
-                RemoteScreen(state.value, { action ->
+                RemoteScreen(state.value, dispatch = { action ->
                     state.value = state.value.copy(sheet = when (action) {
                         is RemoteAction.OpenSheet -> action.sheet
                         RemoteAction.CloseSheet -> null
@@ -147,7 +147,7 @@ class RemoteAdaptiveScreenTest {
         compose.setContent {
             val density = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(density, 2f)) {
-                MaterialTheme { Box(Modifier.requiredSize(360.dp, 600.dp)) { RemoteScreen(player(), {}) } }
+                MaterialTheme { Box(Modifier.requiredSize(360.dp, 600.dp)) { RemoteScreen(player(), dispatch = {}) } }
             }
         }
         compose.onNodeWithTag("remote.input").assertDoesNotExist()
@@ -162,7 +162,7 @@ class RemoteAdaptiveScreenTest {
             val density = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(density, 2f)) {
                 MaterialTheme { Box(Modifier.requiredSize(320.dp, 600.dp)) {
-                    RemoteScreen(player().copy(context = RemoteContext.Browser, playback = null), {})
+                    RemoteScreen(player().copy(context = RemoteContext.Browser, playback = null), dispatch = {})
                 } }
             }
         }
@@ -171,7 +171,7 @@ class RemoteAdaptiveScreenTest {
     }
     @Test fun defaultPlayerHasNoInputAndSeekSitsDirectlyAboveNav() {
         compose.setContent { MaterialTheme { Box(Modifier.requiredSize(412.dp, 892.dp)) {
-            RemoteScreen(player(), {})
+            RemoteScreen(player(), dispatch = {})
         } } }
         compose.onNodeWithTag("remote.input").assertDoesNotExist()
         compose.onNodeWithTag("remote.transport").assertDoesNotExist()

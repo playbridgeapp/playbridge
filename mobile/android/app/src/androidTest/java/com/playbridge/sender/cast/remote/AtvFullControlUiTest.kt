@@ -84,7 +84,7 @@ class AtvFullControlUiTest {
             connection = RemoteConnection.Connected("Hisense"),
             fullControl = FullControlStatus(connected = true, paired = true, available = true, powerOn = true),
         )
-        compose.setContent { MaterialTheme { RemoteHeader(state) {} } }
+        compose.setContent { MaterialTheme { RemoteHeader(state, dispatch = {}) } }
         compose.onNodeWithTag("remote.fullControl").assertIsDisplayed()
         compose.onNodeWithContentDescription("Full control connected").assertIsDisplayed()
     }
