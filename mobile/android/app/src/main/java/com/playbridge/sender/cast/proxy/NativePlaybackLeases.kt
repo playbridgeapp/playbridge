@@ -19,6 +19,8 @@ internal class NativePlaybackLeases(
     private var idleReason: String? = null
     private var playbackId: String? = null
 
+    val holding: Boolean @Synchronized get() = held.isNotEmpty()
+
     /** Five minutes of receiver inactivity or a lost connection, not a playback cap. */
     @Synchronized
     fun inactive(reason: String = "connection") {

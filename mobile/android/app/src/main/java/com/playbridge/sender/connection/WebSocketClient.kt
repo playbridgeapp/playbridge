@@ -66,6 +66,9 @@ class WebSocketClient(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val playbackLeases = NativePlaybackLeases(scope) { url ->
         PhoneSenderServices.retainMediaIfRunning(url)
+            // Phone files are published by the local proxy instead; nothing to renew, but the
+            // TV still depends on this phone for them.
+            ?: if (com.playbridge.sender.cast.dlna.DlnaProxyHolder.servesIfRunning(url)) AutoCloseable {} else null
     }
 
     @Volatile
@@ -919,6 +922,9 @@ class WebSocketClient(
         }
     }
     
+    /** The TV is playing media served by this phone (proxied or local files). */
+    val holdsPhoneServedMedia: Boolean get() = playbackLeases.holding
+
     fun isConnected(): Boolean {
         return _connectionState.value is ConnectionState.Connected
     }

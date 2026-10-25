@@ -56,6 +56,9 @@ final class LocalFileServer {
         return "http://\(ip):\(port)/media\(ext)"
     }
 
+    /// A phone file is being offered to a receiver right now.
+    var isServing: Bool { listener != nil }
+
     func stop() {
         listener?.cancel()
         listener = nil

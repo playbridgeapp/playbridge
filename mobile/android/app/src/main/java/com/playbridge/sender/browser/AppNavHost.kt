@@ -1610,6 +1610,7 @@ fun AppNavHost(
                         onPlayOn = { showDevicePicker = true },
                         onExit = onFullExit,
                         onRemote = { onScreenChange(Screen.Remote) },
+                        onUseThisPhone = { connectionViewModel.selectThisDevice() },
                         onSettings = {
                             // So Settings back lands on Dashboard (not Browser/Library).
                             onLastMainScreenChange(Screen.Dashboard)

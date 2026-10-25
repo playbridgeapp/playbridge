@@ -70,6 +70,10 @@ struct DashboardScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 topBar
                 DashboardDeviceChip(status: playOnDashboard) { nav.openPlayOn() }
+                // A dropped TV stays chosen; switching to this phone is the user's call.
+                if playOnDashboard.state == .reconnecting || playOnDashboard.state == .offline {
+                    LostTVNotice(tvName: playOnDashboard.deviceName) { vm.selectThisPhone() }
+                }
                 HStack {
                     Text("WATCH")
                         .font(Theme.font(size: 12, weight: .bold))
@@ -368,6 +372,34 @@ private struct DashboardTileCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 20))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Shown while the chosen TV is unreachable. The route never changes by itself.
+private struct LostTVNotice: View {
+    let tvName: String
+    let useThisPhone: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(Theme.surface)
+                .accessibilityHidden(true)
+            Text("Lost \(tvName)")
+                .font(Theme.font(size: 14))
+                .foregroundColor(Theme.surface)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Use this phone", action: useThisPhone)
+                .font(Theme.font(size: 14, weight: .bold))
+                .foregroundColor(Theme.primaryDim)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("dashboard-use-this-phone")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.onSurface))
+        .accessibilityElement(children: .combine)
     }
 }
 

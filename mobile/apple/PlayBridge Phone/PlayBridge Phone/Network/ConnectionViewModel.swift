@@ -693,15 +693,23 @@ final class ConnectionViewModel: ObservableObject {
         ws.isConnected && pairedDevice != nil && externalReceiver == nil
     }
 
-    /// Leave the PlayBridge socket up and aim playback at this phone.
+    /// Non-nil while the TV plays media this phone serves (phone files, streams relayed
+    /// through the phone, AirPlay from this phone). It may cut out after switching to this
+    /// phone, so the picker confirms first. The value names what is playing, when known.
+    var phoneServedTVPlayback: String? {
+        let title = castPlaybackSession.snapshot?.title ?? ""
+        if isAirPlay { return airPlay.playing || airPlay.buffering ? title : nil }
+        let serving = !routedStreamRegistrations.isEmpty || LocalFileServer.shared.isServing
+        guard serving, castPlaybackSession.isActive else { return nil }
+        if isExternalReceiver { return isConnected ? title : nil }
+        return playBridgeOutputSelected && playBridgeLinkConnected ? title : nil
+    }
+
+    /// Aim playback at this phone. Nothing is stopped on the TV: the receiver link closes
+    /// (pairing is kept, so picking the TV again reconnects). Media this phone was serving
+    /// may cut out once the TV runs through what it has buffered.
     func selectThisPhone() {
-        guard playBridgeLinkConnected else { disconnect(); return }
-        destinationSelectionRevision &+= 1
-        if airPlay.selected { airPlay.disconnect() }
-        nativeReceiverSelected = true
-        playBridgeOutputSelected = false
-        UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
-        if ws.state.isConnected { state = ws.state }
+        disconnect()
     }
 
     /// Aim playback at the PlayBridge receiver. An open socket is reused.

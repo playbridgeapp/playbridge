@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -106,6 +107,8 @@ internal fun DashboardScreen(
     onSettings: () -> Unit = { onNavigate(Screen.Settings) },
     onPlayOn: () -> Unit = {},
     onRemote: () -> Unit = { onNavigate(Screen.Remote) },
+    /** Switch where videos play to this phone (offered when the chosen TV drops). */
+    onUseThisPhone: () -> Unit = {},
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
@@ -188,6 +191,10 @@ internal fun DashboardScreen(
                 onExit = { showExitConfirm = true },
             )
             DashboardDeviceChip(status = playOnStatus, onClick = onPlayOn)
+            // A dropped TV stays chosen; switching to this phone is the user's call.
+            if (playOnStatus.state == PlayOnStatus.State.RECONNECTING || playOnStatus.state == PlayOnStatus.State.OFFLINE) {
+                LostTvNotice(tvName = playOnStatus.deviceName, onUseThisPhone = onUseThisPhone)
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -318,6 +325,35 @@ internal fun DashboardScreen(
                     TextButton(onClick = { showExitConfirm = false }) { Text("Cancel") }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun LostTvNotice(tvName: String, onUseThisPhone: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.inverseSurface,
+        modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = null,
+                tint = MaterialTheme.colorScheme.inverseOnSurface, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Lost $tvName",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onUseThisPhone) {
+                Text("Use this phone", color = MaterialTheme.colorScheme.inversePrimary)
+            }
         }
     }
 }

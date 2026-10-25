@@ -34,6 +34,18 @@ class NativePlaybackLeasesTest {
         fun start(url: String = "http://phone/video") = send("playlist", """{"items":[{"url":"$url"}]}""")
     }
 
+    @Test fun holdingReportsPhoneServedMediaOnlyWhileRetained() {
+        val f = Fixture()
+        assertFalse(f.leases.holding)
+        f.start("https://cdn.example/video")
+        assertFalse("Media the TV fetches itself isn't phone-served", f.leases.holding)
+        f.start()
+        assertTrue(f.leases.holding)
+        f.leases.clear()
+        assertFalse(f.leases.holding)
+        assertTrue(f.live.isEmpty())
+    }
+
     @Test fun canonicalWirePlaylistRetainsAllResources() {
         val f = Fixture()
         val message = createPlaylistCommandJson(PlaylistPayload(items = listOf(

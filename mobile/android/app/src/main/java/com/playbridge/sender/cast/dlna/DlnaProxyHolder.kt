@@ -19,6 +19,10 @@ object DlnaProxyHolder {
                 server = it
             }
 
+    /** Whether a running proxy publishes [url]; never starts the proxy. */
+    @Synchronized
+    fun servesIfRunning(url: String): Boolean = server?.serves(url) == true
+
     @Synchronized
     fun shutdown() {
         server?.stop()
