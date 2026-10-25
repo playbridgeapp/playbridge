@@ -56,9 +56,6 @@ data class PhotoSection<T : PhoneMediaFacts>(val label: String, val items: List<
 /** Pure list logic for Phone Files, kept out of Compose so it can be unit-tested. */
 object PhoneFilesModel {
 
-    /** PlayBridge TVs hold at most this many items in one queue. */
-    const val TV_QUEUE_LIMIT = 200
-
     /** Folder chips for [items], most populated first, ties by name. */
     fun <T : PhoneMediaFacts> folders(items: List<T>): List<PhoneFolder> =
         items.filter { it.bucketId != null }

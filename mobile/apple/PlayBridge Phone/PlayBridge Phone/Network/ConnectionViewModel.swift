@@ -779,23 +779,46 @@ final class ConnectionViewModel: ObservableObject {
     /// The receiver can move queued items, so Play next can place them after the current one.
     var localQueueReorders: Bool { localQueueSupported && supportsQueueV1 && nativeRemotePolicy.allowsQueue("move") }
 
-    /// Appends one phone file (already served by this phone) to the receiver's queue.
-    @discardableResult
-    func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil) -> Bool {
-        guard localQueueSupported else { return false }
-        onUserMediaAction?()
+    /// Appends one phone file (already served by this phone) to the receiver's queue under
+    /// `itemId`, tied to `playbackId`, and waits for the receiver to confirm it.
+    func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil,
+                         itemId: String, playbackId: String) async -> QueueCommandResult? {
+        guard localQueueSupported, supportsQueueV1 else { return nil }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
+        let requestID = UUID().uuidString
         let command = WireProtocol.queueVideoCommand(
             url: url, title: title, contentType: contentType, mediaKind: kind,
-            playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
-            useQueueV1: supportsQueueV1, displayDurationMs: displayDurationMs
+            playbackId: playbackId, useQueueV1: true, displayDurationMs: displayDurationMs,
+            itemId: itemId, requestID: requestID
         )
-        guard ws.send(command) else { return false }
-        recordCast(command)
-        return true
+        return await sendConfirmedQueueCommand(command, requestID: requestID)
     }
 
-    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil) {
+    /// Sends a queue command carrying `requestID` and waits for the receiver's result.
+    /// Nil when it couldn't be sent or wasn't confirmed in time.
+    func sendConfirmedQueueCommand(_ command: String, requestID: String, timeout: TimeInterval = 8) async -> QueueCommandResult? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<QueueCommandResult?, Never>) in
+            var finished = false
+            var subscription: AnyCancellable?
+            let finish: (QueueCommandResult?) -> Void = { result in
+                guard !finished else { return }
+                finished = true
+                subscription?.cancel()
+                continuation.resume(returning: result)
+            }
+            subscription = coordinator.$lastCommandResult
+                .compactMap { $0 }
+                .filter { $0.requestId == requestID }
+                .first()
+                .receive(on: DispatchQueue.main)
+                .sink { finish($0) }
+            guard ws.send(command) else { finish(nil); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(nil) }
+        }
+    }
+
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
+                        itemId: String? = nil) {
         onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
@@ -808,7 +831,7 @@ final class ConnectionViewModel: ObservableObject {
         } else {
             guard playBridgeOutputSelected else { return }
             ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
-                                                    mediaKind: kind, displayDurationMs: displayDurationMs))
+                                                    mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId))
         }
     }
 

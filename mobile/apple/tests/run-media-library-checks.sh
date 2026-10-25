@@ -24,7 +24,7 @@ source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
  "$source_dir/Models/PhoneMedia.swift" "$source_dir/Models/CollectionModels.swift" \
  "$source_dir/Data/PhoneMediaLibrary.swift" "$source_dir/Data/CollectionsStore.swift" \
- "$source_dir/UI/PhoneMediaThumbnail.swift" "$source_dir/UI/PhoneFilesModel.swift" "$source_dir/UI/PhoneFilesScreen.swift" "$source_dir/UI/PhoneMediaDetail.swift" \
+ "$source_dir/UI/PhoneMediaThumbnail.swift" "$source_dir/UI/PhoneFilesModel.swift" "$source_dir/UI/PhoneQueueWindow.swift" "$source_dir/UI/PhoneFilesScreen.swift" "$source_dir/UI/PhoneMediaDetail.swift" \
  "$source_dir/UI/CollectionDetailScreen.swift" "$source_dir/UI/Theme.swift" \
  "$source_dir/Network/LocalFileServer.swift" "$source_dir/Network/PhoneQueueCoordinator.swift" "$source_dir/Network/StreamRouteService.swift" \
  "$source_dir/Network/PhonePlayerPreferences.swift" "$source_dir/Network/PhonePlaybackEngine.swift" "$source_dir/Network/PlaybackSession.swift" \

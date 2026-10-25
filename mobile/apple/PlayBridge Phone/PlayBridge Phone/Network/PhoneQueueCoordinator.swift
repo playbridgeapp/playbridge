@@ -1,109 +1,303 @@
+import Combine
 import Foundation
 
-/// Sends phone files to a PlayBridge receiver as a queue (Play all, Play next, Add to queue,
-/// slideshows). Photos items must be exported before they can be served, so a long list is
-/// fed lazily: the first item plays at once and each later Photos item is prepared while the
-/// one before it plays. Imported files need no export and are queued straight away.
+/// Plays a list of phone files of any length on a PlayBridge receiver (Play all, Play next,
+/// Add to queue, slideshows). The phone keeps the whole list; the receiver only holds a window
+/// of it (`PhoneQueueWindow`), which this coordinator keeps in step, matching Android:
+///
+/// - The receiver's `playlist_status` (it moved on, or someone edited its queue) and edits on
+///   the phone wake an update, which waits briefly so quick skips settle, then sends removes,
+///   adds and moves, each tied to this playback and confirmed.
+/// - Edits made on the receiver are taken in, unless the phone has its own edit waiting.
+/// - Anything else starting on the receiver ends the list.
+///
+/// Files are prepared (Photos items exported) and served only as the window reaches them.
+/// Photos videos are large to export, so lists with them keep a shorter window.
+/// A receiver that ignores sender item ids falls back to queueing items one by one.
 @MainActor final class PhoneQueueCoordinator: ObservableObject {
     static let shared = PhoneQueueCoordinator()
 
     enum Mode { case replace, next, end }
     enum Outcome: Equatable { case playing, added, addedAtEnd, failed(String) }
 
-    /// Items still waiting to be prepared and queued; drives the "keep PlayBridge running" note.
-    @Published private(set) var pending: [PhoneMedia] = []
-    private var feeder: Task<Void, Never>?
-    private var displayDurationMs: Int?
+    private struct Entry {
+        let id: String
+        let media: PhoneMedia
+        let displayDurationMs: Int?
+    }
 
-    /// Photos items still need this iPhone: iOS may close PlayBridge before they are sent.
-    var needsAppRunning: Bool { pending.contains { $0.source == .photos } }
+    /// The list is playing on the receiver.
+    @Published private(set) var active = false
+    /// Index of the current item in the phone's list.
+    @Published private(set) var position = 0
+    @Published private(set) var count = 0
+
+    private var entries: [Entry] = []
+    private var byId: [String: Entry] = [:]
+    private var cursor = 0
+    /// Ids the receiver has confirmed it holds (or held).
+    private var sent: Set<String> = []
+    /// Served URLs by entry id, so trimmed items stop being served.
+    private var served: [String: String] = [:]
+    private var playbackId: String?
+    private var latest: PlaylistUiState?
+    private var dirty = false
+    private var awaitRevision: UInt64 = 0
+    private var generation = 0
+    private var updating = false
+    private var pendingUpdate = false
+    private var settleTask: Task<Void, Never>?
+    private var attachTask: Task<Void, Never>?
+    private var subscription: AnyCancellable?
+    private weak var vm: ConnectionViewModel?
+    private weak var library: PhoneMediaLibrary?
+
+    /// The phone serves the files: iOS closing PlayBridge stops the list after the window.
+    var needsAppRunning: Bool { active }
 
     func send(_ items: [PhoneMedia], mode: Mode, displayDurationMs: Int? = nil,
               library: PhoneMediaLibrary, vm: ConnectionViewModel) async -> Outcome {
-        guard let first = items.first else { return .failed("Nothing to play.") }
+        guard !items.isEmpty else { return .failed("Nothing to play.") }
         guard vm.localQueueSupported else { return .failed("This receiver plays one item at a time.") }
+        attach(vm: vm, library: library)
+        let newEntries = items.map {
+            Entry(id: UUID().uuidString, media: $0, displayDurationMs: $0.kind == .image ? displayDurationMs : nil)
+        }
         let playing = vm.coordinator.activeContext == "player" && vm.coordinator.playlist != nil
-        if mode == .replace || !playing {
-            stop()
-            self.displayDurationMs = displayDurationMs
-            if let failure = await PhoneMediaCasting.cast(first, displayDurationMs: duration(for: first),
-                                                           library: library, vm: vm) {
-                return .failed(failure)
+        if mode == .replace || !playing || !active {
+            if mode != .replace, playing, !active {
+                // Something else is playing: add to the receiver's own queue, one by one.
+                return await appendToForeignQueue(newEntries, vm: vm, library: library)
             }
-            pending = Array(items.dropFirst())
-            if !pending.isEmpty { startFeeder(library: library, vm: vm) }
-            return .playing
+            return await start(newEntries) ? .playing : .failed("Couldn’t send to \(PhoneMediaCasting.receiverName(vm)).")
         }
-        if mode == .end, feeder != nil {
-            // Keep the order: these go after what the running feeder still has to send.
-            pending.append(contentsOf: items)
-            return .added
+        if mode == .next { entries.insert(contentsOf: newEntries, at: cursor + 1) } else { entries += newEntries }
+        newEntries.forEach { byId[$0.id] = $0 }
+        dirty = true
+        publish()
+        scheduleUpdate()
+        return .added
+    }
+
+    /// Moves `delta` items through the list (slideshow previous and next).
+    func step(_ delta: Int) {
+        Task { _ = await jump(to: cursor + delta) }
+    }
+
+    /// Plays entry `index` of the list. In the receiver's window it is a plain jump; otherwise
+    /// the entry is added to the receiver's queue and jumped to, in the same playback, and the
+    /// window then rebuilds around it.
+    func jump(to index: Int) async -> Bool {
+        guard active, entries.indices.contains(index), let vm, let library, let pid = playbackId else { return false }
+        let entry = entries[index]
+        let session = generation
+        if latest?.items.contains(where: { $0.itemId == entry.id }) != true {
+            guard let url = try? await library.resolve(entry.media),
+                  let media = await LocalFileServer.shared.add(fileURL: url) else { return false }
+            guard await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                           displayDurationMs: entry.displayDurationMs, itemId: entry.id, playbackId: pid)?.ok == true,
+                  session == generation
+            else { LocalFileServer.shared.remove(served: media); return false }
+            sent.insert(entry.id)
+            served[entry.id] = media
         }
-        let before = Set(vm.coordinator.playlist?.items.compactMap(\.itemId) ?? [])
-        for item in items {
-            guard await queue(item, library: library, vm: vm) else { return .failed("Couldn’t prepare \(item.title).") }
+        let requestID = UUID().uuidString
+        return await vm.sendConfirmedQueueCommand(
+            WireProtocol.playlistJumpCommand(index: 0, itemId: entry.id, playbackId: pid, useQueueV1: true, requestID: requestID),
+            requestID: requestID)?.ok == true
+    }
+
+    /// Forgets the list; the receiver keeps playing what it holds.
+    func stop() { clear() }
+
+    // MARK: - Sending
+
+    private func attach(vm: ConnectionViewModel, library: PhoneMediaLibrary) {
+        self.library = library
+        guard self.vm !== vm else { return }
+        self.vm = vm
+        subscription = vm.coordinator.$playlist
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in self?.onStatus(status) }
+    }
+
+    private func start(_ list: [Entry]) async -> Bool {
+        clear()
+        entries = list
+        list.forEach { byId[$0.id] = $0 }
+        return await sendFrom(0, session: generation)
+    }
+
+    private func sendFrom(_ index: Int, session: Int) async -> Bool {
+        guard let vm, let library, entries.indices.contains(index) else { return false }
+        let entry = entries[index]
+        guard let url = try? await library.resolve(entry.media),
+              let media = await LocalFileServer.shared.serve(fileURL: url, subtitle: nil)?.media,
+              session == generation, vm.isConnected else { return false }
+        vm.castLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                          displayDurationMs: entry.displayDurationMs, itemId: entry.id)
+        PhoneFilesNowPlaying.shared.itemID = entry.media.id
+        cursor = index
+        sent.insert(entry.id)
+        served[entry.id] = media
+        active = true
+        publish()
+        attachTask?.cancel()
+        attachTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            await self?.fallbackIfIdsIgnored(session: session)
         }
-        guard mode == .next else { return .added }
-        guard vm.localQueueReorders else { return .addedAtEnd }
-        // Wait for the receiver to list the new items, then move them after the current one.
-        var newIDs: [String] = []
-        for _ in 0..<20 {
-            newIDs = (vm.coordinator.playlist?.items.compactMap(\.itemId) ?? []).filter { !before.contains($0) }
-            if newIDs.count >= items.count { break }
-            try? await Task.sleep(nanoseconds: 250_000_000)
-        }
-        guard newIDs.count >= items.count, let playlist = vm.coordinator.playlist else { return .addedAtEnd }
-        var order = playlist.items.compactMap(\.itemId)
-        let current = playlist.currentItemId ?? playlist.items.first { $0.index == playlist.currentIndex }?.itemId
-        for id in PhoneFilesModel.playNextMoveOrder(Array(newIDs.suffix(items.count))) {
-            guard let current, let position = order.firstIndex(of: current) else { return .addedAtEnd }
-            let before = order[(position + 1)...].first { $0 != id }
-            vm.moveInQueue(itemId: id, beforeItemId: before)
-            // Track the moves locally: the receiver's echo may lag behind the next move.
-            order.removeAll { $0 == id }
-            order.insert(id, at: (order.firstIndex(of: current) ?? position) + 1)
+        return true
+    }
+
+    /// A receiver that keeps sender item ids reports the first item under its id. One that
+    /// doesn't never will: queue what's left (up to its limit) one by one instead.
+    private func fallbackIfIdsIgnored(session: Int) async {
+        guard session == generation, playbackId == nil, let vm, let library,
+              vm.coordinator.playlist?.playbackId != nil else { return }
+        let rest = Array(entries.dropFirst(cursor + 1).prefix(PhoneQueueWindow.tvLimit - 1))
+        attachTask = nil // This task: clearing must not cancel it.
+        clear()
+        _ = await appendToForeignQueue(rest, vm: vm, library: library)
+    }
+
+    private func appendToForeignQueue(_ list: [Entry], vm: ConnectionViewModel, library: PhoneMediaLibrary) async -> Outcome {
+        for entry in list {
+            guard let pid = vm.coordinator.playlist?.playbackId,
+                  let url = try? await library.resolve(entry.media),
+                  let media = await LocalFileServer.shared.add(fileURL: url),
+                  await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                           displayDurationMs: entry.displayDurationMs, itemId: entry.id, playbackId: pid)?.ok == true
+            else { return .failed("Couldn’t add \(entry.media.title).") }
         }
         return .added
     }
 
-    func stop() {
-        feeder?.cancel()
-        feeder = nil
-        pending = []
-    }
-
-    private func duration(for item: PhoneMedia) -> Int? { item.kind == .image ? displayDurationMs : nil }
-
-    /// Resolves (exports) one item, serves it next to the others and appends it.
-    private func queue(_ item: PhoneMedia, library: PhoneMediaLibrary, vm: ConnectionViewModel) async -> Bool {
-        guard let url = try? await library.resolve(item), let served = await LocalFileServer.shared.add(fileURL: url) else { return false }
-        return vm.queueLocalMedia(url: served, title: item.title, contentType: LocalFileServer.mimeType(for: url),
-                                  displayDurationMs: duration(for: item))
-    }
-
-    private func startFeeder(library: PhoneMediaLibrary, vm: ConnectionViewModel) {
-        feeder = Task { [weak self] in
-            var sent = 1
-            var playbackID: String?
-            while let self, !Task.isCancelled, let next = self.pending.first {
-                if next.source == .photos {
-                    // Keep one prepared item ahead of the one playing.
-                    while !Task.isCancelled {
-                        guard vm.isConnected, let playlist = vm.coordinator.playlist else {
-                            try? await Task.sleep(nanoseconds: 500_000_000); continue
-                        }
-                        if playbackID == nil { playbackID = playlist.playbackId }
-                        // Something else started playing: this queue is over.
-                        if playlist.playbackId != playbackID { self.stop(); return }
-                        if PhoneFilesModel.shouldPrepareNext(currentIndex: playlist.currentIndex, sentCount: sent) { break }
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                    }
-                }
-                guard !Task.isCancelled else { return }
-                if self.pending.first == next { self.pending.removeFirst() }
-                if await self.queue(next, library: library, vm: vm) { sent += 1 }
-            }
-            self?.feeder = nil
+    private func onStatus(_ status: PlaylistUiState?) {
+        guard let status, !entries.isEmpty else { return }
+        let ids = status.items.compactMap(\.itemId)
+        if playbackId == nil {
+            // The new playback is ours once the receiver lists one of our items.
+            guard ids.contains(where: { byId[$0] != nil }) else { return }
+            playbackId = status.playbackId
+        } else if status.playbackId != playbackId {
+            clear()
+            return
         }
+        latest = status
+        scheduleUpdate()
+    }
+
+    private func scheduleUpdate() {
+        settleTask?.cancel()
+        settleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.update()
+        }
+    }
+
+    private func update() async {
+        if updating { pendingUpdate = true; return }
+        updating = true
+        defer {
+            updating = false
+            if pendingUpdate { pendingUpdate = false; scheduleUpdate() }
+        }
+        guard let status = latest, let pid = playbackId, status.queueRevision >= awaitRevision,
+              let current = status.currentItemId,
+              let at = entries.firstIndex(where: { $0.id == current }) else { return }
+        let tv = status.items.compactMap(\.itemId)
+        cursor = at
+        if !dirty {
+            let adopted = PhoneQueueWindow.adopt(order: entries.map(\.id), cursor: cursor, sent: sent, tv: tv, tvCurrent: current)
+            if adopted != entries.map(\.id) {
+                let kept = Set(adopted)
+                for entry in entries where !kept.contains(entry.id) {
+                    byId[entry.id] = nil
+                    sent.remove(entry.id)
+                }
+                entries = adopted.compactMap { byId[$0] }
+                cursor = entries.firstIndex { $0.id == current } ?? cursor
+            }
+        }
+        dirty = false
+        publish()
+        let plan = PhoneQueueWindow.plan(order: entries.map(\.id), cursor: cursor, tv: tv, tvCurrent: current, limits: limits)
+        guard !plan.isEmpty else { return }
+        if await !apply(plan, playbackId: pid, session: generation) {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self?.scheduleUpdate()
+            }
+        }
+    }
+
+    /// Photos videos are slow to export: keep fewer of them prepared ahead.
+    private var limits: PhoneQueueWindow.Limits {
+        let upcoming = entries.dropFirst(cursor + 1).prefix(20)
+        let heavy = upcoming.contains { $0.media.source == .photos && $0.media.kind == .video }
+        return heavy ? PhoneQueueWindow.Limits(ahead: 2, aheadLow: 1) : PhoneQueueWindow.Limits()
+    }
+
+    /// Sends `plan`: removes first, then adds, then moves. False if a step went unconfirmed.
+    private func apply(_ plan: WindowPlan, playbackId pid: String, session: Int) async -> Bool {
+        guard let vm, let library else { return false }
+        func ok(_ result: QueueCommandResult?) -> Bool {
+            guard let result, session == generation else { return false }
+            if result.error == "stale_playback" || result.error == "no_active_playback" { clear(); return false }
+            if let revision = result.queueRevision { awaitRevision = revision }
+            return result.ok
+        }
+        if !plan.removes.isEmpty {
+            let requestID = UUID().uuidString
+            guard ok(await vm.sendConfirmedQueueCommand(
+                WireProtocol.queueRemove(itemIds: plan.removes, playbackId: pid, requestID: requestID), requestID: requestID))
+            else { return false }
+            for id in plan.removes {
+                sent.remove(id)
+                if let url = served.removeValue(forKey: id) { LocalFileServer.shared.remove(served: url) }
+            }
+        }
+        for id in plan.adds {
+            guard session == generation, let entry = byId[id] else { return false }
+            guard let url = try? await library.resolve(entry.media),
+                  let media = await LocalFileServer.shared.add(fileURL: url) else { return false }
+            guard ok(await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                              displayDurationMs: entry.displayDurationMs, itemId: id, playbackId: pid))
+            else { LocalFileServer.shared.remove(served: media); return false }
+            sent.insert(id)
+            served[id] = media
+        }
+        for move in plan.moves {
+            let requestID = UUID().uuidString
+            guard ok(await vm.sendConfirmedQueueCommand(
+                WireProtocol.queueMove(itemId: move.itemId, beforeItemId: move.before, playbackId: pid, requestID: requestID),
+                requestID: requestID)) else { return false }
+        }
+        return true
+    }
+
+    private func clear() {
+        attachTask?.cancel()
+        settleTask?.cancel()
+        entries = []
+        byId = [:]
+        sent = []
+        served = [:]
+        cursor = 0
+        playbackId = nil
+        latest = nil
+        dirty = false
+        awaitRevision = 0
+        generation += 1
+        active = false
+        publish()
+    }
+
+    private func publish() {
+        position = cursor
+        count = entries.count
+        if entries.isEmpty { active = false }
     }
 }

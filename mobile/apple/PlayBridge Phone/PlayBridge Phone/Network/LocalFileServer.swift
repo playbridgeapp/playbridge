@@ -49,6 +49,12 @@ final class LocalFileServer {
         return base + path
     }
 
+    /// Stops serving a file returned by `add` (a queue item the receiver no longer holds).
+    func remove(served: String) {
+        guard let path = URL(string: served)?.path, !path.isEmpty else { return }
+        unregister(path)
+    }
+
     /// A phone file is being offered to a receiver right now.
     var isServing: Bool { listener != nil }
 

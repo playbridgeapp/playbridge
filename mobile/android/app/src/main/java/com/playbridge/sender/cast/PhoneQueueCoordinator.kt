@@ -1,0 +1,347 @@
+package com.playbridge.sender.cast
+
+import android.util.Log
+import com.playbridge.sender.connection.ConnectionCoordinator
+import com.playbridge.sender.connection.LocalCastItem
+import com.playbridge.sender.connection.LocalCastPackager
+import com.playbridge.sender.connection.QueueCommandResult
+import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.library.PlaylistUiState
+import com.playbridge.shared.protocol.createPlaylistCommandJson
+import com.playbridge.shared.protocol.createQueueAddCommandJson
+import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+/** Where the phone's list is, for the slideshow controls and Up next. */
+data class PhoneQueueState(
+    val active: Boolean = false,
+    /** Index of the current item in the phone's list. */
+    val position: Int = 0,
+    val count: Int = 0,
+)
+
+/**
+ * Plays a list of phone files of any length on a PlayBridge TV. The phone keeps the whole
+ * list; the TV only holds a window of it ([PhoneQueueWindow]), which this coordinator keeps
+ * in step as items play and as the list is edited:
+ *
+ * - The TV's `playlist_status` (it moved on, or someone edited its queue) and edits on the
+ *   phone wake a worker, which waits briefly so quick skips settle, then sends removes,
+ *   adds (at most 50 per message) and moves, each tied to this playback and confirmed.
+ * - Edits made on the TV are taken in, unless the phone has its own edit waiting, which wins.
+ * - Anything else starting on the TV ends the list.
+ *
+ * Every entry gets an item id the TV keeps, so the phone can tell its items apart. A receiver
+ * that ignores sender item ids gets the first [PhoneQueueWindow.TV_LIMIT] items at once instead.
+ */
+class PhoneQueueCoordinator(
+    private val packager: LocalCastPackager,
+    private val webSocketClient: WebSocketClient,
+    private val connectionCoordinator: ConnectionCoordinator,
+    private val castSessionManager: CastSessionManager,
+    private val scope: CoroutineScope,
+) {
+    private class Entry(val id: String, val item: LocalCastItem)
+
+    private val mutex = Mutex()
+    private var entries: MutableList<Entry> = mutableListOf()
+    private val byId = HashMap<String, Entry>()
+    private var cursor = 0
+    /** Ids the TV has confirmed it holds (or held). */
+    private val sent = HashSet<String>()
+    private var playbackId: String? = null
+    private var latest: PlaylistUiState? = null
+    /** A phone edit is waiting to be sent: the phone's order wins over the TV's this round. */
+    private var dirty = false
+    /** Skip TV reports older than our last confirmed change. */
+    private var awaitRevision = -1L
+    private var generation = 0L
+    private var attachJob: Job? = null
+
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+    private val mutableState = MutableStateFlow(PhoneQueueState())
+    val state: StateFlow<PhoneQueueState> = mutableState.asStateFlow()
+
+    init {
+        scope.launch { connectionCoordinator.tvPlaylistState.collect { onStatus(it) } }
+        scope.launch {
+            for (signal in wake) {
+                delay(SETTLE_MS)
+                runCatching { reconcile() }.onFailure { Log.w(TAG, "Queue update failed: ${it.message}") }
+            }
+        }
+    }
+
+    /** True while the TV is playing this phone list. */
+    val isActive: Boolean get() = mutableState.value.active
+
+    /** Starts [items] on the TV from the first one. False if it could not be sent. */
+    suspend fun start(items: List<LocalCastItem>): Boolean {
+        if (items.isEmpty()) return false
+        val list = items.map { Entry(UUID.randomUUID().toString(), it) }
+        val session = mutex.withLock {
+            clearLocked()
+            entries = list.toMutableList()
+            list.forEach { byId[it.id] = it }
+            ++generation
+        }
+        return sendFrom(0, session)
+    }
+
+    /** Inserts [items] right after the current one. */
+    suspend fun playNext(items: List<LocalCastItem>) {
+        mutex.withLock {
+            val added = items.map { Entry(UUID.randomUUID().toString(), it) }
+            entries.addAll(cursor + 1, added)
+            added.forEach { byId[it.id] = it }
+            dirty = true
+            publishLocked()
+        }
+        wake.trySend(Unit)
+    }
+
+    /** Appends [items] to the end of the list. */
+    suspend fun addToEnd(items: List<LocalCastItem>) {
+        mutex.withLock {
+            val added = items.map { Entry(UUID.randomUUID().toString(), it) }
+            entries.addAll(added)
+            added.forEach { byId[it.id] = it }
+            dirty = true
+            publishLocked()
+        }
+        wake.trySend(Unit)
+    }
+
+    /** Moves [delta] items through the list (slideshow previous and next). */
+    suspend fun step(delta: Int): Boolean = jumpTo(mutex.withLock { cursor } + delta)
+
+    /**
+     * Plays entry [index] of the list. In the TV's window it is a plain jump; otherwise the
+     * entry is added to the TV's queue and jumped to, in the same playback, and the window
+     * then rebuilds around it.
+     */
+    suspend fun jumpTo(index: Int): Boolean {
+        val (entry, onTv, pid, session) = mutex.withLock {
+            val entry = entries.getOrNull(index) ?: return false
+            val pid = playbackId ?: return false
+            Jump(entry, latest?.items?.any { it.itemId == entry.id } == true, pid, generation)
+        }
+        if (!onTv) {
+            val payload = packager.packageItems(listOf(entry.item), listOf(entry.id))?.firstOrNull() ?: return false
+            val requestId = UUID.randomUUID().toString()
+            val added = connectionCoordinator.sendConfirmedQueueCommand(
+                requestId, createQueueAddCommandJson(listOf(payload), pid, requestId), CONFIRM_MS,
+            )
+            if (added?.ok != true) return false
+            mutex.withLock {
+                if (session != generation) return false
+                sent += entry.id
+            }
+        }
+        return command("playlist_jump", pid) { put("itemId", entry.id) }?.ok == true
+    }
+
+    /** Forgets the list; the TV keeps playing what it holds. */
+    suspend fun stop() = mutex.withLock { clearLocked() }
+
+    // ---- Sending ---------------------------------------------------------------------------
+
+    /** Starts a new TV playlist with entry [index] and waits to see the TV take it. */
+    private suspend fun sendFrom(index: Int, session: Long): Boolean {
+        val entry = mutex.withLock { entries.getOrNull(index) } ?: return false
+        val payload = packager.packageItems(listOf(entry.item), listOf(entry.id))?.firstOrNull() ?: return false
+        runCatching {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>()
+                .supersedeIfActive()
+        }
+        if (!webSocketClient.send(createPlaylistCommandJson(playbridge.PlaylistPayload(items = listOf(payload))))) return false
+        castSessionManager.notifyNativePlaybackStarted()
+        mutex.withLock {
+            if (session != generation) return true
+            cursor = index
+            sent += entry.id
+            publishLocked(active = true)
+        }
+        attachJob?.cancel()
+        attachJob = scope.launch { awaitAttach(entry.id, session) }
+        return true
+    }
+
+    /**
+     * A receiver that keeps sender item ids reports the first item under its id. One that
+     * doesn't never will: give it the rest of the list (up to its limit) in one go instead.
+     */
+    private suspend fun awaitAttach(firstId: String, session: Long) {
+        delay(ATTACH_TIMEOUT_MS)
+        val fallback = mutex.withLock {
+            if (session != generation || playbackId != null) return
+            val status = latest ?: connectionCoordinator.tvPlaylistState.value
+            val pid = status?.playbackId ?: return
+            val rest = entries.drop(cursor + 1).take(PhoneQueueWindow.TV_LIMIT - 1).map { it.item }
+            attachJob = null // This job: clearing must not cancel it.
+            clearLocked()
+            pid to rest
+        }
+        Log.i(TAG, "Receiver did not keep item ids for $firstId; sending ${fallback.second.size} items at once")
+        val payloads = packager.packageItems(fallback.second) ?: return
+        for (chunk in payloads.chunked(APPEND_LIMIT)) {
+            if (!webSocketClient.send(createQueueAddCommandJson(chunk, fallback.first))) break
+        }
+    }
+
+    private suspend fun onStatus(status: PlaylistUiState?) {
+        if (status == null) return
+        val changed = mutex.withLock {
+            if (entries.isEmpty()) return
+            val ids = status.items.mapNotNull { it.itemId }
+            when {
+                playbackId == null -> {
+                    // The new playback is ours once the TV lists one of our items.
+                    if (ids.none { it in byId }) return
+                    playbackId = status.playbackId
+                }
+                status.playbackId != playbackId -> {
+                    Log.i(TAG, "Another playback started on the TV; the phone list ends")
+                    clearLocked()
+                    return
+                }
+            }
+            latest = status
+            true
+        }
+        if (changed) wake.trySend(Unit)
+    }
+
+    private suspend fun reconcile() {
+        val work = mutex.withLock {
+            val status = latest ?: return
+            val pid = playbackId ?: return
+            if (status.queueRevision < awaitRevision) return
+            val current = status.currentItemId ?: return
+            val tv = status.items.mapNotNull { it.itemId }
+            val at = entries.indexOfFirst { it.id == current }
+            if (at < 0) return // Something another controller added is playing; wait for ours.
+            cursor = at
+            if (!dirty) {
+                val adopted = PhoneQueueWindow.adopt(entries.map { it.id }, cursor, sent, tv, current)
+                if (adopted.size != entries.size || adopted.indices.any { adopted[it] != entries[it].id }) {
+                    val kept = adopted.toHashSet()
+                    entries.filter { it.id !in kept }.forEach { byId.remove(it.id); sent.remove(it.id) }
+                    entries = adopted.mapNotNull(byId::get).toMutableList()
+                    cursor = entries.indexOfFirst { it.id == current }
+                }
+            }
+            dirty = false
+            publishLocked()
+            val plan = PhoneQueueWindow.plan(entries.map { it.id }, cursor, tv, current)
+            if (plan.isEmpty) return
+            Triple(plan, pid, generation)
+        }
+        val (plan, pid, session) = work
+        if (!apply(plan, pid, session)) {
+            // Not confirmed: try again shortly with whatever the TV reports by then.
+            scope.launch { delay(RETRY_MS); wake.trySend(Unit) }
+        }
+    }
+
+    /** Sends [plan]: removes first, then adds, then moves. False if a step went unconfirmed. */
+    private suspend fun apply(plan: WindowPlan, pid: String, session: Long): Boolean {
+        suspend fun ok(result: QueueCommandResult?): Boolean {
+            if (result == null) return false
+            if (result.error == "stale_playback" || result.error == "no_active_playback") {
+                mutex.withLock { if (session == generation) clearLocked() }
+                return false
+            }
+            result.queueRevision?.let { revision -> mutex.withLock { if (session == generation) awaitRevision = revision } }
+            return result.ok
+        }
+        if (plan.removes.isNotEmpty()) {
+            val result = command("queue_remove", pid) {
+                put("itemIds", buildJsonArray { plan.removes.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (!ok(result)) return false
+            mutex.withLock { sent.removeAll(plan.removes.toSet()) }
+        }
+        if (plan.adds.isNotEmpty()) {
+            val toAdd = mutex.withLock { plan.adds.mapNotNull(byId::get) }
+            val payloads = packager.packageItems(toAdd.map { it.item }, toAdd.map { it.id }) ?: return false
+            for (chunk in payloads.chunked(APPEND_LIMIT)) {
+                val requestId = UUID.randomUUID().toString()
+                val result = connectionCoordinator.sendConfirmedQueueCommand(
+                    requestId, createQueueAddCommandJson(chunk, pid, requestId), CONFIRM_MS,
+                )
+                if (!ok(result)) return false
+                mutex.withLock { chunk.mapNotNull { it.item_id }.forEach(sent::add) }
+            }
+        }
+        for ((id, before) in plan.moves) {
+            val result = command("queue_move", pid) {
+                put("itemId", id)
+                put("beforeItemId", before)
+            }
+            if (!ok(result)) return false
+        }
+        return true
+    }
+
+    private suspend fun command(
+        action: String,
+        pid: String,
+        payload: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): QueueCommandResult? {
+        val requestId = UUID.randomUUID().toString()
+        val json = buildJsonObject {
+            put("type", "command")
+            put("action", action)
+            put("requestId", requestId)
+            put("payload", buildJsonObject { payload(); put("ifPlaybackId", pid) })
+        }.toString()
+        return connectionCoordinator.sendConfirmedQueueCommand(requestId, json, CONFIRM_MS)
+    }
+
+    private fun clearLocked() {
+        attachJob?.cancel()
+        attachJob = null
+        entries = mutableListOf()
+        byId.clear()
+        sent.clear()
+        cursor = 0
+        playbackId = null
+        latest = null
+        dirty = false
+        awaitRevision = -1L
+        generation++
+        mutableState.value = PhoneQueueState()
+    }
+
+    private fun publishLocked(active: Boolean = mutableState.value.active) {
+        mutableState.value = PhoneQueueState(active = active && entries.isNotEmpty(), position = cursor, count = entries.size)
+    }
+
+    private data class Jump(val entry: Entry, val onTv: Boolean, val playbackId: String, val session: Long)
+
+    private companion object {
+        const val TAG = "PhoneQueueCoordinator"
+        /** Let quick skips settle before updating the TV. */
+        const val SETTLE_MS = 600L
+        const val RETRY_MS = 2_000L
+        const val CONFIRM_MS = 8_000L
+        const val ATTACH_TIMEOUT_MS = 8_000L
+        /** PlayBridge TVs reject larger `queue_add` messages. */
+        const val APPEND_LIMIT = 50
+    }
+}

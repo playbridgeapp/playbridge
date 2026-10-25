@@ -74,18 +74,62 @@ import Foundation
         let shuffled = PhoneFilesModel.slideshow(photos: many, videos: [], includeVideos: false, shuffle: true, startIndex: 0, limit: 50)
         precondition(Set(shuffled.map(\.title)) == Set(many.map(\.title)) && shuffled.count == 20)
 
-        // Play next: each move lands right after the current item; last-first keeps pick order.
-        var queue = ["current", "later", "a", "b", "c"]
-        for id in PhoneFilesModel.playNextMoveOrder(["a", "b", "c"]) {
-            queue.removeAll { $0 == id }
-            queue.insert(id, at: queue.firstIndex(of: "current")! + 1)
-        }
-        precondition(queue == ["current", "a", "b", "c", "later"])
-
-        // Lazy preparation keeps one item queued after the one playing.
-        precondition(PhoneFilesModel.shouldPrepareNext(currentIndex: 0, sentCount: 1))
-        precondition(!PhoneFilesModel.shouldPrepareNext(currentIndex: 0, sentCount: 2))
-        precondition(PhoneFilesModel.shouldPrepareNext(currentIndex: 1, sentCount: 2))
+        checkQueueWindow()
         print("PASS: phone files model")
+    }
+
+    /// Applies `plan` to `tv` the way the receiver would.
+    static func apply(_ plan: WindowPlan, to tv: [String]) -> [String] {
+        var queue = tv.filter { !plan.removes.contains($0) } + plan.adds
+        for move in plan.moves {
+            queue.removeAll { $0 == move.itemId }
+            if let before = move.before, let at = queue.firstIndex(of: before) { queue.insert(move.itemId, at: at) }
+            else { queue.append(move.itemId) }
+        }
+        return queue
+    }
+
+    static func checkQueueWindow() {
+        func ids(_ range: ClosedRange<Int>) -> [String] { range.map { "e\($0)" } }
+        let order = ids(0...9_999)
+        // Start fills 20 ahead; nothing to do while enough is queued; top up at 10 left.
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 0, tv: ["e0"], tvCurrent: "e0").adds == ids(1...20))
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 4, tv: ids(0...20), tvCurrent: "e4").isEmpty)
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 10, tv: ids(0...20), tvCurrent: "e10").adds == ids(21...30))
+        // Played items are trimmed down to 10.
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 16, tv: ids(0...32), tvCurrent: "e16").removes == ids(0...5))
+        // Playing through 500 items keeps the window small and the next item queued.
+        var tv = ["e0"]
+        for cursor in 0..<500 {
+            tv = apply(PhoneQueueWindow.plan(order: order, cursor: cursor, tv: tv, tvCurrent: "e\(cursor)"), to: tv)
+            precondition(tv.count <= 36 && tv[tv.firstIndex(of: "e\(cursor)")! + 1] == "e\(cursor + 1)")
+        }
+        // Play next inside the window: add, then move into place.
+        let edited = ["e0", "x", "y"] + ids(1...9_999)
+        let plan = PhoneQueueWindow.plan(order: edited, cursor: 0, tv: ids(0...15), tvCurrent: "e0")
+        precondition(plan.adds == ["x", "y"] && apply(plan, to: ids(0...15)) == ["e0", "x", "y"] + ids(1...15))
+        // Add to queue past the window sends nothing; other controllers' items are left alone.
+        precondition(PhoneQueueWindow.plan(order: order + ["z"], cursor: 4, tv: ids(0...20), tvCurrent: "e4").isEmpty)
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 0, tv: ["e0", "foreign"] + ids(1...14), tvCurrent: "e0").isEmpty)
+        // A far jump back: the old window is dropped, not the gap filled.
+        let jumped = PhoneQueueWindow.plan(order: order, cursor: 100, tv: ["e100"] + ids(5_001...5_020), tvCurrent: "e100")
+        precondition(jumped.removes == ids(5_001...5_020) && jumped.adds == ids(101...120))
+        let appended = ids(4_990...5_020) + ["e100"]
+        let after = apply(PhoneQueueWindow.plan(order: order, cursor: 100, tv: appended, tvCurrent: "e100"), to: appended)
+        precondition(Array(after[after.firstIndex(of: "e100")!...]) == ids(100...120))
+        // The receiver's 200-item limit.
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 0, tv: ["e0"] + (1...195).map { "f\($0)" }, tvCurrent: "e0").adds == ids(1...4))
+        // Smaller window for Photos videos.
+        precondition(PhoneQueueWindow.plan(order: order, cursor: 0, tv: ["e0"], tvCurrent: "e0",
+                                           limits: .init(ahead: 2, aheadLow: 1)).adds == ids(1...2))
+        // Edits made on the receiver: removals and reordering are taken in; unsent items stay.
+        precondition(PhoneQueueWindow.adopt(order: ids(0...7), cursor: 1, sent: Set(ids(0...5)),
+                                            tv: ["e0", "e1", "e2", "e4", "e5"], tvCurrent: "e1")
+            == ["e0", "e1", "e2", "e4", "e5", "e6", "e7"])
+        precondition(PhoneQueueWindow.adopt(order: ids(0...5), cursor: 0, sent: Set(ids(0...3)),
+                                            tv: ["e0", "e3", "e1", "e2"], tvCurrent: "e0")
+            == ["e0", "e3", "e1", "e2", "e4", "e5"])
+        precondition(PhoneQueueWindow.adopt(order: ids(0...30), cursor: 0, sent: Set(ids(0...20)), tv: ids(0...20), tvCurrent: "e0")
+            == ids(0...30))
     }
 }

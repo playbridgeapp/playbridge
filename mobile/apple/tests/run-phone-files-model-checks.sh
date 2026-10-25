@@ -7,5 +7,6 @@ source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$test_dir/cache" \
   "$source_dir/Models/PhoneMedia.swift" \
   "$source_dir/UI/PhoneFilesModel.swift" \
+  "$source_dir/UI/PhoneQueueWindow.swift" \
   "$repo_root/mobile/apple/tests/PhoneFilesModelTests.swift" -o "$test_dir/check"
 "$test_dir/check"

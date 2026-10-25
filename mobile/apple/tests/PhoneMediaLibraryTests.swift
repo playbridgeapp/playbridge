@@ -41,11 +41,21 @@ struct ScreenBackButton: View {
 }
 final class FixtureCoordinator {
     var activeContext = "idle"
-    var playlist: PlaylistUiState?
+    @Published var playlist: PlaylistUiState?
     var playback: TvPlaybackStatus?
 }
 struct PlaylistEpisode { let index: Int; let title: String; var itemId: String? = nil }
-struct PlaylistUiState { var currentIndex: Int; var items: [PlaylistEpisode]; var playbackId: String? = nil; var currentItemId: String? = nil }
+struct PlaylistUiState {
+    var currentIndex: Int; var items: [PlaylistEpisode]; var playbackId: String? = nil; var currentItemId: String? = nil
+    var queueRevision: UInt64 = 0
+}
+struct QueueCommandResult { let requestId: String; let ok: Bool; let error: String?; let playbackId: String?; let queueRevision: UInt64? }
+enum WireProtocol {
+    static func playlistJumpCommand(index: Int, itemId: String? = nil, playbackId: String? = nil, useQueueV1: Bool = false,
+                                    requestID: String? = nil) -> String { "" }
+    static func queueRemove(itemIds: [String], playbackId: String?, requestID: String = "") -> String { "" }
+    static func queueMove(itemId: String, beforeItemId: String?, playbackId: String?, requestID: String = "") -> String { "" }
+}
 struct TvPlaybackStatus { var state: String }
 final class ConnectionViewModel: ObservableObject {
     var isConnected = false
@@ -57,8 +67,11 @@ final class ConnectionViewModel: ObservableObject {
     var destinationID: String? = "fixture"
     var localQueueSupported = false
     var localQueueReorders = false
-    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil) {}
-    @discardableResult func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil) -> Bool { false }
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
+                        itemId: String? = nil) {}
+    func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil,
+                         itemId: String, playbackId: String) async -> QueueCommandResult? { nil }
+    func sendConfirmedQueueCommand(_ command: String, requestID: String, timeout: TimeInterval = 8) async -> QueueCommandResult? { nil }
     func moveInQueue(itemId: String, beforeItemId: String?) {}
     func control(_ command: String) {}
     func jump(to item: PlaylistEpisode) {}

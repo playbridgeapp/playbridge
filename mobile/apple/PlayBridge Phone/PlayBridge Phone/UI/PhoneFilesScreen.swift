@@ -104,7 +104,7 @@ struct PhoneFilesScreen: View {
         .sheet(item: $collectionItems) { target in AddPhoneMediaToCollection(items: target.items) }
         .sheet(item: $slideshow) { run in
             SlideshowSheet(run: run, seconds: $slideSeconds, shuffle: $slideShuffle, includeVideos: $slideVideos,
-                           restart: { startIndex in startSlideshow(run, startIndex: startIndex) },
+                           restart: { from in startSlideshow(run, from: from) },
                            onStop: { vm.control("stop"); phoneQueue.stop(); slideshow = nil })
         }
         .alert("Remove imported copy?", isPresented: Binding(get: { deleteItem != nil }, set: { if !$0 { deleteItem = nil } })) {
@@ -216,7 +216,7 @@ struct PhoneFilesScreen: View {
                             let name = chips.first { $0.id == chip }?.title
                             Button {
                                 let run = SlideshowRun(title: name ?? "All photos", photos: shown, videos: slideshowVideos)
-                                startSlideshow(run, startIndex: 0)
+                                startSlideshow(run)
                             } label: {
                                 Label("Slideshow of \(name ?? "all photos") on TV", systemImage: "play.rectangle.on.rectangle")
                                     .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary).lineLimit(1)
@@ -552,7 +552,7 @@ struct PhoneFilesScreen: View {
     }
 
     private func playList(_ list: [PhoneMedia], shuffle: Bool) {
-        send(Array((shuffle ? list.shuffled() : list).prefix(PhoneFilesModel.tvQueueLimit)), .replace)
+        send(shuffle ? list.shuffled() : list, .replace)
     }
 
     private func send(_ list: [PhoneMedia], _ mode: PhoneQueueCoordinator.Mode, displayDurationMs: Int? = nil) {
@@ -570,11 +570,18 @@ struct PhoneFilesScreen: View {
         }
     }
 
-    private func startSlideshow(_ run: SlideshowRun, startIndex: Int) {
-        let ordered = PhoneFilesModel.slideshow(photos: run.photos, videos: run.videos, includeVideos: slideVideos,
-                                                shuffle: slideShuffle, startIndex: startIndex, limit: PhoneFilesModel.tvQueueLimit)
+    /// Builds the order from the options; `from` keeps the current order and restarts at that
+    /// item instead (a new time per photo).
+    private func startSlideshow(_ run: SlideshowRun, from: Int? = nil) {
+        let ordered: [PhoneMedia]
+        if let from, !run.ordered.isEmpty {
+            ordered = Array(run.ordered[from...] + run.ordered[..<from])
+        } else {
+            ordered = PhoneFilesModel.slideshow(photos: run.photos, videos: run.videos, includeVideos: slideVideos,
+                                                shuffle: slideShuffle, startIndex: 0, limit: .max)
+        }
         var updated = run
-        updated.count = ordered.count
+        updated.ordered = ordered
         slideshow = updated
         send(ordered, .replace, displayDurationMs: slideSeconds * 1000)
     }
@@ -709,7 +716,8 @@ struct SlideshowRun: Identifiable {
     let title: String
     let photos: [PhoneMedia]
     let videos: [PhoneMedia]
-    var count = 0
+    /// The order sent, so a new time per photo keeps it.
+    var ordered: [PhoneMedia] = []
 }
 
 /// Slideshow controls (board 8). Changing an option resends the list.
@@ -718,11 +726,11 @@ private struct SlideshowSheet: View {
     @Binding var seconds: Int
     @Binding var shuffle: Bool
     @Binding var includeVideos: Bool
-    let restart: (Int) -> Void
+    /// Restarts the slideshow: at an item of the current order, or (nil) in a new order.
+    let restart: (Int?) -> Void
     let onStop: () -> Void
     @EnvironmentObject private var vm: ConnectionViewModel
-
-    private var playlist: PlaylistUiState? { vm.coordinator.playlist }
+    @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -730,27 +738,27 @@ private struct SlideshowSheet: View {
                 Text("Slideshow").font(Theme.font(.title3).bold())
                 Text("\(run.title) on \(PhoneMediaCasting.receiverName(vm))").font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
             }
-            if let playlist, run.count > 0 {
-                Text("\(playlist.currentIndex + 1) of \(run.count)").font(Theme.font(.headline)).frame(maxWidth: .infinity)
+            if phoneQueue.active, phoneQueue.count > 0 {
+                Text("\(phoneQueue.position + 1) of \(phoneQueue.count)").font(Theme.font(.headline)).frame(maxWidth: .infinity)
             }
             HStack(spacing: 20) {
-                control("backward.fill", label: "Previous photo") { step(-1) }
+                control("backward.fill", label: "Previous photo") { phoneQueue.step(-1) }
                 control(vm.coordinator.playback?.state == "paused" ? "play.fill" : "pause.fill", label: "Pause slideshow", primary: true) {
                     vm.control(vm.coordinator.playback?.state == "paused" ? "play" : "pause")
                 }
-                control("forward.fill", label: "Next photo") { step(1) }
+                control("forward.fill", label: "Next photo") { phoneQueue.step(1) }
             }.frame(maxWidth: .infinity)
             VStack(spacing: 0) {
                 HStack {
                     Text("Each photo")
                     Spacer()
-                    Picker("Time per photo", selection: Binding(get: { seconds }, set: { seconds = $0; restart(playlist?.currentIndex ?? 0) })) {
+                    Picker("Time per photo", selection: Binding(get: { seconds }, set: { seconds = $0; restart(phoneQueue.active ? phoneQueue.position : 0) })) {
                         ForEach([3, 5, 10], id: \.self) { Text("\($0) s").tag($0) }
                     }.pickerStyle(.segmented).frame(width: 170)
                 }.frame(minHeight: 52)
-                Toggle("Shuffle", isOn: Binding(get: { shuffle }, set: { shuffle = $0; restart(0) })).frame(minHeight: 52)
+                Toggle("Shuffle", isOn: Binding(get: { shuffle }, set: { shuffle = $0; restart(nil) })).frame(minHeight: 52)
                 if !run.videos.isEmpty {
-                    Toggle("Play videos in the album too", isOn: Binding(get: { includeVideos }, set: { includeVideos = $0; restart(0) }))
+                    Toggle("Play videos in the album too", isOn: Binding(get: { includeVideos }, set: { includeVideos = $0; restart(nil) }))
                         .frame(minHeight: 52)
                 }
             }
@@ -765,16 +773,6 @@ private struct SlideshowSheet: View {
         .background(Theme.surfaceContainer.ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-    }
-
-    private func step(_ delta: Int) {
-        guard let playlist else { return }
-        let ordered = playlist.items.sorted { $0.index < $1.index }
-        guard let position = ordered.firstIndex(where: { item in
-                  playlist.currentItemId.map { item.itemId == $0 } ?? (item.index == playlist.currentIndex)
-              }),
-              ordered.indices.contains(position + delta) else { return }
-        vm.jump(to: ordered[position + delta])
     }
 
     private func control(_ systemImage: String, label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {

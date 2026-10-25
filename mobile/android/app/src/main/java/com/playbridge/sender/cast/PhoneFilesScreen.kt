@@ -157,6 +157,7 @@ fun PhoneFilesScreen(
     val tvPlaying = (nativeConnected && tvActiveContext == "player") ||
         (activeExternalDevice != null && externalMediaTitle != null)
     val tvPlaylist by connectionCoordinator.tvPlaylistState.collectAsState()
+    val phoneQueueState by koinInject<PhoneQueueCoordinator>().state.collectAsState()
     // PlayBridge receivers take whole lists; Google Cast, DLNA and Roku play one item at a time.
     val queueEnabled = nativeConnected
 
@@ -309,10 +310,7 @@ fun PhoneFilesScreen(
     fun playList(list: List<PhoneMediaItem>, shuffle: Boolean) {
         val ordered = if (shuffle) list.shuffled() else list
         when {
-            queueEnabled -> queue(
-                ordered.take(PhoneFilesModel.TV_QUEUE_LIMIT),
-                com.playbridge.sender.connection.LocalQueueMode.REPLACE,
-            )
+            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
             !hasExternalTarget -> {
                 val playable = ordered.filter { it.mediaKind != MediaKind.IMAGE }
                 if (playable.isEmpty()) return
@@ -322,13 +320,19 @@ fun PhoneFilesScreen(
     }
 
     /** Photos (and optionally the folder's videos) as a timed list (board 8). */
-    fun startSlideshow(show: Slideshow, startIndex: Int = 0) {
+    fun startSlideshow(show: Slideshow) {
         val ordered = PhoneFilesModel.slideshow(
-            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, startIndex, PhoneFilesModel.TV_QUEUE_LIMIT,
+            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, 0, Int.MAX_VALUE,
         )
-        val list = ordered.map { castItem(it, uiState.slideSeconds * 1000L) }
-        slideshow = show.copy(count = ordered.size)
-        sendQueue(list, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+        slideshow = show.copy(ordered = ordered)
+        sendQueue(ordered.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+    }
+
+    /** Same order, new time per photo: restart from the photo on screen. */
+    fun retimeSlideshow(show: Slideshow, from: Int) {
+        val rotated = show.ordered.drop(from) + show.ordered.take(from)
+        slideshow = show.copy(ordered = rotated)
+        sendQueue(rotated.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
     }
 
     fun share(list: List<PhoneMediaItem>) {
@@ -640,14 +644,14 @@ fun PhoneFilesScreen(
         SlideshowSheet(
             show = show,
             tvName = tvName ?: "TV",
-            position = tvPlaylist?.let { it.currentIndex + 1 }?.takeIf { tvPlaying },
+            position = phoneQueueState.position.plus(1).takeIf { phoneQueueState.active && tvPlaying },
             seconds = uiState.slideSeconds,
             shuffle = uiState.slideShuffle,
             includeVideos = uiState.slideVideos,
             hasVideos = show.videos.isNotEmpty(),
             onSeconds = {
                 uiState.slideSeconds = it
-                startSlideshow(show, startIndex = tvPlaylist?.currentIndex ?: 0)
+                retimeSlideshow(show, from = if (phoneQueueState.active) phoneQueueState.position else 0)
             },
             onShuffle = {
                 uiState.slideShuffle = it
@@ -690,13 +694,15 @@ internal class PhoneFilesCallbacks(
     val slideshowAvailable: Boolean = false,
 )
 
-/** A running slideshow: what it shows and how many items were sent. */
+/** A running slideshow: what it shows, in the order sent. */
 internal data class Slideshow(
     val title: String,
     val photos: List<PhoneMediaItem>,
     val videos: List<PhoneMediaItem>,
-    val count: Int = 0,
-)
+    val ordered: List<PhoneMediaItem> = emptyList(),
+) {
+    val count: Int get() = ordered.size
+}
 
 /** Keeps one `playlist` message a reasonable size for every receiver. */
 

@@ -53,9 +53,6 @@ struct PhotoSection: Identifiable {
 
 /// Pure list logic for Phone Files, kept out of SwiftUI so it can be checked on the host.
 enum PhoneFilesModel {
-    /// PlayBridge TVs hold at most this many items in one queue.
-    static let tvQueueLimit = 200
-
     static func matches(_ item: PhoneMedia, _ query: String) -> Bool {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return true }
@@ -163,13 +160,6 @@ enum PhoneFilesModel {
         let start = min(max(0, startIndex), ordered.count - 1)
         return Array(ordered[start...] + ordered[..<start])
     }
-
-    /// Play next for several new items: each move puts one right after the current item,
-    /// so moving them last-first leaves them in their original order.
-    static func playNextMoveOrder(_ newItemIDs: [String]) -> [String] { newItemIDs.reversed() }
-
-    /// Lazy queue feeding keeps one prepared item ahead of the one playing.
-    static func shouldPrepareNext(currentIndex: Int, sentCount: Int) -> Bool { currentIndex + 1 >= sentCount }
 
     /// Toggles `id` in a pick-ordered selection; removing renumbers the rest.
     static func toggle(_ selection: [String], _ id: String) -> [String] {
