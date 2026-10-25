@@ -213,9 +213,10 @@ final class BridgedAppUITests: XCTestCase {
         let remoteReturn = app.buttons["remote-return"]
         XCTAssertTrue(remoteReturn.waitForExistence(timeout: 10), app.debugDescription)
         // With no TV selected the Remote opens the device picker over itself (#376).
-        let devicePicker = app.navigationBars["Play on"]
+        // The Play on sheet hides its navigation bar on its first page.
+        let devicePicker = app.otherElements["play-on-sheet"]
         if devicePicker.waitForExistence(timeout: 5) {
-            devicePicker.buttons["Close"].tap()
+            devicePicker.buttons["Close"].firstMatch.tap()
             XCTAssertTrue(remoteReturn.waitForHittable(timeout: 5), "Device picker did not close")
         }
         remoteReturn.tap()
