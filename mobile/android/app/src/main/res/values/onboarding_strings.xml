@@ -8,9 +8,9 @@
     <string name="onboarding_done">Finish</string>
     <string name="onboarding_progress">Step %1$d of %2$d</string>
     <string name="onboarding_dashboard_title">This is your Dashboard</string>
-    <string name="onboarding_dashboard_body">Home base for everything: browse the web, open your Library, cast phone files, and more. Each card takes you to a section. Swipe across the cards for more. Tap Reorder to move any feature or Bridged App — the first two tiles on each page are larger.</string>
+    <string name="onboarding_dashboard_body">Home base for everything: browse the web, open your web apps, cast phone files, and more. Each tile takes you to a section. Tap Customize to reorder or hide tiles — the first two are larger.</string>
     <string name="onboarding_cast_title">Cast to your TV</string>
-    <string name="onboarding_cast_body">Tap the status pill or the Connection card to pair with your TV. Once connected, any video you find can be sent to the big screen.</string>
+    <string name="onboarding_cast_body">The bar under the title shows where videos play. Tap it to pick or pair a TV. Once connected, any video you find can be sent to the big screen. The remote button at the top controls your TV.</string>
     <string name="onboarding_return_title">Getting back here</string>
     <string name="onboarding_return_body">See this blocks icon in the top bar? Every screen has it. Tap it any time to return to the Dashboard.</string>
     <string name="onboarding_ublock_title">Block ads with uBlock Origin</string>

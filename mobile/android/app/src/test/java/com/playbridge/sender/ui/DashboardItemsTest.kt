@@ -1,147 +1,156 @@
 package com.playbridge.sender.ui
 
 import androidx.compose.runtime.saveable.SaverScope
-import com.playbridge.sender.FlavorConfig
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
-import com.playbridge.sender.cast.PlayOnStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DashboardItemsTest {
     private val builtInIds = linkedMapOf(
-        Screen.Remote to "remote",
         Screen.Browser to "browser",
-        Screen.Library to "library",
-        null to "connection",
-        Screen.ScreenMirror to "screen-mirror",
         Screen.PhoneFiles to "phone-files",
-        Screen.DebridLibrary to "debrid",
+        Screen.ScreenMirror to "screen-mirror",
         Screen.Iptv to "iptv",
         Screen.Collections to "collections",
+        Screen.DebridLibrary to "debrid",
         Screen.CastHistory to "cast-history",
     )
 
     @Test
-    fun `every production built-in constructs with its stable ID in all Play on states and flavors`() {
+    fun `every production built-in constructs with its stable ID in both flavors`() {
         for (debridSupported in listOf(false, true)) {
-            for (state in PlayOnStatus.State.entries) {
-                // Exercise the real DashboardItem constructors used on launch, not a parallel fixture.
-                val items = dashboardItems(playOnStatus = PlayOnStatus(state), debridSupported = debridSupported)
-                val builtIns = items.filter { it.id != "bridged-apps" }
-                val expected = builtInIds.filterKeys { debridSupported || it != Screen.DebridLibrary }
-                assertEquals(expected, builtIns.associate { it.screen to it.id })
-                assertEquals(expected.size + 1, items.size)
-                assertEquals(items.size, items.map { it.id }.distinct().size)
-            }
+            val items = dashboardItems(debridSupported = debridSupported)
+            val builtIns = items.filterNot { it.isAddPlaceholder }
+            val expected = builtInIds.filterKeys { debridSupported || it != Screen.DebridLibrary }
+            assertEquals(expected, builtIns.associate { it.screen to it.id })
+            assertEquals(expected.size + 1, items.size)
+            assertEquals(items.size, items.map { it.id }.distinct().size)
         }
     }
 
     @Test
-    fun `Remote stays visible while disconnected and uses the selected TV subtitle`() {
-        for (debridSupported in listOf(false, true)) {
-            val items = dashboardItems(
-                playOnStatus = PlayOnStatus(),
-                remoteSubtitle = "Living Room · TV remote only",
-                debridSupported = debridSupported,
-            )
-            val remote = items.single { it.screen == Screen.Remote }
-            assertEquals("remote", remote.id)
-            assertEquals("Remote", remote.title)
-            assertEquals("Living Room · TV remote only", remote.subtitle)
-            assertEquals("Not connected", items.single { it.id == "connection" }.subtitle)
-            assertEquals(debridSupported, items.any { it.screen == Screen.DebridLibrary })
-        }
-        assertEquals("Control your TV", dashboardItems().single { it.id == "remote" }.subtitle)
+    fun `Library, Play on and Remote are no longer tiles`() {
+        val ids = dashboardItems(debridSupported = true).map { it.id }
+        for (removed in listOf("library", "connection", "remote")) assertFalse(removed in ids)
+        assertFalse(dashboardItems().any { it.screen == Screen.Remote || it.screen == Screen.Library })
     }
 
     @Test
-    fun `Play on tile shows standing by with the connected identity color`() {
-        val connected = dashboardItems(playOnStatus = PlayOnStatus(PlayOnStatus.State.PLAYING_ON))
-            .single { it.id == "connection" }
-        val standby = dashboardItems(playOnStatus = PlayOnStatus(PlayOnStatus.State.STANDING_BY))
-            .single { it.id == "connection" }
-        assertEquals("Connected", connected.subtitle)
-        assertEquals("Standing by", standby.subtitle)
-        assertEquals(connected.gradientColors, standby.gradientColors)
+    fun `every tile has its own colour`() {
+        val gradients = dashboardItems(debridSupported = true).filterNot { it.isAddPlaceholder }.map { it.gradientColors }
+        assertEquals(gradients.size, gradients.distinct().size)
+        assertTrue(dashboardItems().single { it.isAddPlaceholder }.gradientColors.isEmpty())
     }
 
     @Test
-    fun `installed apps replace the placeholder without colliding with Remote or Browser`() {
-        assertEquals(Screen.Browser, dashboardItems().single { it.id == "bridged-apps" }.screen)
-        val apps = listOf(app("https://streams.playbridge.app"), app("https://jellyfin.example"))
+    fun `unknown state shows the neutral in-use subtitles`() {
+        val subtitles = dashboardItems(debridSupported = true).associate { it.id to it.subtitle }
+        assertEquals("Videos, music, photos", subtitles["phone-files"])
+        assertEquals("Show this phone", subtitles["screen-mirror"])
+        assertEquals("Live channels", subtitles["iptv"])
+        assertEquals("Your playlists", subtitles["collections"])
+        assertEquals("Cloud files", subtitles["debrid"])
+        assertEquals("Recent casts", subtitles["cast-history"])
+    }
+
+    @Test
+    fun `not set up subtitles tell people what to do first`() {
+        val states = DashboardTileStates(
+            mediaAccess = false, mirror = MirrorTileState.NeedsTv, iptvPlaylists = 0, collections = 0,
+            debridLinked = false, castHistoryEmpty = true,
+        )
+        val subtitles = dashboardItems(states, debridSupported = true).associate { it.id to it.subtitle }
+        assertEquals("Allow access", subtitles["phone-files"])
+        assertEquals("Pick a TV first", subtitles["screen-mirror"])
+        assertEquals("Add a playlist", subtitles["iptv"])
+        assertEquals("Create your first", subtitles["collections"])
+        assertEquals("Link an account", subtitles["debrid"])
+        assertEquals("Nothing yet", subtitles["cast-history"])
+    }
+
+    @Test
+    fun `in use subtitles carry counts, the provider and the last cast`() {
+        val states = DashboardTileStates(
+            mediaAccess = true, iptvPlaylists = 3, collections = 1,
+            debridLinked = true, debridProvider = "Real-Debrid", castHistoryEmpty = false, lastCastTitle = "Big Buck Bunny",
+        )
+        val subtitles = dashboardItems(states, debridSupported = true).associate { it.id to it.subtitle }
+        assertEquals("3 playlists", subtitles["iptv"])
+        assertEquals("1 collection", subtitles["collections"])
+        assertEquals("Real-Debrid", subtitles["debrid"])
+        assertEquals("Last: Big Buck Bunny", subtitles["cast-history"])
+    }
+
+    @Test
+    fun `screen mirror covers every TV situation and marks live sharing`() {
+        fun mirror(state: MirrorTileState) = dashboardItems(DashboardTileStates(mirror = state)).single { it.id == "screen-mirror" }
+        assertEquals("Not on this TV", mirror(MirrorTileState.Unsupported).subtitle)
+        assertEquals("TV needs an update", mirror(MirrorTileState.NeedsUpdate).subtitle)
+        val live = mirror(MirrorTileState.Live("Living Room TV"))
+        assertEquals("Living Room TV", live.subtitle)
+        assertTrue(live.live)
+        assertFalse(mirror(MirrorTileState.Ready).live)
+    }
+
+    @Test
+    fun `mirror tile state follows the chosen TV like the Screen mirror screen`() {
+        fun state(
+            mirroring: Boolean = false, tvChosen: Boolean = true, external: Boolean = false,
+            externalSupported: Boolean = false, connected: Boolean = true, nativeSupported: Boolean = true,
+        ) = mirrorTileState(mirroring, tvChosen, "Living Room TV", external, externalSupported, connected, nativeSupported)
+        assertEquals(MirrorTileState.Live("Living Room TV"), state(mirroring = true, tvChosen = false))
+        assertEquals(MirrorTileState.NeedsTv, state(tvChosen = false))
+        assertEquals(MirrorTileState.Unsupported, state(external = true))
+        assertEquals(MirrorTileState.Ready, state(external = true, externalSupported = true))
+        assertEquals(MirrorTileState.NeedsUpdate, state(nativeSupported = false))
+        // Capabilities aren't known until the TV answers, so an unconnected TV isn't blamed.
+        assertEquals(MirrorTileState.Ready, state(connected = false, nativeSupported = false))
+        assertEquals(MirrorTileState.Ready, state())
+    }
+
+    @Test
+    fun `installed apps replace the Add web app placeholder and Streams gets its own colour`() {
+        val placeholder = dashboardItems().single { it.isAddPlaceholder }
+        assertEquals(Screen.Browser, placeholder.screen)
+        assertEquals(DashboardTileOrder.ADD_WEB_APP_ID, placeholder.id)
+        val apps = listOf(app(DashboardTileOrder.STREAMS_ORIGIN), app("https://jellyfin.example"))
         val items = dashboardItems(bridgedApps = apps)
-        assertFalse(items.any { it.id == "bridged-apps" })
+        assertFalse(items.any { it.isAddPlaceholder })
         assertEquals(apps.map { "app:${it.origin}" }, items.filter { it.app != null }.map { it.id })
-        assertEquals(apps, items.mapNotNull { it.app })
         assertEquals(items.size, items.map { it.id }.distinct().size)
-        assertTrue(items.any { it.id == "remote" && it.screen == Screen.Remote })
+        val (streams, other) = items.filter { it.app != null }
+        assertNotEquals(streams.gradientColors, other.gradientColors)
         assertTrue(items.any { it.id == "browser" && it.screen == Screen.Browser && it.app == null })
     }
 
     @Test
-    fun `old saved orders append Remote once and preserve the user's order on later launches`() {
+    fun `saved orders drop removed tiles and keep the user's order`() {
         for (debridSupported in listOf(false, true)) {
             val available = dashboardItems(debridSupported = debridSupported).map { it.id }
-            val oldOrder = available.filterNot { it == "remote" }.reversed()
-            val reconciled = DashboardTileOrder.reconcile(oldOrder + listOf("removed", oldOrder.first()), available)
-            assertEquals(oldOrder + "remote", reconciled)
+            val oldOrder = listOf("remote", "library") + available.reversed() + "connection"
+            val reconciled = DashboardTileOrder.reconcile(oldOrder, available)
+            assertEquals(available.reversed(), reconciled)
             assertEquals(reconciled, DashboardTileOrder.reconcile(reconciled, available))
-            assertEquals(available.toSet(), reconciled.toSet())
         }
     }
 
     @Test
-    fun `first launch and legacy migration keep Remote alongside Browser Streams and Library`() {
-        val apps = listOf(app("https://streams.playbridge.app"))
-        val available = dashboardItems(bridgedApps = apps).map { it.id }
-        for (saved in listOf(emptyList(), available.filterNot { it == "remote" }.reversed())) {
-            val migrated = DashboardTileOrder.migrateOrder(saved, available)
-            assertEquals(listOf("browser", "app:https://streams.playbridge.app", "library"), migrated.take(3))
-            assertEquals(1, migrated.count { it == "remote" })
-            assertEquals(available.size, migrated.size)
-            assertEquals(available.toSet(), migrated.toSet())
-        }
+    fun `Browser can't be hidden but every other tile can`() {
+        val order = dashboardItems(debridSupported = true).map { it.id }
+        val visible = DashboardTileOrder.visible(order, order.toSet())
+        assertEquals(listOf("browser"), visible)
+        assertEquals(order.filterNot { it == "iptv" }, DashboardTileOrder.visible(order, setOf("iptv", "unknown")))
     }
 
     @Test
-    fun `Remote reorders across pages and survives flavor and app visibility changes`() {
-        val apps = listOf(app("https://streams.playbridge.app"))
-        val foss = dashboardItems(bridgedApps = apps, debridSupported = true).map { it.id }
-        for (position in listOf(0, foss.lastIndex)) {
-            val moved = DashboardTileOrder.move(foss, "remote", position)
-            assertEquals("remote", moved[position])
-            assertEquals(moved, DashboardTileOrder.reconcile(moved, foss))
-            val play = dashboardItems(debridSupported = false).map { it.id }
-            val visible = DashboardTileOrder.reconcile(moved, play)
-            assertEquals(moved.filter { it in play } + "bridged-apps", visible)
-            assertEquals(1, visible.count { it == "remote" })
-            assertFalse("debrid" in visible)
-            assertFalse(visible.any { it.startsWith("app:") })
-            assertEquals(visible, visible.chunked(DashboardTileOrder.TILES_PER_PAGE).flatten())
-        }
-    }
-
-    @Test
-    fun `pager reaches every tile including the new Remote at installed app page boundaries`() {
-        // The old hard-coded count missed page three at 7 apps (Foss) or 8 apps (Play).
-        val builtInCount = if (FlavorConfig.DEBRID_SUPPORTED) 10 else 9
-        for (appCount in 0..20) {
-            val apps = (0 until appCount).map { app("https://app$it.example") }
-            val items = dashboardItems(bridgedApps = apps)
-            assertEquals(builtInCount + appCount.coerceAtLeast(1), items.size)
-            assertEquals(items.chunked(DashboardTileOrder.TILES_PER_PAGE).size, dashboardPageCount(apps))
-        }
-    }
-
-    @Test
-    fun `every visible built-in including Remote survives screen saving and restoration`() {
+    fun `every built-in survives screen saving and restoration`() {
         val scope = object : SaverScope {
             override fun canBeSaved(value: Any): Boolean = true
         }
-        // The Play on tile opens a sheet rather than a screen, so it has nothing to restore.
         for (item in dashboardItems().filter { it.app == null && it.screen != null }) {
             val saved = with(Screen.Saver) { scope.save(requireNotNull(item.screen)) }
             assertTrue("Missing saved destination for ${item.id}", saved != null)
@@ -151,7 +160,7 @@ class DashboardItemsTest {
 
     private fun app(origin: String) = BridgedApp(
         origin = origin,
-        name = "Library",
+        name = "App",
         startUrl = "$origin/",
         iconUrl = null,
     )

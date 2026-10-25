@@ -1,24 +1,15 @@
 package com.playbridge.sender.ui
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToIndex
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.unit.Density
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -70,7 +61,7 @@ class DashboardReorderDialogTest {
                 )
             }
         }
-        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithContentDescription("Done").performClick()
         compose.runOnIdle { assertTrue(dismissed) }
     }
 
@@ -90,30 +81,21 @@ class DashboardReorderDialogTest {
     }
 
     @Test
-    fun doubleDigitNumbersHaveAGutterAndDoNotOverflowAtLargeFontScale() {
-        var gutterPx = 0f
+    fun switchesHideTilesButBrowserIsAlwaysShown() {
+        val toggled = mutableListOf<Pair<String, Boolean>>()
         compose.setContent {
-            val originalDensity = LocalDensity.current
-            gutterPx = 12f * originalDensity.density
-            CompositionLocalProvider(LocalDensity provides Density(originalDensity.density, fontScale = 2f)) {
-                MaterialTheme {
-                    DashboardReorderDialog(
-                        (1..12).map { DashboardReorderTile("tile-$it", "Tile $it") },
-                        onReorder = {}, onChoosePosition = {}, onDismiss = {},
-                    )
-                }
+            MaterialTheme {
+                DashboardReorderDialog(
+                    listOf(DashboardReorderTile("browser", "Browser"), DashboardReorderTile("iptv", "IPTV")),
+                    onReorder = {}, onChoosePosition = {}, onDismiss = {},
+                    hidden = emptySet(), onToggleHidden = { id, hide -> toggled += id to hide },
+                )
             }
         }
-        compose.onNode(hasScrollAction()).performScrollToIndex(9)
-        val number = compose.onNodeWithText("10", useUnmergedTree = true)
-        val listBounds = compose.onNode(hasScrollAction()).fetchSemanticsNode().boundsInRoot
-        val numberBounds = number.fetchSemanticsNode().boundsInRoot
-        assertTrue("Number sits against the list clip", numberBounds.left - listBounds.left >= gutterPx - 1f)
-        val layouts = mutableListOf<TextLayoutResult>()
-        number.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(layouts) }
-        assertEquals(1, layouts.size)
-        assertEquals(1, layouts.single().lineCount)
-        assertFalse("Number overflows its column", layouts.single().hasVisualOverflow)
+        compose.onNodeWithText("Always shown").assertExists()
+        compose.onNodeWithContentDescription("Show Browser").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Show IPTV").performClick()
+        compose.runOnIdle { assertEquals(listOf("iptv" to true), toggled) }
     }
 
     @Test

@@ -66,28 +66,40 @@ internal fun groupPlayOnDevices(
 /** Receiver names as people know them: hostnames lose their mDNS ".local", also inside "Kodi (Host.local)". */
 internal val TvDevice.playOnName: String get() = name.replace(".local)", ")").removeSuffix(".local")
 
+/**
+ * What the Dashboard device chip says: videos play either on a chosen TV or on this phone.
+ * Connecting, reconnecting and offline describe the chosen TV's link, not a third destination.
+ */
 internal data class PlayOnStatus(
-    val state: State = State.NOT_CONNECTED,
-    val deviceName: String = "TV",
+    val state: State = State.THIS_PHONE,
+    val deviceName: String = THIS_PHONE_NAME,
+    /** Receiver kind for a chosen TV ("PlayBridge", "Google Cast", …); null on this phone. */
+    val receiver: String? = null,
     val secure: Boolean = false,
 ) {
-    enum class State { NOT_CONNECTED, STANDING_BY, PLAYING_ON }
+    enum class State { THIS_PHONE, CONNECTING, RECONNECTING, OFFLINE, CONNECTED }
 
-    val isConnected: Boolean get() = state != State.NOT_CONNECTED
-    val isPlayingOn: Boolean get() = state == State.PLAYING_ON
-    val pillSuffix: String get() = when {
-        state == State.STANDING_BY -> " · Standing by"
-        isPlayingOn && !secure -> " · not encrypted"
-        else -> ""
+    val tvChosen: Boolean get() = state != State.THIS_PHONE
+    val isConnected: Boolean get() = state == State.CONNECTED
+    /** A plain-WebSocket PlayBridge link keeps its encryption warning. */
+    val unencrypted: Boolean get() = isConnected && !secure
+    val statusLine: String get() = when (state) {
+        State.THIS_PHONE -> "Plays here · Tap to pick a TV"
+        State.CONNECTING -> "Connecting…"
+        State.RECONNECTING -> "Reconnecting…"
+        State.OFFLINE -> "Not connected"
+        State.CONNECTED -> "${receiver ?: "TV"} · ${if (unencrypted) "Not encrypted" else "Connected"}"
     }
-    val tileSubtitle: String get() = when (state) {
-        State.NOT_CONNECTED -> "Not connected"
-        State.STANDING_BY -> "Standing by"
-        State.PLAYING_ON -> "Connected"
+
+    companion object {
+        const val THIS_PHONE_NAME = "This phone"
     }
 }
 
-/** Presentation follows the selected route; a live socket alone may just be standing by. */
+/**
+ * Presentation follows the selected route, never the socket alone: on [CastSessionManager.Route.ThisDevice]
+ * the chip says This phone even while an idle native link is still open.
+ */
 internal fun playOnStatus(
     route: CastSessionManager.Route,
     socketConnected: Boolean,
@@ -95,17 +107,30 @@ internal fun playOnStatus(
     externalDevice: TvDevice?,
     externalReady: Boolean,
     socketSecure: Boolean = false,
+    connecting: Boolean = false,
+    reconnecting: Boolean = false,
 ): PlayOnStatus = when (route) {
-    is CastSessionManager.Route.External -> if (externalReady) {
-        // External transports use the neutral green presentation, independent of the native socket.
-        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, externalDevice?.playOnName ?: route.name.removeSuffix(".local"), secure = true)
-    } else PlayOnStatus()
-    CastSessionManager.Route.NativeTv -> if (socketConnected) {
-        PlayOnStatus(PlayOnStatus.State.PLAYING_ON, nativeDevice?.playOnName ?: "TV", secure = socketSecure)
-    } else PlayOnStatus()
-    CastSessionManager.Route.ThisDevice -> if (socketConnected) {
-        PlayOnStatus(PlayOnStatus.State.STANDING_BY, nativeDevice?.playOnName ?: "TV")
-    } else PlayOnStatus()
+    is CastSessionManager.Route.External -> {
+        val name = externalDevice?.playOnName ?: route.name.removeSuffix(".local")
+        val receiver = externalDevice?.resolvedProtocol?.displayName
+        // External transports use the neutral presentation, independent of the native socket.
+        when {
+            externalReady -> PlayOnStatus(PlayOnStatus.State.CONNECTED, name, receiver, secure = true)
+            connecting -> PlayOnStatus(PlayOnStatus.State.CONNECTING, name, receiver)
+            else -> PlayOnStatus(PlayOnStatus.State.OFFLINE, name, receiver)
+        }
+    }
+    CastSessionManager.Route.NativeTv -> {
+        val name = nativeDevice?.playOnName ?: "TV"
+        val receiver = CastProtocol.PLAYBRIDGE.displayName
+        when {
+            socketConnected -> PlayOnStatus(PlayOnStatus.State.CONNECTED, name, receiver, secure = socketSecure)
+            reconnecting -> PlayOnStatus(PlayOnStatus.State.RECONNECTING, name, receiver)
+            connecting -> PlayOnStatus(PlayOnStatus.State.CONNECTING, name, receiver)
+            else -> PlayOnStatus(PlayOnStatus.State.OFFLINE, name, receiver)
+        }
+    }
+    CastSessionManager.Route.ThisDevice -> PlayOnStatus()
 }
 
 /** Desktop receivers advertise their hostname and no TV player engines. */

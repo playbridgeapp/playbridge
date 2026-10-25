@@ -2,10 +2,15 @@ package com.playbridge.sender.ui
 
 /** Stable IDs, not titles or installation order, own dashboard placement. */
 internal object DashboardTileOrder {
-    const val TILES_PER_PAGE = 8
     const val BROWSER_ID = "browser"
     const val LEGACY_LIBRARY_ID = "library"
-    const val STREAMS_APP_ID = "app:https://streams.playbridge.app"
+    const val STREAMS_ORIGIN = "https://streams.playbridge.app"
+    const val STREAMS_APP_ID = "app:$STREAMS_ORIGIN"
+    /** Kept from the old "Bridged Apps" placeholder so saved orders still place it. */
+    const val ADD_WEB_APP_ID = "bridged-apps"
+
+    /** Browser is how videos are found and web apps are added, so it can't be hidden. */
+    val ALWAYS_SHOWN: Set<String> = setOf(BROWSER_ID)
 
     fun reconcile(saved: List<String>, available: List<String>): List<String> {
         val availableIds = available.toSet()
@@ -49,5 +54,7 @@ internal object DashboardTileOrder {
         }
     }
 
-    fun pageCount(tileCount: Int): Int = ((tileCount + TILES_PER_PAGE - 1) / TILES_PER_PAGE).coerceAtLeast(1)
+    /** Tiles the Dashboard draws: the saved order minus hidden ones, never hiding [ALWAYS_SHOWN]. */
+    fun visible(order: List<String>, hidden: Set<String>): List<String> =
+        order.filter { it !in hidden || it in ALWAYS_SHOWN }
 }
