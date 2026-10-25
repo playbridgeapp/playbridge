@@ -30,6 +30,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import java.io.File
 import java.net.Socket
 import java.net.InetSocketAddress
@@ -574,22 +577,38 @@ class ConnectionViewModel(
     suspend fun castLocalQueue(items: List<LocalCastItem>, mode: LocalQueueMode): LocalQueueResult {
         if (items.isEmpty() || !localQueueSupported()) return LocalQueueResult.FAILED
         val coordinator = org.koin.core.context.GlobalContext.get().get<ConnectionCoordinator>()
-        val payloads = try {
-            items.map { packageLocalItem(it) }
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "castLocalQueue packaging failed: ${e.message}")
-            return LocalQueueResult.FAILED
-        }
         val playing = coordinator.tvActiveContext.value == "player" && coordinator.tvPlaylistState.value != null
         if (mode == LocalQueueMode.REPLACE || !playing) {
+            // Start the first item at once; the rest are prepared afterwards and appended, so a
+            // long list or slideshow doesn't wait for every file (and every song's cover).
+            val first = packageLocalItems(items.take(1)) ?: return LocalQueueResult.FAILED
+            val previousPlaybackId = coordinator.tvPlaylistState.value?.playbackId
             val sent = sendCommandAndRecord(
-                createPlaylistCommandJson(playbridge.PlaylistPayload(items = payloads)),
-                "play", payloads.first().url, payloads.first().title,
+                createPlaylistCommandJson(playbridge.PlaylistPayload(items = first)),
+                "play", first.first().url, first.first().title,
             )
             if (!sent) return LocalQueueResult.FAILED
             castSessionManager.notifyNativePlaybackStarted()
+            if (items.size > 1) {
+                // The ViewModel scope outlives Phone Files, so leaving the screen keeps the list.
+                viewModelScope.launch {
+                    val rest = packageLocalItems(
+                        items.take(com.playbridge.sender.cast.PhoneFilesModel.TV_QUEUE_LIMIT).drop(1),
+                    ) ?: return@launch
+                    // Only append to the list just started, not to something started since.
+                    val playbackId = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                        coordinator.tvPlaylistState.first {
+                            it?.playbackId != null && it.playbackId != previousPlaybackId
+                        }?.playbackId
+                    }
+                    for (chunk in rest.chunked(LOCAL_QUEUE_CHUNK)) {
+                        if (!webSocketClient.send(createQueueAddCommandJson(chunk, playbackId))) break
+                    }
+                }
+            }
             return LocalQueueResult.PLAYING
         }
+        val payloads = packageLocalItems(items) ?: return LocalQueueResult.FAILED
         val registry = org.koin.core.context.GlobalContext.get()
             .get<com.playbridge.sender.cast.remote.RemoteControllerRegistry>()
         val controller = registry.controller.value
@@ -637,6 +656,21 @@ class ConnectionViewModel(
     }
 
     /** Publishes one phone file (and audio artwork) through the local proxy. */
+    /** Prepares several items a few at a time, keeping their order; null if any fails. */
+    private suspend fun packageLocalItems(items: List<LocalCastItem>): List<PlayPayload>? = try {
+        kotlinx.coroutines.coroutineScope {
+            val gate = kotlinx.coroutines.sync.Semaphore(LOCAL_PACKAGE_PARALLELISM)
+            items.map { item ->
+                async { gate.withPermit { packageLocalItem(item) } }
+            }.awaitAll()
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "castLocalQueue packaging failed: ${e.message}")
+        null
+    }
+
     private suspend fun packageLocalItem(item: LocalCastItem): PlayPayload {
         val app = getApplication<Application>()
         val routeService = com.playbridge.sender.cast.proxy.StreamRouteService(app)
@@ -965,6 +999,10 @@ class ConnectionViewModel(
         private const val SCAN_WINDOW_MS = 15_000L
         /** Quiet rescan interval while Connection UI / cast sheet holds discovery. */
         private const val BACKGROUND_RESCAN_MS = 45_000L
+        /** Phone files prepared at once when sending a list. */
+        private const val LOCAL_PACKAGE_PARALLELISM = 6
+        /** Items per queue_add message; PlayBridge TVs reject larger appends. */
+        private const val LOCAL_QUEUE_CHUNK = 50
     }
 }
 

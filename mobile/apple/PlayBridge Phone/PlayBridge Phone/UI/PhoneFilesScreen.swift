@@ -552,7 +552,7 @@ struct PhoneFilesScreen: View {
     }
 
     private func playList(_ list: [PhoneMedia], shuffle: Bool) {
-        send(shuffle ? list.shuffled() : list, .replace)
+        send(Array((shuffle ? list.shuffled() : list).prefix(PhoneFilesModel.tvQueueLimit)), .replace)
     }
 
     private func send(_ list: [PhoneMedia], _ mode: PhoneQueueCoordinator.Mode, displayDurationMs: Int? = nil) {
@@ -572,7 +572,7 @@ struct PhoneFilesScreen: View {
 
     private func startSlideshow(_ run: SlideshowRun, startIndex: Int) {
         let ordered = PhoneFilesModel.slideshow(photos: run.photos, videos: run.videos, includeVideos: slideVideos,
-                                                shuffle: slideShuffle, startIndex: startIndex, limit: 500)
+                                                shuffle: slideShuffle, startIndex: startIndex, limit: PhoneFilesModel.tvQueueLimit)
         var updated = run
         updated.count = ordered.count
         slideshow = updated

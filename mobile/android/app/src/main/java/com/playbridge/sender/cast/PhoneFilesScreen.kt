@@ -109,6 +109,8 @@ class PhoneFilesUiState {
     var slideVideos by mutableStateOf(true)
     val folderByTab = mutableStateMapOf<PhoneFilesTab, Long?>()
     internal val askedKinds = mutableStateMapOf<MediaKind, Boolean>()
+    /** Loaded media by kind. Kept here so returning shows the lists at once, at the same scroll. */
+    internal val items = mutableStateMapOf<MediaKind, List<PhoneMediaItem>>()
     val videoGrid = LazyGridState()
     val photoGrid = LazyGridState()
     val musicList = LazyListState()
@@ -174,7 +176,7 @@ fun PhoneFilesScreen(
 
     var accessRevision by remember { mutableIntStateOf(0) }
     val accessByKind = remember(accessRevision) { MediaKind.entries.associateWith { access(it) } }
-    val items = remember { mutableStateMapOf<MediaKind, List<PhoneMediaItem>>() }
+    val items = uiState.items
     var loadingKind by remember { mutableStateOf<MediaKind?>(null) }
 
     val permLauncher = rememberLauncherForActivityResult(
@@ -307,7 +309,10 @@ fun PhoneFilesScreen(
     fun playList(list: List<PhoneMediaItem>, shuffle: Boolean) {
         val ordered = if (shuffle) list.shuffled() else list
         when {
-            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+            queueEnabled -> queue(
+                ordered.take(PhoneFilesModel.TV_QUEUE_LIMIT),
+                com.playbridge.sender.connection.LocalQueueMode.REPLACE,
+            )
             !hasExternalTarget -> {
                 val playable = ordered.filter { it.mediaKind != MediaKind.IMAGE }
                 if (playable.isEmpty()) return
@@ -319,7 +324,7 @@ fun PhoneFilesScreen(
     /** Photos (and optionally the folder's videos) as a timed list (board 8). */
     fun startSlideshow(show: Slideshow, startIndex: Int = 0) {
         val ordered = PhoneFilesModel.slideshow(
-            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, startIndex, SLIDESHOW_LIMIT,
+            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, startIndex, PhoneFilesModel.TV_QUEUE_LIMIT,
         )
         val list = ordered.map { castItem(it, uiState.slideSeconds * 1000L) }
         slideshow = show.copy(count = ordered.size)
@@ -694,7 +699,6 @@ internal data class Slideshow(
 )
 
 /** Keeps one `playlist` message a reasonable size for every receiver. */
-private const val SLIDESHOW_LIMIT = 500
 
 @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun fullPermission(kind: MediaKind): String = when (kind) {
