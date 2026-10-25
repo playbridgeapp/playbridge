@@ -49,42 +49,37 @@ enum PlayOnRoute: Equatable {
     case external
 }
 
-/// Dashboard pill and Play on tile. A live socket is standing by until that receiver is the selected route.
+/// Dashboard device chip: videos play either on a chosen TV or on this phone. Connecting,
+/// reconnecting and not connected describe the chosen TV's link, never a third destination.
 struct PlayOnDashboardStatus: Equatable {
     enum State: Equatable {
-        case notConnected
-        case standingBy
-        case playingOn
+        case thisPhone
+        case connecting
+        case reconnecting
+        case offline
+        case connected
     }
 
-    var state: State = .notConnected
-    var deviceName: String = "TV"
+    static let thisPhoneName = "This phone"
+
+    var state: State = .thisPhone
+    var deviceName: String = PlayOnDashboardStatus.thisPhoneName
+    /// Receiver kind for a chosen TV ("PlayBridge", "AirPlay", "Google Cast"…); nil on this phone.
+    var receiver: String? = nil
     var secure: Bool = false
 
-    var isConnected: Bool { state != .notConnected }
-    var isPlayingOn: Bool { state == .playingOn }
+    var tvChosen: Bool { state != .thisPhone }
+    var isConnected: Bool { state == .connected }
+    /// A plain-WebSocket PlayBridge link keeps its encryption warning.
+    var unencrypted: Bool { isConnected && !secure }
 
-    var pillSuffix: String {
+    var statusLine: String {
         switch state {
-        case .standingBy: return " · Standing by"
-        case .playingOn where !secure: return " · not encrypted"
-        default: return ""
-        }
-    }
-
-    var tileSubtitle: String {
-        switch state {
-        case .notConnected: return "Not connected"
-        case .standingBy: return "Standing by"
-        case .playingOn: return "Connected"
-        }
-    }
-
-    var pillLabel: String {
-        switch state {
-        case .notConnected: return "No device connected"
-        case .playingOn: return "Playing on \(deviceName)\(pillSuffix)"
-        case .standingBy: return "\(deviceName)\(pillSuffix)"
+        case .thisPhone: return "Plays here · Tap to pick a TV"
+        case .connecting: return "Connecting…"
+        case .reconnecting: return "Reconnecting…"
+        case .offline: return "Not connected"
+        case .connected: return "\(receiver ?? "TV") · \(unencrypted ? "Not encrypted" : "Connected")"
         }
     }
 }
@@ -236,6 +231,8 @@ enum PlayOnCatalog {
 
     /// Presentation follows the selected route. A live PlayBridge socket can stand by for This phone or AirPlay.
     /// External and ready AirPlay routes stay secure even when the native socket is plain WebSocket.
+    /// Presentation follows the selected route, never the socket alone: on This phone the chip
+    /// says This phone even while an idle PlayBridge link is still open.
     static func dashboardStatus(
         route: PlayOnRoute,
         socketConnected: Bool,
@@ -243,24 +240,28 @@ enum PlayOnCatalog {
         externalName: String?,
         externalReady: Bool,
         airPlayReady: Bool = false,
-        socketSecure: Bool = false
+        socketSecure: Bool = false,
+        externalProtocol: String? = nil,
+        connecting: Bool = false,
+        reconnecting: Bool = false
     ) -> PlayOnDashboardStatus {
         switch route {
         case .external:
-            guard externalReady else { return PlayOnDashboardStatus() }
-            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(externalName), secure: true)
+            let name = receiverName(externalName)
+            if externalReady { return PlayOnDashboardStatus(state: .connected, deviceName: name, receiver: externalProtocol, secure: true) }
+            return PlayOnDashboardStatus(state: connecting ? .connecting : .offline, deviceName: name, receiver: externalProtocol)
         case .airPlay:
-            if socketConnected {
-                return PlayOnDashboardStatus(state: .standingBy, deviceName: receiverName(nativeName))
-            }
-            guard airPlayReady else { return PlayOnDashboardStatus() }
-            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(externalName), secure: true)
+            let name = receiverName(externalName)
+            return PlayOnDashboardStatus(state: airPlayReady ? .connected : .offline, deviceName: name,
+                                         receiver: "AirPlay", secure: airPlayReady)
         case .playBridge:
-            guard socketConnected else { return PlayOnDashboardStatus() }
-            return PlayOnDashboardStatus(state: .playingOn, deviceName: receiverName(nativeName), secure: socketSecure)
+            let name = receiverName(nativeName)
+            let state: PlayOnDashboardStatus.State =
+                socketConnected ? .connected : reconnecting ? .reconnecting : connecting ? .connecting : .offline
+            return PlayOnDashboardStatus(state: state, deviceName: name, receiver: "PlayBridge",
+                                         secure: socketConnected && socketSecure)
         case .thisPhone:
-            guard socketConnected else { return PlayOnDashboardStatus() }
-            return PlayOnDashboardStatus(state: .standingBy, deviceName: receiverName(nativeName))
+            return PlayOnDashboardStatus()
         }
     }
 
