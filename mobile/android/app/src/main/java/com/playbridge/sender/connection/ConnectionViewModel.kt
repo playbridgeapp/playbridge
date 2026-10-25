@@ -124,7 +124,7 @@ class ConnectionViewModel(
     /** User picked "This Device": route phone-local without forcing a disconnect. */
     fun selectThisDevice() = castSessionManager.selectThisDevice()
 
-    /** Why switching to this phone needs a confirmation: what plays and what the switch costs. */
+    /** Why switching away from the current device needs a confirmation: what plays and what it costs. */
     data class ThisPhoneSwitchWarning(
         /** What the TV is playing, when known. */
         val title: String,
@@ -135,8 +135,9 @@ class ConnectionViewModel(
     )
 
     /**
-     * Non-null while switching to this phone would cost something: media this phone serves may
-     * cut out, and a linked website loses control (and stops adding to the queue).
+     * Non-null while switching away from the current device (to this phone or another device)
+     * would cost something: media this phone serves may cut out, and a linked website loses
+     * control (and stops adding to the queue).
      */
     fun thisPhoneSwitchWarning(): ThisPhoneSwitchWarning? {
         val phoneServed = castSessionManager.tvPlaysPhoneServedMedia()
@@ -360,7 +361,10 @@ class ConnectionViewModel(
         // supervisor agree. Cold-start auto-connect goes
         // through webSocketClient.connect() directly and intentionally does NOT set this.
         val selected = castSessionManager.remoteDevice.value
-        if (selected != null && selected.endpointKey != device.endpointKey) webSocketClient.disconnect()
+        // Moving to another TV leaves the previous one playing; nothing is stopped.
+        if (selected != null && selected.endpointKey != device.endpointKey) {
+            castSessionManager.releaseNativeLink("switched to another TV")
+        }
         castSessionManager.selectNativeDevice(device)
         // A deliberate connect (user picked or cast to a device) re-enables auto-connect, which a
         // prior manual disconnect turned off. Set the flag directly rather than via
@@ -382,7 +386,9 @@ class ConnectionViewModel(
     /** Select the TV for its independent remote without starting PlayBridge pairing. */
     fun selectNativeRemote(device: TvDevice) {
         val target = ConnectionMerge.withDiscoveredEndpoint(device, discoveryRepository.devices.value)
-        if (castSessionManager.remoteDevice.value?.endpointKey != target.endpointKey) webSocketClient.disconnect()
+        if (castSessionManager.remoteDevice.value?.endpointKey != target.endpointKey) {
+            castSessionManager.releaseNativeLink("switched to another TV")
+        }
         castSessionManager.selectNativeDevice(target)
     }
 

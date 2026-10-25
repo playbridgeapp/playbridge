@@ -170,6 +170,8 @@ fun PlayOnSheet(
     var pendingNative by remember { mutableStateOf<TvDevice?>(null) }
     // Non-null while "Switch to this phone?" is showing.
     var switchWarning by remember { mutableStateOf<ConnectionViewModel.ThisPhoneSwitchWarning?>(null) }
+    // Where the warned switch goes: another device, or null for this phone.
+    var switchTarget by remember { mutableStateOf<TvDevice?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     val connected = connection is WebSocketClient.ConnectionState.Connected
     val nativeSelected = route is CastSessionManager.Route.NativeTv
@@ -244,6 +246,19 @@ fun PlayOnSheet(
             CastProtocol.WEB_BROWSER -> { viewModel.selectBrowserTarget(target); finish(target) }
         }
     }
+    /** Pick another device, confirming first when leaving the current one would cost something. */
+    fun requestPick(device: TvDevice) {
+        val current = nowDevice
+        val warning = if (current != null && !ConnectionMerge.isSameDevice(current, device)) {
+            viewModel.thisPhoneSwitchWarning()
+        } else null
+        if (warning != null) {
+            switchTarget = device
+            switchWarning = warning
+        } else {
+            pick(device)
+        }
+    }
     LaunchedEffect(connection) {
         if (connection.needsPairingPage()) page = PlayOnPage.Pair
         if (connection is WebSocketClient.ConnectionState.Connected) {
@@ -271,8 +286,8 @@ fun PlayOnSheet(
     switchWarning?.let { warning ->
         val tvName = nowDevice?.playOnName ?: "Your TV"
         AlertDialog(
-            onDismissRequest = { switchWarning = null },
-            title = { Text("Switch to this phone?") },
+            onDismissRequest = { switchWarning = null; switchTarget = null },
+            title = { Text("Switch to ${switchTarget?.playOnName ?: "this phone"}?") },
             text = {
                 // The file name gets its own line: long phone file names otherwise swamp the message.
                 val name = warning.title.replace(Regex("\\.[A-Za-z0-9]{2,5}$"), "").trim()
@@ -301,12 +316,17 @@ fun PlayOnSheet(
             },
             confirmButton = {
                 Button(onClick = {
-                    switchWarning = null
-                    pendingNative = null; pendingGoogle = null
-                    viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                    val target = switchTarget
+                    switchWarning = null; switchTarget = null
+                    if (target != null) {
+                        pick(target)
+                    } else {
+                        pendingNative = null; pendingGoogle = null
+                        viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                    }
                 }) { Text("Switch") }
             },
-            dismissButton = { TextButton(onClick = { switchWarning = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { switchWarning = null; switchTarget = null }) { Text("Cancel") } },
         )
     }
     ModalBottomSheet(onDismissRequest = { if (page != PlayOnPage.Devices) back() else dismiss() }, sheetState = sheetState) {
@@ -398,13 +418,14 @@ fun PlayOnSheet(
                                     val warning = if (route is CastSessionManager.Route.ThisDevice && external == null) null
                                         else viewModel.thisPhoneSwitchWarning()
                                     if (warning != null) {
+                                        switchTarget = null
                                         switchWarning = warning
                                     } else {
                                         pendingNative = null; pendingGoogle = null
                                         viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
                                     }
                                 })
-                            saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                            saved.forEach { row -> PlayOnDeviceRow(row, onClick = { requestPick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             // Nearby always shows so a search can be retried once the scan window ends.
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 48.dp),
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -418,7 +439,7 @@ fun PlayOnSheet(
                                     Text("Search again", Modifier.padding(start = 6.dp))
                                 }
                             }
-                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { pick(row.device) },
+                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { requestPick(row.device) },
                                 onLongClick = { managed = row; page = PlayOnPage.Actions }) }
                             if (groups.nearby.isEmpty()) Text(if (scanning) "Looking for TVs on this Wi-Fi…" else "No new devices found.",
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -433,7 +454,7 @@ fun PlayOnSheet(
                                     Icon(if (unavailableExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                if (unavailableExpanded) unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                                if (unavailableExpanded) unavailable.forEach { row -> PlayOnDeviceRow(row, onClick = { requestPick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             }
                             if (groups.saved.isEmpty() && groups.nearby.isEmpty()) PlayOnTip("Don’t see your TV?", "Open the PlayBridge app on your TV and make sure it’s on the same Wi-Fi as this phone.")
                             OutlinedButton(onClick = { page = PlayOnPage.Add }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
@@ -468,7 +489,7 @@ fun PlayOnSheet(
                             },
                             connect = { device ->
                                 val known = history.firstOrNull { ConnectionMerge.isSameDevice(it, device) }
-                                pick(known ?: device)
+                                requestPick(known ?: device)
                             },
                         )
                         PlayOnPage.Actions -> managed?.let { row ->
@@ -491,7 +512,7 @@ fun PlayOnSheet(
                             val noun = if (row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE) "TV" else "device"
                             PlayOnRow(if (!isSaved && row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE && row.device.token.isEmpty())
                                 "Pair this TV" else "Play on this $noun", null,
-                                icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = { pick(row.device) })
+                                icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = { requestPick(row.device) })
                             val supportsFullRemote = row.device.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
                                 (row.remotePaired || "exo" in row.device.players || remoteRows.any {
                                     ConnectionMerge.isSameDevice(it.device, row.device) && it.tvReachable

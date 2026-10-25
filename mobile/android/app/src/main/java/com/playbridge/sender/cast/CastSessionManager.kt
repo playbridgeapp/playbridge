@@ -187,7 +187,7 @@ class CastSessionManager(
     /**
      * True while the TV plays media this phone serves (phone files, streams relayed through
      * the phone, the phone-hosted browser receiver). Nothing stops it on switching, but it may
-     * cut out once the phone stops serving, so the Play on sheet warns first.
+     * cut out once the phone stops serving, so the Play on sheet warns before switching away.
      */
     fun tvPlaysPhoneServedMedia(): Boolean {
         val external = _externalTarget.value
@@ -222,16 +222,23 @@ class CastSessionManager(
         persistBaseRoute("this")
         // Leaving the TV route: stop trying to keep the native link alive.
         stopReconnectSupervisor()
-        // Not a user disconnect: pairing material stays, and picking the TV again reconnects.
+        releaseNativeLink("this phone selected")
+    }
+
+    /**
+     * Let go of the PlayBridge TV without stopping it, when playback moves elsewhere (this
+     * phone or another device). Not a user disconnect: pairing stays, picking the TV again
+     * reconnects, and media this phone serves keeps being served while it can.
+     */
+    fun releaseNativeLink(reason: String) {
         val linkState = webSocketClient.connectionState.value
-        if (linkState !is WebSocketClient.ConnectionState.Disconnected) {
-            // The TV may keep playing, but it's no longer this phone's session: don't let the
-            // drop handler promote the route back to the TV or arm a reconnect. An Error state
-            // never emits Disconnected, so the flag would linger and swallow a later real drop.
-            if (linkState !is WebSocketClient.ConnectionState.Error) thisDeviceStandDown = true
-            connectionCoordinator.markIdle()
-            webSocketClient.softDisconnect("this phone selected")
-        }
+        if (linkState is WebSocketClient.ConnectionState.Disconnected) return
+        // The TV may keep playing, but it's no longer this phone's session: don't let the
+        // drop handler promote the route back to the TV or arm a reconnect. An Error state
+        // never emits Disconnected, so the flag would linger and swallow a later real drop.
+        if (linkState !is WebSocketClient.ConnectionState.Error) thisDeviceStandDown = true
+        connectionCoordinator.markIdle()
+        webSocketClient.softDisconnect(reason)
     }
 
     /**
@@ -253,7 +260,8 @@ class CastSessionManager(
     fun selectNativeRoute() {
         selectionClock.incrementAndGet()
         screenMirrorCoordinator.stop("target_changed")
-        stopAndClearExternalTarget()
+        // Moving to the TV leaves a third-party receiver playing; nothing is stopped.
+        detachExternalTarget(stopFirst = false)
         _route.value = Route.NativeTv
         persistBaseRoute("native")
     }
@@ -1124,7 +1132,8 @@ class CastSessionManager(
         castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
         if (_externalTarget.value != null) _externalInterrupts.tryEmit(Unit)
-        detachExternalTarget(stopFirst = true)
+        // Switching devices leaves the previous one playing; nothing is stopped.
+        detachExternalTarget(stopFirst = false)
         externalTargetSlot.replace(target)
         _externalTarget.value = externalTargetSlot.target
         _activeExternalDevice.value = device
@@ -1135,7 +1144,7 @@ class CastSessionManager(
         _externalNowPlayingMeta.value = null
         _lastEffectiveStreamRoute.value = null
         _preferredStreamRoute.value = StreamRouteMode.VIA_PHONE
-        webSocketClient.disconnect()
+        releaseNativeLink("switched to another device")
         stopReconnectSupervisor()
         // External routes cannot be restored without reconnecting, so their restart/clear
         // fallback is local playback rather than a stale native-TV route.

@@ -73,6 +73,11 @@ final class ConnectionViewModel: ObservableObject {
     let castHistory = CastHistoryStore()
     /// A manual media/queue action takes playlist ownership back from a website.
     var onUserMediaAction: (() -> Void)?
+    /// The website controlling receiver playback, if any (set by ContentView from the page
+    /// cast coordinator, so sheets don't depend on it being in their environment).
+    var linkedReceiverSite: (() -> String?)?
+    /// Unlink that website before the receiver link closes.
+    var unlinkWebsite: (() -> Void)?
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
     let castPlaybackSession = CastPlaybackSession(renderer: CastSystemPlayback.shared)
@@ -367,7 +372,8 @@ final class ConnectionViewModel: ObservableObject {
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
         airPlay.disconnect()
         let preservingPlayback = (preservingPlayback || castPlaybackSession.isActive) && externalReceiver?.identity == device.identity
-        if !preservingPlayback { endCastSession() }
+        // Switching devices leaves the previous one playing; nothing is stopped.
+        if !preservingPlayback { endCastSessionKeepingServedMedia() }
         endSavedReconnectDiscovery()
         let device = (googleCastBrowser.devices + dlnaBrowser.devices + rokuBrowser.devices).first { $0.identity == device.identity } ?? device
         nativeReceiverSelected = false
@@ -392,10 +398,10 @@ final class ConnectionViewModel: ObservableObject {
 
     private func usePlayBridge(preservingPlayback: Bool = false) {
         airPlay.disconnect()
-        if !preservingPlayback { endCastSession() }
+        // Switching devices leaves the previous one playing; nothing is stopped.
+        if !preservingPlayback { endCastSessionKeepingServedMedia() }
         externalReceiver = nil
         googleCast.disconnect()
-        if !preservingPlayback { routedStreamRegistrations.removeAll() }
         nativeReceiverSelected = true
         playBridgeOutputSelected = true
         UserDefaults.standard.set("playbridge", forKey: "last_receiver_protocol")
@@ -659,19 +665,26 @@ final class ConnectionViewModel: ObservableObject {
         savedReachability.recheck(SavedReceiverEndpoint.refreshHistory(list, from: browser.devices))
     }
 
-    func disconnect() {
+    func disconnect() { leaveReceiver(keepingServedMedia: false) }
+
+    /// Close the receiver link and aim playback at this phone. `keepingServedMedia` leaves
+    /// the phone's file server, stream relays and subtitle servers running, so a TV playing
+    /// media this phone serves keeps going until the phone can no longer serve it.
+    private func leaveReceiver(keepingServedMedia: Bool) {
         destinationSelectionRevision &+= 1
         nativeReceiverSelected = false
         playBridgeOutputSelected = false
         onUserMediaAction?()
         airPlay.disconnect()
         state = .disconnected
-        endCastSession()
+        if keepingServedMedia { endCastSessionKeepingServedMedia() } else { endCastSession() }
         UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
         pendingSubtitleConfirmations.values.forEach { $0.cancel() }
         pendingSubtitleConfirmations.removeAll()
-        subtitleFileServers.forEach { $0.stop() }
-        subtitleFileServers.removeAll()
+        if !keepingServedMedia {
+            subtitleFileServers.forEach { $0.stop() }
+            subtitleFileServers.removeAll()
+        }
         if isExternalReceiver {
             // Clear routing intent before the transport publishes its disconnect state.
             selectedBrowserReceiverId = nil
@@ -680,10 +693,10 @@ final class ConnectionViewModel: ObservableObject {
             state = .disconnected
             coordinator.clear()
             coordinator.activeContext = "idle"
-            routedStreamRegistrations.removeAll()
+            if !keepingServedMedia { routedStreamRegistrations.removeAll() }
             return
         }
-        routedStreamRegistrations.removeAll()
+        if !keepingServedMedia { routedStreamRegistrations.removeAll() }
         endSavedReconnectDiscovery()
         ws.disconnect()
     }
@@ -706,10 +719,10 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     /// Aim playback at this phone. Nothing is stopped on the TV: the receiver link closes
-    /// (pairing is kept, so picking the TV again reconnects). Media this phone was serving
-    /// may cut out once the TV runs through what it has buffered.
+    /// (pairing is kept, so picking the TV again reconnects), and media this phone serves
+    /// keeps being served while it can. It may still cut out later, e.g. in the background.
     func selectThisPhone() {
-        disconnect()
+        leaveReceiver(keepingServedMedia: true)
     }
 
     /// Aim playback at the PlayBridge receiver. An open socket is reused.
@@ -1669,6 +1682,15 @@ final class ConnectionViewModel: ObservableObject {
         subtitleFileServers.forEach { $0.stop() }
         subtitleFileServers.removeAll()
         LocalFileServer.shared.stop()
+    }
+
+    /// End the cast session when playback moves to another device or this phone, but keep
+    /// serving what the previous device plays (file server, relays). The next cast replaces it.
+    private func endCastSessionKeepingServedMedia() {
+        castPlaybackSession.end(releaseResources: false)
+        castPlaybackSession.allowNewPlayback()
+        coordinator.clear()
+        coordinator.activeContext = "idle"
     }
 
     private func endCastSession() {
