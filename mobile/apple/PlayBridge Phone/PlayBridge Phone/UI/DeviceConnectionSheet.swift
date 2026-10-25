@@ -8,6 +8,7 @@ struct DeviceConnectionSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var atv: AtvRemoteCoordinator
+    @EnvironmentObject private var pageCasting: PageCastCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @StateObject private var pathMonitor = PlayOnPathMonitor()
@@ -15,6 +16,15 @@ struct DeviceConnectionSheet: View {
     private let openedForPicking: Bool
     @State private var path: [PlayOnPage]
     @State private var pairingCode = ""
+    /// Why switching to this phone needs a confirmation; non-nil while the alert is showing.
+    private struct SwitchWarning {
+        var title: String
+        /// A website controlling this playback that would be unlinked.
+        var linkedSite: String?
+        /// The phone serves the media, so it may cut out once the phone lets go.
+        var phoneServed: Bool
+    }
+    @State private var switchWarning: SwitchWarning?
     @FocusState private var pairingFieldFocused: Bool
     @State private var showUnavailable = false
     @State private var vpnInfo = false
@@ -52,6 +62,20 @@ struct DeviceConnectionSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("play-on-sheet")
+        .alert("Switch to this phone?", isPresented: Binding(
+            get: { switchWarning != nil }, set: { if !$0 { switchWarning = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { switchWarning = nil }
+            Button("Switch") {
+                switchWarning = nil
+                // Tell the website it was unlinked before the receiver link closes.
+                pageCasting.unlink()
+                vm.selectThisPhone()
+                dismiss()
+            }
+        } message: {
+            Text(switchWarningMessage)
+        }
         .sheet(isPresented: $showAtvPairing) { AtvPairingSheet(coordinator: atv) }
         .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
         .sheet(isPresented: actionsSheetPresented) {
@@ -375,11 +399,35 @@ struct DeviceConnectionSheet: View {
         }
     }
 
+    private var switchWarningMessage: String {
+        let tv = vm.isAirPlay ? vm.airPlay.routeName : (vm.externalReceiver?.name ?? vm.pairedDevice?.name ?? "Your TV")
+        // The file name gets its own line: long phone file names otherwise swamp the message.
+        let warning = switchWarning ?? SwitchWarning(title: "", linkedSite: nil, phoneServed: false)
+        let name = warning.title
+            .replacingOccurrences(of: #"\.[A-Za-z0-9]{2,5}$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let source = warning.linkedSite ?? "this phone"
+        let consequence: String
+        switch (warning.linkedSite, warning.phoneServed) {
+        case (let site?, true): consequence = "\(site) will stop controlling it, and it may stop partway through once you switch."
+        case (let site?, false): consequence = "\(site) will stop controlling it and won't add anything more to the queue."
+        default: consequence = "It may stop partway through once you switch."
+        }
+        if name.isEmpty { return "\(tv) is playing a video from \(source). \(consequence)" }
+        return "\(tv) is playing from \(source):\n\n\(name)\n\n\(consequence)"
+    }
+
     private var phoneRow: some View {
         Button {
-            let linked = vm.playBridgeLinkConnected
-            vm.selectThisPhone()
-            if !linked { dismiss() }
+            let playing = vm.phoneServedTVPlayback
+            let linkedSite = pageCasting.isLinkedToReceiver ? pageCasting.controllerName : nil
+            if playing != nil || linkedSite != nil {
+                switchWarning = SwitchWarning(title: playing ?? vm.castPlaybackSession.snapshot?.title ?? "",
+                                              linkedSite: linkedSite, phoneServed: playing != nil)
+            } else {
+                vm.selectThisPhone()
+                dismiss()
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "iphone")

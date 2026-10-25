@@ -177,6 +177,14 @@ class LocalProxyServer(
      * HLS playlist rewrites do not mint thousands of unique URLs per refresh (LRU thrash
      * + hls.js levelParsingError when a level URL's mapping disappears mid-session).
      */
+    /** True when [url] points at media this proxy is currently publishing. */
+    fun serves(url: String): Boolean {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+        if (port == 0 || uri.port != port) return false
+        val token = uri.path.trim('/').substringBefore('/').substringBefore('.')
+        return token.isNotEmpty() && entries.containsKey(token)
+    }
+
     private fun register(entry: Entry, ext: String): String {
         val ip = cachedLanIp ?: lanIp().also { cachedLanIp = it }
         if (entry is Entry.Remote) {

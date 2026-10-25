@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -167,6 +168,8 @@ fun PlayOnSheet(
     var vpnInfo by remember { mutableStateOf(false) }
     var pendingGoogle by remember { mutableStateOf<TvDevice?>(null) }
     var pendingNative by remember { mutableStateOf<TvDevice?>(null) }
+    // Non-null while "Switch to this phone?" is showing.
+    var switchWarning by remember { mutableStateOf<ConnectionViewModel.ThisPhoneSwitchWarning?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     val connected = connection is WebSocketClient.ConnectionState.Connected
     val nativeSelected = route is CastSessionManager.Route.NativeTv
@@ -265,6 +268,47 @@ fun PlayOnSheet(
         } else true
     })
     LaunchedEffect(page) { if (page != PlayOnPage.Devices) sheetState.expand() }
+    switchWarning?.let { warning ->
+        val tvName = nowDevice?.playOnName ?: "Your TV"
+        AlertDialog(
+            onDismissRequest = { switchWarning = null },
+            title = { Text("Switch to this phone?") },
+            text = {
+                // The file name gets its own line: long phone file names otherwise swamp the message.
+                val name = warning.title.replace(Regex("\\.[A-Za-z0-9]{2,5}$"), "").trim()
+                val source = warning.linkedSite ?: "this phone"
+                val consequence = when {
+                    warning.linkedSite != null && warning.phoneServed ->
+                        "${warning.linkedSite} will stop controlling it, and it may stop partway through once you switch."
+                    warning.linkedSite != null ->
+                        "${warning.linkedSite} will stop controlling it and won't add anything more to the queue."
+                    else -> "It may stop partway through once you switch."
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (name.isEmpty()) "$tvName is playing a video from $source." else "$tvName is playing from $source:",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (name.isNotEmpty()) Text(
+                        name,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(consequence, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    switchWarning = null
+                    pendingNative = null; pendingGoogle = null
+                    viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                }) { Text("Switch") }
+            },
+            dismissButton = { TextButton(onClick = { switchWarning = null }) { Text("Cancel") } },
+        )
+    }
     ModalBottomSheet(onDismissRequest = { if (page != PlayOnPage.Devices) back() else dismiss() }, sheetState = sheetState) {
         BackHandler(enabled = page != PlayOnPage.Devices) { back() }
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.94f).imePadding()) {
@@ -351,8 +395,14 @@ fun PlayOnSheet(
                             PlayOnSectionLabel("Devices")
                             if (showThisDevice) PlayOnRow("This phone", "Play here", phone = true,
                                 selected = route is CastSessionManager.Route.ThisDevice && external == null, onClick = {
-                                    pendingNative = null; pendingGoogle = null
-                                    viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                                    val warning = if (route is CastSessionManager.Route.ThisDevice && external == null) null
+                                        else viewModel.thisPhoneSwitchWarning()
+                                    if (warning != null) {
+                                        switchWarning = warning
+                                    } else {
+                                        pendingNative = null; pendingGoogle = null
+                                        viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
+                                    }
                                 })
                             saved.forEach { row -> PlayOnDeviceRow(row, onClick = { pick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             // Nearby always shows so a search can be retried once the scan window ends.

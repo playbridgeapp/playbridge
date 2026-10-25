@@ -144,9 +144,10 @@ class CastSessionManager(
     //
     // The single source of truth for *where playback should go*, set ONLY by explicit
     // user action in the device picker. It is deliberately decoupled from the live
-    // connection state: connecting to a TV must never change the route, and choosing
-    // "This Device" must never be implemented as a disconnect. Screens read [route]
-    // instead of inferring a destination from connection state.
+    // connection state: connecting to a TV must never change the route, and a dropped TV
+    // never switches the route to this phone by itself. Choosing "This Device" closes the
+    // PlayBridge link (pairing kept) and leaves the TV playing anything it fetches itself.
+    // Screens read [route] instead of inferring a destination from connection state.
     // ------------------------------------------------------------------
     sealed interface Route {
         /** Play on the phone (in-app player). */
@@ -183,17 +184,54 @@ class CastSessionManager(
         routePrefs.edit().putString(ROUTE_KEY, value).apply()
     }
 
-    /** Route phone-local. Keeps an idle native link, but stops any external receiver session. */
+    /**
+     * True while the TV plays media this phone serves (phone files, streams relayed through
+     * the phone, the phone-hosted browser receiver). Nothing stops it on switching, but it may
+     * cut out once the phone stops serving, so the Play on sheet warns first.
+     */
+    fun tvPlaysPhoneServedMedia(): Boolean {
+        val external = _externalTarget.value
+        if (external != null) {
+            return _externalMediaLoaded.value && (_phonePathActive.value || external is BrowserCastTarget)
+        }
+        return _route.value is Route.NativeTv &&
+            webSocketClient.holdsPhoneServedMedia &&
+            connectionCoordinator.tvActiveContext.value == "player"
+    }
+
+    /**
+     * Route phone-local. Nothing is stopped on the TV: external receivers are released without
+     * a stop, and the PlayBridge link closes but stays paired. Media this phone serves keeps
+     * being served while it can, and may cut out later (the picker warns about that). The
+     * Android TV remote connection is separate and stays up for the Remote.
+     */
     fun selectThisDevice() {
         selectionClock.incrementAndGet()
+        // A linked website loses control of TV playback: tell it it was unlinked, not that the
+        // receiver stopped, before the session goes idle below.
+        runCatchingLogged(TAG, "Could not unlink website playback") {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>()
+                .unlink()
+        }
         nativeSelection.value = null
         castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
-        stopAndClearExternalTarget()
+        if (_externalTarget.value != null) detachExternalTarget(stopFirst = false)
         _route.value = Route.ThisDevice
         persistBaseRoute("this")
         // Leaving the TV route: stop trying to keep the native link alive.
         stopReconnectSupervisor()
+        // Not a user disconnect: pairing material stays, and picking the TV again reconnects.
+        val linkState = webSocketClient.connectionState.value
+        if (linkState !is WebSocketClient.ConnectionState.Disconnected) {
+            // The TV may keep playing, but it's no longer this phone's session: don't let the
+            // drop handler promote the route back to the TV or arm a reconnect. An Error state
+            // never emits Disconnected, so the flag would linger and swallow a later real drop.
+            if (linkState !is WebSocketClient.ConnectionState.Error) thisDeviceStandDown = true
+            connectionCoordinator.markIdle()
+            webSocketClient.softDisconnect("this phone selected")
+        }
     }
 
     /**
@@ -808,6 +846,11 @@ class CastSessionManager(
                         // the route never flipped to NativeTv (e.g. cold-start cast before the
                         // route-capture collector ran). Sticky FGS depends on NativeTv, so
                         // promote the route here the same way live playback does.
+                        if (thisDeviceStandDown) {
+                            thisDeviceStandDown = false
+                            Log.d(TAG, "Ignoring disconnect for reconnect (this phone selected)")
+                            return@collect
+                        }
                         val playingOnNative = connectionCoordinator.tvActiveContext.value == "player" &&
                             _route.value !is Route.External
                         if (playingOnNative && _route.value !is Route.NativeTv) {
@@ -880,8 +923,9 @@ class CastSessionManager(
             // the "Casting to …" notification never went away after leaving the house.
             connectionCoordinator.markIdle()
             if (isForeground) {
-                Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (foreground) — routing to This Device")
-                selectThisDevice()
+                // The TV stays chosen: switching where videos play is the user's call
+                // (the Dashboard offers "Use this phone").
+                Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (foreground) — route unchanged")
                 notifyReconnectGaveUp(backgrounded = false)
             } else {
                 Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (background) — standing down, route unchanged")
@@ -946,6 +990,8 @@ class CastSessionManager(
      * connection-state collector does not arm [scheduleReconnect].
      */
     @Volatile private var idleBackgroundStandDown = false
+    /** Set just before the link closes because the user chose this phone; see [selectThisDevice]. */
+    @Volatile private var thisDeviceStandDown = false
     private var backgroundStandDownJob: Job? = null
 
     private fun registerForegroundObserver() {
@@ -1030,6 +1076,8 @@ class CastSessionManager(
         // scope before touching supervisor state so nothing races the reconnect loop.
         scope.launch {
             if (!routePrefs.getBoolean("auto_connect_tv", true)) return@launch
+            // This phone means no PlayBridge link; only a chosen TV is recovered.
+            if (_route.value !is Route.NativeTv) return@launch
             val state = webSocketClient.connectionState.value
             val eligible = state is WebSocketClient.ConnectionState.Disconnected ||
                 state is WebSocketClient.ConnectionState.Error
@@ -1541,7 +1589,7 @@ class CastSessionManager(
             val message = if (backgrounded) {
                 "Couldn't reach your TV. It'll reconnect when you reopen the app."
             } else {
-                "Playback switched to this phone. Pick the TV again to reconnect."
+                "Pick the TV again to reconnect, or switch to this phone."
             }
             val notif = androidx.core.app.NotificationCompat.Builder(context, RECONNECT_CHANNEL_ID)
                 .setSmallIcon(com.playbridge.sender.R.drawable.ic_launcher_foreground)
@@ -1608,9 +1656,9 @@ class CastSessionManager(
         externalScreenMirrorCoordinator.stop("disconnect")
         connectionCoordinator.markIdle()
         // Disconnect means ALL links, even when an external receiver and an idle native
-        // socket coexist. selectThisDevice also stops/releases the external target.
-        // Stop/select-target callers retain their narrower semantics.
-        // Flag as user disconnect before close so the reconnect supervisor does not re-arm.
+        // socket coexist, and it stops external media (selectThisDevice alone would leave
+        // it playing). Flag as user disconnect before close so the supervisor does not re-arm.
+        stopAndClearExternalTarget()
         webSocketClient.disconnect()
         selectThisDevice()
     }

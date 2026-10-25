@@ -124,6 +124,29 @@ class ConnectionViewModel(
     /** User picked "This Device": route phone-local without forcing a disconnect. */
     fun selectThisDevice() = castSessionManager.selectThisDevice()
 
+    /** Why switching to this phone needs a confirmation: what plays and what the switch costs. */
+    data class ThisPhoneSwitchWarning(
+        /** What the TV is playing, when known. */
+        val title: String,
+        /** A website that controls this playback and would be unlinked, when linked. */
+        val linkedSite: String?,
+        /** The phone serves the media, so it may cut out once the phone lets go. */
+        val phoneServed: Boolean,
+    )
+
+    /**
+     * Non-null while switching to this phone would cost something: media this phone serves may
+     * cut out, and a linked website loses control (and stops adding to the queue).
+     */
+    fun thisPhoneSwitchWarning(): ThisPhoneSwitchWarning? {
+        val phoneServed = castSessionManager.tvPlaysPhoneServedMedia()
+        val linked = org.koin.core.context.GlobalContext.get()
+            .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>().uiState.value
+        val linkedSite = linked.controllerName?.takeIf { linked.active && castSessionManager.routeTargetsTv.value }
+        if (!phoneServed && linkedSite == null) return null
+        return ThisPhoneSwitchWarning(castSessionManager.sessionInfo.value.title.orEmpty(), linkedSite, phoneServed)
+    }
+
     /** User picked the saved native TV as the routing target. */
     fun selectNativeRoute() = castSessionManager.selectNativeRoute()
 
@@ -191,8 +214,10 @@ class ConnectionViewModel(
                 // failed startup attempt once discovery finds the TV at a fresh address (a failed
                 // connect lands in Error, not Disconnected). wasUserDisconnect keeps a deliberate
                 // disconnect from being overridden when this ViewModel is recreated.
+                // This phone means no PlayBridge link; only a chosen TV auto-connects.
                 if (!hasAttemptedInitialConnect &&
                     _autoConnectEnabled.value &&
+                    castSessionManager.route.value is CastSessionManager.Route.NativeTv &&
                     device != null &&
                     !webSocketClient.wasUserDisconnect &&
                     (state is WebSocketClient.ConnectionState.Disconnected ||

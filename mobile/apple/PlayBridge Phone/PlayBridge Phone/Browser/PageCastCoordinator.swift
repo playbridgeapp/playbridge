@@ -56,6 +56,8 @@ final class PageCastCoordinator: ObservableObject {
     @Published private(set) var presentation: Presentation?
     @Published private(set) var controllerName: String?
     var isLinked: Bool { controllerName != nil }
+    /// A website controls playback on a receiver (not on this phone).
+    var isLinkedToReceiver: Bool { isLinked && active.map { !$0.local } == true }
     var onError: ((String) -> Void)?
     var onChooseDestination: (() -> Void)?
 
