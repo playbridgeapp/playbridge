@@ -8,7 +8,6 @@ struct DeviceConnectionSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var atv: AtvRemoteCoordinator
-    @EnvironmentObject private var pageCasting: PageCastCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @StateObject private var pathMonitor = PlayOnPathMonitor()
@@ -25,6 +24,8 @@ struct DeviceConnectionSheet: View {
         var phoneServed: Bool
     }
     @State private var switchWarning: SwitchWarning?
+    /// Where the warned switch goes: another device, or nil for this phone.
+    @State private var switchTarget: PlayOnSheetRow?
     @FocusState private var pairingFieldFocused: Bool
     @State private var showUnavailable = false
     @State private var vpnInfo = false
@@ -62,16 +63,21 @@ struct DeviceConnectionSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("play-on-sheet")
-        .alert("Switch to this phone?", isPresented: Binding(
-            get: { switchWarning != nil }, set: { if !$0 { switchWarning = nil } }
+        .alert("Switch to \(switchTarget?.listed.name ?? "this phone")?", isPresented: Binding(
+            get: { switchWarning != nil }, set: { if !$0 { switchWarning = nil; switchTarget = nil } }
         )) {
-            Button("Cancel", role: .cancel) { switchWarning = nil }
+            Button("Cancel", role: .cancel) { switchWarning = nil; switchTarget = nil }
             Button("Switch") {
-                switchWarning = nil
+                let target = switchTarget
+                switchWarning = nil; switchTarget = nil
                 // Tell the website it was unlinked before the receiver link closes.
-                pageCasting.unlink()
-                vm.selectThisPhone()
-                dismiss()
+                vm.unlinkWebsite?()
+                if let target {
+                    select(target)
+                } else {
+                    vm.selectThisPhone()
+                    dismiss()
+                }
             }
         } message: {
             Text(switchWarningMessage)
@@ -400,12 +406,16 @@ struct DeviceConnectionSheet: View {
     }
 
     private var switchWarningMessage: String {
-        let tv = vm.isAirPlay ? vm.airPlay.routeName : (vm.externalReceiver?.name ?? vm.pairedDevice?.name ?? "Your TV")
+        let tv = PlayOnCatalog.displayName(
+            vm.isAirPlay ? vm.airPlay.routeName : (vm.externalReceiver?.name ?? vm.pairedDevice?.name ?? "Your TV"))
         // The file name gets its own line: long phone file names otherwise swamp the message.
         let warning = switchWarning ?? SwitchWarning(title: "", linkedSite: nil, phoneServed: false)
-        let name = warning.title
+        var name = warning.title
             .replacingOccurrences(of: #"\.[A-Za-z0-9]{2,5}$"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+        // Photo library items can be titled with their asset identifier; that means nothing to people.
+        if name.range(of: #"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(/.*)?$"#,
+                      options: .regularExpression) != nil { name = "" }
         let source = warning.linkedSite ?? "this phone"
         let consequence: String
         switch (warning.linkedSite, warning.phoneServed) {
@@ -417,13 +427,40 @@ struct DeviceConnectionSheet: View {
         return "\(tv) is playing from \(source):\n\n\(name)\n\n\(consequence)"
     }
 
+    /// Non-nil while leaving the current device would cost something.
+    private var currentSwitchWarning: SwitchWarning? {
+        let playing = vm.phoneServedTVPlayback
+        let linkedSite = vm.linkedReceiverSite?()
+        guard playing != nil || linkedSite != nil else { return nil }
+        return SwitchWarning(title: playing ?? vm.castPlaybackSession.snapshot?.title ?? "",
+                             linkedSite: linkedSite, phoneServed: playing != nil)
+    }
+
+    private func isCurrentDestination(_ row: PlayOnSheetRow) -> Bool {
+        if let external = row.external { return vm.externalReceiver?.identity == external.identity }
+        guard vm.playBridgeOutputSelected, let current = vm.pairedDevice else { return false }
+        if let saved = row.playBridge {
+            return saved.uuid.isEmpty ? (saved.ip == current.ip && saved.port == current.port) : saved.uuid == current.uuid
+        }
+        if let found = row.discovered { return SavedReceiverEndpoint.sameIdentity(current, found) }
+        return false
+    }
+
+    /// Pick another device, confirming first when leaving the current one would cost something.
+    private func requestSelect(_ row: PlayOnSheetRow) {
+        if !isCurrentDestination(row), let warning = currentSwitchWarning {
+            switchTarget = row
+            switchWarning = warning
+        } else {
+            select(row)
+        }
+    }
+
     private var phoneRow: some View {
         Button {
-            let playing = vm.phoneServedTVPlayback
-            let linkedSite = pageCasting.isLinkedToReceiver ? pageCasting.controllerName : nil
-            if playing != nil || linkedSite != nil {
-                switchWarning = SwitchWarning(title: playing ?? vm.castPlaybackSession.snapshot?.title ?? "",
-                                              linkedSite: linkedSite, phoneServed: playing != nil)
+            if let warning = currentSwitchWarning {
+                switchTarget = nil
+                switchWarning = warning
             } else {
                 vm.selectThisPhone()
                 dismiss()
@@ -567,7 +604,7 @@ struct DeviceConnectionSheet: View {
                     suppressRowTap = false
                     return
                 }
-                select(row)
+                requestSelect(row)
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: PlayOnCatalog.symbol(kind: row.listed.kind, desktop: row.desktop))

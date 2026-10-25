@@ -78,6 +78,15 @@ struct ContentView: View {
             vm.onUserMediaAction = { [weak pageCasting] in
                 MainActor.assumeIsolated { pageCasting?.userStartedCast() }
             }
+            vm.linkedReceiverSite = { [weak pageCasting] in
+                MainActor.assumeIsolated {
+                    guard let pageCasting, pageCasting.isLinkedToReceiver else { return nil }
+                    return pageCasting.controllerName
+                }
+            }
+            vm.unlinkWebsite = { [weak pageCasting] in
+                MainActor.assumeIsolated { pageCasting?.unlink() }
+            }
             reconnectOnActivation()
             updateAtv()
         }
