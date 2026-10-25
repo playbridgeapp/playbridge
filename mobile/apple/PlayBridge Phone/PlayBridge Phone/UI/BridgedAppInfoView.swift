@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Local installation settings; website storage and casting grants are not modified.
+/// Web app details: local installation settings; website storage and casting grants are not modified.
 struct BridgedAppInfoView: View {
     let app: BridgedApp
     @EnvironmentObject private var store: BrowserStore
@@ -20,50 +20,110 @@ struct BridgedAppInfoView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("Name", text: $name)
-                        .accessibilityIdentifier("bridged-app-name")
-                    TextField("Home URL", text: $homeURL, axis: .vertical)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("bridged-app-home-url")
-                } header: {
-                    Text("Bridged App")
-                } footer: {
-                    Text("After a fresh PlayBridge launch, this app opens at its home URL. Use a URL on the same website origin and a name of 1–60 characters.")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    field("Name") {
+                        TextField("Name", text: $name)
+                            .accessibilityIdentifier("bridged-app-name")
+                    }
+                    field("Home page") {
+                        TextField("Home page", text: $homeURL, axis: .vertical)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("bridged-app-home-url")
+                    }
+                    Text("Opens here after a fresh launch. Must stay on \(app.origin.absoluteString).")
+                        .font(Theme.font(size: 12))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                    if edited == nil || saveFailed {
+                        Text(saveFailed ? "This app could not be saved. It may have been removed."
+                             : "Enter a name of 1–60 characters and a valid home page on this website.")
+                            .font(Theme.font(size: 13))
+                            .foregroundColor(Theme.danger)
+                    }
+                    HStack(spacing: 8) {
+                        Button { showRemove = true } label: {
+                            Label("Remove", systemImage: "trash")
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                                .foregroundColor(Theme.danger)
+                                .overlay(Capsule().stroke(Theme.danger.opacity(0.5), lineWidth: 1))
+                        }
+                        Button {
+                            if store.editBridgedApp(app, name: name, homeURL: homeURL) { dismiss() }
+                            else { saveFailed = true }
+                        } label: {
+                            Text("Save")
+                                .font(Theme.font(size: 15, weight: .bold))
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                                .foregroundColor(Theme.onPrimary)
+                                .background(Capsule().fill(Theme.primary.opacity(edited == nil ? 0.4 : 1)))
+                        }
+                        .disabled(edited == nil)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
                 }
-                Section("Website origin") {
-                    Text(app.origin.absoluteString).textSelection(.enabled)
-                }
-                if edited == nil || saveFailed {
-                    Text(saveFailed ? "This app could not be saved. It may have been removed." : "Enter a name of 1–60 characters and a valid home URL on this website origin.")
-                        .foregroundStyle(.red)
-                }
-                Section {
-                    Button("Remove Bridged App", role: .destructive) { showRemove = true }
-                } footer: {
-                    Text("Removal closes the app session. Website data and casting permissions are managed separately.")
-                }
+                .padding(16)
             }
-            .navigationTitle("Bridged App Info")
+            .background(Theme.surfaceContainerLow.ignoresSafeArea())
+            .navigationTitle("Web app details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if store.editBridgedApp(app, name: name, homeURL: homeURL) { dismiss() }
-                        else { saveFailed = true }
-                    }.disabled(edited == nil)
-                }
             }
-            .alert("Remove Bridged App?", isPresented: $showRemove) {
+            .alert("Remove \(app.name)?", isPresented: $showRemove) {
                 Button("Remove", role: .destructive) { store.removeBridgedApp(app); dismiss() }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Its dashboard tile and app session will be removed. Website data and casting permissions are kept.")
             }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainerHighest)
+                if let iconURL = app.iconURL {
+                    AsyncImage(url: iconURL) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        Image(systemName: "app.connected.to.app.below.fill").foregroundColor(Theme.onSurfaceVariant)
+                    }
+                    .frame(width: 40, height: 40)
+                } else {
+                    Image(systemName: "app.connected.to.app.below.fill").foregroundColor(Theme.onSurfaceVariant)
+                }
+            }
+            .frame(width: 52, height: 52)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(Theme.font(size: 19, weight: .bold))
+                    .foregroundColor(Theme.onSurface)
+                    .lineLimit(1)
+                Text(app.origin.host ?? app.origin.absoluteString)
+                    .font(Theme.font(size: 13))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(Theme.font(size: 13))
+                .foregroundColor(Theme.onSurfaceVariant)
+            content()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surfaceContainer))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.outlineVariant, lineWidth: 1))
         }
     }
 }

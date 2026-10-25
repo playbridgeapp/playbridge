@@ -27,6 +27,8 @@ final class NavigationViewModel: ObservableObject {
     @Published var lastMainScreen: AppScreen = .browser
     @Published var remoteOrigin: AppScreen? = nil
     @Published var dashboardOrigin: AppScreen? = nil
+    /// Where Settings was opened from: the Browser menu or the Dashboard top bar.
+    @Published var settingsOrigin: AppScreen? = nil
     @Published var playOnRequest: PlayOnRequest?
     @Published var pendingAtvPairing = false
     var playOnSuppressCount = 0
@@ -55,6 +57,9 @@ final class NavigationViewModel: ObservableObject {
             dashboardOrigin = currentScreen
             dashboardAppTabID = currentScreen == .browser && browserStore?.activeBridgedApp != nil
                 ? browserStore?.activeID : nil
+        }
+        if target == .browserSettings && currentScreen != .browserSettings {
+            settingsOrigin = currentScreen
         }
         if target == .browser {
             lastMainScreen = target

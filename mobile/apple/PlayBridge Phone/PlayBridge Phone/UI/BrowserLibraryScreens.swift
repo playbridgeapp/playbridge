@@ -5,6 +5,7 @@ import WebKit
 
 struct BrowserSettingsScreen: View {
     @EnvironmentObject private var store: BrowserStore
+    @EnvironmentObject private var nav: NavigationViewModel
     @State private var showClearData = false
     @State private var showMediaDetection = false
     @State private var advanced = false
@@ -21,7 +22,12 @@ struct BrowserSettingsScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    // Settings opens from the Dashboard's top bar too; Back returns there.
+                    if nav.settingsOrigin == .dashboard {
+                        ScreenBackButton(destination: .dashboard, accessibilityLabel: "Back to Dashboard")
+                    } else {
+                        ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    }
                     Text("Browser settings")
                         .font(Theme.font(size: 22, weight: .bold))
                         .foregroundColor(Theme.onSurface)

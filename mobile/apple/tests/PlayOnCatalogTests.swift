@@ -176,70 +176,61 @@ import Foundation
             native: String? = receiver,
             external: String? = nil,
             externalReady: Bool = false,
-            airPlayReady: Bool = false
+            airPlayReady: Bool = false,
+            externalProtocol: String? = nil,
+            connecting: Bool = false,
+            reconnecting: Bool = false
         ) -> PlayOnDashboardStatus {
             PlayOnCatalog.dashboardStatus(
                 route: route, socketConnected: socket, nativeName: native, externalName: external,
-                externalReady: externalReady, airPlayReady: airPlayReady, socketSecure: secure
+                externalReady: externalReady, airPlayReady: airPlayReady, socketSecure: secure,
+                externalProtocol: externalProtocol, connecting: connecting, reconnecting: reconnecting
             )
         }
 
-        let playing = status(.playBridge, socket: true)
-        precondition(playing.state == .playingOn && playing.isConnected && playing.isPlayingOn)
-        precondition(playing.tileSubtitle == "Connected")
-        precondition(playing.deviceName == "Living-Room-Computer")
-        precondition(playing.pillLabel == "Playing on Living-Room-Computer · not encrypted")
-
-        for secure in [false, true] {
-            let standing = status(.thisPhone, socket: true, secure: secure)
-            precondition(standing.state == .standingBy && standing.isConnected && !standing.isPlayingOn && !standing.secure)
-            precondition(standing.pillSuffix == " · Standing by" && standing.tileSubtitle == "Standing by")
-            precondition(standing.deviceName == "Living-Room-Computer")
-            precondition(standing.pillLabel == "Living-Room-Computer · Standing by")
-        }
-
-        let securePlay = status(.playBridge, socket: true, secure: true)
-        precondition(securePlay.isPlayingOn && securePlay.secure && securePlay.pillSuffix.isEmpty)
-        precondition(securePlay.pillLabel == "Playing on Living-Room-Computer")
+        let secureTV = status(.playBridge, socket: true, secure: true)
+        precondition(secureTV.state == .connected && secureTV.tvChosen && secureTV.isConnected && !secureTV.unencrypted)
+        precondition(secureTV.deviceName == "Living-Room-Computer")
+        precondition(secureTV.statusLine == "PlayBridge · Connected")
 
         let plain = status(.playBridge, socket: true, secure: false)
-        precondition(plain.isPlayingOn && !plain.secure && plain.pillSuffix == " · not encrypted")
-        precondition(plain.pillLabel == "Playing on Living-Room-Computer · not encrypted")
+        precondition(plain.unencrypted && plain.statusLine == "PlayBridge · Not encrypted")
 
-        for route in [PlayOnRoute.thisPhone, .playBridge] {
-            let idle = status(route, socket: false)
-            precondition(idle.state == .notConnected && !idle.isConnected && !idle.isPlayingOn)
-            precondition(idle.pillSuffix.isEmpty && idle.tileSubtitle == "Not connected")
-            precondition(idle.pillLabel == "No device connected")
+        // This phone is This phone even while an idle PlayBridge link stays open.
+        for socket in [false, true] {
+            let phone = status(.thisPhone, socket: socket, secure: true)
+            precondition(phone == PlayOnDashboardStatus() && !phone.tvChosen)
+            precondition(phone.deviceName == "This phone" && phone.statusLine == "Plays here · Tap to pick a TV")
         }
+
+        // A chosen TV without a socket shows its link state, never This phone.
+        precondition(status(.playBridge, socket: false, connecting: true, reconnecting: true).state == .reconnecting)
+        precondition(status(.playBridge, socket: false, connecting: true).statusLine == "Connecting…")
+        let offline = status(.playBridge, socket: false)
+        precondition(offline.state == .offline && offline.tvChosen && offline.statusLine == "Not connected")
+        precondition(offline.deviceName == "Living-Room-Computer")
 
         for pair in [(false, false), (true, false), (true, true)] {
-            let external = status(.external, socket: pair.0, secure: pair.1, external: "Bedroom", externalReady: true)
-            precondition(external.state == .playingOn && external.isPlayingOn && external.secure)
-            precondition(external.pillSuffix.isEmpty && external.tileSubtitle == "Connected")
-            precondition(external.deviceName == "Bedroom" && external.pillLabel == "Playing on Bedroom")
+            let external = status(.external, socket: pair.0, secure: pair.1, external: "Bedroom", externalReady: true,
+                                  externalProtocol: "Google Cast")
+            precondition(external.state == .connected && !external.unencrypted)
+            precondition(external.deviceName == "Bedroom" && external.statusLine == "Google Cast · Connected")
         }
         let stripped = status(.external, socket: false, external: "Bedroom.local", externalReady: true)
-        precondition(stripped.deviceName == "Bedroom" && stripped.secure && stripped.pillSuffix.isEmpty)
-
-        let notReady = status(.external, socket: true, secure: true, external: receiver, externalReady: false)
-        precondition(notReady == PlayOnDashboardStatus())
+        precondition(stripped.deviceName == "Bedroom" && stripped.statusLine == "TV · Connected")
+        let notReady = status(.external, socket: true, secure: true, external: receiver, externalProtocol: "DLNA")
+        precondition(notReady.state == .offline && notReady.receiver == "DLNA")
 
         precondition(status(.playBridge, socket: true, native: nil).deviceName == "TV")
         precondition(status(.playBridge, socket: true, native: "   ").deviceName == "TV")
         precondition(status(.playBridge, socket: true, native: "  Office.local  ").deviceName == "Office")
-        precondition(status(.external, socket: false, native: nil, external: receiver, externalReady: true).deviceName == "Living-Room-Computer")
         precondition(status(.external, socket: false, native: nil, external: nil, externalReady: true).deviceName == "TV")
 
-        let airStandby = status(.airPlay, socket: true, secure: true, external: "Kitchen Speaker", airPlayReady: true)
-        precondition(airStandby.state == .standingBy && !airStandby.secure && airStandby.deviceName == "Living-Room-Computer")
-        precondition(airStandby.pillLabel == "Living-Room-Computer · Standing by")
-
-        let airPlay = status(.airPlay, socket: false, external: "Kitchen Speaker.local", airPlayReady: true)
-        precondition(airPlay.state == .playingOn && airPlay.secure && airPlay.deviceName == "Kitchen Speaker")
-        precondition(airPlay.pillSuffix.isEmpty && airPlay.pillLabel == "Playing on Kitchen Speaker")
-
-        precondition(status(.airPlay, socket: false, external: "Kitchen Speaker", airPlayReady: false) == PlayOnDashboardStatus())
+        // AirPlay is its own receiver, whatever the PlayBridge socket is doing.
+        let airPlay = status(.airPlay, socket: true, secure: true, external: "Kitchen Speaker.local", airPlayReady: true)
+        precondition(airPlay.state == .connected && airPlay.deviceName == "Kitchen Speaker")
+        precondition(airPlay.statusLine == "AirPlay · Connected")
+        precondition(status(.airPlay, socket: false, external: "Kitchen Speaker", airPlayReady: false).state == .offline)
     }
 
     private static func relativeTime() {

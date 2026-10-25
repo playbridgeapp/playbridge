@@ -22,33 +22,25 @@ final class BridgedAppUITests: XCTestCase {
         reorder.tap()
         let popup = app.otherElements["dashboard-reorder-popup"]
         XCTAssertTrue(popup.waitForExistence(timeout: 10), app.debugDescription)
-        // SwiftUI reports its accessibility group's frame as the whole overlay.
-        // The native navigation bar reports the editor's actual onscreen bounds.
-        let toolbar = app.navigationBars["Reorder Tiles"]
+        // Customize home is a full screen, not a centered popup.
+        let toolbar = app.navigationBars["Customize home"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertGreaterThan(toolbar.frame.minX, app.frame.minX + 8, "Popup has no left margin")
-        XCTAssertLessThan(toolbar.frame.maxX, app.frame.maxX - 8, "Popup has no right margin")
-        XCTAssertGreaterThan(toolbar.frame.minY, app.frame.minY + 70, "Popup is not vertically inset")
         let snapshot = XCTAttachment(screenshot: app.screenshot())
-        snapshot.name = "Centered dashboard reorder popup"
+        snapshot.name = "Customize home"
         snapshot.lifetime = .keepAlways
         add(snapshot)
 
         app.buttons["Position 1, Browser"].tap()
-        XCTAssertTrue(app.buttons["2 · Connection"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["2 · Media Library"].waitForExistence(timeout: 5))
         app.buttons["Back"].tap()
         XCTAssertTrue(app.buttons["Position 1, Browser"].waitForExistence(timeout: 5),
                       "Cancelling exact-position selection changed the order")
         app.buttons["Position 1, Browser"].tap()
-        app.buttons["2 · Connection"].tap()
+        app.buttons["2 · Media Library"].tap()
         XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
         XCTAssertFalse(popup.exists)
 
-        reorder.tap()
-        XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5))
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).tap()
-        XCTAssertFalse(popup.exists, "Tapping outside did not close the popup")
         app.terminate()
         app.launch()
         XCTAssertTrue(reorder.waitForExistence(timeout: 20))
@@ -56,9 +48,9 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5),
                       "Popup order did not persist across relaunch")
         // The suite shares its isolated app installation. Restore the default order
-        // so the following install/reorder test still starts with Connection at #2.
+        // so the following install/reorder test still starts with Media Library at #2.
         app.buttons["Position 2, Browser"].tap()
-        app.buttons["1 · Connection"].tap()
+        app.buttons["1 · Media Library"].tap()
         XCTAssertTrue(app.buttons["Position 1, Browser"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
     }
@@ -114,21 +106,20 @@ final class BridgedAppUITests: XCTestCase {
         let tile = app.buttons["bridged-app-\(base)/"]
         XCTAssertTrue(tile.waitForExistence(timeout: 10), app.debugDescription)
         reorder.tap()
-        let fixtureRow = app.buttons["Position 8, Fixture"]
-        // The centered popup intentionally shows fewer rows than the old sheet.
+        let fixtureRow = app.buttons["Position 6, Fixture"]
         for _ in 0..<4 {
             if fixtureRow.exists && fixtureRow.isHittable { break }
             app.collectionViews.firstMatch.swipeUp()
         }
         XCTAssertTrue(fixtureRow.waitForExistence(timeout: 10), app.debugDescription)
         fixtureRow.tap()
-        let secondPosition = app.buttons["2 · Connection"]
+        let secondPosition = app.buttons["2 · Media Library"]
         XCTAssertTrue(secondPosition.waitForExistence(timeout: 5), app.debugDescription)
         secondPosition.tap()
         XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
         let browserTile = app.buttons["dashboard-browser"]
-        let connectionTile = app.buttons["dashboard-connection"]
+        let connectionTile = app.buttons["dashboard-phone-files"]
         XCTAssertEqual(tile.frame.height, browserTile.frame.height, accuracy: 1)
         XCTAssertGreaterThan(tile.frame.height, connectionTile.frame.height)
         XCTAssertEqual(tile.frame.minY, browserTile.frame.minY, accuracy: 1)
@@ -222,7 +213,7 @@ final class BridgedAppUITests: XCTestCase {
         let remoteReturn = app.buttons["remote-return"]
         XCTAssertTrue(remoteReturn.waitForExistence(timeout: 10), app.debugDescription)
         // With no TV selected the Remote opens the device picker over itself (#376).
-        let devicePicker = app.navigationBars["Cast to"]
+        let devicePicker = app.navigationBars["Play on"]
         if devicePicker.waitForExistence(timeout: 5) {
             devicePicker.buttons["Close"].tap()
             XCTAssertTrue(remoteReturn.waitForHittable(timeout: 5), "Device picker did not close")
@@ -231,7 +222,8 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(edge.waitForExistence(timeout: 10), "Remote did not reopen app mode")
         edge.tap()
         app.buttons["Dashboard"].tap()
-        app.buttons["Close dashboard"].tap()
+        // The open web app's tile (marked OPEN) returns to it.
+        app.buttons["bridged-app-\(base)/"].tap()
         XCTAssertTrue(edge.waitForExistence(timeout: 10), "Closing Dashboard did not reopen app mode")
         // At the start URL, Back exits to Dashboard.
         edge.tap()
@@ -241,7 +233,7 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5), "Dashboard lost the saved tile order")
         app.buttons["Done"].tap()
         tile.press(forDuration: 1.2)
-        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["Web app details"].waitForExistence(timeout: 5), app.debugDescription)
         let name = app.textFields["bridged-app-name"]
         let home = app.textFields["bridged-app-home-url"]
         XCTAssertTrue(name.exists, app.debugDescription)
@@ -259,23 +251,23 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Save"].isEnabled, "Cross-origin edit was accepted")
         replace(home, with: base + "/detection")
         app.buttons["Save"].tap()
-        XCTAssertFalse(app.navigationBars["Bridged App Info"].exists)
+        XCTAssertFalse(app.navigationBars["Web app details"].exists)
         app.terminate()
         app.launch()
         XCTAssertTrue(tile.waitForExistence(timeout: 20))
         tile.press(forDuration: 1.2)
-        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Web app details"].waitForExistence(timeout: 5))
         XCTAssertEqual(name.value as? String, "Edited Fixture")
         XCTAssertEqual(home.value as? String, base + "/detection")
         replace(name, with: "Unsaved edit")
         app.buttons["Cancel"].tap()
         tile.press(forDuration: 1.2)
-        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Web app details"].waitForExistence(timeout: 5))
         XCTAssertEqual(name.value as? String, "Edited Fixture", "Cancel saved the draft")
-        let remove = app.buttons["Remove Bridged App"]
+        let remove = app.buttons["Remove"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
         remove.tap()
-        app.alerts["Remove Bridged App?"].buttons["Remove"].tap()
+        app.alerts.firstMatch.buttons["Remove"].tap()
         XCTAssertFalse(tile.exists, "Removal left the tile installed")
         app.buttons["dashboard-browser"].tap()
         XCTAssertTrue(app.buttons["Tabs, 1 open"].waitForExistence(timeout: 10), "App session leaked into the browser tab count")

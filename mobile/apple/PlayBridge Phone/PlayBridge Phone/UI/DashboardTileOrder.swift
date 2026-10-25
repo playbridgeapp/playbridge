@@ -2,7 +2,12 @@ import Foundation
 
 /// Placement follows stable feature/origin IDs, never names or install order.
 enum DashboardTileOrder {
-    static let tilesPerPage = 8
+    static let browserID = "browser"
+    /// Kept from the old "Bridged Apps" placeholder so saved orders still place it.
+    static let addWebAppID = "bridged-apps"
+    static let streamsOrigin = "https://streams.playbridge.app"
+    /// Browser is how videos are found and web apps are added, so it can't be hidden.
+    static let alwaysShown: Set<String> = [browserID]
 
     static func reconcile(saved: [String], available: [String]) -> [String] {
         let availableIDs = Set(available)
@@ -18,8 +23,9 @@ enum DashboardTileOrder {
         return result
     }
 
-    static func pageCount(_ tileCount: Int) -> Int {
-        max(1, (tileCount + tilesPerPage - 1) / tilesPerPage)
+    /// Tiles the Dashboard draws: the saved order minus hidden ones, never hiding `alwaysShown`.
+    static func visible(_ order: [String], hidden: Set<String>) -> [String] {
+        order.filter { !hidden.contains($0) || alwaysShown.contains($0) }
     }
 
     static func decode(_ value: String) -> [String] {

@@ -29,25 +29,26 @@ Dashboard tile ordering and persistence (host model checks):
 bash mobile/apple/tests/run-dashboard-order-checks.sh
 ```
 
-Checks exact-position moves, cross-page ordering, restored preferences, duplicate/stale
-IDs, new-app append behavior, and page-count boundaries. The bridged-app UI runner
+Checks exact-position moves, restored preferences, duplicate/stale IDs (including the
+removed Play on and Remote tiles), new-app append behavior, and that Browser can't be
+hidden while every other tile can. The bridged-app UI runner
 below also checks moving an installed app into the second large slot and retaining
 that order after a process restart and when returning to Dashboard. Its dashboard
-screenshot can also be used to review card edges and pager spacing. To retain the
+screenshot can also be used to review card edges and tile spacing. To retain the
 UI screenshots and test results outside the runner's temporary directory, set
 `IOS_UI_RESULT_BUNDLE=/tmp/playbridge-ui-results.xcresult` to a path that does not
 already exist.
 
-Centered dashboard reorder popup (focused simulator UI check):
+Customize home (focused simulator UI check):
 
 ```sh
 IOS_UI_TEST_FILTER=PopupTests/BridgedAppUITests/testDashboardReorderPopupMovesTilesAndDismisses \
   bash mobile/apple/tests/run-bridged-app-ui-checks.sh
 ```
 
-Checks the popup's screen margins, exact-position selection and cancellation,
-Done/outside-tap dismissal, and saved order after relaunch. Reordering still uses
-native drag handles; the editor and position picker no longer use bottom sheets.
+Checks the full-screen editor, exact-position selection and cancellation, Done
+dismissal, and saved order after relaunch. Reordering uses native drag handles; each
+tile also has a show/hide switch, and Browser is always shown.
 
 Cold-launch Dashboard and browser-tab restoration (focused simulator UI check):
 
