@@ -18,10 +18,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.outlined.Folder
@@ -35,6 +39,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -66,6 +72,8 @@ internal fun MediaDetailsSheet(
     onShare: () -> Unit,
     onAddSubtitles: () -> Unit,
     onRemoveSubtitles: () -> Unit,
+    onPlayNext: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -130,7 +138,9 @@ internal fun MediaDetailsSheet(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ActionTile(Icons.AutoMirrored.Filled.PlaylistAdd, "Collection", onAddToCollection, Modifier.weight(1f))
+                if (onPlayNext != null) ActionTile(Icons.AutoMirrored.Filled.PlaylistPlay, "Play next", onPlayNext, Modifier.weight(1f))
+                if (onAddToQueue != null) ActionTile(Icons.AutoMirrored.Filled.QueueMusic, "Add to queue", onAddToQueue, Modifier.weight(1f))
+                ActionTile(Icons.Outlined.Folder, "Collection", onAddToCollection, Modifier.weight(1f))
                 ActionTile(Icons.Default.Share, "Share", onShare, Modifier.weight(1f))
             }
 
@@ -273,11 +283,16 @@ private fun OptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Select mode actions (board 3); playing a selection arrives with the queue. */
+/** Select mode actions (board 3). */
 @Composable
 internal fun SelectionBar(
     selected: List<PhoneMediaItem>,
+    tvName: String?,
+    queueEnabled: Boolean,
+    playAvailable: Boolean,
     modifier: Modifier,
+    onPlay: (shuffle: Boolean) -> Unit,
+    onAddToQueue: () -> Unit,
     onAddToCollection: () -> Unit,
     onShare: () -> Unit,
 ) {
@@ -290,19 +305,118 @@ internal fun SelectionBar(
     ) {
         val total = selected.sumOf { it.durationMs.coerceAtLeast(0) }
         Text(
-            if (total > 0) "In the order you picked · ${PhoneFilesModel.clock(total)} in total" else "In the order you picked",
+            if (total > 0) "Plays in the order you picked · ${PhoneFilesModel.clock(total)} in total" else "Plays in the order you picked",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onAddToCollection, modifier = Modifier.weight(1f).height(48.dp)) {
-                Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text("  Add ${selected.size} to collection", fontWeight = FontWeight.Bold, maxLines = 1)
-            }
-            OutlinedButton(onClick = onShare, modifier = Modifier.height(48.dp)) {
-                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text("  Share")
+        if (playAvailable) {
+            Button(onClick = { onPlay(false) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("  Play ${selected.size} on ${tvName ?: "this phone"}", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (queueEnabled) {
+                OutlinedButton(onClick = onAddToQueue, modifier = Modifier.weight(1f).height(44.dp)) { Text("Add to queue", maxLines = 1) }
+            }
+            OutlinedButton(onClick = onAddToCollection, modifier = Modifier.weight(1f).height(44.dp)) { Text("Collection", maxLines = 1) }
+            if (playAvailable) {
+                OutlinedButton(onClick = { onPlay(true) }, modifier = Modifier.weight(1f).height(44.dp)) { Text("Shuffle play", maxLines = 1) }
+            } else {
+                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f).height(44.dp)) { Text("Share", maxLines = 1) }
+            }
+        }
+    }
+}
+
+/** Slideshow controls (board 8). Changing an option resends the list. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SlideshowSheet(
+    show: Slideshow,
+    tvName: String,
+    position: Int?,
+    seconds: Int,
+    shuffle: Boolean,
+    includeVideos: Boolean,
+    hasVideos: Boolean,
+    onSeconds: (Int) -> Unit,
+    onShuffle: (Boolean) -> Unit,
+    onIncludeVideos: (Boolean) -> Unit,
+    onPrevious: () -> Unit,
+    onTogglePause: () -> Unit,
+    onNext: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column {
+                Text("Slideshow", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("${show.title} on $tvName", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (position != null && show.count > 0) {
+                Text("$position of ${show.count}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.align(Alignment.CenterHorizontally))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
+                RoundControl(Icons.Default.SkipPrevious, "Previous photo", onPrevious)
+                RoundControl(Icons.Default.Pause, "Pause slideshow", onTogglePause, primary = true)
+                RoundControl(Icons.Default.SkipNext, "Next photo", onNext)
+            }
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Each photo", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    listOf(3, 5, 10).forEach { value ->
+                        val selected = value == seconds
+                        Box(
+                            Modifier
+                                .padding(start = 6.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                .clickable { onSeconds(value) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                "$value s",
+                                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (selected) FontWeight.Bold else null,
+                            )
+                        }
+                    }
+                }
+                SwitchRow("Shuffle", shuffle, onShuffle)
+                if (hasVideos) SwitchRow("Play videos in the album too", includeVideos, onIncludeVideos)
+            }
+            TextButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+                Text("Stop slideshow", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundControl(icon: ImageVector, label: String, onClick: () -> Unit, primary: Boolean = false) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(if (primary) 64.dp else 52.dp)
+            .clip(CircleShape)
+            .background(if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Icon(icon, contentDescription = label, tint = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

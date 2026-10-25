@@ -20,7 +20,7 @@ import QuickLookThumbnailing
     }
 
     /// Returns an error message, or nil once the cast was sent.
-    static func cast(_ item: PhoneMedia, url resolved: URL? = nil, subtitle: URL? = nil,
+    static func cast(_ item: PhoneMedia, url resolved: URL? = nil, subtitle: URL? = nil, displayDurationMs: Int? = nil,
                      library: PhoneMediaLibrary, vm: ConnectionViewModel) async -> String? {
         guard castsToSelectedReceiver(vm) else { return "Pick a TV first." }
         let target = vm.destinationID
@@ -33,7 +33,7 @@ import QuickLookThumbnailing
         }
         guard vm.destinationID == target, vm.isConnected else { return "The connected device changed. Try casting again." }
         vm.castLocalMedia(url: served.media, title: item.title, contentType: LocalFileServer.mimeType(for: url),
-                          subtitles: served.subtitle.map { [$0] } ?? [])
+                          subtitles: served.subtitle.map { [$0] } ?? [], displayDurationMs: displayDurationMs)
         PhoneFilesNowPlaying.shared.itemID = item.id
         return nil
     }
@@ -89,6 +89,10 @@ struct PhoneMediaDetail: View {
                     }.buttonStyle(.plain)
                 }
                 HStack(spacing: 8) {
+                    if vm.localQueueSupported {
+                        tile("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") { enqueue(.next) }
+                        tile("Add to queue", systemImage: "text.badge.plus") { enqueue(.end) }
+                    }
                     tile("Collection", systemImage: "folder.badge.plus") { showCollections = true }
                     if let url {
                         ShareLink(item: url) { tileLabel("Share", systemImage: "square.and.arrow.up") }.buttonStyle(.plain)
@@ -235,6 +239,19 @@ struct PhoneMediaDetail: View {
         } else {
             sent = true
             dismiss()
+        }
+    }
+
+    private func enqueue(_ mode: PhoneQueueCoordinator.Mode) {
+        Task {
+            sending = true
+            let outcome = await PhoneQueueCoordinator.shared.send([item], mode: mode, library: library, vm: vm)
+            sending = false
+            switch outcome {
+            case .failed(let message): error = message
+            case .addedAtEnd: error = "\(tvName) can’t reorder its queue, so it was added at the end."
+            default: dismiss()
+            }
         }
     }
 

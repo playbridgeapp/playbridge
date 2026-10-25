@@ -103,6 +103,10 @@ class PhoneFilesUiState {
     var selection by mutableStateOf<List<String>>(emptyList())
     /** Last item this screen cast, for the ON TV badge. */
     var lastCastUri by mutableStateOf<String?>(null)
+    /** Slideshow options (board 8), kept between slideshows. */
+    var slideSeconds by mutableIntStateOf(5)
+    var slideShuffle by mutableStateOf(false)
+    var slideVideos by mutableStateOf(true)
     val folderByTab = mutableStateMapOf<PhoneFilesTab, Long?>()
     internal val askedKinds = mutableStateMapOf<MediaKind, Boolean>()
     val videoGrid = LazyGridState()
@@ -135,6 +139,7 @@ fun PhoneFilesScreen(
     var showDevicePicker by remember { mutableStateOf(false) }
     var showSortSheet by remember { mutableStateOf(false) }
     var detailsFor by remember { mutableStateOf<PhoneMediaItem?>(null) }
+    var slideshow by remember { mutableStateOf<Slideshow?>(null) }
 
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val connectionState by viewModel.connectionState.collectAsState()
@@ -149,7 +154,9 @@ fun PhoneFilesScreen(
     val tvName = activeExternalDevice?.playOnName ?: nativeDevice?.playOnName?.takeIf { nativeConnected }
     val tvPlaying = (nativeConnected && tvActiveContext == "player") ||
         (activeExternalDevice != null && externalMediaTitle != null)
-    val onTvUri = uiState.lastCastUri.takeIf { tvPlaying }
+    val tvPlaylist by connectionCoordinator.tvPlaylistState.collectAsState()
+    // PlayBridge receivers take whole lists; Google Cast, DLNA and Roku play one item at a time.
+    val queueEnabled = nativeConnected
 
     // ---- Access -------------------------------------------------------------------------
     val activity = remember(context) { context.findActivity() }
@@ -261,6 +268,64 @@ fun PhoneFilesScreen(
 
     fun play(media: PhoneMediaItem) = if (hasExternalTarget) playOnTv(media) else playOnPhone(media)
 
+    fun castItem(media: PhoneMediaItem, displayDurationMs: Long? = null) = com.playbridge.sender.connection.LocalCastItem(
+        uri = media.uri.toString(),
+        mime = media.mimeType,
+        title = media.title,
+        durationMs = media.durationMs,
+        kind = media.mediaKind,
+        artist = media.artist,
+        album = media.album,
+        trackNumber = media.trackNumber,
+        displayDurationMs = displayDurationMs.takeIf { media.mediaKind == MediaKind.IMAGE },
+    )
+
+    fun sendQueue(list: List<com.playbridge.sender.connection.LocalCastItem>, mode: com.playbridge.sender.connection.LocalQueueMode) {
+        if (list.isEmpty()) return
+        scope.launch {
+            val result = viewModel.castLocalQueue(list, mode)
+            val tv = tvName ?: "TV"
+            val count = if (list.size == 1) "1 item" else "${list.size} items"
+            val message = when (result) {
+                com.playbridge.sender.connection.LocalQueueResult.PLAYING -> {
+                    uiState.lastCastUri = list.first().uri
+                    if (list.size == 1) "Playing on $tv" else "Playing $count on $tv"
+                }
+                com.playbridge.sender.connection.LocalQueueResult.ADDED ->
+                    if (mode == com.playbridge.sender.connection.LocalQueueMode.NEXT) "Plays next on $tv" else "Added $count to Up next"
+                com.playbridge.sender.connection.LocalQueueResult.ADDED_AT_END -> "$tv can't reorder its queue, so it was added at the end"
+                com.playbridge.sender.connection.LocalQueueResult.FAILED -> "Couldn't send to $tv"
+            }
+            snackbar.showSnackbar(message)
+        }
+    }
+
+    fun queue(list: List<PhoneMediaItem>, mode: com.playbridge.sender.connection.LocalQueueMode) =
+        sendQueue(list.filterNot(::unsupportedOnTv).map { castItem(it) }, mode)
+
+    /** Play all / Play N / Shuffle: a new list on the TV, or in order on this phone. */
+    fun playList(list: List<PhoneMediaItem>, shuffle: Boolean) {
+        val ordered = if (shuffle) list.shuffled() else list
+        when {
+            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+            !hasExternalTarget -> {
+                val playable = ordered.filter { it.mediaKind != MediaKind.IMAGE }
+                if (playable.isEmpty()) return
+                PlayerLauncher.startPlaylist(context, playable.map { it.uri.toString() }, playable.map { it.title }, startIndex = 0)
+            }
+        }
+    }
+
+    /** Photos (and optionally the folder's videos) as a timed list (board 8). */
+    fun startSlideshow(show: Slideshow, startIndex: Int = 0) {
+        val ordered = PhoneFilesModel.slideshow(
+            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, startIndex, SLIDESHOW_LIMIT,
+        )
+        val list = ordered.map { castItem(it, uiState.slideSeconds * 1000L) }
+        slideshow = show.copy(count = ordered.size)
+        sendQueue(list, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+    }
+
     fun share(list: List<PhoneMediaItem>) {
         if (list.isEmpty()) return
         val intent = if (list.size == 1) {
@@ -312,6 +377,14 @@ fun PhoneFilesScreen(
     }
     val byUri = remember(items.toMap()) { items.values.flatten().associateBy { it.uri.toString() } }
     val selectedItems = uiState.selection.mapNotNull { byUri[it] }
+    // The TV's current item: the last thing sent, or a phone file with the current item's title.
+    val currentTvTitle = tvPlaylist?.let { list -> list.items.firstOrNull { it.index == list.currentIndex }?.title }
+    val onTvUri = when {
+        !tvPlaying -> null
+        currentTvTitle == null -> uiState.lastCastUri
+        byUri[uiState.lastCastUri]?.title == currentTvTitle -> uiState.lastCastUri
+        else -> items.values.asSequence().flatten().firstOrNull { it.title == currentTvTitle }?.uri?.toString()
+    }
 
     BackHandler(enabled = uiState.selecting || uiState.searchActive || uiState.openGroupKey != null) {
         when {
@@ -341,6 +414,17 @@ fun PhoneFilesScreen(
         onLongPress = { media -> uiState.selection = PhoneFilesModel.toggle(uiState.selection, media.uri.toString()) },
         onAddToCollection = { onAddToCollection(listOf(it)) },
         onPlayOnPhone = ::playOnPhone,
+        queueEnabled = queueEnabled,
+        playListAvailable = queueEnabled || !hasExternalTarget,
+        onPlayNext = { queue(listOf(it), com.playbridge.sender.connection.LocalQueueMode.NEXT) },
+        onAddToQueue = { queue(listOf(it), com.playbridge.sender.connection.LocalQueueMode.END) },
+        onPlayList = ::playList,
+        onSlideshow = { title, photos ->
+            val folder = uiState.folderByTab[PhoneFilesTab.PHOTOS]
+            val videos = items[MediaKind.VIDEO].orEmpty().filter { folder == null || it.bucketId == folder }
+            startSlideshow(Slideshow(title, photos, videos))
+        },
+        slideshowAvailable = queueEnabled && nativeDevice?.supportsNativeMediaKind(MediaKind.IMAGE.wireValue) != false,
     )
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -470,7 +554,18 @@ fun PhoneFilesScreen(
         if (uiState.selecting) {
             SelectionBar(
                 selected = selectedItems,
+                tvName = tvName.takeIf { hasExternalTarget },
+                queueEnabled = queueEnabled,
+                playAvailable = callbacks.playListAvailable && selectedItems.any { it.mediaKind != MediaKind.IMAGE || queueEnabled },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset),
+                onPlay = { shuffle ->
+                    playList(selectedItems, shuffle)
+                    uiState.selection = emptyList()
+                },
+                onAddToQueue = {
+                    queue(selectedItems, com.playbridge.sender.connection.LocalQueueMode.END)
+                    uiState.selection = emptyList()
+                },
                 onAddToCollection = {
                     onAddToCollection(selectedItems)
                     uiState.selection = emptyList()
@@ -508,6 +603,14 @@ fun PhoneFilesScreen(
             onPickTv = { showDevicePicker = true },
             onAddToCollection = { onAddToCollection(listOf(media)) },
             onShare = { share(listOf(media)) },
+            onPlayNext = if (queueEnabled) ({
+                queue(listOf(media), com.playbridge.sender.connection.LocalQueueMode.NEXT)
+                detailsFor = null
+            }) else null,
+            onAddToQueue = if (queueEnabled) ({
+                queue(listOf(media), com.playbridge.sender.connection.LocalQueueMode.END)
+                detailsFor = null
+            }) else null,
             onAddSubtitles = { subtitlePicker.launch(arrayOf("*/*")) },
             onRemoveSubtitles = { subtitle = null },
         )
@@ -528,6 +631,38 @@ fun PhoneFilesScreen(
         )
     }
 
+    slideshow?.let { show ->
+        SlideshowSheet(
+            show = show,
+            tvName = tvName ?: "TV",
+            position = tvPlaylist?.let { it.currentIndex + 1 }?.takeIf { tvPlaying },
+            seconds = uiState.slideSeconds,
+            shuffle = uiState.slideShuffle,
+            includeVideos = uiState.slideVideos,
+            hasVideos = show.videos.isNotEmpty(),
+            onSeconds = {
+                uiState.slideSeconds = it
+                startSlideshow(show, startIndex = tvPlaylist?.currentIndex ?: 0)
+            },
+            onShuffle = {
+                uiState.slideShuffle = it
+                startSlideshow(show)
+            },
+            onIncludeVideos = {
+                uiState.slideVideos = it
+                startSlideshow(show)
+            },
+            onPrevious = { scope.launch { viewModel.stepQueue(-1) } },
+            onTogglePause = { scope.launch { viewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.TogglePlayPause) } },
+            onNext = { scope.launch { viewModel.stepQueue(1) } },
+            onStop = {
+                scope.launch { viewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.StopPlayback) }
+                slideshow = null
+            },
+            onDismiss = { slideshow = null },
+        )
+    }
+
     if (showDevicePicker) {
         PlayOnSheet(onDismiss = { showDevicePicker = false }, showThisDevice = true)
     }
@@ -539,7 +674,27 @@ internal class PhoneFilesCallbacks(
     val onLongPress: (PhoneMediaItem) -> Unit,
     val onAddToCollection: (PhoneMediaItem) -> Unit,
     val onPlayOnPhone: (PhoneMediaItem) -> Unit,
+    /** Play next and Add to queue: PlayBridge receivers only. */
+    val queueEnabled: Boolean = false,
+    /** Play all / Shuffle: PlayBridge receivers, or this phone. */
+    val playListAvailable: Boolean = false,
+    val onPlayNext: (PhoneMediaItem) -> Unit = {},
+    val onAddToQueue: (PhoneMediaItem) -> Unit = {},
+    val onPlayList: (List<PhoneMediaItem>, Boolean) -> Unit = { _, _ -> },
+    val onSlideshow: (String, List<PhoneMediaItem>) -> Unit = { _, _ -> },
+    val slideshowAvailable: Boolean = false,
 )
+
+/** A running slideshow: what it shows and how many items were sent. */
+internal data class Slideshow(
+    val title: String,
+    val photos: List<PhoneMediaItem>,
+    val videos: List<PhoneMediaItem>,
+    val count: Int = 0,
+)
+
+/** Keeps one `playlist` message a reasonable size for every receiver. */
+private const val SLIDESHOW_LIMIT = 500
 
 @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun fullPermission(kind: MediaKind): String = when (kind) {

@@ -771,7 +771,31 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
-    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = []) {
+    /// Phone-file queues (Play all, Play next, Add to queue) need a PlayBridge receiver that appends.
+    var localQueueSupported: Bool {
+        isConnected && playBridgeOutputSelected && !isAirPlay && !isExternalReceiver && nativeRemotePolicy.allowsQueue("append")
+    }
+
+    /// The receiver can move queued items, so Play next can place them after the current one.
+    var localQueueReorders: Bool { localQueueSupported && supportsQueueV1 && nativeRemotePolicy.allowsQueue("move") }
+
+    /// Appends one phone file (already served by this phone) to the receiver's queue.
+    @discardableResult
+    func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil) -> Bool {
+        guard localQueueSupported else { return false }
+        onUserMediaAction?()
+        let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
+        let command = WireProtocol.queueVideoCommand(
+            url: url, title: title, contentType: contentType, mediaKind: kind,
+            playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
+            useQueueV1: supportsQueueV1, displayDurationMs: displayDurationMs
+        )
+        guard ws.send(command) else { return false }
+        recordCast(command)
+        return true
+    }
+
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil) {
         onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
@@ -783,7 +807,8 @@ final class ConnectionViewModel: ObservableObject {
             }
         } else {
             guard playBridgeOutputSelected else { return }
-            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles, mediaKind: kind))
+            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
+                                                    mediaKind: kind, displayDurationMs: displayDurationMs))
         }
     }
 

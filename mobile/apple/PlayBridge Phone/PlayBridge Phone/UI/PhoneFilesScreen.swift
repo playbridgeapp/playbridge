@@ -9,6 +9,11 @@ struct PhoneFilesScreen: View {
     @EnvironmentObject private var library: PhoneMediaLibrary
     @EnvironmentObject private var nav: NavigationViewModel
     @ObservedObject private var nowPlaying = PhoneFilesNowPlaying.shared
+    @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
+    @AppStorage("pb_phone_files_slide_seconds") private var slideSeconds = 5
+    @AppStorage("pb_phone_files_slide_shuffle") private var slideShuffle = false
+    @AppStorage("pb_phone_files_slide_videos") private var slideVideos = true
+    @State private var slideshow: SlideshowRun?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("pb_phone_files_tab") private var tabRaw = PhoneFilesTab.videos.rawValue
     @AppStorage("pb_phone_files_sort") private var sortRaw = PhoneFilesSort.newest.rawValue
@@ -33,6 +38,8 @@ struct PhoneFilesScreen: View {
     private var musicView: MusicView { MusicView(rawValue: musicRaw) ?? .songs }
     private var selecting: Bool { !selection.isEmpty }
     private var toTV: Bool { PhoneMediaCasting.castsToSelectedReceiver(vm) }
+    /// PlayBridge receivers take lists; Google Cast, DLNA, Roku and AirPlay play one item at a time.
+    private var queueEnabled: Bool { vm.localQueueSupported }
     private var onTvID: String? {
         guard vm.isConnected, vm.coordinator.activeContext == "player" || vm.isExternalReceiver || vm.isAirPlay else { return nil }
         return nowPlaying.itemID
@@ -63,10 +70,12 @@ struct PhoneFilesScreen: View {
         VStack(spacing: 0) {
             if let group = openGroup {
                 SongGroupPage(group: group, onTvID: onTvID, tvName: PhoneMediaCasting.receiverName(vm), selection: selection,
+                              onPlay: queueEnabled && !selecting ? { songs, shuffle in playList(songs, shuffle: shuffle) } : nil,
                               onBack: { openGroupID = nil }, row: songRow)
             } else {
                 header
                 tabs.padding(.horizontal, 16).padding(.bottom, 12)
+                if phoneQueue.needsAppRunning { queueNote.padding(.horizontal, 16).padding(.bottom, 12) }
                 content
             }
         }
@@ -93,6 +102,11 @@ struct PhoneFilesScreen: View {
         }
         .sheet(item: $detail) { item in PhoneMediaDetail(item: item) }
         .sheet(item: $collectionItems) { target in AddPhoneMediaToCollection(items: target.items) }
+        .sheet(item: $slideshow) { run in
+            SlideshowSheet(run: run, seconds: $slideSeconds, shuffle: $slideShuffle, includeVideos: $slideVideos,
+                           restart: { startIndex in startSlideshow(run, startIndex: startIndex) },
+                           onStop: { vm.control("stop"); phoneQueue.stop(); slideshow = nil })
+        }
         .alert("Remove imported copy?", isPresented: Binding(get: { deleteItem != nil }, set: { if !$0 { deleteItem = nil } })) {
             Button("Remove", role: .destructive) { if let item = deleteItem { library.removeImport(item) }; deleteItem = nil }
             Button("Cancel", role: .cancel) { deleteItem = nil }
@@ -186,9 +200,29 @@ struct PhoneFilesScreen: View {
                     photosAccess
                     if !chips.isEmpty { chipRow(chips.map { ($0.id as String?, $0.title) }, selected: chip) { chipByTab[tab.rawValue] = $0 } }
                     if tab == .videos {
-                        Text(sort.title).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+                        HStack {
+                            Text(sort.title).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+                            Spacer()
+                            if queueEnabled && !selecting && !shown.isEmpty {
+                                Button { playList(shown, shuffle: false) } label: {
+                                    Label("Play all", systemImage: "play.fill").font(Theme.font(.footnote).weight(.medium))
+                                        .padding(.horizontal, 14).frame(minHeight: 36).background(Capsule().fill(Theme.surfaceContainerHigh))
+                                }.buttonStyle(.plain)
+                            }
+                        }
                         videoGrid
                     } else {
+                        if queueEnabled && !selecting && !shown.isEmpty {
+                            let name = chips.first { $0.id == chip }?.title
+                            Button {
+                                let run = SlideshowRun(title: name ?? "All photos", photos: shown, videos: slideshowVideos)
+                                startSlideshow(run, startIndex: 0)
+                            } label: {
+                                Label("Slideshow of \(name ?? "all photos") on TV", systemImage: "play.rectangle.on.rectangle")
+                                    .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary).lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 48).background(Capsule().fill(Theme.primary))
+                            }.buttonStyle(.plain)
+                        }
                         photoGrid
                     }
                 }.padding(.horizontal, 16).padding(.bottom, 16)
@@ -281,6 +315,10 @@ struct PhoneFilesScreen: View {
         let songs = PhoneFilesModel.sorted(items(.audio).filter { PhoneFilesModel.matches($0, query) }, by: sort)
         switch musicView {
         case .songs:
+            if queueEnabled && !selecting && !songs.isEmpty {
+                PlayShuffleButtons(playTitle: "Play all", shuffleTitle: "Shuffle all",
+                                   onPlay: { playList(songs, shuffle: false) }, onShuffle: { playList(songs, shuffle: true) })
+            }
             if songs.isEmpty { empty(query.isEmpty ? "No music imported yet" : "No matches") }
             LazyVStack(spacing: 0) { ForEach(songs) { songRow($0, nil) } }
         case .albums:
@@ -365,6 +403,10 @@ struct PhoneFilesScreen: View {
     }
 
     @ViewBuilder private func menu(_ item: PhoneMedia) -> some View {
+        if queueEnabled {
+            Button("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") { send([item], .next) }
+            Button("Add to queue", systemImage: "text.badge.plus") { send([item], .end) }
+        }
         if toTV && item.kind != .video {
             Button("Show details", systemImage: "info.circle") { detail = item }
         }
@@ -438,16 +480,29 @@ struct PhoneFilesScreen: View {
         let picked = selection.compactMap { library.item($0) }
         let total = picked.reduce(0) { $0 + max(0, $1.duration ?? 0) }
         return VStack(alignment: .leading, spacing: 10) {
-            Text(total > 0 ? "In the order you picked · \(PhoneFilesModel.clock(total)) in total" : "In the order you picked")
+            Text(total > 0 ? "Plays in the order you picked · \(PhoneFilesModel.clock(total)) in total" : "Plays in the order you picked")
                 .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
-            Button {
-                collectionItems = CollectionTarget(items: picked)
-                selection = []
-            } label: {
-                Label("Add \(picked.count) to collection", systemImage: "folder.badge.plus")
-                    .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary)
-                    .frame(maxWidth: .infinity, minHeight: 50).background(Capsule().fill(Theme.primary))
-            }.buttonStyle(.plain)
+            if queueEnabled {
+                Button { playList(picked, shuffle: false); selection = [] } label: {
+                    Label("Play \(picked.count) on \(PhoneMediaCasting.receiverName(vm))", systemImage: "play.fill")
+                        .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary).lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 50).background(Capsule().fill(Theme.primary))
+                }.buttonStyle(.plain)
+                HStack(spacing: 8) {
+                    outlined("Add to queue") { send(picked, .end); selection = [] }
+                    outlined("Collection") { collectionItems = CollectionTarget(items: picked); selection = [] }
+                    outlined("Shuffle play") { playList(picked, shuffle: true); selection = [] }
+                }
+            } else {
+                Button {
+                    collectionItems = CollectionTarget(items: picked)
+                    selection = []
+                } label: {
+                    Label("Add \(picked.count) to collection", systemImage: "folder.badge.plus")
+                        .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary)
+                        .frame(maxWidth: .infinity, minHeight: 50).background(Capsule().fill(Theme.primary))
+                }.buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
         .background(Theme.surfaceContainer.ignoresSafeArea(edges: .bottom))
@@ -466,6 +521,62 @@ struct PhoneFilesScreen: View {
                 show("\(item.kind == .image ? "Showing" : "Playing") on \(PhoneMediaCasting.receiverName(vm))")
             }
         }
+    }
+
+    /// Videos from the same album (or all of them) for "Play videos in the album too".
+    private var slideshowVideos: [PhoneMedia] {
+        let videos = items(.video)
+        if chipByTab[PhoneFilesTab.photos.rawValue] == Self.importedChip { return videos.filter { $0.source == .imported } }
+        if let id = chipByTab[PhoneFilesTab.photos.rawValue], let album = library.albums.first(where: { $0.id == id }) {
+            return videos.filter { $0.assetIdentifier.map(album.assetIDs.contains) ?? false }
+        }
+        return videos
+    }
+
+    private func outlined(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(Theme.font(.footnote).weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 44).overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 1))
+                .contentShape(Capsule())
+        }.buttonStyle(.plain)
+    }
+
+    private var queueNote: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "iphone").foregroundColor(.orange)
+            Text("Keep PlayBridge running. If iOS closes it, the TV stops after the current file.")
+                .font(Theme.font(.footnote))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+        .background(Color.orange.opacity(0.15)).cornerRadius(12)
+    }
+
+    private func playList(_ list: [PhoneMedia], shuffle: Bool) {
+        send(shuffle ? list.shuffled() : list, .replace)
+    }
+
+    private func send(_ list: [PhoneMedia], _ mode: PhoneQueueCoordinator.Mode, displayDurationMs: Int? = nil) {
+        guard !list.isEmpty else { return }
+        Task {
+            let outcome = await phoneQueue.send(list, mode: mode, displayDurationMs: displayDurationMs, library: library, vm: vm)
+            let tv = PhoneMediaCasting.receiverName(vm)
+            let count = list.count == 1 ? "1 item" : "\(list.count) items"
+            switch outcome {
+            case .playing: show(list.count == 1 ? "Playing on \(tv)" : "Playing \(count) on \(tv)")
+            case .added: show(mode == .next ? "Plays next on \(tv)" : "Added \(count) to Up next")
+            case .addedAtEnd: show("\(tv) can’t reorder its queue, so it was added at the end")
+            case .failed(let message): show(message)
+            }
+        }
+    }
+
+    private func startSlideshow(_ run: SlideshowRun, startIndex: Int) {
+        let ordered = PhoneFilesModel.slideshow(photos: run.photos, videos: run.videos, includeVideos: slideVideos,
+                                                shuffle: slideShuffle, startIndex: startIndex, limit: 500)
+        var updated = run
+        updated.count = ordered.count
+        slideshow = updated
+        send(ordered, .replace, displayDurationMs: slideSeconds * 1000)
     }
 
     private func show(_ message: String) {
@@ -518,6 +629,7 @@ private struct SongGroupPage<Row: View>: View {
     let onTvID: String?
     let tvName: String
     let selection: [String]
+    let onPlay: (([PhoneMedia], Bool) -> Void)?
     let onBack: () -> Void
     let row: (PhoneMedia, Int?) -> Row
     @EnvironmentObject private var library: PhoneMediaLibrary
@@ -536,6 +648,10 @@ private struct SongGroupPage<Row: View>: View {
                         Text("\(PhoneFilesModel.songCount(group.songs.count)) · \(PhoneFilesModel.minutes(group.totalDuration))")
                             .font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
                     }.padding(.bottom, 4)
+                }
+                if let onPlay {
+                    PlayShuffleButtons(playTitle: "Play", shuffleTitle: "Shuffle",
+                                       onPlay: { onPlay(group.songs, false) }, onShuffle: { onPlay(group.songs, true) })
                 }
                 LazyVStack(spacing: 0) {
                     ForEach(Array(group.songs.enumerated()), id: \.element.id) { index, song in
@@ -564,5 +680,110 @@ private struct OnTvBadge: View {
     var body: some View {
         Text("ON TV").font(Theme.font(.caption2).bold()).foregroundColor(Theme.onSecondaryContainer)
             .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.secondaryContainer).cornerRadius(4)
+    }
+}
+
+private struct PlayShuffleButtons: View {
+    let playTitle: String
+    let shuffleTitle: String
+    let onPlay: () -> Void
+    let onShuffle: () -> Void
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onPlay) {
+                Label(playTitle, systemImage: "play.fill").font(Theme.font(.subheadline).bold()).foregroundColor(Theme.onPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 44).background(Capsule().fill(Theme.primary))
+            }.buttonStyle(.plain)
+            Button(action: onShuffle) {
+                Label(shuffleTitle, systemImage: "shuffle").font(Theme.font(.subheadline).weight(.medium))
+                    .frame(maxWidth: .infinity, minHeight: 44).overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 1))
+                    .contentShape(Capsule())
+            }.buttonStyle(.plain)
+        }
+    }
+}
+
+/// A slideshow in progress: what it shows and how many items were sent.
+struct SlideshowRun: Identifiable {
+    let id = UUID()
+    let title: String
+    let photos: [PhoneMedia]
+    let videos: [PhoneMedia]
+    var count = 0
+}
+
+/// Slideshow controls (board 8). Changing an option resends the list.
+private struct SlideshowSheet: View {
+    let run: SlideshowRun
+    @Binding var seconds: Int
+    @Binding var shuffle: Bool
+    @Binding var includeVideos: Bool
+    let restart: (Int) -> Void
+    let onStop: () -> Void
+    @EnvironmentObject private var vm: ConnectionViewModel
+
+    private var playlist: PlaylistUiState? { vm.coordinator.playlist }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Slideshow").font(Theme.font(.title3).bold())
+                Text("\(run.title) on \(PhoneMediaCasting.receiverName(vm))").font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
+            }
+            if let playlist, run.count > 0 {
+                Text("\(playlist.currentIndex + 1) of \(run.count)").font(Theme.font(.headline)).frame(maxWidth: .infinity)
+            }
+            HStack(spacing: 20) {
+                control("backward.fill", label: "Previous photo") { step(-1) }
+                control(vm.coordinator.playback?.state == "paused" ? "play.fill" : "pause.fill", label: "Pause slideshow", primary: true) {
+                    vm.control(vm.coordinator.playback?.state == "paused" ? "play" : "pause")
+                }
+                control("forward.fill", label: "Next photo") { step(1) }
+            }.frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Each photo")
+                    Spacer()
+                    Picker("Time per photo", selection: Binding(get: { seconds }, set: { seconds = $0; restart(playlist?.currentIndex ?? 0) })) {
+                        ForEach([3, 5, 10], id: \.self) { Text("\($0) s").tag($0) }
+                    }.pickerStyle(.segmented).frame(width: 170)
+                }.frame(minHeight: 52)
+                Toggle("Shuffle", isOn: Binding(get: { shuffle }, set: { shuffle = $0; restart(0) })).frame(minHeight: 52)
+                if !run.videos.isEmpty {
+                    Toggle("Play videos in the album too", isOn: Binding(get: { includeVideos }, set: { includeVideos = $0; restart(0) }))
+                        .frame(minHeight: 52)
+                }
+            }
+            .font(Theme.font(.body)).padding(.horizontal, 14).background(Theme.surfaceContainerHigh).cornerRadius(16)
+            Button(role: .destructive, action: onStop) {
+                Text("Stop slideshow").font(Theme.font(.body).bold()).frame(maxWidth: .infinity, minHeight: 44)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .foregroundColor(Theme.onSurface)
+        .background(Theme.surfaceContainer.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func step(_ delta: Int) {
+        guard let playlist else { return }
+        let ordered = playlist.items.sorted { $0.index < $1.index }
+        guard let position = ordered.firstIndex(where: { item in
+                  playlist.currentItemId.map { item.itemId == $0 } ?? (item.index == playlist.currentIndex)
+              }),
+              ordered.indices.contains(position + delta) else { return }
+        vm.jump(to: ordered[position + delta])
+    }
+
+    private func control(_ systemImage: String, label: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage).font(.system(size: primary ? 24 : 20))
+                .foregroundColor(primary ? Theme.onPrimary : Theme.onSurface)
+                .frame(width: primary ? 64 : 52, height: primary ? 64 : 52)
+                .background(Circle().fill(primary ? Theme.primary : Theme.surfaceContainerHigh))
+        }
+        .buttonStyle(.plain).accessibilityLabel(label)
     }
 }

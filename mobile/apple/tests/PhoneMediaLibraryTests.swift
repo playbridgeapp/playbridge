@@ -39,7 +39,14 @@ struct ScreenBackButton: View {
     let accessibilityLabel: String
     var body: some View { Image(systemName: "chevron.left").frame(width: 36, height: 44) }
 }
-final class FixtureCoordinator { var activeContext = "idle" }
+final class FixtureCoordinator {
+    var activeContext = "idle"
+    var playlist: PlaylistUiState?
+    var playback: TvPlaybackStatus?
+}
+struct PlaylistEpisode { let index: Int; let title: String; var itemId: String? = nil }
+struct PlaylistUiState { var currentIndex: Int; var items: [PlaylistEpisode]; var playbackId: String? = nil; var currentItemId: String? = nil }
+struct TvPlaybackStatus { var state: String }
 final class ConnectionViewModel: ObservableObject {
     var isConnected = false
     var isAirPlay = false
@@ -48,7 +55,13 @@ final class ConnectionViewModel: ObservableObject {
     var receiverName: String?
     let coordinator = FixtureCoordinator()
     var destinationID: String? = "fixture"
-    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = []) {}
+    var localQueueSupported = false
+    var localQueueReorders = false
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil) {}
+    @discardableResult func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil) -> Bool { false }
+    func moveInQueue(itemId: String, beforeItemId: String?) {}
+    func control(_ command: String) {}
+    func jump(to item: PlaylistEpisode) {}
     func castMedia(url: String, title: String, headers: [String: String], contentType: String?) {}
 }
 struct DeviceConnectionSheet: View { var body: some View { Text("Fixture connection") } }

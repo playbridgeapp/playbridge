@@ -60,6 +60,32 @@ import Foundation
         precondition(PhoneFilesModel.minutes(48 * 60) == "48 min" && PhoneFilesModel.minutes(125 * 60) == "2 h 5 min")
         precondition(PhoneFilesModel.trackNumber(from: "3/12") == 3 && PhoneFilesModel.trackNumber(from: "0") == nil
             && PhoneFilesModel.trackNumber(from: "x") == nil)
+        let slidePhotos = [media("p1", kind: .image, added: t(1)), media("p3", kind: .image, added: t(3))]
+        let slideVideos = [media("v2", kind: .video, added: t(2))]
+        precondition(PhoneFilesModel.slideshow(photos: slidePhotos, videos: slideVideos, includeVideos: true, shuffle: false,
+                                               startIndex: 0, limit: 10).map(\.title) == ["p3", "v2", "p1"])
+        precondition(PhoneFilesModel.slideshow(photos: slidePhotos, videos: slideVideos, includeVideos: false, shuffle: false,
+                                               startIndex: 0, limit: 10).map(\.title) == ["p3", "p1"])
+        precondition(PhoneFilesModel.slideshow(photos: slidePhotos, videos: slideVideos, includeVideos: true, shuffle: false,
+                                               startIndex: 1, limit: 10).map(\.title) == ["v2", "p1", "p3"])
+        precondition(PhoneFilesModel.slideshow(photos: slidePhotos, videos: slideVideos, includeVideos: true, shuffle: false,
+                                               startIndex: 0, limit: 2).count == 2)
+        let many = (1...20).map { media("p\($0)", kind: .image, added: t(Double($0))) }
+        let shuffled = PhoneFilesModel.slideshow(photos: many, videos: [], includeVideos: false, shuffle: true, startIndex: 0, limit: 50)
+        precondition(Set(shuffled.map(\.title)) == Set(many.map(\.title)) && shuffled.count == 20)
+
+        // Play next: each move lands right after the current item; last-first keeps pick order.
+        var queue = ["current", "later", "a", "b", "c"]
+        for id in PhoneFilesModel.playNextMoveOrder(["a", "b", "c"]) {
+            queue.removeAll { $0 == id }
+            queue.insert(id, at: queue.firstIndex(of: "current")! + 1)
+        }
+        precondition(queue == ["current", "a", "b", "c", "later"])
+
+        // Lazy preparation keeps one item queued after the one playing.
+        precondition(PhoneFilesModel.shouldPrepareNext(currentIndex: 0, sentCount: 1))
+        precondition(!PhoneFilesModel.shouldPrepareNext(currentIndex: 0, sentCount: 2))
+        precondition(PhoneFilesModel.shouldPrepareNext(currentIndex: 1, sentCount: 2))
         print("PASS: phone files model")
     }
 }

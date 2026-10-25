@@ -143,6 +143,31 @@ enum PhoneFilesModel {
         return sections
     }
 
+    /// Slideshow order (board 8): photos plus, optionally, videos, newest first or shuffled,
+    /// capped at `limit`, and rotated so `startIndex` plays first (keeping the rest).
+    static func slideshow(photos: [PhoneMedia], videos: [PhoneMedia], includeVideos: Bool, shuffle: Bool,
+                          startIndex: Int, limit: Int) -> [PhoneMedia] {
+        var generator = SystemRandomNumberGenerator()
+        return slideshow(photos: photos, videos: videos, includeVideos: includeVideos, shuffle: shuffle,
+                         startIndex: startIndex, limit: limit, using: &generator)
+    }
+
+    static func slideshow<G: RandomNumberGenerator>(photos: [PhoneMedia], videos: [PhoneMedia], includeVideos: Bool,
+                                                    shuffle: Bool, startIndex: Int, limit: Int, using generator: inout G) -> [PhoneMedia] {
+        let merged = (photos + (includeVideos ? videos : [])).sorted { $0.addedAt > $1.addedAt }
+        let ordered = Array((shuffle ? merged.shuffled(using: &generator) : merged).prefix(limit))
+        guard !ordered.isEmpty else { return [] }
+        let start = min(max(0, startIndex), ordered.count - 1)
+        return Array(ordered[start...] + ordered[..<start])
+    }
+
+    /// Play next for several new items: each move puts one right after the current item,
+    /// so moving them last-first leaves them in their original order.
+    static func playNextMoveOrder(_ newItemIDs: [String]) -> [String] { newItemIDs.reversed() }
+
+    /// Lazy queue feeding keeps one prepared item ahead of the one playing.
+    static func shouldPrepareNext(currentIndex: Int, sentCount: Int) -> Bool { currentIndex + 1 >= sentCount }
+
     /// Toggles `id` in a pick-ordered selection; removing renumbers the rest.
     static func toggle(_ selection: [String], _ id: String) -> [String] {
         selection.contains(id) ? selection.filter { $0 != id } : selection + [id]

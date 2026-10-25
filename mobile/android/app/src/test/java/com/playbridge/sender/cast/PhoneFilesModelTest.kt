@@ -117,4 +117,45 @@ class PhoneFilesModelTest {
         assertEquals("24 MB", PhoneFilesModel.size(24L * 1024 * 1024))
         assertEquals(null, PhoneFilesModel.size(0))
     }
+
+    @Test
+    fun slideshowMergesVideosNewestFirstAndRotatesToStart() {
+        val photos = listOf(Item("p1", dateAdded = 1), Item("p3", dateAdded = 3))
+        val videos = listOf(Item("v2", dateAdded = 2))
+        assertEquals(
+            listOf("p3", "v2", "p1"),
+            PhoneFilesModel.slideshow(photos, videos, includeVideos = true, shuffle = false, startIndex = 0, limit = 10).map { it.title },
+        )
+        assertEquals(
+            listOf("p3", "p1"),
+            PhoneFilesModel.slideshow(photos, videos, includeVideos = false, shuffle = false, startIndex = 0, limit = 10).map { it.title },
+        )
+        // Changing the time per photo mid-show restarts at the current item, keeping the rest.
+        assertEquals(
+            listOf("v2", "p1", "p3"),
+            PhoneFilesModel.slideshow(photos, videos, includeVideos = true, shuffle = false, startIndex = 1, limit = 10).map { it.title },
+        )
+        assertEquals(2, PhoneFilesModel.slideshow(photos, videos, true, false, 0, limit = 2).size)
+        assertEquals(emptyList<Item>(), PhoneFilesModel.slideshow(emptyList<Item>(), emptyList(), true, false, 3, 10))
+    }
+
+    @Test
+    fun slideshowShuffleKeepsEveryItemOnce() {
+        val photos = (1..20).map { Item("p$it", dateAdded = it.toLong()) }
+        val shuffled = PhoneFilesModel.slideshow(photos, emptyList(), false, shuffle = true, startIndex = 0, limit = 50, random = kotlin.random.Random(7))
+        assertEquals(photos.map { it.title }.toSet(), shuffled.map { it.title }.toSet())
+        assertEquals(20, shuffled.size)
+        assertEquals(true, shuffled.map { it.title } != photos.sortedByDescending { it.dateAdded }.map { it.title })
+    }
+
+    @Test
+    fun playNextMovesLastFirstSoPickOrderSurvives() {
+        // Simulate the receiver: each Play next move inserts right after the current item.
+        val queue = mutableListOf("current", "later", "a", "b", "c")
+        for (id in PhoneFilesModel.playNextMoveOrder(listOf("a", "b", "c"))) {
+            queue.remove(id)
+            queue.add(queue.indexOf("current") + 1, id)
+        }
+        assertEquals(listOf("current", "a", "b", "c", "later"), queue)
+    }
 }

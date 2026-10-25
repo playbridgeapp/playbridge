@@ -128,6 +128,52 @@ struct LocalFileServerRangeTests {
             server.stop()
         }
 
+        // 3. Several files at once (phone-file queues) plus a subtitle sidecar.
+        let second = tempDir.appendingPathComponent("second.mp4")
+        let third = tempDir.appendingPathComponent("third.jpg")
+        let subtitle = tempDir.appendingPathComponent("captions.srt")
+        let secondData = Data((0..<300).map { UInt8($0 % 7) })
+        let thirdData = Data((0..<200).map { UInt8($0 % 11) })
+        try secondData.write(to: second)
+        try thirdData.write(to: third)
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nHi\n".utf8).write(to: subtitle)
+        let multi = LocalFileServer()
+        func local(_ string: String) -> URL {
+            var comps = URLComponents(string: string)!
+            comps.host = "127.0.0.1"
+            return comps.url!
+        }
+        if let first = await multi.serve(fileURL: testFile, subtitle: subtitle),
+           let secondURL = await multi.add(fileURL: second),
+           let thirdURL = await multi.add(fileURL: third) {
+            let session = URLSession(configuration: .ephemeral)
+            check(secondURL != thirdURL && secondURL.hasSuffix(".mp4") && thirdURL.hasSuffix(".jpg"), "Queued files need distinct paths")
+            let (firstBody, _) = try await session.data(from: local(first.media))
+            check(firstBody == testData, "First file must still be served after adding others")
+            var req = URLRequest(url: local(secondURL))
+            req.setValue("bytes=100-199", forHTTPHeaderField: "Range")
+            let (rangeBody, rangeResponse) = try await session.data(for: req)
+            let rangeHTTP = rangeResponse as! HTTPURLResponse
+            check(rangeHTTP.statusCode == 206 && rangeBody == secondData.subdata(in: 100..<200), "Queued file range mismatch")
+            check(rangeHTTP.value(forHTTPHeaderField: "Content-Type") == "video/mp4", "Queued file content type mismatch")
+            let (thirdBody, thirdResponse) = try await session.data(from: local(thirdURL))
+            check(thirdBody == thirdData && (thirdResponse as! HTTPURLResponse).value(forHTTPHeaderField: "Content-Type") == "image/jpeg",
+                  "Second queued file mismatch")
+            let (subtitleBody, subtitleResponse) = try await session.data(from: local(first.subtitle!))
+            check(String(decoding: subtitleBody, as: UTF8.self).contains("Hi") &&
+                  (subtitleResponse as! HTTPURLResponse).value(forHTTPHeaderField: "Content-Type") == "application/x-subrip",
+                  "Subtitle sidecar mismatch")
+            let (_, missing) = try await session.data(from: local(first.media.replacingOccurrences(of: "/media.dat", with: "/q/unknown.mp4")))
+            check((missing as! HTTPURLResponse).statusCode == 404, "Unknown path must be 404")
+            // A new single cast replaces the queue: older queued files stop being served.
+            let replaced = await multi.serve(fileURL: third, subtitle: nil)
+            check(replaced != nil, "Re-serving failed")
+            let (_, gone) = try await session.data(from: local(secondURL.replacingOccurrences(of: ":\(URL(string: secondURL)!.port!)", with: ":\(URL(string: replaced!.media)!.port!)")))
+            check((gone as! HTTPURLResponse).statusCode == 404, "A new cast must stop serving the old queue")
+            multi.stop()
+            print("PASS: LocalFileServer serves several files and a subtitle")
+        }
+
         print("PASS: LocalFileServer range handling matches stream-proxy-rust")
     }
 }

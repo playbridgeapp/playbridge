@@ -2,23 +2,26 @@ import Foundation
 import Network
 import UniformTypeIdentifiers
 
-/// Minimal LAN HTTP/1.1 server that serves a single local media file with byte-range
-/// support, so a connected receiver (PlayBridge TV / DLNA) can fetch and play files
-/// straight from the phone. Mirrors the Android `LocalProxyServer` role for local files.
+/// Minimal LAN HTTP/1.1 server that serves local media files with byte-range support, so a
+/// connected receiver (PlayBridge TV / DLNA) can fetch and play files straight from the phone.
+/// Mirrors the Android `LocalProxyServer` role for local files. A single cast serves one file
+/// (plus an optional subtitle); a queue adds more files while earlier ones keep playing.
 ///
-/// The file is streamed from disk in chunks (never loaded fully into memory), so
+/// Files are streamed from disk in chunks (never loaded fully into memory), so
 /// multi-gigabyte videos are fine.
 final class LocalFileServer {
     static let shared = LocalFileServer()
 
+    private struct Entry {
+        let url: URL
+        let contentType: String
+        let scoped: Bool
+    }
+
     private let queue = DispatchQueue(label: "com.playbridge.localfileserver")
     private var listener: NWListener?
-    private var fileURL: URL?
-    private var scoped = false
-    private var contentType = "application/octet-stream"
-    /// Optional subtitle sidecar served at `/subtitle.<ext>` next to the media.
-    private var subtitleURL: URL?
-    private var subtitleScoped = false
+    /// Served files by request path (`/media.mp4`, `/subtitle.srt`, `/q/<id>.mp4`). Read on `queue`.
+    private var entries: [String: Entry] = [:]
     private(set) var port: UInt16 = 0
 
     /// Start (or restart) serving `url`. Returns the LAN URL the receiver should
@@ -27,21 +30,60 @@ final class LocalFileServer {
         await serve(fileURL: url, subtitle: nil)?.media
     }
 
-    /// Serves `url` plus an optional subtitle file; returns both LAN URLs.
+    /// Serves only `url` plus an optional subtitle file; returns both LAN URLs.
     func serve(fileURL url: URL, subtitle: URL?) async -> (media: String, subtitle: String?)? {
         stop()
+        let mediaPath = "/media" + Self.suffix(url)
+        register(mediaPath, url: url, contentType: Self.mimeType(for: url))
+        let subtitlePath = subtitle.map { "/subtitle.\($0.pathExtension.lowercased())" }
+        if let subtitle, let subtitlePath { register(subtitlePath, url: subtitle, contentType: Self.subtitleMimeType(subtitle)) }
+        guard let base = await startListener() else { stop(); return nil }
+        return (base + mediaPath, subtitlePath.map { base + $0 })
+    }
 
-        scoped = url.startAccessingSecurityScopedResource()
-        fileURL = url
-        contentType = Self.mimeType(for: url)
-        if let subtitle {
-            subtitleScoped = subtitle.startAccessingSecurityScopedResource()
-            subtitleURL = subtitle
+    /// Adds `url` alongside what is already served (queues), starting the server if needed.
+    func add(fileURL url: URL) async -> String? {
+        let path = "/q/\(UUID().uuidString)" + Self.suffix(url)
+        register(path, url: url, contentType: Self.mimeType(for: url))
+        guard let base = await startListener() else { unregister(path); return nil }
+        return base + path
+    }
+
+    /// A phone file is being offered to a receiver right now.
+    var isServing: Bool { listener != nil }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+        let removed = queue.sync { () -> [Entry] in
+            let all = Array(entries.values)
+            entries.removeAll()
+            return all
         }
+        for entry in removed where entry.scoped { entry.url.stopAccessingSecurityScopedResource() }
+        port = 0
+    }
 
+    private func register(_ path: String, url: URL, contentType: String) {
+        let entry = Entry(url: url, contentType: contentType, scoped: url.startAccessingSecurityScopedResource())
+        queue.sync { entries[path] = entry }
+    }
+
+    private func unregister(_ path: String) {
+        if let entry = queue.sync(execute: { entries.removeValue(forKey: path) }), entry.scoped {
+            entry.url.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    private static func suffix(_ url: URL) -> String { url.pathExtension.isEmpty ? "" : ".\(url.pathExtension)" }
+
+    /// Returns `http://<lan ip>:<port>`, starting the listener when it isn't running.
+    private func startListener() async -> String? {
+        guard let ip = Self.lanIPAddress() else { return nil }
+        if listener != nil, port != 0 { return "http://\(ip):\(port)" }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        guard let listener = try? NWListener(using: params) else { stop(); return nil }
+        guard let listener = try? NWListener(using: params) else { return nil }
         self.listener = listener
         listener.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
 
@@ -59,29 +101,9 @@ final class LocalFileServer {
             }
             listener.start(queue: queue)
         }
-
-        guard ready, let p = listener.port?.rawValue, let ip = Self.lanIPAddress() else {
-            stop(); return nil
-        }
+        guard ready, self.listener === listener, let p = listener.port?.rawValue else { return nil }
         port = p
-        let ext = url.pathExtension.isEmpty ? "" : ".\(url.pathExtension)"
-        let subtitlePath = subtitle.map { "http://\(ip):\(port)/subtitle.\($0.pathExtension.lowercased())" }
-        return ("http://\(ip):\(port)/media\(ext)", subtitlePath)
-    }
-
-    /// A phone file is being offered to a receiver right now.
-    var isServing: Bool { listener != nil }
-
-    func stop() {
-        listener?.cancel()
-        listener = nil
-        if scoped, let u = fileURL { u.stopAccessingSecurityScopedResource() }
-        if subtitleScoped, let u = subtitleURL { u.stopAccessingSecurityScopedResource() }
-        scoped = false
-        fileURL = nil
-        subtitleScoped = false
-        subtitleURL = nil
-        port = 0
+        return "http://\(ip):\(p)"
     }
 
     // MARK: - Connection handling
@@ -112,11 +134,11 @@ final class LocalFileServer {
         let requestLine = lines.first ?? ""
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? "GET"
-        let path = parts.count > 1 ? String(parts[1]) : "/"
-        let wantsSubtitle = path.hasPrefix("/subtitle")
-        let servedURL = wantsSubtitle ? subtitleURL : fileURL
-        let contentType = wantsSubtitle ? (subtitleURL.map(Self.subtitleMimeType) ?? "text/plain") : self.contentType
-        guard let fileURL = servedURL,
+        let path = (parts.count > 1 ? String(parts[1]) : "/").split(separator: "?").first.map(String.init) ?? "/"
+        // `respond` runs on `queue`, which owns `entries`.
+        let entry = entries[path]
+        let contentType = entry?.contentType ?? "application/octet-stream"
+        guard let fileURL = entry?.url,
               let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
               let fileSize = (attrs[.size] as? NSNumber)?.int64Value else {
             sendNotFound(conn); return

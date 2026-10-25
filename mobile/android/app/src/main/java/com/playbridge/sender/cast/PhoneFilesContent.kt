@@ -43,6 +43,9 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -52,6 +55,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -101,11 +105,17 @@ internal fun VideosTab(
         item(span = { GridItemSpan(maxLineSpan) }) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 FolderChips(folders, uiState.folderId) { uiState.folderId = it }
-                Text(
-                    uiState.sort.label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        uiState.sort.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (callbacks.playListAvailable && videos.isNotEmpty() && !uiState.selecting) {
+                        SmallActionButton("Play all", Icons.Default.PlayArrow) { callbacks.onPlayList(videos, false) }
+                    }
+                }
             }
         }
         if (videos.isEmpty()) {
@@ -229,6 +239,9 @@ internal fun MusicTab(
             contentPadding = PaddingValues(bottom = bottomPadding),
         ) {
             item { viewChips() }
+            if (callbacks.playListAvailable && filtered.isNotEmpty() && !uiState.selecting) {
+                item { PlayShuffleRow(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp), playLabel = "Play all", shuffleLabel = "Shuffle all", onPlay = { callbacks.onPlayList(filtered, false) }, onShuffle = { callbacks.onPlayList(filtered, true) }) }
+            }
             if (filtered.isEmpty()) item { EmptyMessage(if (uiState.query.isNotBlank()) "No matches" else "No music on this phone") }
             items(filtered, key = { it.uri.toString() }) { song ->
                 val key = song.uri.toString()
@@ -380,6 +393,16 @@ internal fun SongGroupPage(
                 }
             }
         }
+        if (callbacks.playListAvailable && selection.isEmpty()) {
+            item {
+                PlayShuffleRow(
+                    Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+                    playLabel = "Play", shuffleLabel = "Shuffle",
+                    onPlay = { callbacks.onPlayList(group.songs, false) },
+                    onShuffle = { callbacks.onPlayList(group.songs, true) },
+                )
+            }
+        }
         itemsIndexed(group.songs, key = { _, song -> song.uri.toString() }) { index, song ->
             val key = song.uri.toString()
             val playing = key == playingUri
@@ -420,7 +443,21 @@ internal fun PhotosTab(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        item(span = { GridItemSpan(maxLineSpan) }) { FolderChips(folders, uiState.folderId) { uiState.folderId = it } }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                FolderChips(folders, uiState.folderId) { uiState.folderId = it }
+                if (callbacks.slideshowAvailable && photos.isNotEmpty() && !uiState.selecting) {
+                    val name = folders.firstOrNull { it.id == uiState.folderId }?.name
+                    Button(
+                        onClick = { callbacks.onSlideshow(name ?: "All photos", photos) },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) {
+                        Icon(Icons.Default.Slideshow, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("  Slideshow of ${name ?: "all photos"} on TV", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
         if (photos.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 EmptyMessage(if (uiState.query.isNotBlank()) "No matches" else "No photos here")
@@ -609,6 +646,16 @@ internal fun MediaRow(
                     Icon(Icons.Default.MoreVert, contentDescription = "More for ${media.title}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (callbacks.queueEnabled) {
+                        DropdownMenuItem(text = { Text("Play next") }, onClick = {
+                            menuOpen = false
+                            callbacks.onPlayNext(media)
+                        })
+                        DropdownMenuItem(text = { Text("Add to queue") }, onClick = {
+                            menuOpen = false
+                            callbacks.onAddToQueue(media)
+                        })
+                    }
                     DropdownMenuItem(text = { Text("Add to collection") }, onClick = {
                         menuOpen = false
                         callbacks.onAddToCollection(media)
@@ -708,5 +755,42 @@ internal fun MediaThumbnail(media: PhoneMediaItem, size: Size, modifier: Modifie
                 modifier = Modifier.size(24.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun PlayShuffleRow(
+    modifier: Modifier,
+    playLabel: String,
+    shuffleLabel: String,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = onPlay, modifier = Modifier.weight(1f).height(44.dp)) {
+            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text("  $playLabel", fontWeight = FontWeight.Bold)
+        }
+        OutlinedButton(onClick = onShuffle, modifier = Modifier.weight(1f).height(44.dp)) {
+            Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text("  $shuffleLabel")
+        }
+    }
+}
+
+@Composable
+private fun SmallActionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+        Text(label, style = MaterialTheme.typography.labelLarge)
     }
 }

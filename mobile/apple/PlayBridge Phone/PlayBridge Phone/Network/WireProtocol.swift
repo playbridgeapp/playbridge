@@ -85,9 +85,11 @@ enum WireProtocol {
         mediaKind: String? = nil,
         headers: [String: String] = [:],
         detectedBy: String? = nil,
-        playerMode: String? = nil
+        playerMode: String? = nil,
+        displayDurationMs: Int? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
+        if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
@@ -111,9 +113,11 @@ enum WireProtocol {
         detectedBy: String? = nil,
         playerMode: String? = nil,
         playbackId: String? = nil,
-        useQueueV1: Bool = false
+        useQueueV1: Bool = false,
+        displayDurationMs: Int? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
+        if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }

@@ -161,6 +161,32 @@ object PhoneFilesModel {
             }
     }
 
+    /**
+     * Slideshow order (board 8): photos plus, optionally, the folder's videos, newest first or
+     * shuffled, capped at [limit], and rotated so [startIndex] plays first (keeping the rest).
+     */
+    fun <T : PhoneMediaFacts> slideshow(
+        photos: List<T>,
+        videos: List<T>,
+        includeVideos: Boolean,
+        shuffle: Boolean,
+        startIndex: Int,
+        limit: Int,
+        random: kotlin.random.Random = kotlin.random.Random.Default,
+    ): List<T> {
+        val merged = (photos + if (includeVideos) videos else emptyList()).sortedByDescending { it.dateAdded }
+        val ordered = (if (shuffle) merged.shuffled(random) else merged).take(limit)
+        if (ordered.isEmpty()) return ordered
+        val start = startIndex.coerceIn(0, ordered.size - 1)
+        return ordered.drop(start) + ordered.take(start)
+    }
+
+    /**
+     * Play next for several new items: each move puts one item right after the current one,
+     * so moving them last-first leaves them in their original order.
+     */
+    fun playNextMoveOrder(newItemIds: List<String>): List<String> = newItemIds.reversed()
+
     /** Toggles [item] in a pick-ordered selection; removing renumbers the rest. */
     fun toggle(selection: List<String>, item: String): List<String> =
         if (item in selection) selection - item else selection + item
