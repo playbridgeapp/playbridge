@@ -10,35 +10,37 @@ import kotlinx.coroutines.withContext
 /** A video, audio, or image file on the device, castable via the local proxy. */
 data class PhoneMediaItem(
     val uri: Uri,
-    val title: String,
-    val durationMs: Long,
+    override val title: String,
+    override val durationMs: Long,
     val mimeType: String?,
     val mediaKind: MediaKind,
-    val artist: String? = null,
-    val album: String? = null,
-    val trackNumber: Int? = null,
+    override val artist: String? = null,
+    override val album: String? = null,
+    override val trackNumber: Int? = null,
     /** File size in bytes (0 when unknown). */
-    val sizeBytes: Long = 0L,
+    override val sizeBytes: Long = 0L,
     /** Last-modified time, epoch seconds (0 when unknown). */
     val dateModified: Long = 0L,
-    /** Date added to MediaStore, epoch seconds — drives the natural "Unsorted" order. */
-    val dateAdded: Long = 0L,
+    /** Date added to MediaStore, epoch seconds — drives the "Newest first" order. */
+    override val dateAdded: Long = 0L,
     /** Containing folder (bucket) display name, null when unavailable. */
-    val bucketName: String? = null,
+    override val bucketName: String? = null,
     /** Containing folder (bucket) id, null when unavailable. */
-    val bucketId: Long? = null,
-)
+    override val bucketId: Long? = null,
+) : PhoneMediaFacts
 
 /** Enumerates on-device media (MediaStore) for the Phone Files screen. */
 object PhoneMediaStore {
 
-    suspend fun query(context: Context): List<PhoneMediaItem> = withContext(Dispatchers.IO) {
+    /** Every indexed file of [kind] this app may read, newest first. */
+    suspend fun query(context: Context, kind: MediaKind): List<PhoneMediaItem> = withContext(Dispatchers.IO) {
         val items = mutableListOf<PhoneMediaItem>()
-        collect(context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, MediaKind.VIDEO, items)
-        collect(context, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaKind.AUDIO, items)
-        collect(context, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaKind.IMAGE, items)
-        // Return in natural (date-added desc) order; the UI applies the chosen sort so
-        // the "Unsorted" option stays meaningful.
+        val collection = when (kind) {
+            MediaKind.VIDEO -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            MediaKind.AUDIO -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            MediaKind.IMAGE -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        collect(context, collection, kind, items)
         items
     }
 

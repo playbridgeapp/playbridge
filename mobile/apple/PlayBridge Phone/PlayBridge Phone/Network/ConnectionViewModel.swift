@@ -771,7 +771,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
-    func castLocalMedia(url: String, title: String, contentType: String) {
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = []) {
         onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
@@ -783,7 +783,7 @@ final class ConnectionViewModel: ObservableObject {
             }
         } else {
             guard playBridgeOutputSelected else { return }
-            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, mediaKind: kind))
+            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles, mediaKind: kind))
         }
     }
 

@@ -198,9 +198,9 @@ fun AppNavHost(
     val iptvViewModel: com.playbridge.sender.iptv.IptvViewModel = koinViewModel()
     val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
     // Centralized "Add to Collection": any screen sets this draft → one shared sheet shows.
-    var addToCollectionDraft by remember { mutableStateOf<com.playbridge.sender.data.collection.CollectionItemDraft?>(null) }
+    var addToCollectionDrafts by remember { mutableStateOf<List<com.playbridge.sender.data.collection.CollectionItemDraft>>(emptyList()) }
     val onAddToCollection: (com.playbridge.sender.data.collection.CollectionItemDraft) -> Unit =
-        { addToCollectionDraft = it }
+        { addToCollectionDrafts = listOf(it) }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val playbackFailure by connectionCoordinator.playbackFailure.collectAsStateWithLifecycle()
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
@@ -1633,15 +1633,15 @@ fun AppNavHost(
                         uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
                         onAddToCollection = { media ->
-                            onAddToCollection(
+                            addToCollectionDrafts = media.map { item ->
                                 com.playbridge.sender.data.collection.CollectionItemDraft(
-                                    title = media.title,
-                                    url = media.uri.toString(),
+                                    title = item.title,
+                                    url = item.uri.toString(),
                                     kind = com.playbridge.sender.data.collection.CollectionItemKind.LOCAL,
-                                    mimeType = media.mimeType,
+                                    mimeType = item.mimeType,
                                     sourceTag = com.playbridge.sender.data.collection.CollectionSource.PHONE_FILE,
                                 )
-                            )
+                            }
                         },
                     )
                 }
@@ -1722,7 +1722,8 @@ fun AppNavHost(
             val libSelectedTab by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
             val showNowPlayingBar = (targetScreen == Screen.Library ||
-                targetScreen == Screen.PhoneFiles ||
+                // Phone Files' select mode puts its own action bar where the mini player sits.
+                (targetScreen == Screen.PhoneFiles && !phoneFilesUiState.selecting) ||
                 targetScreen == Screen.Downloads ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
@@ -1800,15 +1801,21 @@ fun AppNavHost(
     } // Main content column: the same persistent notice also covers Remote.
 
     // Shared Add-to-Collection sheet, driven by any screen's onAddToCollection(draft).
-    addToCollectionDraft?.let { draft ->
+    if (addToCollectionDrafts.isNotEmpty()) {
+        val drafts = addToCollectionDrafts
         com.playbridge.sender.collection.AddToCollectionSheet(
             viewModel = collectionsViewModel,
-            draft = draft,
-            onDismiss = { addToCollectionDraft = null },
-            onAdded = { name, added ->
+            drafts = drafts,
+            onDismiss = { addToCollectionDrafts = emptyList() },
+            onAdded = { name, addedCount ->
                 Toast.makeText(
                     context,
-                    if (added) "Added to $name" else "Already in $name",
+                    when {
+                        addedCount == 0 && drafts.size == 1 -> "Already in $name"
+                        addedCount == 0 -> "All already in $name"
+                        drafts.size == 1 -> "Added to $name"
+                        else -> "Added $addedCount to $name"
+                    },
                     Toast.LENGTH_SHORT,
                 ).show()
             },

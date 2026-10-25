@@ -1,94 +1,88 @@
 import SwiftUI
 import PhotosUI
-import AVKit
-import QuickLookThumbnailing
 
+/// Phone Files (Phone Files canvas, boards 1–11): Videos, Music and Photos over the Photos
+/// library and files imported from Files. Items play on the chosen TV, or on this phone when
+/// none is chosen. The shared mini player (ContentView) shows what is playing.
 struct PhoneFilesScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
-    @EnvironmentObject private var collections: CollectionsStore
     @EnvironmentObject private var nav: NavigationViewModel
+    @ObservedObject private var nowPlaying = PhoneFilesNowPlaying.shared
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("pb_library_category") private var category = "Videos"
+    @AppStorage("pb_phone_files_tab") private var tabRaw = PhoneFilesTab.videos.rawValue
+    @AppStorage("pb_phone_files_sort") private var sortRaw = PhoneFilesSort.newest.rawValue
+    @AppStorage("pb_phone_files_videos_list") private var videosAsList = false
+    @AppStorage("pb_phone_files_music_view") private var musicRaw = MusicView.songs.rawValue
     @State private var query = ""
-    @State private var sortByName = false
-    @State private var source = "All"
+    @State private var searching = false
+    /// Chosen chip per tab: an album id, `importedChip`, or nil for All.
+    @State private var chipByTab: [String: String] = [:]
+    @State private var selection: [String] = []
+    @State private var openGroupID: String?
     @State private var showImporter = false
     @State private var importing = false
-    @State private var selected: PhoneMedia?
-    @State private var collectionItem: PhoneMedia?
+    @State private var detail: PhoneMedia?
+    @State private var collectionItems: CollectionTarget?
     @State private var deleteItem: PhoneMedia?
-    @State private var selectedCollection: MediaCollection?
-    @State private var newCollection = false
-    @State private var collectionName = ""
-    private let categories = ["Videos", "Audio", "Images", "Collections"]
+    @State private var toast: String?
 
-    private var filtered: [PhoneMedia] {
-        library.items.filter { item in
-            item.kind.title == category && (source == "All" || item.source.title == source) &&
-                (query.isEmpty || item.title.localizedCaseInsensitiveContains(query))
-        }.sorted { sortByName ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : $0.addedAt > $1.addedAt }
+    private static let importedChip = "imported"
+    private var tab: PhoneFilesTab { PhoneFilesTab(rawValue: tabRaw) ?? .videos }
+    private var sort: PhoneFilesSort { PhoneFilesSort(rawValue: sortRaw) ?? .newest }
+    private var musicView: MusicView { MusicView(rawValue: musicRaw) ?? .songs }
+    private var selecting: Bool { !selection.isEmpty }
+    private var toTV: Bool { PhoneMediaCasting.castsToSelectedReceiver(vm) }
+    private var onTvID: String? {
+        guard vm.isConnected, vm.coordinator.activeContext == "player" || vm.isExternalReceiver || vm.isAirPlay else { return nil }
+        return nowPlaying.itemID
     }
+
+    private func items(_ kind: PhoneMedia.Kind) -> [PhoneMedia] { library.items.filter { $0.kind == kind } }
+
+    private var chip: String? { chipByTab[tab.rawValue] }
+
+    private var chips: [(id: String, title: String)] {
+        let all = items(tab.kind)
+        let ids = Set(all.compactMap(\.assetIdentifier))
+        var result: [(String, String)] = []
+        if all.contains(where: { $0.source == .imported }) { result.append((Self.importedChip, "Imported")) }
+        for album in library.albums where !album.assetIDs.isDisjoint(with: ids) { result.append((album.id, album.title)) }
+        return result
+    }
+
+    private var shown: [PhoneMedia] {
+        var all = items(tab.kind)
+        var album: Set<String>?
+        if chip == Self.importedChip { all = all.filter { $0.source == .imported } }
+        else if let chip, let match = library.albums.first(where: { $0.id == chip }) { album = match.assetIDs }
+        return PhoneFilesModel.visible(all, album: album, query: query, sort: tab == .photos ? .newest : sort)
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                DashboardNavigationButton()
-                Text("Media Library").font(Theme.font(.title2).bold())
-                Spacer()
-                Button { nav.openPlayOn() } label: { Image(systemName: vm.isConnected ? "tv.fill" : "tv") }
-                    .accessibilityLabel("Connect to TV")
-                Menu {
-                    Button("Import from Files", systemImage: "folder") { showImporter = true }
-                    Button("New Collection", systemImage: "folder.badge.plus") { newCollection = true }
-                } label: { Image(systemName: "plus") }.accessibilityLabel("Add media")
-            }.padding(.horizontal, 16).padding(.top, 12)
-            categoryTabs
-            HStack {
-                Image(systemName: "magnifyingglass")
-                TextField("Search library", text: $query).autocorrectionDisabled()
-                if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Clear search") }
-                Menu {
-                    Picker("Sort", selection: $sortByName) { Text("Recently added").tag(false); Text("Name").tag(true) }
-                    Picker("Source", selection: $source) {
-                        ForEach(["All", "Photos", "Files"], id: \.self) { Text($0).tag($0) }
-                    }
-                } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("Sort and filter")
-            }.padding(12).background(Theme.surfaceContainer).cornerRadius(12).padding(.horizontal, 12)
-            if importing { HStack { ProgressView(); Text("Importing media…") }.font(Theme.font(.caption)) }
-            if category == "Collections" { collectionGrid }
-            else {
-                if category != "Audio" { photosAccess }
-                if library.isScanning { ProgressView("Loading Photos…").font(Theme.font(.caption)) }
-                ScrollView {
-                    if filtered.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: category == "Audio" ? "music.note.list" : "photo.on.rectangle").font(Theme.font(.largeTitle))
-                            Text(query.isEmpty ? "No \(category.lowercased()) yet" : "No matching media").font(Theme.font(.headline))
-                            Text(category == "Audio" ? "Import audio from Files." : "Import from Files or browse the Photos you’ve allowed.")
-                                .font(Theme.font(.subheadline)).multilineTextAlignment(.center).foregroundColor(Theme.onSurfaceVariant)
-                            Button("Import from Files") { showImporter = true }.buttonStyle(.borderedProminent)
-                        }.padding(28)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 16) {
-                        ForEach(filtered) { item in
-                            Button { selected = item } label: { PhoneMediaCard(item: item, url: library.localURL(item)) }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button("Open", systemImage: "play") { selected = item }
-                                    Button("Add to Collection", systemImage: "folder.badge.plus") { collectionItem = item }
-                                    if item.source == .imported {
-                                        Button("Remove imported copy", systemImage: "trash", role: .destructive) { deleteItem = item }
-                                    }
-                                }
-                        }
-                    }.padding(12)
-                }
+        VStack(spacing: 0) {
+            if let group = openGroup {
+                SongGroupPage(group: group, onTvID: onTvID, tvName: PhoneMediaCasting.receiverName(vm), selection: selection,
+                              onBack: { openGroupID = nil }, row: songRow)
+            } else {
+                header
+                tabs.padding(.horizontal, 16).padding(.bottom, 12)
+                content
             }
         }
         .foregroundColor(Theme.onSurface)
         .background(Theme.surface.ignoresSafeArea())
-        .task { refresh() }
-        .onChange(of: scenePhase) { phase in if phase == .active { refresh() } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { if selecting { selectionBar } }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast).font(Theme.font(.subheadline)).foregroundColor(Theme.surface)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(Capsule().fill(Theme.onSurface)).padding(.bottom, 16)
+                    .transition(.opacity)
+            }
+        }
+        .task { library.refreshPhotos() }
+        .onChange(of: scenePhase) { phase in if phase == .active { library.refreshPhotos() } }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
@@ -97,141 +91,478 @@ struct PhoneFilesScreen: View {
             case .failure: library.error = "Couldn’t open the selected files. Please try again."
             }
         }
-        .sheet(item: $selected) { item in PhoneMediaDetail(item: item) }
-        .sheet(item: $collectionItem) { item in AddPhoneMediaToCollection(item: item) }
-        .sheet(item: $selectedCollection) { collection in
-            NavigationStack { CollectionDetailScreen(collectionId: collection.id, embedded: true).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { selectedCollection = nil } } } }
-        }
-        .alert("New Collection", isPresented: $newCollection) {
-            TextField("Collection name", text: $collectionName)
-            Button("Create") { let name = collectionName.trimmingCharacters(in: .whitespacesAndNewlines); if !name.isEmpty { collections.createCollection(name: name) }; collectionName = "" }
-            Button("Cancel", role: .cancel) { collectionName = "" }
-        }
+        .sheet(item: $detail) { item in PhoneMediaDetail(item: item) }
+        .sheet(item: $collectionItems) { target in AddPhoneMediaToCollection(items: target.items) }
         .alert("Remove imported copy?", isPresented: Binding(get: { deleteItem != nil }, set: { if !$0 { deleteItem = nil } })) {
             Button("Remove", role: .destructive) { if let item = deleteItem { library.removeImport(item) }; deleteItem = nil }
             Button("Cancel", role: .cancel) { deleteItem = nil }
         } message: { Text("The original file stays where it was. Collection references to this copy will become unavailable.") }
-        .alert("Media library", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
+        .alert("Phone files", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
             Button("OK") { library.error = nil }
         } message: { Text(library.error ?? "") }
     }
-    private var categoryTabs: some View {
-        let counts = Dictionary(grouping: library.items, by: { $0.kind.title }).mapValues { $0.count }
-        return ScrollViewReader { reader in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    ForEach(categories, id: \.self) { title in
-                        let count = title == "Collections" ? collections.collections.count : counts[title, default: 0]
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) { category = title }
-                        } label: {
-                            Text("\(title) (\(count))")
-                                .font(Theme.font(.callout).weight(.medium)).fixedSize(horizontal: true, vertical: false)
-                                .foregroundColor(category == title ? Theme.primary : Theme.onSurfaceVariant)
-                                .padding(.horizontal, 8).frame(minWidth: 88, minHeight: 48)
-                                .overlay(alignment: .bottom) {
-                                    if category == title {
-                                        Capsule().fill(Theme.primary).frame(height: 3).padding(.horizontal, 16)
-                                    }
-                                }
-                                .contentShape(Rectangle())
+
+    // MARK: Header and tabs
+
+    @ViewBuilder private var header: some View {
+        HStack(spacing: 2) {
+            if selecting {
+                Button { selection = [] } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Cancel selection")
+                Text("\(selection.count) selected").font(Theme.font(.headline))
+                Spacer()
+                Button("Select all") {
+                    let visible = tab == .music ? PhoneFilesModel.sorted(items(.audio).filter { PhoneFilesModel.matches($0, query) }, by: sort) : shown
+                    selection = selection + visible.map(\.id).filter { !selection.contains($0) }
+                }.font(Theme.font(.subheadline).weight(.semibold)).padding(.trailing, 8)
+            } else if searching {
+                Image(systemName: "magnifyingglass").foregroundColor(Theme.onSurfaceVariant).frame(width: 44, height: 44)
+                TextField("Search \(tab.title.lowercased())", text: $query).autocorrectionDisabled()
+                Button("Cancel") { searching = false; query = "" }.padding(.horizontal, 8)
+            } else {
+                DashboardNavigationButton()
+                Text("Phone files").font(Theme.font(.title2).bold())
+                Spacer()
+                iconButton("folder", label: "Import from Files") { showImporter = true }
+                iconButton("magnifyingglass", label: "Search") { searching = true }
+                Menu {
+                    if tab != .photos {
+                        Picker("Sort", selection: $sortRaw) {
+                            ForEach(PhoneFilesSort.allCases) { Text($0.title).tag($0.rawValue) }
                         }
-                        .buttonStyle(.plain).id(title)
-                        .accessibilityAddTraits(category == title ? .isSelected : [])
                     }
-                }
+                    if tab == .videos {
+                        Picker("View", selection: $videosAsList) { Text("Grid").tag(false); Text("List").tag(true) }
+                    }
+                    Button("Import from Files", systemImage: "folder") { showImporter = true }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease").font(.system(size: 19)).frame(width: 44, height: 44)
+                }.accessibilityLabel("Sort and view")
             }
-            .overlay(alignment: .bottom) { Rectangle().fill(Theme.outlineVariant.opacity(0.4)).frame(height: 0.5) }
-            .onChange(of: category) { value in
-                withAnimation(.easeInOut(duration: 0.18)) { reader.scrollTo(value, anchor: .center) }
-            }
-            .onAppear { reader.scrollTo(category, anchor: .center) }
+        }
+        .padding(.leading, 6).padding(.trailing, 4).frame(height: 56)
+        .background(selecting ? Theme.surfaceContainerHigh : Color.clear)
+        if importing {
+            HStack { ProgressView(); Text("Importing…") }.font(Theme.font(.caption)).padding(.bottom, 6)
         }
     }
 
-    private func refresh() { library.refreshPhotos() }
-    @ViewBuilder private var photosAccess: some View {
-        if library.authorization == .notDetermined {
-            Button("Connect Photos") { Task { await library.requestPhotos() } }.buttonStyle(.bordered)
-        } else if library.authorization == .limited {
-            HStack {
-                Text("Showing selected Photos").font(Theme.font(.caption))
-                Button("Manage access") { managePhotos() }.font(Theme.font(.caption).bold())
+    private func iconButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: systemImage).font(.system(size: 19)).frame(width: 44, height: 44) }
+            .accessibilityLabel(label)
+    }
+
+    private var tabs: some View {
+        HStack(spacing: 4) {
+            ForEach(PhoneFilesTab.allCases) { item in
+                let selected = item == tab
+                let count = items(item.kind).count
+                let showCount = item == .music || library.authorization != .notDetermined || count > 0
+                Button {
+                    if tabRaw != item.rawValue { tabRaw = item.rawValue; selection = [] }
+                } label: {
+                    Text(showCount ? "\(item.title) · \(count)" : item.title)
+                        .font(Theme.font(.subheadline).weight(selected ? .bold : .medium))
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .foregroundColor(selected ? Theme.onSecondaryContainer : Theme.onSurfaceVariant)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(Capsule().fill(selected ? Theme.secondaryContainer : Color.clear))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
             }
-        } else if library.authorization == .denied || library.authorization == .restricted {
-            Button("Photos access is off · Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-            }.font(Theme.font(.caption))
+        }
+        .padding(4).background(Capsule().fill(Theme.surfaceContainer))
+    }
+
+    // MARK: Content
+
+    @ViewBuilder private var content: some View {
+        switch tab {
+        case .videos, .photos:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    photosAccess
+                    if !chips.isEmpty { chipRow(chips.map { ($0.id as String?, $0.title) }, selected: chip) { chipByTab[tab.rawValue] = $0 } }
+                    if tab == .videos {
+                        Text(sort.title).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+                        videoGrid
+                    } else {
+                        photoGrid
+                    }
+                }.padding(.horizontal, 16).padding(.bottom, 16)
+            }
+        case .music:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    importMusicCard
+                    chipRow(MusicView.allCases.map { ($0.rawValue as String?, $0.title) }, selected: musicRaw, includeAll: false) {
+                        musicRaw = $0 ?? MusicView.songs.rawValue
+                    }
+                    musicContent
+                }.padding(.horizontal, 16).padding(.bottom, 16)
+            }
         }
     }
+
+    private var videoGrid: some View {
+        let videos = shown
+        return Group {
+            if videos.isEmpty {
+                empty(query.isEmpty ? "No videos here" : "No matches")
+            } else if videosAsList {
+                LazyVStack(spacing: 0) { ForEach(videos) { songRow($0, nil) } }
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 14) {
+                    ForEach(videos) { video in
+                        Button { open(video) } label: { videoCard(video) }
+                            .buttonStyle(.plain)
+                            .contextMenu { menu(video) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func videoCard(_ video: PhoneMedia) -> some View {
+        let order = selection.firstIndex(of: video.id).map { $0 + 1 }
+        return VStack(alignment: .leading, spacing: 6) {
+            PhoneMediaThumbnailView(item: video, url: library.localURL(video), size: CGSize(width: 320, height: 180))
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay(alignment: .bottomTrailing) {
+                    if let duration = video.duration {
+                        Text(PhoneFilesModel.clock(duration)).font(Theme.font(.caption2).monospacedDigit()).foregroundColor(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2).background(.black.opacity(0.7)).cornerRadius(4).padding(6)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if selecting { SelectionMarker(order: order).padding(8) }
+                    else if video.id == onTvID { OnTvBadge().padding(6) }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(order != nil ? Theme.primary : .clear, lineWidth: 3))
+            Text(video.title).font(Theme.font(.footnote).weight(.medium)).lineLimit(1)
+            let meta = [video.source == .imported ? "Imported" : nil, PhoneFilesModel.size(video.bytes)].compactMap { $0 }
+            if !meta.isEmpty { Text(meta.joined(separator: " · ")).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant) }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var photoGrid: some View {
+        let sections = PhoneFilesModel.photoSections(shown)
+        return VStack(alignment: .leading, spacing: 10) {
+            if sections.isEmpty { empty(query.isEmpty ? "No photos here" : "No matches") }
+            ForEach(sections) { section in
+                Text(section.label.uppercased()).font(Theme.font(.caption).bold()).foregroundColor(Theme.onSurfaceVariant)
+                    .padding(.top, 4)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
+                    ForEach(section.items) { photo in
+                        let order = selection.firstIndex(of: photo.id).map { $0 + 1 }
+                        let onTv = photo.id == onTvID
+                        Button { open(photo) } label: {
+                            Color.clear.aspectRatio(1, contentMode: .fit)
+                                .overlay(PhoneMediaThumbnailView(item: photo, url: library.localURL(photo), size: CGSize(width: 256, height: 256)))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(onTv ? Color(red: 0.27, green: 0.83, blue: 0.51) : order != nil ? Theme.primary : .clear, lineWidth: 3))
+                                .overlay(alignment: .topLeading) { if selecting { SelectionMarker(order: order).padding(6) } }
+                                .overlay(alignment: .bottomLeading) { if onTv && !selecting { OnTvBadge().padding(5) } }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(onTv ? "Photo, showing on TV" : "Photo")
+                        .contextMenu { menu(photo) }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var musicContent: some View {
+        let songs = PhoneFilesModel.sorted(items(.audio).filter { PhoneFilesModel.matches($0, query) }, by: sort)
+        switch musicView {
+        case .songs:
+            if songs.isEmpty { empty(query.isEmpty ? "No music imported yet" : "No matches") }
+            LazyVStack(spacing: 0) { ForEach(songs) { songRow($0, nil) } }
+        case .albums:
+            let albums = PhoneFilesModel.albums(songs)
+            if albums.isEmpty { empty("No albums. Albums come from the tags in imported files.") }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+                ForEach(albums) { album in
+                    Button { openGroupID = album.id } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Color.clear.aspectRatio(1, contentMode: .fit)
+                                .overlay(PhoneMediaThumbnailView(item: album.songs[0], url: library.localURL(album.songs[0]), size: CGSize(width: 256, height: 256)))
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            Text(album.title).font(Theme.font(.subheadline).weight(.medium)).lineLimit(1)
+                            Text([album.subtitle, PhoneFilesModel.songCount(album.songs.count)].compactMap { $0 }.joined(separator: " · "))
+                                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+                        }.contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+        case .artists:
+            let artists = PhoneFilesModel.artists(songs)
+            if artists.isEmpty { empty("No artists. Artists come from the tags in imported files.") }
+            LazyVStack(spacing: 0) {
+                ForEach(artists) { artist in
+                    Button { openGroupID = artist.id } label: {
+                        HStack(spacing: 12) {
+                            PhoneMediaThumbnailView(item: artist.songs[0], url: library.localURL(artist.songs[0]), size: CGSize(width: 96, height: 96))
+                                .frame(width: 48, height: 48).clipShape(Circle())
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(artist.title).font(Theme.font(.body)).lineLimit(1)
+                                Text(PhoneFilesModel.songCount(artist.songs.count)).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                            }
+                            Spacer()
+                        }.padding(.vertical, 6).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var openGroup: SongGroup? {
+        guard tab == .music, let openGroupID else { return nil }
+        let songs = items(.audio)
+        return (PhoneFilesModel.albums(songs) + PhoneFilesModel.artists(songs)).first { $0.id == openGroupID }
+    }
+
+    /// A list row for songs, and for videos in list view; `number` shows the track number.
+    private func songRow(_ item: PhoneMedia, _ number: Int?) -> some View {
+        let order = selection.firstIndex(of: item.id).map { $0 + 1 }
+        let onTv = item.id == onTvID
+        let green = Color(red: 0.27, green: 0.83, blue: 0.51)
+        return HStack(spacing: 12) {
+            Button { open(item) } label: {
+                HStack(spacing: 12) {
+                    if selecting { SelectionMarker(order: order) }
+                    if let number {
+                        Text("\(number)").font(Theme.font(.subheadline)).foregroundColor(onTv ? green : Theme.onSurfaceVariant)
+                            .frame(width: 22, alignment: .trailing)
+                    } else {
+                        PhoneMediaThumbnailView(item: item, url: library.localURL(item), size: CGSize(width: 160, height: 120))
+                            .frame(width: item.kind == .video ? 80 : 44, height: item.kind == .video ? 45 : 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title).font(Theme.font(.body)).foregroundColor(onTv ? green : Theme.onSurface).lineLimit(1)
+                        let detail = onTv ? "Playing on \(PhoneMediaCasting.receiverName(vm))"
+                            : [item.kind == .audio && number == nil ? item.artist : nil, item.duration.map(PhoneFilesModel.clock)]
+                                .compactMap { $0 }.joined(separator: " · ")
+                        if !detail.isEmpty { Text(detail).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1) }
+                    }
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if !selecting {
+                Menu { menu(item) } label: {
+                    Image(systemName: "ellipsis").rotationEffect(.degrees(90)).foregroundColor(Theme.onSurfaceVariant).frame(width: 44, height: 44)
+                }.accessibilityLabel("More for \(item.title)")
+            }
+        }
+        .frame(minHeight: 60)
+        .contextMenu { menu(item) }
+    }
+
+    @ViewBuilder private func menu(_ item: PhoneMedia) -> some View {
+        if toTV && item.kind != .video {
+            Button("Show details", systemImage: "info.circle") { detail = item }
+        }
+        Button("Add to Collection", systemImage: "folder.badge.plus") { collectionItems = CollectionTarget(items: [item]) }
+        if toTV && item.kind != .image {
+            Button("Play on this phone", systemImage: "iphone") { detail = item }
+        }
+        Button("Select", systemImage: "checkmark.circle") { selection = PhoneFilesModel.toggle(selection, item.id) }
+        if item.source == .imported {
+            Button("Remove imported copy", systemImage: "trash", role: .destructive) { deleteItem = item }
+        }
+    }
+
+    // MARK: Access and import (board 11)
+
+    @ViewBuilder private var photosAccess: some View {
+        switch library.authorization {
+        case .notDetermined:
+            accessCard(title: "Let PlayBridge see your \(tab == .videos ? "videos" : "photos")",
+                       body: "Files stay on your iPhone. PlayBridge only plays them on the device you pick.",
+                       button: "Allow access") { Task { await library.requestPhotos() } }
+        case .denied, .restricted:
+            accessCard(title: "Photos access is off",
+                       body: "Allow PlayBridge in Settings to list your Photos library, or import files instead.",
+                       button: "Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            }
+        case .limited:
+            HStack(spacing: 10) {
+                Text("Showing the photos you allowed").font(Theme.font(.footnote))
+                Spacer()
+                Button("Manage") { managePhotos() }.font(Theme.font(.subheadline).bold())
+            }
+            .padding(.leading, 14).padding(.trailing, 8).frame(minHeight: 52)
+            .background(Theme.surfaceContainerHigh).cornerRadius(14)
+        default:
+            EmptyView()
+        }
+        if library.isScanning && items(tab.kind).isEmpty { ProgressView("Loading Photos…").font(Theme.font(.caption)) }
+    }
+
+    private var importMusicCard: some View {
+        accessCard(title: "Add music from Files",
+                   body: "Songs from the Music app can’t be played here. Audio files you import from Files, iCloud Drive or a USB drive can.",
+                   button: "Import from Files") { showImporter = true }
+    }
+
+    private func accessCard(title: String, body: String, button: String, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(Theme.font(.headline))
+            Text(body).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+            Button(action: action) {
+                Text(button).font(Theme.font(.subheadline).bold()).foregroundColor(Theme.onPrimary)
+                    .padding(.horizontal, 18).frame(minHeight: 44).background(Capsule().fill(Theme.primary))
+            }.buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(Theme.surfaceContainer).cornerRadius(20)
+    }
+
     private func managePhotos() {
         guard let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
               var controller = scene.windows.first(where: \.isKeyWindow)?.rootViewController else { return }
         while let presented = controller.presentedViewController { controller = presented }
         PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: controller)
     }
-    private var collectionGrid: some View {
-        ScrollView {
-            if collections.collections.isEmpty {
-                VStack(spacing: 12) {
-                    Text("Organize your media").font(Theme.font(.headline))
-                    Text("Create a collection, then add videos, images or audio from their menus.").font(Theme.font(.subheadline))
-                    Button("New Collection") { newCollection = true }.buttonStyle(.borderedProminent)
-                }.padding(28)
+
+    // MARK: Selection (board 3)
+
+    private var selectionBar: some View {
+        let picked = selection.compactMap { library.item($0) }
+        let total = picked.reduce(0) { $0 + max(0, $1.duration ?? 0) }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(total > 0 ? "In the order you picked · \(PhoneFilesModel.clock(total)) in total" : "In the order you picked")
+                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+            Button {
+                collectionItems = CollectionTarget(items: picked)
+                selection = []
+            } label: {
+                Label("Add \(picked.count) to collection", systemImage: "folder.badge.plus")
+                    .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 50).background(Capsule().fill(Theme.primary))
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
+        .background(Theme.surfaceContainer.ignoresSafeArea(edges: .bottom))
+    }
+
+    // MARK: Actions
+
+    /// Videos open details; songs and photos play straight away on a TV, else open details.
+    private func open(_ item: PhoneMedia) {
+        if selecting { selection = PhoneFilesModel.toggle(selection, item.id); return }
+        guard toTV, item.kind != .video else { detail = item; return }
+        Task {
+            if let failure = await PhoneMediaCasting.cast(item, library: library, vm: vm) {
+                show(failure)
+            } else {
+                show("\(item.kind == .image ? "Showing" : "Playing") on \(PhoneMediaCasting.receiverName(vm))")
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 145))], spacing: 12) {
-                ForEach(collections.collections.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { collection in
-                    Button { selectedCollection = collection } label: {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Image(systemName: "rectangle.stack.fill").font(Theme.font(.largeTitle)).foregroundColor(Theme.primary)
-                            Text(collection.name).font(Theme.font(.headline)).lineLimit(2)
-                            Text("\(collection.itemCount) items").font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
-                        }.frame(maxWidth: .infinity, minHeight: 120, alignment: .leading).padding(16)
-                            .background(Theme.surfaceContainer).cornerRadius(16)
-                    }.buttonStyle(.plain)
+        }
+    }
+
+    private func show(_ message: String) {
+        withAnimation { toast = message }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            withAnimation { if toast == message { toast = nil } }
+        }
+    }
+
+    private func chipRow(_ options: [(String?, String)], selected: String?, includeAll: Bool = true,
+                         onSelect: @escaping (String?) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if includeAll { pill("All", selected: selected == nil) { onSelect(nil) } }
+                ForEach(options, id: \.0) { option in
+                    pill(option.1, selected: selected == option.0) { onSelect(option.0) }
                 }
-            }.padding(12)
+            }
+        }
+    }
+
+    private func pill(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(Theme.font(.footnote).weight(selected ? .bold : .regular)).lineLimit(1)
+                .foregroundColor(selected ? Theme.onPrimary : Theme.onSurface)
+                .padding(.horizontal, 14).frame(minHeight: 36)
+                .background(Capsule().fill(selected ? Theme.primary : Color.clear))
+                .overlay(Capsule().stroke(selected ? Color.clear : Theme.outlineVariant, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+    }
+
+    private func empty(_ text: String) -> some View {
+        Text(text).font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
+            .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 40)
+    }
+}
+
+/// Items for the Add to Collection sheet.
+struct CollectionTarget: Identifiable {
+    let id = UUID()
+    let items: [PhoneMedia]
+}
+
+/// Album or artist page (board 6).
+private struct SongGroupPage<Row: View>: View {
+    let group: SongGroup
+    let onTvID: String?
+    let tvName: String
+    let selection: [String]
+    let onBack: () -> Void
+    let row: (PhoneMedia, Int?) -> Row
+    @EnvironmentObject private var library: PhoneMediaLibrary
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold)).frame(width: 44, height: 44) }
+                    .accessibilityLabel("Back to music")
+                HStack(alignment: .bottom, spacing: 16) {
+                    PhoneMediaThumbnailView(item: group.songs[0], url: library.localURL(group.songs[0]), size: CGSize(width: 320, height: 320))
+                        .frame(width: 132, height: 132).clipShape(RoundedRectangle(cornerRadius: 16))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(group.title).font(Theme.font(.title3).bold()).lineLimit(2)
+                        if let subtitle = group.subtitle { Text(subtitle).font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant) }
+                        Text("\(PhoneFilesModel.songCount(group.songs.count)) · \(PhoneFilesModel.minutes(group.totalDuration))")
+                            .font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+                    }.padding(.bottom, 4)
+                }
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(group.songs.enumerated()), id: \.element.id) { index, song in
+                        row(song, group.id.hasPrefix("album:") ? (song.trackNumber ?? index + 1) : index + 1)
+                    }
+                }
+            }.padding(.horizontal, 16).padding(.bottom, 16)
         }
     }
 }
 
-struct PhoneMediaCard: View {
-    let item: PhoneMedia
-    let url: URL?
-    @State private var thumbnail: UIImage?
-    @State private var photoRequest: PHImageRequestID?
+/// Pick-order number when selected, an empty ring otherwise.
+private struct SelectionMarker: View {
+    let order: Int?
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12).fill(Theme.surfaceContainerHigh)
-                    if let thumbnail { Image(uiImage: thumbnail).resizable().scaledToFill() }
-                    else { Image(systemName: item.kind.icon).font(Theme.font(.largeTitle)).foregroundColor(Theme.primary) }
-                }.frame(height: 110).clipped().cornerRadius(12)
-                if let duration = item.duration, duration.isFinite {
-                    Text(String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60))
-                        .font(Theme.font(.caption2).monospacedDigit()).padding(4).background(.black.opacity(0.7)).cornerRadius(4).padding(6)
-                }
-            }
-            Text(item.title).font(Theme.font(.subheadline).weight(.medium)).lineLimit(2)
-            Text(item.source.title + (item.bytes.map { " · " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? ""))
-                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+        if let order {
+            Text("\(order)").font(Theme.font(.caption).bold()).foregroundColor(Theme.onPrimary)
+                .frame(width: 26, height: 26).background(Circle().fill(Theme.primary))
+        } else {
+            Circle().stroke(.white, lineWidth: 2).background(Circle().fill(.black.opacity(0.3))).frame(width: 24, height: 24)
         }
-        .contentShape(Rectangle())
-        .task(id: item.id) {
-            if let id = item.assetIdentifier, let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject {
-                let options = PHImageRequestOptions(); options.deliveryMode = .opportunistic; options.isNetworkAccessAllowed = false
-                photoRequest = PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 320, height: 220), contentMode: .aspectFill, options: options) { image, _ in
-                    DispatchQueue.main.async { thumbnail = image }
-                }
-            } else if let url, item.kind == .image {
-                let image = await PhoneMediaThumbnail.image(at: url, maxPixel: 320)
-                if !Task.isCancelled { thumbnail = image }
-            } else if let url {
-                let request = QLThumbnailGenerator.Request(fileAt: url, size: CGSize(width: 320, height: 220), scale: 1, representationTypes: .thumbnail)
-                if let result = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request), !Task.isCancelled { thumbnail = result.uiImage }
-            }
-        }
-        .onDisappear { if let request = photoRequest { PHImageManager.default().cancelImageRequest(request); photoRequest = nil } }
+    }
+}
+
+private struct OnTvBadge: View {
+    var body: some View {
+        Text("ON TV").font(Theme.font(.caption2).bold()).foregroundColor(Theme.onSecondaryContainer)
+            .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.secondaryContainer).cornerRadius(4)
     }
 }

@@ -16,16 +16,28 @@ final class LocalFileServer {
     private var fileURL: URL?
     private var scoped = false
     private var contentType = "application/octet-stream"
+    /// Optional subtitle sidecar served at `/subtitle.<ext>` next to the media.
+    private var subtitleURL: URL?
+    private var subtitleScoped = false
     private(set) var port: UInt16 = 0
 
     /// Start (or restart) serving `url`. Returns the LAN URL the receiver should
     /// fetch, or nil if the server or local IP couldn't be resolved.
     func serve(fileURL url: URL) async -> String? {
+        await serve(fileURL: url, subtitle: nil)?.media
+    }
+
+    /// Serves `url` plus an optional subtitle file; returns both LAN URLs.
+    func serve(fileURL url: URL, subtitle: URL?) async -> (media: String, subtitle: String?)? {
         stop()
 
         scoped = url.startAccessingSecurityScopedResource()
         fileURL = url
         contentType = Self.mimeType(for: url)
+        if let subtitle {
+            subtitleScoped = subtitle.startAccessingSecurityScopedResource()
+            subtitleURL = subtitle
+        }
 
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -53,7 +65,8 @@ final class LocalFileServer {
         }
         port = p
         let ext = url.pathExtension.isEmpty ? "" : ".\(url.pathExtension)"
-        return "http://\(ip):\(port)/media\(ext)"
+        let subtitlePath = subtitle.map { "http://\(ip):\(port)/subtitle.\($0.pathExtension.lowercased())" }
+        return ("http://\(ip):\(port)/media\(ext)", subtitlePath)
     }
 
     /// A phone file is being offered to a receiver right now.
@@ -63,8 +76,11 @@ final class LocalFileServer {
         listener?.cancel()
         listener = nil
         if scoped, let u = fileURL { u.stopAccessingSecurityScopedResource() }
+        if subtitleScoped, let u = subtitleURL { u.stopAccessingSecurityScopedResource() }
         scoped = false
         fileURL = nil
+        subtitleScoped = false
+        subtitleURL = nil
         port = 0
     }
 
@@ -92,15 +108,19 @@ final class LocalFileServer {
     }
 
     private func respond(_ conn: NWConnection, requestHeader: String) {
-        guard let fileURL,
+        let lines = requestHeader.components(separatedBy: "\r\n")
+        let requestLine = lines.first ?? ""
+        let parts = requestLine.split(separator: " ")
+        let method = parts.first.map(String.init) ?? "GET"
+        let path = parts.count > 1 ? String(parts[1]) : "/"
+        let wantsSubtitle = path.hasPrefix("/subtitle")
+        let servedURL = wantsSubtitle ? subtitleURL : fileURL
+        let contentType = wantsSubtitle ? (subtitleURL.map(Self.subtitleMimeType) ?? "text/plain") : self.contentType
+        guard let fileURL = servedURL,
               let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
               let fileSize = (attrs[.size] as? NSNumber)?.int64Value else {
             sendNotFound(conn); return
         }
-
-        let lines = requestHeader.components(separatedBy: "\r\n")
-        let requestLine = lines.first ?? ""
-        let method = requestLine.split(separator: " ").first.map(String.init) ?? "GET"
 
         // Parse an optional Range header (bytes=start-end) matching stream-proxy-rust.
         var rangeHeaderValue: String?
@@ -179,6 +199,14 @@ final class LocalFileServer {
     }
 
     // MARK: - Helpers
+
+    static func subtitleMimeType(_ url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "vtt": return "text/vtt"
+        case "ass", "ssa": return "text/x-ssa"
+        default: return "application/x-subrip"
+        }
+    }
 
     static func mimeType(for url: URL) -> String {
         switch url.pathExtension.lowercased() {

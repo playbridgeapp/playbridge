@@ -522,6 +522,8 @@ class ConnectionViewModel(
         artist: String? = null,
         album: String? = null,
         trackNumber: Int? = null,
+        /** Sidecar subtitle URLs already published through the local proxy. */
+        subtitleUrls: List<String> = emptyList(),
     ): Boolean {
         val resolvedMediaKind = mediaKind ?: when {
             mime?.startsWith("audio/", ignoreCase = true) == true -> MediaKind.AUDIO
@@ -534,6 +536,7 @@ class ConnectionViewModel(
             mediaKind = resolvedMediaKind,
             title = title,
             durationMs = durationMs,
+            subtitles = subtitleUrls.map { com.playbridge.sender.cast.SubtitleRef(url = it) },
         )
         if (castSessionManager.load(media)) return true
         if (route.value is CastSessionManager.Route.NativeTv &&
@@ -582,6 +585,7 @@ class ConnectionViewModel(
                             content_type = packaged.contentType ?: mime,
                             media_kind = resolvedMediaKind.wireValue,
                             visual_metadata = visualMetadata,
+                            subtitles = subtitleUrls,
                         ),
                     )
                     sendCommandAndRecord(cmd, "play", packaged.url, title)

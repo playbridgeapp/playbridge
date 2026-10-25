@@ -39,13 +39,24 @@ struct ScreenBackButton: View {
     let accessibilityLabel: String
     var body: some View { Image(systemName: "chevron.left").frame(width: 36, height: 44) }
 }
+final class FixtureCoordinator { var activeContext = "idle" }
 final class ConnectionViewModel: ObservableObject {
     var isConnected = false
+    var isAirPlay = false
+    var isExternalReceiver = false
+    var playBridgeOutputSelected = false
+    var receiverName: String?
+    let coordinator = FixtureCoordinator()
     var destinationID: String? = "fixture"
-    func castLocalMedia(url: String, title: String, contentType: String) {}
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = []) {}
     func castMedia(url: String, title: String, headers: [String: String], contentType: String?) {}
 }
 struct DeviceConnectionSheet: View { var body: some View { Text("Fixture connection") } }
+enum PlayOnPage: Hashable { case add }
+enum PlayOnCatalog { static func displayName(_ name: String) -> String { name } }
+extension View {
+    func playOnLocalSheet(isPresented: Binding<Bool>, page: Binding<PlayOnPage?>, picking: Binding<Bool>) -> some View { self }
+}
 
 @main final class PhoneMediaLibraryChecks: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
@@ -120,7 +131,7 @@ struct DeviceConnectionSheet: View { var body: some View { Text("Fixture connect
         try check(LocalFileServer.parseByteRange("bytes=0-10", total: 0) == nil, "Range on empty file must return nil")
         try check(LocalFileServer.parseByteRange("bytes=-0", total: 1000) == nil, "Suffix of 0 must return nil")
         try check(LocalFileServer.parseByteRange("bytes=abc-def", total: 1000) == nil, "Garbage range must return nil")
-        UserDefaults.standard.set("Images", forKey: "pb_library_category")
+        UserDefaults.standard.set("music", forKey: "pb_phone_files_tab")
         let host = UIHostingController(rootView: PhoneFilesScreen()
             .environmentObject(library).environmentObject(collections).environmentObject(BrowserStore())
             .environmentObject(ConnectionViewModel()).environmentObject(NavigationViewModel()).preferredColorScheme(.dark))

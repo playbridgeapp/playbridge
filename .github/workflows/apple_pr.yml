@@ -48,6 +48,9 @@ jobs:
       - name: Dashboard tile order
         run: bash mobile/apple/tests/run-dashboard-order-checks.sh
 
+      - name: Phone Files model
+        run: bash mobile/apple/tests/run-phone-files-model-checks.sh
+
       - name: Bridged-app declarations
         run: bash mobile/apple/tests/run-bridged-app-declaration-checks.sh
 
