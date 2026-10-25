@@ -1,22 +1,13 @@
 package com.playbridge.sender.ui
 
-import com.playbridge.sender.browser.Screen
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -34,24 +25,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,47 +60,52 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.drawscope.Stroke
+import coil.compose.AsyncImage
 import com.playbridge.sender.R
 import com.playbridge.sender.browser.BridgedApp
+import com.playbridge.sender.browser.Screen
 import com.playbridge.sender.browser.UblockSetupStatus
 import com.playbridge.sender.cast.PlayOnStatus
-import coil.compose.AsyncImage
-import kotlinx.coroutines.launch
+import com.playbridge.sender.model.CastProtocol
 
-@OptIn(ExperimentalFoundationApi::class)
+private val ChipGreen = Color(0xFF46D483)
+private val ChipAmber = Color(0xFFFFB74D)
+private const val PREFS = "browser_prefs"
+private const val ORDER_KEY = "dashboard_tile_order"
+private const val HIDDEN_KEY = "dashboard_hidden_tiles"
+
 @Composable
 internal fun DashboardScreen(
-    pagerState: PagerState,
     currentScreen: Screen,
     playOnStatus: PlayOnStatus,
-    remoteSubtitle: String = "Control your TV",
+    tileStates: DashboardTileStates = DashboardTileStates(),
     onNavigate: (Screen) -> Unit,
     onExit: () -> Unit = {},
-    // Close the Dashboard (top-left X) → return to the screen it was opened from.
-    // Defaults to the active main screen to preserve the old behavior.
-    onClose: () -> Unit = { onNavigate(currentScreen) },
-    /** Global Settings entry (top-right gear). Defaults to [Screen.Settings]. */
+    /** Global Settings entry (top bar gear). Defaults to [Screen.Settings]. */
     onSettings: () -> Unit = { onNavigate(Screen.Settings) },
     onPlayOn: () -> Unit = {},
+    onRemote: () -> Unit = { onNavigate(Screen.Remote) },
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
@@ -117,42 +117,29 @@ internal fun DashboardScreen(
     canFinishUblockSetup: () -> Boolean = { true },
     onOnboardingVisible: () -> Unit = {},
 ) {
-    // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var appToInspectOrigin by rememberSaveable { mutableStateOf<String?>(null) }
-    val homeScrollState = rememberScrollState()
-    val pagerScope = rememberCoroutineScope()
-    val selectPage: (Int) -> Unit = { page ->
-        pagerScope.launch { pagerState.animateScrollToPage(page) }
-    }
-    BackHandler(enabled = pagerState.currentPage > 0) { selectPage(0) }
     LaunchedEffect(Unit) { visible = true }
 
     // One-time onboarding tour (first launch lands here; see BrowserActivity).
-    val onboardingContext = androidx.compose.ui.platform.LocalContext.current
-    val onboardingPrefs = remember {
-        onboardingContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-    }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE) }
     var showOnboarding by rememberSaveable {
-        mutableStateOf(!onboardingPrefs.getBoolean("dashboard_onboarding_seen", false))
+        mutableStateOf(!prefs.getBoolean("dashboard_onboarding_seen", false))
     }
 
-    var showReorder by remember { mutableStateOf(false) }
+    var showCustomize by remember { mutableStateOf(false) }
     var tileToMove by remember { mutableStateOf<String?>(null) }
-    var savedOrder by remember {
-        mutableStateOf(runCatching {
-            val array = org.json.JSONArray(onboardingPrefs.getString("dashboard_tile_order", "[]"))
-            (0 until array.length()).map { array.getString(it) }
-        }.getOrDefault(emptyList()))
-    }
-    val availableItems = dashboardItems(playOnStatus, remoteSubtitle, bridgedApps)
+    var savedOrder by remember { mutableStateOf(readIds(prefs.getString(ORDER_KEY, "[]"))) }
+    var hidden by remember { mutableStateOf(readIds(prefs.getString(HIDDEN_KEY, "[]")).toSet()) }
+    val availableItems = dashboardItems(tileStates, bridgedApps)
     val availableIds = availableItems.map { it.id }
     val orderedIds = remember(savedOrder, availableIds) {
-        if (!onboardingPrefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
+        if (!prefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
             val migrated = DashboardTileOrder.migrateOrder(savedOrder, availableIds)
-            onboardingPrefs.edit()
-                .putString("dashboard_tile_order", org.json.JSONArray(migrated).toString())
+            prefs.edit()
+                .putString(ORDER_KEY, writeIds(migrated))
                 .putBoolean("migrated_dashboard_tile_order_v1", true)
                 .apply()
             savedOrder = migrated
@@ -163,388 +150,90 @@ internal fun DashboardScreen(
     }
     val itemsById = availableItems.associateBy { it.id }
     val orderedItems = orderedIds.mapNotNull { itemsById[it] }
-    val pages = orderedItems.chunked(DashboardTileOrder.TILES_PER_PAGE)
+    val visibleItems = DashboardTileOrder.visible(orderedIds, hidden).mapNotNull { itemsById[it] }
     fun saveOrder(ids: List<String>) {
         savedOrder = ids
-        onboardingPrefs.edit()
-            .putString("dashboard_tile_order", org.json.JSONArray(ids).toString())
+        prefs.edit()
+            .putString(ORDER_KEY, writeIds(ids))
             .putBoolean("migrated_dashboard_tile_order_v1", true)
             .apply()
     }
-    fun moveTile(id: String, position: Int) {
-        saveOrder(DashboardTileOrder.move(orderedIds, id, position))
+    fun setHidden(id: String, hide: Boolean) {
+        if (id in DashboardTileOrder.ALWAYS_SHOWN) return
+        hidden = if (hide) hidden + id else hidden - id
+        prefs.edit().putString(HIDDEN_KEY, writeIds(hidden.toList())).apply()
     }
     LaunchedEffect(availableIds) { saveOrder(orderedIds) }
-    LaunchedEffect(pages.size) {
-        if (pagerState.currentPage >= pages.size) pagerState.scrollToPage(pages.lastIndex.coerceAtLeast(0))
-    }
-
-    val logoScale by animateFloatAsState(
-        targetValue = if (visible) 1f else 0.3f,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 300f),
-        label = "logoScale"
-    )
-    val logoAlpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(400),
-        label = "logoAlpha"
-    )
-
-    val surfaceColor = MaterialTheme.colorScheme.surface
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val secondaryColor = MaterialTheme.colorScheme.secondary
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(surfaceColor)
+            .background(MaterialTheme.colorScheme.surface)
     ) {
-        // ── Static Ambient Mesh Background ───────────────────────────────────
-        // Perf: was two infinite angle clocks redrawing a full-screen Canvas + new
-        // radial-gradient Brushes every frame. Static blobs cost one composition.
-        val staticBlob1 = remember(primaryColor) {
-            Brush.radialGradient(
-                colors = listOf(
-                    primaryColor.copy(alpha = 0.12f),
-                    primaryColor.copy(alpha = 0.04f),
-                    Color.Transparent
-                ),
-            )
-        }
-        val staticBlob2 = remember(secondaryColor) {
-            Brush.radialGradient(
-                colors = listOf(
-                    secondaryColor.copy(alpha = 0.10f),
-                    secondaryColor.copy(alpha = 0.03f),
-                    Color.Transparent
-                ),
-            )
-        }
-
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val width = size.width
-            val height = size.height
-
-            // Drift Blob 1 (Top-Right-ish)
-            val dx1 = width * 0.6f
-            val dy1 = height * 0.25f
-            drawCircle(
-                brush = staticBlob1,
-                center = Offset(dx1, dy1),
-                radius = width * 0.8f
-            )
-
-            // Drift Blob 2 (Bottom-Left-ish)
-            val dx2 = width * 0.4f
-            val dy2 = height * 0.7f
-            drawCircle(
-                brush = staticBlob2,
-                center = Offset(dx2, dy2),
-                radius = width * 0.7f
-            )
-        }
-
-        // The header and status stay in the vertical dashboard; only tiles page sideways.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                // Keep the gesture inset outside the scroll viewport so even partially
-                // visible tiles/page controls cannot draw against the system handle.
+                // Keep the gesture inset outside the scroll viewport so partially
+                // visible tiles cannot draw against the system handle.
                 .navigationBarsPadding()
-                .padding(bottom = 16.dp)
-                .verticalScroll(homeScrollState)
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Spacer(modifier = Modifier.height(48.dp))
-
-            // ── Logo with Pulsing Halo ───────────────────────────────────────
-            val logoGlowTransition = rememberInfiniteTransition(label = "logo_glow_anim")
-            val logoGlowScale by logoGlowTransition.animateFloat(
-                initialValue = 1f,
-                targetValue = 1.25f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(2200, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "logoGlowScale"
+            DashboardTopBar(
+                onRemote = onRemote,
+                onSettings = onSettings,
+                onSetupGuide = { showOnboarding = true },
+                onExit = { showExitConfirm = true },
             )
-            val logoGlowAlpha by logoGlowTransition.animateFloat(
-                initialValue = 0.15f,
-                targetValue = 0.35f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(2200, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "logoGlowAlpha"
-            )
-
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .scale(logoScale)
-                    .alpha(logoAlpha)
-            ) {
-                // Pulsing glow ring
-                Box(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .scale(logoGlowScale)
-                        .clip(CircleShape)
-                        .background(primaryColor.copy(alpha = logoGlowAlpha))
-                )
-
-                Image(
-                    painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                    contentDescription = "PlayBridge Logo",
-                    modifier = Modifier
-                        .size(72.dp)
-                        .clip(CircleShape)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "PlayBridge",
-                style = MaterialTheme.typography.headlineMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.5).sp
-                ),
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.alpha(logoAlpha)
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "CONSOLE HUB",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 3.sp
-                ),
-                color = primaryColor.copy(alpha = 0.7f),
-                modifier = Modifier.alpha(logoAlpha)
-            )
-
-            // ── Interactive Connection Status Pill ────────────────────────────
-            Spacer(modifier = Modifier.height(12.dp))
-            val statusAlpha by animateFloatAsState(
-                targetValue = if (visible) 1f else 0f,
-                animationSpec = tween(600, delayMillis = 200),
-                label = "statusAlpha"
-            )
-
-            val accent = if (playOnStatus.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (playOnStatus.isPlayingOn)
-                    accent.copy(alpha = 0.15f)
-                else
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                border = BorderStroke(
-                    1.dp,
-                    if (playOnStatus.isPlayingOn) accent.copy(alpha = 0.3f)
-                    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-                ),
-                modifier = Modifier
-                    .alpha(statusAlpha)
-                    .padding(horizontal = 16.dp)
-                    .widthIn(max = 280.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onPlayOn
-                    )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    if (playOnStatus.isPlayingOn) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(accent)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val textColor = if (playOnStatus.isPlayingOn) accent else MaterialTheme.colorScheme.onSurfaceVariant
-                    if (playOnStatus.isPlayingOn) Text(
-                        "Playing on ", style = MaterialTheme.typography.labelMedium, color = textColor,
-                    )
-                    Text(
-                        text = if (playOnStatus.isConnected) playOnStatus.deviceName else "No device connected",
-                        modifier = Modifier.weight(1f, fill = false),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = textColor,
-                    )
-                    if (playOnStatus.pillSuffix.isNotEmpty()) Text(
-                        playOnStatus.pillSuffix, style = MaterialTheme.typography.labelMedium, color = textColor,
-                        maxLines = 1,
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(36.dp))
-
-            // Each page contains only dashboard tiles; the logo and connection stay put.
+            DashboardDeviceChip(status = playOnStatus, onClick = onPlayOn)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = { showReorder = true }) {
-                    Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Reorder")
-                }
-            }
-            // All pages share the same hierarchy, including pages of installed apps.
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxWidth().height(414.dp),
-                pageSpacing = 12.dp,
-                verticalAlignment = Alignment.Top,
-            ) { page ->
-                val pageItems = pages.getOrElse(page) { emptyList() }
-                val rows = listOf(pageItems.take(2)) + pageItems.drop(2).chunked(3)
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    rows.forEachIndexed { rowIndex, rowItems ->
-                        val columns = if (rowIndex == 0) 2 else 3
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            rowItems.forEach { item ->
-                                key(item.id) {
-                                    DashboardCard(
-                                        item = item,
-                                        isActive = item.app == null && item.id != "bridged-apps" &&
-                                            item.screen?.let { isCurrentScreen(currentScreen, it) } == true,
-                                        animDelay = 0,
-                                        visible = visible,
-                                        modifier = Modifier.weight(1f),
-                                        tall = rowIndex == 0,
-                                        onClick = {
-                                            when {
-                                                item.app != null -> onOpenBridgedApp(item.app)
-                                                item.screen != null -> onNavigate(item.screen)
-                                                else -> onPlayOn()
-                                            }
-                                        },
-                                        onLongClick = {
-                                            if (item.app != null) appToInspectOrigin = item.app.origin
-                                            else showReorder = true
-                                        },
-                                        onLongClickLabel = if (item.app != null) "App info for ${item.title}" else "Reorder tiles",
-                                        appIconUrl = item.app?.iconUrl,
-                                    )
-                                }
-                            }
-                            repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            }
-            if (pages.size > 1) {
-                Spacer(modifier = Modifier.height(18.dp))
-                DashboardPageDots(
-                    selectedPage = pagerState.currentPage,
-                    pageCount = pages.size,
-                    onSelect = selectPage,
+                Text(
+                    "WATCH",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
+                TextButton(onClick = { showCustomize = true }) { Text("Customize") }
             }
-            Spacer(modifier = Modifier.height(24.dp))
+            DashboardTileGrid(
+                items = visibleItems,
+                currentScreen = currentScreen,
+                visible = visible,
+                onOpen = { item ->
+                    when {
+                        item.app != null -> onOpenBridgedApp(item.app)
+                        item.screen != null -> onNavigate(item.screen)
+                    }
+                },
+                onLongPress = { item ->
+                    if (item.app != null) appToInspectOrigin = item.app.origin else showCustomize = true
+                },
+            )
         }
 
-        // ── Navigation Top Bar Shortcuts ─────────────────────────────────────
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier.align(Alignment.TopStart),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close Dashboard",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                    )
-                }
-                IconButton(
-                    onClick = { showExitConfirm = true },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PowerSettingsNew,
-                        contentDescription = "Exit PlayBridge",
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.align(Alignment.TopEnd),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                IconButton(
-                    onClick = { showOnboarding = true },
-                    modifier = Modifier.size(40.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-                ) {
-                    Icon(Icons.Default.Info, contentDescription = stringResource(R.string.onboarding_open_guide),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
-                }
-                // Single global Settings entry — not in Browser menu or Library bottom nav.
-                IconButton(
-                    onClick = onSettings,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                    )
-                }
-            }
-        }
-
-        if (showReorder) {
+        if (showCustomize) {
             DashboardReorderDialog(
-                tiles = orderedItems.map { DashboardReorderTile(it.id, it.title) },
+                tiles = orderedItems.map {
+                    DashboardReorderTile(
+                        id = it.id, title = it.title, icon = it.icon, gradient = it.gradientColors,
+                        iconUrl = it.app?.iconUrl, subtitle = if (it.app != null) "Web app" else null,
+                    )
+                },
+                hidden = hidden,
                 onReorder = { ids -> saveOrder(DashboardTileOrder.reconcile(ids, availableIds)) },
+                onToggleHidden = ::setHidden,
+                onReset = {
+                    saveOrder(DashboardTileOrder.migrateOrder(emptyList(), availableIds))
+                    hidden = emptySet()
+                    prefs.edit().remove(HIDDEN_KEY).apply()
+                },
                 onChoosePosition = { id -> tileToMove = id },
-                onDismiss = { showReorder = false },
+                onDismiss = { showCustomize = false },
             )
         }
         tileToMove?.let { id ->
@@ -557,7 +246,10 @@ internal fun DashboardScreen(
                         LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
                             itemsIndexed(orderedItems, key = { _, item -> item.id }) { index, item ->
                                 TextButton(
-                                    onClick = { moveTile(id, index); tileToMove = null },
+                                    onClick = {
+                                        saveOrder(DashboardTileOrder.move(orderedIds, id, index))
+                                        tileToMove = null
+                                    },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text("${index + 1} · ${item.title}", modifier = Modifier.fillMaxWidth())
@@ -576,7 +268,7 @@ internal fun DashboardScreen(
             DashboardOnboardingOverlay(
                 onDone = {
                     if (canFinishUblockSetup()) {
-                        onboardingPrefs.edit().putBoolean("dashboard_onboarding_seen", true).apply()
+                        prefs.edit().putBoolean("dashboard_onboarding_seen", true).apply()
                         showOnboarding = false
                     } else {
                         onCancelUblock()
@@ -603,16 +295,24 @@ internal fun DashboardScreen(
             AlertDialog(
                 onDismissRequest = { showExitConfirm = false },
                 title = { Text("Exit PlayBridge?") },
-                text = { Text("This fully quits the app. Any cast that relies on PlayBridge — phone files, DLNA, or queued playback — will stop or error out.") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showExitConfirm = false
-                            onExit()
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("This fully quits the app. Anything that relies on PlayBridge will stop:")
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("Phone files on the TV", "DLNA playback", "Episodes queued from this phone").forEach {
+                                Text("•  $it", color = MaterialTheme.colorScheme.onSurface)
+                            }
                         }
-                    ) {
-                        Text("Exit", color = MaterialTheme.colorScheme.error)
                     }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showExitConfirm = false; onExit() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                    ) { Text("Exit") }
                 },
                 dismissButton = {
                     TextButton(onClick = { showExitConfirm = false }) { Text("Cancel") }
@@ -622,31 +322,162 @@ internal fun DashboardScreen(
     }
 }
 
+private fun readIds(json: String?): List<String> = runCatching {
+    val array = org.json.JSONArray(json ?: "[]")
+    (0 until array.length()).map { array.getString(it) }
+}.getOrDefault(emptyList())
+
+private fun writeIds(ids: List<String>): String = org.json.JSONArray(ids).toString()
+
 @Composable
-private fun DashboardPageDots(selectedPage: Int, pageCount: Int, onSelect: (Int) -> Unit) {
+private fun DashboardTopBar(
+    onRemote: () -> Unit,
+    onSettings: () -> Unit,
+    onSetupGuide: () -> Unit,
+    onExit: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(pageCount) { index ->
+        Image(
+            painter = painterResource(id = R.drawable.ic_playbridge_logo),
+            contentDescription = null,
+            modifier = Modifier.size(30.dp).clip(CircleShape),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "PlayBridge",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        // Always shown: the Remote picks its own TV, even when videos play on this phone.
+        IconButton(onClick = onRemote) {
+            Icon(Icons.Default.SettingsRemote, contentDescription = "Open remote")
+        }
+        IconButton(onClick = onSettings) {
+            Icon(Icons.Default.Settings, contentDescription = "Settings")
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.onboarding_open_guide)) },
+                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                    onClick = { menuOpen = false; onSetupGuide() },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Exit PlayBridge", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = {
+                        Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    },
+                    onClick = { menuOpen = false; onExit() },
+                )
+            }
+        }
+    }
+}
+
+/** Where videos play: a chosen TV or this phone. Opens the Play on sheet. */
+@Composable
+internal fun DashboardDeviceChip(status: PlayOnStatus, onClick: () -> Unit) {
+    val accent = when (status.state) {
+        PlayOnStatus.State.CONNECTED -> if (status.unencrypted) ChipAmber else ChipGreen
+        PlayOnStatus.State.CONNECTING, PlayOnStatus.State.RECONNECTING -> ChipAmber
+        PlayOnStatus.State.OFFLINE -> MaterialTheme.colorScheme.error
+        PlayOnStatus.State.THIS_PHONE -> null
+    }
+    val icon = when {
+        !status.tvChosen -> Icons.Default.Smartphone
+        status.receiver == null || status.receiver == CastProtocol.PLAYBRIDGE.displayName -> Icons.Default.Tv
+        else -> Icons.Default.Cast
+    }
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(30.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, accent?.copy(alpha = 0.35f) ?: MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .semantics { contentDescription = "${status.deviceName}, ${status.statusLine}. Change where to play" },
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 10.dp, end = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clickable(onClickLabel = "Show dashboard page ${index + 1}") {
-                        onSelect(index)
-                    },
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(accent?.copy(alpha = 0.15f) ?: MaterialTheme.colorScheme.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(
+                Icon(icon, contentDescription = null, tint = accent ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp))
+                if (accent != null) Box(
                     modifier = Modifier
-                        .size(if (selectedPage == index) 10.dp else 7.dp)
+                        .align(Alignment.BottomEnd)
+                        .offset(x = (-3).dp, y = (-3).dp)
+                        .size(10.dp)
                         .clip(CircleShape)
-                        .background(
-                            if (selectedPage == index) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        ),
+                        .background(accent),
                 )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(status.deviceName, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface)
+                Text(status.statusLine, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** Two large tiles, then rows of three; the whole Dashboard scrolls instead of paging. */
+@Composable
+private fun DashboardTileGrid(
+    items: List<DashboardItem>,
+    currentScreen: Screen,
+    visible: Boolean,
+    onOpen: (DashboardItem) -> Unit,
+    onLongPress: (DashboardItem) -> Unit,
+) {
+    val rows = listOf(items.take(2)) + items.drop(2).chunked(3)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        rows.forEachIndexed { rowIndex, rowItems ->
+            if (rowItems.isEmpty()) return@forEachIndexed
+            val columns = if (rowIndex == 0) 2 else 3
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                rowItems.forEach { item ->
+                    key(item.id) {
+                        val badge = when {
+                            item.live -> "LIVE"
+                            // The screen the Dashboard was opened from; tapping returns there.
+                            item.app == null && !item.isAddPlaceholder && item.screen == currentScreen -> "OPEN"
+                            else -> null
+                        }
+                        DashboardCard(
+                            item = item,
+                            badge = badge,
+                            visible = visible,
+                            tall = rowIndex == 0,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onOpen(item) },
+                            onLongClick = { onLongPress(item) },
+                            onLongClickLabel = if (item.app != null) "App info for ${item.title}" else "Customize home",
+                        )
+                    }
+                }
+                repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
@@ -656,67 +487,38 @@ private fun DashboardPageDots(selectedPage: Int, pageCount: Int, onSelect: (Int)
 @Composable
 private fun DashboardCard(
     item: DashboardItem,
-    isActive: Boolean,
-    animDelay: Int,
+    badge: String?,
     visible: Boolean,
-    modifier: Modifier = Modifier,
     tall: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null,
-    onLongClickLabel: String? = null,
-    appIconUrl: String? = null,
+    onLongClick: () -> Unit,
+    onLongClickLabel: String,
 ) {
-    // Perf: single entrance animation (alpha + offset) instead of 4 concurrent
-    // per-card anims (cardAlpha/cardTranslateY/pressScale/activeScale).
-    val cardAlpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(400, delayMillis = animDelay),
-        label = "cardAlpha"
-    )
-    val cardTranslateY by animateFloatAsState(
-        targetValue = if (visible) 0f else 60f,
-        animationSpec = tween(500, delayMillis = animDelay, easing = FastOutSlowInEasing),
-        label = "cardTranslateY"
-    )
-
-    // Tactile press scale response (no separate active-scale spring).
+    val cardAlpha by animateFloatAsState(if (visible) 1f else 0f, tween(400), label = "cardAlpha")
+    val cardTranslateY by animateFloatAsState(if (visible) 0f else 60f, tween(500), label = "cardTranslateY")
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.95f else 1f,
-        animationSpec = tween(150),
-        label = "pressScale"
-    )
-    val finalScale = pressScale
+    val pressScale by animateFloatAsState(if (isPressed) 0.95f else 1f, tween(150), label = "pressScale")
+    val shape = RoundedCornerShape(20.dp)
+    val outline = MaterialTheme.colorScheme.outline
 
-    val height = if (tall) 150.dp else 120.dp
-
-    // Glass-like translucent border adaptive to theme luminance
-    val surfaceLuminance = MaterialTheme.colorScheme.surface.luminance()
-    val isDarkTheme = surfaceLuminance < 0.5f
-    val borderBrush = Brush.linearGradient(
-        colors = if (isDarkTheme) {
-            listOf(
-                Color.White.copy(alpha = if (isActive) 0.35f else 0.15f),
-                Color.White.copy(alpha = 0.03f)
-            )
-        } else {
-            listOf(
-                Color.Black.copy(alpha = if (isActive) 0.18f else 0.08f),
-                Color.Black.copy(alpha = 0.02f)
-            )
-        }
-    )
-
-    Card(
+    Box(
         modifier = modifier
-            .height(height)
+            .height(if (tall) 140.dp else 112.dp)
             .graphicsLayer {
                 alpha = cardAlpha
                 translationY = cardTranslateY
-                scaleX = finalScale
-                scaleY = finalScale
+                scaleX = pressScale
+                scaleY = pressScale
             }
+            .clip(shape)
+            .then(
+                if (item.isAddPlaceholder) Modifier
+                else Modifier
+                    .background(Brush.linearGradient(item.gradientColors))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+            )
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true),
@@ -724,162 +526,96 @@ private fun DashboardCard(
                 onLongClick = onLongClick,
                 onLongClickLabel = onLongClickLabel,
             ),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.Transparent
-        ),
-        border = BorderStroke(1.dp, borderBrush),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isActive) 6.dp else 1.dp
-        )
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.linearGradient(item.gradientColors))
-                .then(
-                    if (isActive) Modifier.background(Color.White.copy(alpha = 0.12f))
-                    else Modifier
+        if (item.isAddPlaceholder) {
+            Canvas(Modifier.matchParentSize()) {
+                drawRoundRect(
+                    color = outline,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(20.dp.toPx()),
+                    style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f))),
                 )
-        ) {
-            // Specular glass-like sheen overlay
+            }
+        } else {
+            // Glass sheen and the two decorative circles from the original tile design.
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Color.White.copy(alpha = 0.15f), Color.Transparent),
-                            center = Offset(0f, 0f),
-                            radius = 350f
-                        )
+                Modifier.matchParentSize().background(
+                    Brush.radialGradient(
+                        colors = listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                        center = Offset(0f, 0f),
+                        radius = 350f,
                     )
+                )
             )
-
-            // Subtle decorative circles
             Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .align(Alignment.TopEnd)
-                    .offset(x = 15.dp, y = (-15).dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.08f))
+                Modifier.size(80.dp).align(Alignment.TopEnd).offset(x = 15.dp, y = (-15).dp)
+                    .clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
             )
+            Box(
+                Modifier.size(40.dp).align(Alignment.BottomStart).offset(x = (-10).dp, y = 30.dp)
+                    .clip(CircleShape).background(Color.White.copy(alpha = 0.05f))
+            )
+        }
+
+        val textColor = if (item.isAddPlaceholder) MaterialTheme.colorScheme.onSurface else Color.White
+        val subColor = if (item.isAddPlaceholder) MaterialTheme.colorScheme.onSurfaceVariant else Color.White.copy(alpha = 0.86f)
+        Column(
+            modifier = Modifier.fillMaxSize().padding(if (tall) 16.dp else 12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-10).dp, y = 30.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.05f))
-            )
-
-            val horizontalPadding = if (tall) 16.dp else 10.dp
-            val verticalPadding = if (tall) 16.dp else 12.dp
-
-            val titleStyle = if (tall) {
-                MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.SemiBold
-                )
-            } else {
-                MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    letterSpacing = (-0.2).sp
-                )
-            }
-
-            val subtitleStyle = if (tall) {
-                MaterialTheme.typography.bodySmall
-            } else {
-                MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 10.sp
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = horizontalPadding, vertical = verticalPadding),
-                verticalArrangement = Arrangement.SpaceBetween
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (item.isAddPlaceholder) MaterialTheme.colorScheme.surfaceContainerHigh
+                        else Color.White.copy(alpha = 0.2f)
+                    ),
+                contentAlignment = Alignment.Center,
             ) {
-                // Icon with subtle background
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.2f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (appIconUrl != null) {
-                        AsyncImage(
-                            model = appIconUrl,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = item.icon,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                Column {
-                    Text(
-                        text = item.title,
-                        style = titleStyle,
-                        color = Color.White,
-                        maxLines = if (tall) 1 else 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = item.subtitle,
-                        style = subtitleStyle,
-                        color = Color.White.copy(alpha = 0.7f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                val iconUrl = item.app?.iconUrl
+                if (iconUrl != null) {
+                    AsyncImage(model = iconUrl, contentDescription = null, modifier = Modifier.fillMaxSize())
+                } else {
+                    Icon(item.icon, contentDescription = null, tint = textColor, modifier = Modifier.size(22.dp))
                 }
             }
-
-            // Sleek "ACTIVE" glass chip indicator
-            if (isActive) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 12.dp, end = 12.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.White.copy(alpha = 0.22f))
-                        .padding(horizontal = 6.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(4.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "ACTIVE",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp
-                        ),
-                        color = Color.White
-                    )
-                }
+            Column {
+                Text(
+                    text = item.title,
+                    style = (if (tall) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall)
+                        .copy(fontWeight = FontWeight.SemiBold, fontSize = if (tall) 17.sp else 14.sp),
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = item.subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = if (tall) 13.sp else 12.sp),
+                    color = subColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
-    }
-}
 
-private fun isCurrentScreen(current: Screen, target: Screen): Boolean {
-    return when (target) {
-        Screen.Library -> current == Screen.Library || current == Screen.AddonSettings
-        else -> current == target
+        if (badge != null) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.28f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(Color.White))
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    badge,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.4.sp),
+                    color = Color.White,
+                )
+            }
+        }
     }
 }

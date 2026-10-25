@@ -2771,6 +2771,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = returnTarget.screen
                         },
+                        dashboardCanReturn = dashboardOrigin != null,
                         onDashboardClose = {
                             // Same rules as Remote: reopen the bridged app only while its tab
                             // still belongs to it; a fresh launch has no origin and opens Browser.

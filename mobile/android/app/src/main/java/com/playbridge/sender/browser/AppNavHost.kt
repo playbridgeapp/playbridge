@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.items
@@ -71,7 +70,7 @@ import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.ui.DashboardScreen
-import com.playbridge.sender.ui.dashboardPageCount
+import com.playbridge.sender.ui.rememberDashboardTileStates
 import com.playbridge.sender.cast.mirror.ScreenMirrorScreen
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
@@ -108,8 +107,10 @@ fun AppNavHost(
     onRemoteBack: () -> Unit,
     onAddonSettingsBack: () -> Unit = { onScreenChange(Screen.Library) },
     addonSettingsFromBridgedApp: Boolean = false,
-    // Where the Dashboard's close (X) should return — the screen it was opened from.
+    // Where Back from the Dashboard returns — the screen it was opened from.
     onDashboardClose: () -> Unit = { },
+    /** The Dashboard was opened from another screen, so Back returns there. */
+    dashboardCanReturn: Boolean = false,
     innerPadding: PaddingValues,
 
     // Session & Tab Management
@@ -340,11 +341,6 @@ fun AppNavHost(
     val libraryDiscoverGridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
     val librarySearchResultsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val libraryCatalogRowScrollStates = remember { mutableStateMapOf<String, LazyListState>() }
-    // AnimatedContent recreates DashboardScreen after navigating away; keep its tile page here.
-    val dashboardPages = remember(bridgedApps) { dashboardPageCount(bridgedApps) }
-    val dashboardPagerState = rememberPagerState(pageCount = {
-        dashboardPages
-    })
 
     // State to determine if search focus should be requested
     var shouldFocusSearch by remember { mutableStateOf(false) }
@@ -1558,9 +1554,14 @@ fun AppNavHost(
                     )
                 }
                 Screen.Dashboard -> {
-                    // The Dashboard is "home" — Back here double-taps to exit (soft finish;
-                    // an active cast keeps running in the background).
+                    // Back returns to the screen the Dashboard was opened from, like the tile
+                    // marked OPEN. With nowhere to return to, the Dashboard is "home": Back
+                    // double-taps to exit (soft finish; an active cast keeps running).
                     BackHandler {
+                        if (dashboardCanReturn) {
+                            onDashboardClose()
+                            return@BackHandler
+                        }
                         val now = System.currentTimeMillis()
                         if (now - backPressedTime > 2000) {
                             onBackPressedTimeChange(now)
@@ -1570,6 +1571,7 @@ fun AppNavHost(
                         }
                     }
                     val castSessionState by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
+                    val reconnectStatus by connectionViewModel.reconnectStatus.collectAsStateWithLifecycle()
                     val playOnStatus = playOnStatus(
                         route = castRoute,
                         socketConnected = connectionState is WebSocketClient.ConnectionState.Connected,
@@ -1577,10 +1579,23 @@ fun AppNavHost(
                         externalDevice = activeExternalDevice,
                         externalReady = castSessionState.isReadyForPlayback,
                         socketSecure = (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
+                        connecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
+                            connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
+                            castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTING,
+                        reconnecting = reconnectStatus != null,
                     )
                     val ublockSetupStatus by Components.ublockOnboarding.status.collectAsStateWithLifecycle()
+                    val tileStates = rememberDashboardTileStates(
+                        playOnStatus = playOnStatus,
+                        castSessionManager = connectionViewModel.castSessionManager,
+                        nativeConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                        iptvPlaylists = iptvViewModel.playlists.collectAsStateWithLifecycle().value.size,
+                        collections = collectionsViewModel.collections.collectAsStateWithLifecycle().value.size,
+                        // Read once per Dashboard visit; the provider only changes in Debrid settings.
+                        debridProvider = remember { debridRepository.getConfiguredProviders().firstOrNull() },
+                    )
                     DashboardScreen(
-                        pagerState = dashboardPagerState,
+                        tileStates = tileStates,
                         ublockSetupStatus = ublockSetupStatus,
                         onCheckUblock = { Components.ublockOnboarding.refresh() },
                         onInstallUblock = { Components.ublockOnboarding.requestInstall() },
@@ -1589,13 +1604,12 @@ fun AppNavHost(
                         onOnboardingVisible = { Components.extensionPrompts.reShowPendingPrompt() },
                         currentScreen = lastMainScreen,
                         playOnStatus = playOnStatus,
-                        remoteSubtitle = remoteTV?.let { "${it.device.name} · ${it.status}" } ?: "Control your TV",
                         onNavigate = { screen ->
                             onScreenChange(screen)
                         },
                         onPlayOn = { showDevicePicker = true },
                         onExit = onFullExit,
-                        onClose = onDashboardClose,
+                        onRemote = { onScreenChange(Screen.Remote) },
                         onSettings = {
                             // So Settings back lands on Dashboard (not Browser/Library).
                             onLastMainScreenChange(Screen.Dashboard)

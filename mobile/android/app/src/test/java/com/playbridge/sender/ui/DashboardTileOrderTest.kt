@@ -36,14 +36,6 @@ class DashboardTileOrderTest {
     }
 
     @Test
-    fun `pages have eight slots and grow or shrink with installed apps`() {
-        assertEquals(listOf(1, 1, 1, 2, 2, 3), listOf(0, 1, 8, 9, 16, 17).map(DashboardTileOrder::pageCount))
-        val pages = defaults.chunked(DashboardTileOrder.TILES_PER_PAGE)
-        assertEquals(listOf(8, 2), pages.map { it.size })
-        assertEquals(defaults, pages.flatten())
-    }
-
-    @Test
     fun `new install default order places Browser first, Streams second, and Library legacy third`() {
         val available = listOf(
             "browser", "library", "connection", "screen-mirror", "phone-files",
