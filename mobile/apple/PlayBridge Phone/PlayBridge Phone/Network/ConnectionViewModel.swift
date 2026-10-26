@@ -146,6 +146,8 @@ final class ConnectionViewModel: ObservableObject {
         }
         castPlaybackSession.onReconnect = { [weak self] in self?.reconnectActiveCast() }
         castPlaybackSession.onReleaseResources = { [weak self] in self?.releaseCastResources() }
+        // The session runs on the main thread (see CastPlaybackSession).
+        castPlaybackSession.holdsBetweenItems = { MainActor.assumeIsolated { PhoneQueueCoordinator.shared.active } }
         CastSystemPlayback.shared.onAction = { [weak self] action in
             self?.castPlaybackSession.perform(action) ?? false
         }
