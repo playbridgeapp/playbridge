@@ -42,6 +42,7 @@ class QueueItem {
     this.enforcePageNetworkPolicy = false,
     this.allowedPrivateOrigins = const [],
     this.localUserInitiated = false,
+    this.senderItemId,
   });
 
   /// Public title/episode identifiers only; no webhook URL or credentials.
@@ -91,6 +92,10 @@ class QueueItem {
   /// history, favorites). Never derive it from a network payload field: it is
   /// the only signal that may unlock DNS-derived LAN trust in the proxy.
   final bool localUserInitiated;
+
+  /// The queue item id the sender gave this entry (`item_id`); kept as its id in the queue so
+  /// the sender can refer to it later. Null: the receiver makes one up.
+  final String? senderItemId;
 
   /// Origins to hand to the proxy when registering this item (page grants only).
   List<String>? get proxyAllowedPrivateOrigins =>

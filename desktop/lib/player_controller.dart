@@ -642,7 +642,7 @@ class PlayerController extends ChangeNotifier {
       ..addAll(prepared);
     _queueItemIds
       ..clear()
-      ..addAll(List.generate(prepared.length, (_) => const Uuid().v4()));
+      ..addAll(_itemIdsFor(items, const {}));
     _playbackId = const Uuid().v4();
     _queueRevision++;
     _setIndex(startIndex.clamp(0, prepared.length - 1));
@@ -695,8 +695,7 @@ class PlayerController extends ChangeNotifier {
     if (_queue.length + prepared.length > maxQueueItems) return false;
     final nextIndex = _queue.length;
     _queue.addAll(prepared);
-    _queueItemIds
-        .addAll(List.generate(prepared.length, (_) => const Uuid().v4()));
+    _queueItemIds.addAll(_itemIdsFor(items, _queueItemIds.toSet()));
     _queueRevision++;
     queueChanges.value++;
     notifyListeners();
@@ -705,6 +704,22 @@ class PlayerController extends ChangeNotifier {
       await _jumpToReady(nextIndex);
     }
     return true;
+  }
+
+  /// Queue ids for [items]: the sender's id when it gave one that isn't taken, so the sender
+  /// can address the item later; otherwise a new one.
+  static List<String> _itemIdsFor(List<QueueItem> items, Set<String> taken) {
+    final used = {...taken};
+    final ids = <String>[];
+    for (final item in items) {
+      final id = item.senderItemId;
+      final chosen = id != null && id.length <= 128 && !used.contains(id)
+          ? id
+          : const Uuid().v4();
+      used.add(chosen);
+      ids.add(chosen);
+    }
+    return ids;
   }
 
   Future<bool> jumpToItem(String itemId, {String? ifPlaybackId}) async {

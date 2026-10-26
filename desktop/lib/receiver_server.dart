@@ -1226,6 +1226,9 @@ QueueItem receiverQueueItemFromPayload(PlayPayload payload,
     allowedPrivateOrigins: payload.allowedPrivateOrigins,
     startPositionMs: payload.startPositionMsOrNull,
     bingeGroup: payload.bingeGroupOrNull,
+    senderItemId: payload.hasItemId() && payload.itemId.isNotEmpty
+        ? payload.itemId
+        : null,
     season: payload.seasonOrNull,
     episode: payload.episodeOrNull,
     imdbId: payload.imdbIdOrNull,
