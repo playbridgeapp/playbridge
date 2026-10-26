@@ -576,13 +576,13 @@ class ConnectionViewModel(
      * while it plays; when something else is playing they `queue_add` onto the TV's own queue,
      * and NEXT then moves the new items after the current one, when the receiver allows it.
      */
-    suspend fun castLocalQueue(items: List<LocalCastItem>, mode: LocalQueueMode): LocalQueueResult {
+    suspend fun castLocalQueue(items: List<LocalCastItem>, mode: LocalQueueMode, source: String? = null): LocalQueueResult {
         if (items.isEmpty() || !localQueueSupported()) return LocalQueueResult.FAILED
         val coordinator = org.koin.core.context.GlobalContext.get().get<ConnectionCoordinator>()
         val phoneQueue = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.cast.PhoneQueueCoordinator>()
         val playing = coordinator.tvActiveContext.value == "player" && coordinator.tvPlaylistState.value != null
         if (mode == LocalQueueMode.REPLACE || !playing) {
-            return if (phoneQueue.start(items)) LocalQueueResult.PLAYING else LocalQueueResult.FAILED
+            return if (phoneQueue.start(items, source)) LocalQueueResult.PLAYING else LocalQueueResult.FAILED
         }
         if (phoneQueue.isActive) {
             if (mode == LocalQueueMode.NEXT) phoneQueue.playNext(items) else phoneQueue.addToEnd(items)

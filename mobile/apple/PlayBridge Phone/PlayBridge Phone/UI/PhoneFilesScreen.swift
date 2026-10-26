@@ -71,7 +71,7 @@ struct PhoneFilesScreen: View {
         VStack(spacing: 0) {
             if let group = openGroup {
                 SongGroupPage(group: group, onTvID: onTvID, tvName: PhoneMediaCasting.receiverName(vm), selection: selection,
-                              onPlay: queueEnabled && !selecting ? { songs, shuffle in playList(songs, shuffle: shuffle) } : nil,
+                              onPlay: queueEnabled && !selecting ? { songs, shuffle in playList(songs, shuffle: shuffle, source: group.title) } : nil,
                               onBack: { openGroupID = nil }, row: songRow)
             } else {
                 header
@@ -205,7 +205,7 @@ struct PhoneFilesScreen: View {
                             Text(sort.title).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
                             Spacer()
                             if queueEnabled && !selecting && !shown.isEmpty {
-                                Button { playList(shown, shuffle: false) } label: {
+                                Button { playList(shown, shuffle: false, source: "All videos") } label: {
                                     Label("Play all", systemImage: "play.fill").font(Theme.font(.footnote).weight(.medium))
                                         .padding(.horizontal, 14).frame(minHeight: 36).background(Capsule().fill(Theme.surfaceContainerHigh))
                                 }.buttonStyle(.plain)
@@ -318,7 +318,7 @@ struct PhoneFilesScreen: View {
         case .songs:
             if queueEnabled && !selecting && !songs.isEmpty {
                 PlayShuffleButtons(playTitle: "Play all", shuffleTitle: "Shuffle all",
-                                   onPlay: { playList(songs, shuffle: false) }, onShuffle: { playList(songs, shuffle: true) })
+                                   onPlay: { playList(songs, shuffle: false, source: "All songs") }, onShuffle: { playList(songs, shuffle: true, source: "All songs") })
             }
             if songs.isEmpty { empty(query.isEmpty ? "No music imported yet" : "No matches") }
             LazyVStack(spacing: 0) { ForEach(songs) { songRow($0, nil) } }
@@ -484,7 +484,7 @@ struct PhoneFilesScreen: View {
             Text(total > 0 ? "Plays in the order you picked · \(PhoneFilesModel.clock(total)) in total" : "Plays in the order you picked")
                 .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
             if queueEnabled {
-                Button { playList(picked, shuffle: false); selection = [] } label: {
+                Button { playList(picked, shuffle: false, source: "Your selection"); selection = [] } label: {
                     Label("Play \(picked.count) on \(PhoneMediaCasting.receiverName(vm))", systemImage: "play.fill")
                         .font(Theme.font(.body).bold()).foregroundColor(Theme.onPrimary).lineLimit(1)
                         .frame(maxWidth: .infinity, minHeight: 50).background(Capsule().fill(Theme.primary))
@@ -492,7 +492,7 @@ struct PhoneFilesScreen: View {
                 HStack(spacing: 8) {
                     outlined("Add to queue") { send(picked, .end); selection = [] }
                     outlined("Collection") { collectionItems = CollectionTarget(items: picked); selection = [] }
-                    outlined("Shuffle play") { playList(picked, shuffle: true); selection = [] }
+                    outlined("Shuffle play") { playList(picked, shuffle: true, source: "Your selection"); selection = [] }
                 }
             } else {
                 Button {
@@ -552,14 +552,15 @@ struct PhoneFilesScreen: View {
         .background(Color.orange.opacity(0.15)).cornerRadius(12)
     }
 
-    private func playList(_ list: [PhoneMedia], shuffle: Bool) {
-        send(shuffle ? list.shuffled() : list, .replace)
+    /// `source` names the list in Up next ("All songs", an album).
+    private func playList(_ list: [PhoneMedia], shuffle: Bool, source: String) {
+        send(shuffle ? list.shuffled() : list, .replace, source: shuffle ? "\(source), shuffled" : source)
     }
 
-    private func send(_ list: [PhoneMedia], _ mode: PhoneQueueCoordinator.Mode, displayDurationMs: Int? = nil) {
+    private func send(_ list: [PhoneMedia], _ mode: PhoneQueueCoordinator.Mode, displayDurationMs: Int? = nil, source: String? = nil) {
         guard !list.isEmpty else { return }
         Task {
-            let outcome = await phoneQueue.send(list, mode: mode, displayDurationMs: displayDurationMs, library: library, vm: vm)
+            let outcome = await phoneQueue.send(list, mode: mode, displayDurationMs: displayDurationMs, source: source, library: library, vm: vm)
             let tv = PhoneMediaCasting.receiverName(vm)
             let count = list.count == 1 ? "1 item" : "\(list.count) items"
             switch outcome {
@@ -584,7 +585,7 @@ struct PhoneFilesScreen: View {
         var updated = run
         updated.ordered = ordered
         slideshow = updated
-        send(ordered, .replace, displayDurationMs: slideSeconds * 1000)
+        send(ordered, .replace, displayDurationMs: slideSeconds * 1000, source: "Slideshow · \(run.title)")
     }
 
     private func show(_ message: String) {

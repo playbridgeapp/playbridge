@@ -33,6 +33,9 @@ data class PhoneQueueItem(
     val uri: String,
     val kind: MediaKind,
     val mime: String?,
+    val artist: String? = null,
+    /** How long it plays: its length, or a photo's slideshow time; 0 when unknown. */
+    val playMs: Long = durationMs,
 )
 
 /** Where the phone's list is, for the slideshow controls, Up next and the mini player. */
@@ -42,6 +45,8 @@ data class PhoneQueueState(
     val position: Int = 0,
     val count: Int = 0,
     val items: List<PhoneQueueItem> = emptyList(),
+    /** What the list was started from, e.g. "All songs" or an album; null when unknown. */
+    val source: String? = null,
 ) {
     val current: PhoneQueueItem? get() = items.getOrNull(position)
     /** Items after the current one. */
@@ -70,10 +75,15 @@ class PhoneQueueCoordinator(
     private val scope: CoroutineScope,
 ) {
     private class Entry(val id: String, val item: LocalCastItem) {
-        val view = PhoneQueueItem(id, item.title ?: "Phone file", item.durationMs, item.uri, item.kind, item.mime)
+        val view = PhoneQueueItem(
+            id, item.title ?: "Phone file", item.durationMs, item.uri, item.kind, item.mime,
+            artist = item.artist?.takeIf { it.isNotBlank() },
+            playMs = item.durationMs.takeIf { it > 0 } ?: item.displayDurationMs ?: 0L,
+        )
     }
 
     private val mutex = Mutex()
+    private var source: String? = null
     private var entries: MutableList<Entry> = mutableListOf()
     private val byId = HashMap<String, Entry>()
     private var cursor = 0
@@ -119,11 +129,12 @@ class PhoneQueueCoordinator(
     val isActive: Boolean get() = mutableState.value.active
 
     /** Starts [items] on the TV from the first one. False if it could not be sent. */
-    suspend fun start(items: List<LocalCastItem>): Boolean {
+    suspend fun start(items: List<LocalCastItem>, source: String? = null): Boolean {
         if (items.isEmpty()) return false
         val list = items.map { Entry(UUID.randomUUID().toString(), it) }
         val session = mutex.withLock {
             clearLocked()
+            this.source = source
             entries = list.toMutableList()
             list.forEach { byId[it.id] = it }
             itemsChanged = true
@@ -462,6 +473,7 @@ class PhoneQueueCoordinator(
         itemsChanged = false
         mutableState.value = PhoneQueueState(
             active = active && entries.isNotEmpty(), position = cursor, count = entries.size, items = items,
+            source = source,
         )
     }
 

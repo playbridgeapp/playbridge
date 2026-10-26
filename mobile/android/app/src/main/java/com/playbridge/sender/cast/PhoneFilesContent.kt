@@ -113,7 +113,7 @@ internal fun VideosTab(
                         modifier = Modifier.weight(1f),
                     )
                     if (callbacks.playListAvailable && videos.isNotEmpty() && !uiState.selecting) {
-                        SmallActionButton("Play all", Icons.Default.PlayArrow) { callbacks.onPlayList(videos, false) }
+                        SmallActionButton("Play all", Icons.Default.PlayArrow) { callbacks.onPlayList(videos, false, "All videos") }
                     }
                 }
             }
@@ -240,7 +240,7 @@ internal fun MusicTab(
         ) {
             item { viewChips() }
             if (callbacks.playListAvailable && filtered.isNotEmpty() && !uiState.selecting) {
-                item { PlayShuffleRow(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp), playLabel = "Play all", shuffleLabel = "Shuffle all", onPlay = { callbacks.onPlayList(filtered, false) }, onShuffle = { callbacks.onPlayList(filtered, true) }) }
+                item { PlayShuffleRow(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp), playLabel = "Play all", shuffleLabel = "Shuffle all", onPlay = { callbacks.onPlayList(filtered, false, "All songs") }, onShuffle = { callbacks.onPlayList(filtered, true, "All songs") }) }
             }
             if (filtered.isEmpty()) item { EmptyMessage(if (uiState.query.isNotBlank()) "No matches" else "No music on this phone") }
             items(filtered, key = { it.uri.toString() }) { song ->
@@ -398,8 +398,8 @@ internal fun SongGroupPage(
                 PlayShuffleRow(
                     Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
                     playLabel = "Play", shuffleLabel = "Shuffle",
-                    onPlay = { callbacks.onPlayList(group.songs, false) },
-                    onShuffle = { callbacks.onPlayList(group.songs, true) },
+                    onPlay = { callbacks.onPlayList(group.songs, false, group.title) },
+                    onShuffle = { callbacks.onPlayList(group.songs, true, group.title) },
                 )
             }
         }

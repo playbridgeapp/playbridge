@@ -283,10 +283,10 @@ fun PhoneFilesScreen(
         displayDurationMs = displayDurationMs.takeIf { media.mediaKind == MediaKind.IMAGE },
     )
 
-    fun sendQueue(list: List<com.playbridge.sender.connection.LocalCastItem>, mode: com.playbridge.sender.connection.LocalQueueMode) {
+    fun sendQueue(list: List<com.playbridge.sender.connection.LocalCastItem>, mode: com.playbridge.sender.connection.LocalQueueMode, source: String? = null) {
         if (list.isEmpty()) return
         scope.launch {
-            val result = viewModel.castLocalQueue(list, mode)
+            val result = viewModel.castLocalQueue(list, mode, source)
             val tv = tvName ?: "TV"
             val count = if (list.size == 1) "1 item" else "${list.size} items"
             val message = when (result) {
@@ -303,14 +303,14 @@ fun PhoneFilesScreen(
         }
     }
 
-    fun queue(list: List<PhoneMediaItem>, mode: com.playbridge.sender.connection.LocalQueueMode) =
-        sendQueue(list.filterNot(::unsupportedOnTv).map { castItem(it) }, mode)
+    fun queue(list: List<PhoneMediaItem>, mode: com.playbridge.sender.connection.LocalQueueMode, source: String? = null) =
+        sendQueue(list.filterNot(::unsupportedOnTv).map { castItem(it) }, mode, source)
 
-    /** Play all / Play N / Shuffle: a new list on the TV, or in order on this phone. */
-    fun playList(list: List<PhoneMediaItem>, shuffle: Boolean) {
+    /** Play all / Play N / Shuffle: a new list on the TV, or in order on this phone. [source] names it in Up next. */
+    fun playList(list: List<PhoneMediaItem>, shuffle: Boolean, source: String) {
         val ordered = if (shuffle) list.shuffled() else list
         when {
-            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE, if (shuffle) "$source, shuffled" else source)
             !hasExternalTarget -> {
                 val playable = ordered.filter { it.mediaKind != MediaKind.IMAGE }
                 if (playable.isEmpty()) return
@@ -325,14 +325,14 @@ fun PhoneFilesScreen(
             show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, 0, Int.MAX_VALUE,
         )
         slideshow = show.copy(ordered = ordered)
-        sendQueue(ordered.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+        sendQueue(ordered.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE, "Slideshow · ${show.title}")
     }
 
     /** Same order, new time per photo: restart from the photo on screen. */
     fun retimeSlideshow(show: Slideshow, from: Int) {
         val rotated = show.ordered.drop(from) + show.ordered.take(from)
         slideshow = show.copy(ordered = rotated)
-        sendQueue(rotated.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE)
+        sendQueue(rotated.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE, "Slideshow · ${show.title}")
     }
 
     fun share(list: List<PhoneMediaItem>) {
@@ -568,7 +568,7 @@ fun PhoneFilesScreen(
                 playAvailable = callbacks.playListAvailable && selectedItems.any { it.mediaKind != MediaKind.IMAGE || queueEnabled },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset),
                 onPlay = { shuffle ->
-                    playList(selectedItems, shuffle)
+                    playList(selectedItems, shuffle, "Your selection")
                     uiState.selection = emptyList()
                 },
                 onAddToQueue = {
@@ -689,7 +689,8 @@ internal class PhoneFilesCallbacks(
     val playListAvailable: Boolean = false,
     val onPlayNext: (PhoneMediaItem) -> Unit = {},
     val onAddToQueue: (PhoneMediaItem) -> Unit = {},
-    val onPlayList: (List<PhoneMediaItem>, Boolean) -> Unit = { _, _ -> },
+    /** Items, shuffle, and the name Up next shows for the list ("All songs", an album). */
+    val onPlayList: (List<PhoneMediaItem>, Boolean, String) -> Unit = { _, _, _ -> },
     val onSlideshow: (String, List<PhoneMediaItem>) -> Unit = { _, _ -> },
     val slideshowAvailable: Boolean = false,
 )

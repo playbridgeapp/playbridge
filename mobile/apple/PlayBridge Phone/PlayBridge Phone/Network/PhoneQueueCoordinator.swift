@@ -35,6 +35,8 @@ import Foundation
     @Published private(set) var count = 0
     /// The whole list, for Up next.
     @Published private(set) var items: [Item] = []
+    /// What the list was started from, e.g. "All songs" or an album; nil when unknown.
+    @Published private(set) var source: String?
     /// Items after the current one.
     var remaining: Int { max(0, count - position - 1) }
     var current: Item? { items.indices.contains(position) ? items[position] : nil }
@@ -66,7 +68,7 @@ import Foundation
     /// The phone serves the files: iOS closing PlayBridge stops the list after the window.
     var needsAppRunning: Bool { active }
 
-    func send(_ items: [PhoneMedia], mode: Mode, displayDurationMs: Int? = nil,
+    func send(_ items: [PhoneMedia], mode: Mode, displayDurationMs: Int? = nil, source: String? = nil,
               library: PhoneMediaLibrary, vm: ConnectionViewModel) async -> Outcome {
         guard !items.isEmpty else { return .failed("Nothing to play.") }
         guard vm.localListSupported else { return .failed("This receiver plays one item at a time.") }
@@ -81,7 +83,7 @@ import Foundation
                 guard vm.localQueueSupported else { return .failed("This receiver plays one item at a time.") }
                 return await appendToForeignQueue(newEntries, vm: vm, library: library)
             }
-            return await start(newEntries) ? .playing : .failed("Couldn’t send to \(PhoneMediaCasting.receiverName(vm)).")
+            return await start(newEntries, source: source) ? .playing : .failed("Couldn’t send to \(PhoneMediaCasting.receiverName(vm)).")
         }
         if mode == .next { entries.insert(contentsOf: newEntries, at: cursor + 1) } else { entries += newEntries }
         newEntries.forEach { byId[$0.id] = $0 }
@@ -202,8 +204,9 @@ import Foundation
             .sink { [weak self] status in self?.onStatus(status) }
     }
 
-    private func start(_ list: [Entry]) async -> Bool {
+    private func start(_ list: [Entry], source: String?) async -> Bool {
         clear()
+        self.source = source
         entries = list
         list.forEach { byId[$0.id] = $0 }
         return await sendFrom(0, session: generation)
@@ -391,6 +394,7 @@ import Foundation
         awaitRevision = 0
         generation += 1
         active = false
+        source = nil
         publish()
     }
 

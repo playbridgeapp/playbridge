@@ -130,7 +130,7 @@ struct RemoteControlView: View {
                 case .queue:
                     if phoneListPlaying {
                         PhoneQueueSheet(looping: policy.isLegacy ? looping : vm.coordinator.receiverLoop ?? looping,
-                                        canLoop: canLoop) { value in
+                                        canLoop: canLoop, onTogglePlay: { playPause(browser: false) }) { value in
                             looping = value; playerCommand(value ? "loop_on" : "loop_off")
                         }
                     } else {
