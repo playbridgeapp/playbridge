@@ -20,6 +20,8 @@ struct RemoteSeekBar: View {
     var bufferedMs: Double? = nil
     var chapters: [RemoteChapter] = []
     var segments: [RemoteSegment] = []
+    /// The theme's fills, or a phone list's artwork tones.
+    var palette: RemotePalette = .theme
 
     struct Feedback {
         enum Kind { case seek, volume }
@@ -61,7 +63,7 @@ struct RemoteSeekBar: View {
 
     private var activeColor: Color {
         scrubMode == .absolute && axis == .vertical
-            ? Color(red: 1, green: 0.32, blue: 0.32) : Theme.primary
+            ? Color(red: 1, green: 0.32, blue: 0.32) : palette.accent
     }
 
     var body: some View {
@@ -92,7 +94,7 @@ struct RemoteSeekBar: View {
                         chapters: chapters, segments: segments,
                         amplitude: waving ? RemoteSeekStyle.amplitude : 0,
                         thumbRadius: dragging ? RemoteSeekStyle.thumbHeldRadius : RemoteSeekStyle.thumbRadius,
-                        held: dragging, shimmer: isBuffering && clockRuns, clockRuns: clockRuns, played: Theme.primary
+                        held: dragging, shimmer: isBuffering && clockRuns, clockRuns: clockRuns, played: palette.accent
                     )
                     .animation(reduceMotion ? nil : .easeInOut(duration: waving ? RemoteSeekStyle.grow : RemoteSeekStyle.flatten), value: waving)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: dragging)
@@ -105,7 +107,7 @@ struct RemoteSeekBar: View {
                     Text(RemoteMode.time(Int64(min(displayMs, Double(Int64.max / 2)))))
                     Spacer()
                     Text(isLive ? "● LIVE" : durationMs > 0 ? RemoteMode.time(Int64(durationMs)) : "--:--")
-                        .foregroundStyle(isLive ? Theme.primary : Theme.onSurfaceVariant)
+                        .foregroundStyle(isLive ? palette.accent : Theme.onSurfaceVariant)
                 }.font(Theme.font(size: 11)).monospacedDigit().foregroundStyle(Theme.onSurfaceVariant)
             }.padding(.horizontal, 52).padding(.vertical, 14)
             HStack {
@@ -161,7 +163,7 @@ struct RemoteSeekBar: View {
             }
         }
         .frame(height: 86)
-        .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 28))
+        .background(palette.surface, in: RoundedRectangle(cornerRadius: 28))
         .onDisappear { feedback = nil }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel((enablePlayPause ? (isPlaying ? "Pause" : "Play") : "Playback timeline") + (enableVolume && volumeLabel != "Volume" ? ", " + volumeLabel : ""))

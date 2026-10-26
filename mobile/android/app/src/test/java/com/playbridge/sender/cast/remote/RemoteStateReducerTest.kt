@@ -48,4 +48,21 @@ class RemoteStateReducerTest {
         assertEquals(resolveInputPresentation(before), resolveInputPresentation(reducer.state))
         assertEquals(before.preferences.timeDisplay, reducer.state.preferences.timeDisplay)
     }
+
+    @Test fun upNextStaysOpenWhenTheQueueMovesOnButOtherSheetsClose() {
+        val reducer = RemoteStateReducer { 0L }
+        val first = testSnapshot()
+        reducer.observe(first)
+        reducer.local(RemoteAction.OpenSheet(RemoteSheet.Queue))
+        val next = first.state.copy(
+            playback = first.state.playback!!.copy(title = "Next"),
+            queue = first.state.queue!!.copy(currentIndex = 8),
+        )
+        reducer.observe(first.copy(state = next))
+        assertEquals(RemoteSheet.Queue, reducer.state.sheet)
+
+        reducer.local(RemoteAction.OpenSheet(RemoteSheet.Subtitles))
+        reducer.observe(first)
+        assertEquals(null, reducer.state.sheet)
+    }
 }

@@ -35,6 +35,11 @@ struct NowPlayingMiniBar: View {
 
     @EnvironmentObject private var library: PhoneMediaLibrary
     @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
+    @ObservedObject private var tints = QueueTintStore.shared
+    /// A phone list's bar is coloured like Up next's current card: the artwork's light tint fills as it plays.
+    private var tint: QueueTint? { playing && phoneQueue.tintedItem(on: vm) != nil ? tints.tint : nil }
+    private var textColor: Color { tint?.onCard ?? Theme.onSurface }
+    private var subtleColor: Color { tint.map { $0.onCard.opacity(0.72) } ?? Theme.onSurfaceVariant }
 
     /// The phone list's current item, when the receiver is playing one of this iPhone's lists.
     private var phoneItem: PhoneQueueCoordinator.Item? {
@@ -90,7 +95,7 @@ struct NowPlayingMiniBar: View {
                             .lineLimit(1)
                         Text(secondaryText)
                             .font(Theme.font(size: 12))
-                            .foregroundColor(Theme.onSurfaceVariant)
+                            .foregroundColor(subtleColor)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
@@ -115,7 +120,7 @@ struct NowPlayingMiniBar: View {
                         Text("\(upNextCount)").font(Theme.font(size: 13, weight: .medium))
                     }
                     .padding(.horizontal, 12).frame(height: 40)
-                    .background(Capsule().fill(Theme.onSurface.opacity(0.08)))
+                    .background(Capsule().fill(textColor.opacity(tint == nil ? 0.08 : 0.12)))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Up next, \(upNextCount) items")
@@ -133,20 +138,28 @@ struct NowPlayingMiniBar: View {
                 Button { vm.control(paused ? "play" : "pause") } label: {
                     Image(systemName: paused ? "play.fill" : "pause.fill")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(Theme.onPrimary)
+                        .foregroundColor(tint?.cardFill ?? Theme.onPrimary)
                         .frame(width: 44, height: 44)
-                        .background(Circle().fill(Theme.primary))
+                        .background(Circle().fill(tint?.onCard ?? Theme.primary))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(paused ? "Play" : "Pause")
             }
         }
-        .foregroundColor(Theme.onSurface)
+        .foregroundColor(textColor)
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .frame(height: 64)
+        .background {
+            if let tint {
+                ZStack(alignment: .leading) {
+                    tint.cardBase
+                    GeometryReader { geometry in tint.cardFill.frame(width: geometry.size.width * (progress ?? 0)) }
+                }
+            }
+        }
         .overlay(alignment: .bottomLeading) {
-            if let progress {
+            if let progress, tint == nil {
                 GeometryReader { geometry in
                     Theme.primary.frame(width: geometry.size.width * progress, height: 2)
                         .frame(maxHeight: .infinity, alignment: .bottom)
@@ -155,6 +168,9 @@ struct NowPlayingMiniBar: View {
             }
         }
         .background(Theme.surfaceContainerHighest, in: RoundedRectangle(cornerRadius: 18))
+        .task(id: phoneQueue.tintedItem(on: vm)?.id) {
+            if let item = phoneQueue.tintedItem(on: vm) { await tints.load(item.media, url: library.localURL(item.media)) }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
         .padding(.horizontal, 12)

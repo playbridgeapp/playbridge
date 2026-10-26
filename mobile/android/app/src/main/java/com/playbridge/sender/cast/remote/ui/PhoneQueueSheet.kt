@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -91,7 +91,7 @@ private const val SHOW_PLAYED = "show_played"
  * just the window the TV has, laid out like a music player's queue. Played items sit behind a
  * "Played" toggle (collapsed until opened; the choice is kept), then the current item as a
  * card that fills as it plays, a line naming the list with Repeat, Save and Clear, and what's
- * next. Drag a row's handle to reorder, swipe it away to remove, tap it to play it.
+ * next. Drag a row's handle to reorder, swipe it away to remove, tap it to play it (the sheet stays open).
  * The TV follows through [PhoneQueueCoordinator].
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,132 +119,149 @@ internal fun PhoneQueueSheet(
     val toggleIndex = if (showPlayed) played.size else 0
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = toggleIndex)
     LaunchedEffect(queue.position, showPlayed) { listState.animateScrollToItem(toggleIndex) }
+    val tint = rememberQueueTint(queue.current?.uri, MaterialTheme.colorScheme.primary)
 
     ModalBottomSheet(
         onDismissRequest = close,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = tint.top,
+        contentColor = Color.White,
+        dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.7f)) },
     ) {
         RemoteDialogVolumeKeys()
-        Column(Modifier.fillMaxWidth().fillMaxHeight(0.92f)) {
+        // Light text on the artwork's dark gradient, whatever the app theme.
+        MaterialTheme(
+            colorScheme = MaterialTheme.colorScheme.copy(
+                primary = tint.cardFill,
+                onSurface = Color.White,
+                onSurfaceVariant = Color.White.copy(alpha = 0.68f),
+                surfaceContainerHighest = Color.White.copy(alpha = 0.12f),
+            ),
+        ) {
             Column(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                Modifier.fillMaxWidth().fillMaxHeight(0.92f)
+                    .background(tint.gradient()),
             ) {
-                Text("Up next", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
-                Text(
-                    "On ${state.receiver?.name ?: "TV"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                Column(
+                    Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Up next", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
+                    Text(
+                        "On ${state.receiver?.name ?: "TV"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                if (showPlayed) {
-                    items(played, key = { it.id }) { item ->
+                LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    if (showPlayed) {
+                        items(played, key = { it.id }) { item ->
+                            SwipeToRemove(onRemove = { phoneQueue.removeItem(item.id) }) {
+                                QueueRow(
+                                    item = item,
+                                    muted = true,
+                                    dragHandle = null,
+                                    onPlay = { phoneQueue.playItem(item.id) },
+                                )
+                            }
+                        }
+                    }
+                    if (played.isNotEmpty()) {
+                        item(key = "played-toggle") {
+                            TextButton(onClick = {
+                                showPlayed = !showPlayed
+                                prefs.edit { putBoolean(SHOW_PLAYED, showPlayed) }
+                            }) {
+                                Text("Played · ${played.size}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    if (showPlayed) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (showPlayed) "Hide played" else "Show played",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(start = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                    queue.current?.let { current ->
+                        item(key = current.id) {
+                            CurrentCard(current, state, tint, onToggle = { dispatch(RemoteAction.TogglePlayPause) })
+                        }
+                    }
+                    item(key = "list-line") {
+                        ListLine(
+                            queue = queue,
+                            state = state,
+                            looping = looping,
+                            loopSupported = loopSupported,
+                            onLoop = { dispatch(RemoteAction.SetLoop(!looping)) },
+                            onSave = { close(); phoneQueue.requestSave() },
+                            onClear = { phoneQueue.clearQueue() },
+                        )
+                    }
+                    if (order.isEmpty()) {
+                        item(key = "empty") {
+                            Text(
+                                "Nothing else is queued.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp),
+                            )
+                        }
+                    }
+                    items(order, key = { it.id }) { item ->
+                        val dragging = item.id == draggingId
                         SwipeToRemove(onRemove = { phoneQueue.removeItem(item.id) }) {
                             QueueRow(
                                 item = item,
-                                muted = true,
-                                dragHandle = null,
-                                onPlay = { phoneQueue.playItem(item.id); close() },
+                                muted = false,
+                                modifier = Modifier
+                                    .zIndex(if (dragging) 1f else 0f)
+                                    .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
+                                    .background(if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent),
+                                dragHandle = Modifier.pointerInput(item.id) {
+                                    detectDragGestures(
+                                        onDragStart = { draggingId = item.id; dragOffset = 0f },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            dragOffset += amount.y
+                                            val at = order.indexOfFirst { it.id == draggingId }
+                                            if (dragOffset > rowPx / 2 && at in 0 until order.lastIndex) {
+                                                order = order.toMutableList().apply { add(at + 1, removeAt(at)) }
+                                                dragOffset -= rowPx
+                                            } else if (dragOffset < -rowPx / 2 && at > 0) {
+                                                order = order.toMutableList().apply { add(at - 1, removeAt(at)) }
+                                                dragOffset += rowPx
+                                            }
+                                        },
+                                        onDragEnd = {
+                                            val id = draggingId
+                                            val at = order.indexOfFirst { it.id == id }
+                                            draggingId = null
+                                            dragOffset = 0f
+                                            if (id != null && at >= 0) phoneQueue.moveItem(id, queue.position + 1 + at)
+                                        },
+                                        onDragCancel = { draggingId = null; dragOffset = 0f; order = upcoming },
+                                    )
+                                },
+                                onPlay = { phoneQueue.playItem(item.id) },
                             )
                         }
                     }
                 }
-                if (played.isNotEmpty()) {
-                    item(key = "played-toggle") {
-                        TextButton(onClick = {
-                            showPlayed = !showPlayed
-                            prefs.edit { putBoolean(SHOW_PLAYED, showPlayed) }
-                        }) {
-                            Text("Played · ${played.size}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                            Icon(
-                                if (showPlayed) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = if (showPlayed) "Hide played" else "Show played",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(start = 6.dp),
-                            )
-                        }
-                    }
-                }
-                queue.current?.let { current ->
-                    item(key = current.id) {
-                        CurrentCard(current, state, onToggle = { dispatch(RemoteAction.TogglePlayPause) })
-                    }
-                }
-                item(key = "list-line") {
-                    ListLine(
-                        queue = queue,
-                        state = state,
-                        looping = looping,
-                        loopSupported = loopSupported,
-                        onLoop = { dispatch(RemoteAction.SetLoop(!looping)) },
-                        onSave = { close(); phoneQueue.requestSave() },
-                        onClear = { phoneQueue.clearQueue() },
+
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
+                    Text(
+                        "Plays from your phone. Keep it on the same Wi-Fi.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (order.isEmpty()) {
-                    item(key = "empty") {
-                        Text(
-                            "Nothing else is queued.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 12.dp),
-                        )
-                    }
-                }
-                items(order, key = { it.id }) { item ->
-                    val dragging = item.id == draggingId
-                    SwipeToRemove(onRemove = { phoneQueue.removeItem(item.id) }) {
-                        QueueRow(
-                            item = item,
-                            muted = false,
-                            modifier = Modifier
-                                .zIndex(if (dragging) 1f else 0f)
-                                .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
-                                .background(if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent),
-                            dragHandle = Modifier.pointerInput(item.id) {
-                                detectDragGestures(
-                                    onDragStart = { draggingId = item.id; dragOffset = 0f },
-                                    onDrag = { change, amount ->
-                                        change.consume()
-                                        dragOffset += amount.y
-                                        val at = order.indexOfFirst { it.id == draggingId }
-                                        if (dragOffset > rowPx / 2 && at in 0 until order.lastIndex) {
-                                            order = order.toMutableList().apply { add(at + 1, removeAt(at)) }
-                                            dragOffset -= rowPx
-                                        } else if (dragOffset < -rowPx / 2 && at > 0) {
-                                            order = order.toMutableList().apply { add(at - 1, removeAt(at)) }
-                                            dragOffset += rowPx
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        val id = draggingId
-                                        val at = order.indexOfFirst { it.id == id }
-                                        draggingId = null
-                                        dragOffset = 0f
-                                        if (id != null && at >= 0) phoneQueue.moveItem(id, queue.position + 1 + at)
-                                    },
-                                    onDragCancel = { draggingId = null; dragOffset = 0f; order = upcoming },
-                                )
-                            },
-                            onPlay = { phoneQueue.playItem(item.id); close() },
-                        )
-                    }
-                }
-            }
-
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = Color(0xFFFFB74D), modifier = Modifier.size(16.dp))
-                Text(
-                    "Plays from your phone. Keep it on the same Wi-Fi.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
@@ -252,14 +269,14 @@ internal fun PhoneQueueSheet(
 
 /** The current item: artwork doubling as play/pause, and a fill that tracks playback. */
 @Composable
-private fun CurrentCard(current: PhoneQueueItem, state: RemoteUiState, onToggle: () -> Unit) {
+private fun CurrentCard(current: PhoneQueueItem, state: RemoteUiState, tint: QueueTint, onToggle: () -> Unit) {
     val playback = state.playback
     val duration = playback?.durationMs ?: 0L
     val position = playback?.displayedPositionMs ?: 0L
     val progress = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-    val fill = MaterialTheme.colorScheme.primary
-    val base = lerp(fill, Color.Black, 0.28f)
-    val onFill = MaterialTheme.colorScheme.onPrimary
+    val fill = tint.cardFill
+    val base = tint.cardBase
+    val onFill = tint.onCard
     val playing = playback?.displayedPlaying == true
     Box(Modifier.fillMaxWidth().height(80.dp).clip(RoundedCornerShape(16.dp)).background(base)) {
         Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(fill))
@@ -389,12 +406,12 @@ private fun SwipeToRemove(onRemove: () -> Unit, content: @Composable () -> Unit)
         state = dismiss,
         enableDismissFromStartToEnd = false,
         backgroundContent = {
-            Box(
+            if (dismiss.dismissDirection == SwipeToDismissBoxValue.EndToStart) Box(
                 Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(end = 20.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) { Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.onErrorContainer) }
         },
-    ) { Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainerLow)) { content() } }
+    ) { content() }
 }
 
 /** A list row: artwork (square for songs, wide for videos and photos), title, artist, length. */

@@ -4,7 +4,7 @@ import SwiftUI
 /// just the window the receiver has, laid out like a music player's queue. Played items sit
 /// behind a "Played" toggle (collapsed until opened; the choice is kept), then the current item
 /// as a card that fills as it plays, a line naming the list with Repeat, Save and Clear, and
-/// what's next. Hold and drag a row to reorder, swipe it to remove, tap it to play it.
+/// what's next. Hold and drag a row to reorder, swipe it to remove, tap it to play it (the sheet stays open).
 /// The receiver follows through PhoneQueueCoordinator.
 struct PhoneQueueSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
@@ -17,6 +17,9 @@ struct PhoneQueueSheet: View {
     let onTogglePlay: () -> Void
     let onLoop: (Bool) -> Void
     @State private var saving: SavingItems?
+    @ObservedObject private var tints = QueueTintStore.shared
+    private var tint: QueueTint { tints.tint }
+    private static let secondaryText = Color.white.opacity(0.68)
 
     private var played: [PhoneQueueCoordinator.Item] { Array(queue.items.prefix(queue.position)) }
     private var upcoming: [PhoneQueueCoordinator.Item] { Array(queue.items.dropFirst(queue.position + 1)) }
@@ -28,38 +31,50 @@ struct PhoneQueueSheet: View {
                     if showPlayed {
                         ForEach(played) { item in
                             row(item, muted: true)
+                                .listRowBackground(Color.clear)
                                 .swipeActions(edge: .trailing) { removeAction(item) }
                         }
                     }
-                    if !played.isEmpty { playedToggle }
+                    if !played.isEmpty { playedToggle.listRowBackground(Color.clear) }
                     if let current = queue.current {
                         currentCard(current)
                             .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
                             .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                             .id("current")
                     }
-                    listLine.listRowSeparator(.hidden)
+                    listLine.listRowSeparator(.hidden).listRowBackground(Color.clear)
                     if upcoming.isEmpty {
-                        Text("Nothing else is queued.").foregroundColor(Theme.onSurfaceVariant).listRowSeparator(.hidden)
+                        Text("Nothing else is queued.").foregroundColor(Self.secondaryText).listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
                     ForEach(upcoming) { item in
                         row(item, muted: false)
+                            .listRowBackground(Color.clear)
                             .swipeActions(edge: .trailing) { removeAction(item) }
                     }
                     .onMove { offsets, destination in queue.moveUpcoming(from: offsets, to: destination) }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(LinearGradient(colors: [tint.top, tint.middle, tint.bottom], startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+                .task(id: queue.current?.id) {
+                    if let current = queue.current { await tints.load(current.media, url: library.localURL(current.media)) }
+                }
                 .onAppear { scrollToCurrent(reader, animated: false) }
                 .onChange(of: queue.position) { _ in scrollToCurrent(reader, animated: true) }
                 .onChange(of: showPlayed) { _ in scrollToCurrent(reader, animated: true) }
             }
             .safeAreaInset(edge: .bottom) { phoneNote }
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(tint.top, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
                         Text("Up next").font(Theme.font(.headline))
-                        Text("On \(vm.receiverName ?? "TV")").font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                        Text("On \(vm.receiverName ?? "TV")").font(Theme.font(.caption)).foregroundColor(Self.secondaryText)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -76,7 +91,7 @@ struct PhoneQueueSheet: View {
                 Text("Played · \(played.count)").font(Theme.font(.subheadline).weight(.semibold))
                 Image(systemName: showPlayed ? "chevron.up" : "chevron.down").font(.system(size: 13, weight: .semibold))
             }
-            .foregroundColor(Theme.onSurface)
+            .foregroundColor(Color.white)
             .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
@@ -89,11 +104,11 @@ struct PhoneQueueSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "iphone").foregroundColor(.orange).font(.system(size: 13))
             Text("Plays from your phone. Keep it on the same Wi-Fi.")
-                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                .font(Theme.font(.caption)).foregroundColor(Self.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18).padding(.vertical, 10)
-        .background(.bar)
+        .background(tint.bottom)
     }
 
     private func scrollToCurrent(_ reader: ScrollViewProxy, animated: Bool) {
@@ -109,11 +124,12 @@ struct PhoneQueueSheet: View {
         let progress = duration > 0 ? min(1, max(0, position / duration)) : 0
         let playing = playback?.state == "playing"
         return ZStack(alignment: .leading) {
-            Theme.primary.opacity(0.72)
-            GeometryReader { geo in Theme.primary.frame(width: geo.size.width * progress) }
+            tint.cardBase
+            GeometryReader { geo in tint.cardFill.frame(width: geo.size.width * progress) }
             HStack(spacing: 12) {
                 Button(action: onTogglePlay) {
                     PhoneMediaThumbnailView(item: item.media, url: library.localURL(item.media), size: CGSize(width: 320, height: 320))
+                        .id(item.id)
                         .frame(width: 80, height: 80).clipped()
                         .overlay(Color.black.opacity(0.35))
                         .overlay(Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 28)).foregroundColor(.white))
@@ -129,7 +145,7 @@ struct PhoneQueueSheet: View {
                     }
                     .font(Theme.font(.footnote))
                 }
-                .foregroundColor(Theme.onPrimary)
+                .foregroundColor(tint.onCard)
                 .padding(.trailing, 14)
             }
         }
@@ -151,9 +167,9 @@ struct PhoneQueueSheet: View {
     /// "Playing from …", where the list is and the time left, with Repeat, Save and Clear.
     private var listLine: some View {
         let leftText = timeLeft.flatMap { $0 > 0 ? " · \(PhoneFilesModel.clock($0)) left" : nil } ?? ""
-        let from = Text("Playing from ").foregroundColor(Theme.onSurfaceVariant)
-            + Text(queue.source ?? "your phone").bold().foregroundColor(Theme.onSurface)
-        let place = Text("\(queue.position + 1) / \(queue.count)") + Text(leftText).foregroundColor(Theme.onSurfaceVariant)
+        let from = Text("Playing from ").foregroundColor(Self.secondaryText)
+            + Text(queue.source ?? "your phone").bold().foregroundColor(Color.white)
+        let place = Text("\(queue.position + 1) / \(queue.count)") + Text(leftText).foregroundColor(Self.secondaryText)
         return HStack(spacing: 2) {
             VStack(alignment: .leading, spacing: 2) {
                 from.font(Theme.font(.subheadline)).lineLimit(1)
@@ -161,12 +177,12 @@ struct PhoneQueueSheet: View {
             }
             Spacer(minLength: 4)
             iconButton(looping ? "repeat.1.circle.fill" : "repeat.1", label: looping ? "Repeat this, on" : "Repeat this, off",
-                       tint: looping ? Theme.primary : Theme.onSurfaceVariant) { onLoop(!looping) }
+                       tint: looping ? tint.cardFill : Self.secondaryText) { onLoop(!looping) }
                 .disabled(!canLoop)
-            iconButton("bookmark", label: "Save as collection", tint: Theme.onSurfaceVariant) {
+            iconButton("bookmark", label: "Save as collection", tint: Self.secondaryText) {
                 saving = SavingItems(items: queue.items.map(\.media))
             }
-            iconButton("text.badge.xmark", label: "Clear queue", tint: Theme.onSurfaceVariant) { queue.clearUpcoming() }
+            iconButton("text.badge.xmark", label: "Clear queue", tint: Self.secondaryText) { queue.clearUpcoming() }
                 .disabled(upcoming.isEmpty)
         }
     }
@@ -184,7 +200,6 @@ struct PhoneQueueSheet: View {
         let square = item.media.kind == .audio
         return Button {
             queue.play(item.id)
-            dismiss()
         } label: {
             HStack(spacing: 12) {
                 PhoneMediaThumbnailView(item: item.media, url: library.localURL(item.media),
@@ -193,15 +208,15 @@ struct PhoneQueueSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.media.title).font(Theme.font(.body).weight(.medium)).lineLimit(1)
-                        .foregroundColor(muted ? Theme.onSurfaceVariant : Theme.onSurface)
-                    Text(subtitle(item)).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+                        .foregroundColor(muted ? Self.secondaryText : Color.white)
+                    Text(subtitle(item)).font(Theme.font(.footnote)).foregroundColor(Self.secondaryText).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if let duration = item.media.duration, duration > 0 {
-                    Text(PhoneFilesModel.clock(duration)).font(Theme.font(.footnote)).foregroundColor(Theme.onSurfaceVariant)
+                    Text(PhoneFilesModel.clock(duration)).font(Theme.font(.footnote)).foregroundColor(Self.secondaryText)
                 }
                 if !muted {
-                    Image(systemName: "line.3.horizontal").foregroundColor(Theme.onSurfaceVariant).accessibilityHidden(true)
+                    Image(systemName: "line.3.horizontal").foregroundColor(Self.secondaryText).accessibilityHidden(true)
                 }
             }
             .frame(minHeight: 60)

@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import com.playbridge.sender.cast.remote.ui.QueueTint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,7 +49,8 @@ import androidx.compose.ui.unit.dp
  *    tapping opens Play on.
  *
  * A thin progress line runs along the bottom while media is loaded. [accentColor] (the
- * library detail poster) replaces the container colour when given.
+ * library detail poster) replaces the container colour when given. A phone list's [listTint]
+ * colours the bar like Up next's current card: the artwork's light tint fills as it plays.
  */
 @Composable
 fun NowPlayingBar(
@@ -70,9 +72,11 @@ fun NowPlayingBar(
     onPlayPause: (() -> Unit)? = null,
     onUnlinkClick: (() -> Unit)? = null,
     accentColor: Color? = null,
+    listTint: QueueTint? = null,
 ) {
-    val container = accentColor ?: MaterialTheme.colorScheme.surfaceContainerHighest
+    val container = listTint?.cardBase ?: accentColor ?: MaterialTheme.colorScheme.surfaceContainerHighest
     val content = when {
+        listTint != null -> listTint.onCard
         accentColor != null -> if (accentColor.luminance() > 0.5f) Color.Black else Color.White
         else -> MaterialTheme.colorScheme.onSurface
     }
@@ -85,6 +89,9 @@ fun NowPlayingBar(
         shadowElevation = 8.dp,
     ) {
         Box(Modifier.height(64.dp)) {
+            if (listTint != null && isPlaying && progress != null) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(listTint.cardFill))
+            }
             Row(
                 Modifier.fillMaxHeight().padding(start = 8.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -155,19 +162,19 @@ fun NowPlayingBar(
                 if (isPlaying && onPlayPause != null) {
                     IconButton(
                         onClick = onPlayPause,
-                        modifier = Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.size(44.dp).clip(CircleShape).background(listTint?.onCard ?: MaterialTheme.colorScheme.primary),
                     ) {
                         Icon(
                             if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                             contentDescription = if (isPaused) "Play" else "Pause",
-                            tint = MaterialTheme.colorScheme.onPrimary,
+                            tint = listTint?.cardFill ?: MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(22.dp),
                         )
                     }
                 }
             }
             // Perf: position ticks at ~1 Hz, so no tween (it would never settle).
-            if (isPlaying && progress != null) {
+            if (isPlaying && progress != null && listTint == null) {
                 Box(
                     Modifier.align(Alignment.BottomStart).fillMaxWidth(progress.coerceIn(0f, 1f)).height(2.dp)
                         .background(MaterialTheme.colorScheme.primary),

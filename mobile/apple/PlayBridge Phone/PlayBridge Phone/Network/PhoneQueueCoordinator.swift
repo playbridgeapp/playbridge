@@ -30,7 +30,8 @@ import Foundation
 
     /// The list is playing on the receiver.
     @Published private(set) var active = false
-    /// Index of the current item in the phone's list.
+    /// Index of the current item in the phone's list. While a jump is on its way it is the
+    /// item jumped to, so Up next and the colours follow a tap at once.
     @Published private(set) var position = 0
     @Published private(set) var count = 0
     /// The whole list, for Up next.
@@ -52,7 +53,7 @@ import Foundation
     private var latest: PlaylistUiState?
     private var dirty = false
     /// An item being jumped to: window updates wait until the receiver is on it.
-    private var jumpingTo: String?
+    private var jumpingTo: String? { didSet { if jumpingTo != oldValue { publish() } } }
     /// Ids removed from the phone's list that the receiver still holds.
     private var pendingRemoves: [String] = []
     private var awaitRevision: UInt64 = 0
@@ -399,7 +400,7 @@ import Foundation
     }
 
     private func publish() {
-        position = cursor
+        position = jumpingTo.flatMap { id in entries.firstIndex { $0.id == id } } ?? cursor
         count = entries.count
         if items.count != entries.count || items.map(\.id) != entries.map(\.id) { items = entries }
         if entries.isEmpty { active = false }

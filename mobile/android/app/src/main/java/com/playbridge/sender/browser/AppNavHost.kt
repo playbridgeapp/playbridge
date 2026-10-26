@@ -1913,6 +1913,7 @@ private fun NowPlayingBarHost(
     // The phone list's current item, when the TV is playing one of this phone's lists.
     val phoneItem = phoneQueue.current?.takeIf { phoneQueue.active && !externalActive && nativePlaying }
     val linked = linkedPage.active && nativePlaying
+    val listTint = com.playbridge.sender.cast.remote.ui.rememberQueueTint(phoneQueue.current?.takeIf { phoneQueue.active }?.uri, MaterialTheme.colorScheme.primary)
     val upNextCount = when {
         !playing || externalActive -> 0
         phoneItem != null -> phoneQueue.remaining
@@ -1983,6 +1984,7 @@ private fun NowPlayingBarHost(
         },
         onUnlinkClick = if (linked) ({ linkedCoordinator.unlink("unlinked") }) else null,
         accentColor = accentColor,
+        listTint = listTint.takeIf { phoneQueue.active && !externalActive && nativeSelected && wsConnected },
         modifier = modifier,
     )
 }

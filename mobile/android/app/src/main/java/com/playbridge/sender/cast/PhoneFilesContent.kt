@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.LruCache
@@ -727,6 +728,17 @@ private object ThumbnailCache : LruCache<String, Bitmap>(32 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
 }
 
+/** A phone file's thumbnail, from the cache or decoded off the main thread; null when it has none. */
+internal suspend fun loadMediaThumbnail(context: Context, uri: android.net.Uri, size: Size): Bitmap? {
+    val cacheKey = "$uri@${size.width}x${size.height}"
+    ThumbnailCache.get(cacheKey)?.let { return it }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+    return withContext(Dispatchers.IO) {
+        runCatching { context.contentResolver.loadThumbnail(uri, size, null) }.getOrNull()
+            ?.also { ThumbnailCache.put(cacheKey, it) }
+    }
+}
+
 /** Video frame, photo or album art loaded via ContentResolver; icon fallback. */
 @Composable
 internal fun MediaThumbnail(media: PhoneMediaItem, size: Size, modifier: Modifier) =
@@ -738,11 +750,7 @@ internal fun MediaThumbnail(uri: android.net.Uri, kind: MediaKind, size: Size, m
     val context = LocalContext.current
     val cacheKey = "$uri@${size.width}x${size.height}"
     val bitmap by produceState(initialValue = ThumbnailCache.get(cacheKey), cacheKey) {
-        if (value != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@produceState
-        value = withContext(Dispatchers.IO) {
-            runCatching { context.contentResolver.loadThumbnail(uri, size, null) }.getOrNull()
-                ?.also { ThumbnailCache.put(cacheKey, it) }
-        }
+        if (value == null) value = loadMediaThumbnail(context, uri, size)
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val bmp = bitmap

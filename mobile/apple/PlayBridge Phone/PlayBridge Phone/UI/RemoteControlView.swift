@@ -7,6 +7,9 @@ struct RemoteControlView: View {
     @EnvironmentObject private var browserStore: BrowserStore
     @EnvironmentObject private var nav: NavigationViewModel
     @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
+    @ObservedObject private var tints = QueueTintStore.shared
+    /// A phone list colours the Remote from its artwork, like Up next.
+    private var palette: RemotePalette { phoneQueue.tintedItem(on: vm) != nil ? RemotePalette(tints.tint) : .theme }
     @AppStorage(RemoteHapticPreferences.enabledKey) private var hapticsEnabled = true
     @AppStorage(RemoteHapticPreferences.levelKey) private var hapticsLevel: RemoteHapticLevel = .light
     @State private var padPreferences = RemotePadPreferences()
@@ -64,7 +67,10 @@ struct RemoteControlView: View {
     private var anyVolume: Bool { combined.fullControlReady || supportsVolume || externalAbsoluteVolume || !policy.isLegacy && (policy.hasVolume("absolute") || policy.hasVolume("mute_toggle")) }
     private var canAddSubtitle: Bool { policy.isLegacy || !policy.tracks.isDisjoint(with: ["subtitle_url_add", "subtitle_resource_add"]) }
 
-    private var canShowQueue: Bool { policy.isLegacy || policy.state.connected && !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]) }
+    /// A phone list keeps Up next open between items, when the receiver briefly offers no queue.
+    private var canShowQueue: Bool {
+        policy.isLegacy || policy.state.connected && (phoneQueue.active || !policy.queue.isDisjoint(with: ["jump_index", "jump_item"]))
+    }
     private var allowedPresentations: Set<String> {
         policy.allowedPresentations.union(canShowQueue ? ["queue"] : []).union(canUseKeyboard ? ["keyboard"] : [])
             .union(anyVolume ? ["volume"] : []).union(showPlayerMore ? ["settings"] : [])
@@ -191,7 +197,7 @@ struct RemoteControlView: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
-                .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
+                .background(palette.surfaceLow, in: RoundedRectangle(cornerRadius: 20))
                 episodes
                 if vm.isAirPlay && vm.airPlay.preparing { ProgressView("Preparing subtitles…") }
                 padArea
@@ -262,13 +268,13 @@ struct RemoteControlView: View {
                         Image(systemName: "captions.bubble")
                         Text(vm.coordinator.subtitleTracks.first(where: { $0.selected && !["off", "none", "no", "-1"].contains($0.id.lowercased()) }).map { RemoteControlPresentation.trackLabel($0, in: vm.coordinator.subtitleTracks, subtitle: true) } ?? "Subtitles off").lineLimit(1)
                     }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
-                        .background(Theme.surfaceContainerHigh, in: Capsule())
+                        .background(palette.surfaceHigh, in: Capsule())
                 }.buttonStyle(.plain)
             }
             if showPlayerMore {
                 Button { presented = .settings } label: {
                     Image(systemName: "ellipsis").frame(width: 32, height: 32)
-                        .background(Theme.surfaceContainerHigh, in: Capsule())
+                        .background(palette.surfaceHigh, in: Capsule())
                 }.accessibilityLabel("More player controls")
             }
         }
@@ -288,7 +294,7 @@ struct RemoteControlView: View {
                 Text(tracks.first(where: \.selected).map { RemoteControlPresentation.trackLabel($0, in: tracks) } ?? label).lineLimit(1)
                 Spacer(minLength: 0)
             }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(height: 32)
-                .background(Theme.surfaceContainerHigh, in: Capsule())
+                .background(palette.surfaceHigh, in: Capsule())
         }.disabled(tracks.isEmpty)
     }
 
@@ -326,7 +332,7 @@ struct RemoteControlView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
-            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
+            .background(palette.surfaceLow, in: RoundedRectangle(cornerRadius: 20))
         }
     }
 
@@ -355,13 +361,13 @@ struct RemoteControlView: View {
                                         HStack {
                                             Text("\(index + 1)").font(Theme.font(.caption2).bold())
                                             Spacer()
-                                            if current { Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary) }
+                                            if current { Image(systemName: "play.circle.fill").foregroundStyle(palette.accent) }
                                         }
                                         Text(item.media.title).font(Theme.font(.caption)).lineLimit(2)
                                         Spacer(minLength: 0)
                                     }
                                     .frame(width: 136, height: 70, alignment: .leading).padding(10)
-                                    .background(current ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                                    .background(current ? palette.selected : palette.surface, in: RoundedRectangle(cornerRadius: 16))
                                 }
                                 .buttonStyle(.plain).id(index)
                             }
@@ -374,7 +380,7 @@ struct RemoteControlView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
-            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
+            .background(palette.surfaceLow, in: RoundedRectangle(cornerRadius: 20))
         }
     }
 
@@ -389,16 +395,16 @@ struct RemoteControlView: View {
             HStack {
                 Text(RemoteControlPresentation.episodeBadge(item)).font(Theme.font(.caption2).bold())
                 Spacer()
-                if current { Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary) }
+                if current { Image(systemName: "play.circle.fill").foregroundStyle(palette.accent) }
             }
             Text(RemoteControlPresentation.episodeTitle(item)).font(Theme.font(.caption)).lineLimit(2)
             Spacer(minLength: 0)
             if let progress = RemoteControlPresentation.progress(item, playlist: playlist, playback: playback, live: isLive) {
-                ProgressView(value: progress).tint(Theme.primary)
+                ProgressView(value: progress).tint(palette.accent)
                     .accessibilityLabel("Playback progress").accessibilityValue("\(Int(progress * 100)) percent")
             }
         }.frame(width: 136, height: 70, alignment: .leading).padding(10)
-            .background(current ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+            .background(current ? palette.selected : palette.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var queueSheet: some View {
@@ -439,7 +445,7 @@ struct RemoteControlView: View {
                 case .swipe:
                     RemoteNavigationPad(allowedKeys: Set(RemoteNavigationKey.names.filter(keyAllowed)),
                         begin: vm.beginNavigationGesture, end: vm.endNavigationGesture,
-                        cancel: vm.cancelNavigation, send: { vm.routeRemoteKey($0, gesture: $1) })
+                        cancel: vm.cancelNavigation, send: { vm.routeRemoteKey($0, gesture: $1) }, fill: palette.surfaceLow)
                         .id(combined.fullControl.ticket?.connection ?? vm.ws.capabilitySessionID)
                 case .pointer: touchpad
                 case .none: EmptyView()
@@ -463,7 +469,7 @@ struct RemoteControlView: View {
                     HStack(spacing: 4) {
                         padSurfaceButton("Pad", icon: "gamecontroller", pointer: false)
                         padSurfaceButton("Pointer", icon: "cursorarrow", pointer: true)
-                    }.padding(4).background(Theme.surfaceContainerHigh, in: Capsule())
+                    }.padding(4).background(palette.surfaceHigh, in: Capsule())
                         .padding(.trailing, 8)
                         .padding(.bottom, padSurface == .pointer && isImage && context == "player" ? 80 : 8)
                 }
@@ -477,8 +483,8 @@ struct RemoteControlView: View {
         return Button { padPreferences.setPointer(pointer, in: context) } label: {
             Label(title, systemImage: icon).font(Theme.font(.caption))
                 .padding(.horizontal, 10).frame(minHeight: 44)
-                .foregroundStyle(selected ? Theme.onPrimary : Theme.onSurfaceVariant)
-                .background(selected ? Theme.primary : .clear, in: Capsule())
+                .foregroundStyle(selected ? palette.onAccent : Theme.onSurfaceVariant)
+                .background(selected ? palette.accent : .clear, in: Capsule())
         }.buttonStyle(.plain).accessibilityLabel(pointer ? "Show pointer controls" : "Show navigation pad")
             .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -501,7 +507,8 @@ struct RemoteControlView: View {
             isBuffering: playback?.state == "buffering",
             bufferedMs: browser ? nil : playback?.bufferedMs.map(Double.init),
             chapters: browser ? [] : timelineMarks?.chapters ?? [],
-            segments: browser ? [] : timelineMarks?.segments ?? []
+            segments: browser ? [] : timelineMarks?.segments ?? [],
+            palette: palette
         )
     }
 
@@ -533,15 +540,15 @@ struct RemoteControlView: View {
                         Image(systemName: volumePill.icon)
                         if !volumePill.text.isEmpty { Text(volumePill.text).monospacedDigit() }
                     }.font(Theme.font(size: 14, weight: .semibold)).padding(.horizontal, 12).frame(minHeight: 44)
-                        .background(Theme.primary.opacity(0.14), in: Capsule())
-                }.buttonStyle(.plain).foregroundStyle(Theme.primary).frame(maxWidth: .infinity)
+                        .background(palette.accent.opacity(0.14), in: Capsule())
+                }.buttonStyle(.plain).foregroundStyle(palette.accent).frame(maxWidth: .infinity)
                     .accessibilityLabel(volumeTitle)
                     .accessibilityValue(volumePill.muted ? "Muted" : volumePill.percent.map { "\($0) of 100" } ?? "Level unavailable")
                     .accessibilityHint("Double-tap to adjust")
                     .accessibilityIdentifier("remote.volumePill")
             }
             if canStop { action("stop.fill", "Stop", tint: Self.stopRed) { playerCommand("stop") } }
-        }.padding(.vertical, 4).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+        }.padding(.vertical, 4).background(palette.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     @ViewBuilder private var keyboardButton: some View {
@@ -578,7 +585,7 @@ struct RemoteControlView: View {
                 vm.browserControl(maximized ? "maximize_video" : "restore_video")
             } }
             if policy.isLegacy || !policy.browser.isDisjoint(with: ["cycle_source", "unmute", "manage_user_scripts", "manage_user_agent"]) { action("ellipsis", "More") { presented = .more } }
-        }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+        }.padding(.vertical, 8).frame(minHeight: 64).background(palette.surface, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var touchpad: some View {
@@ -590,7 +597,7 @@ struct RemoteControlView: View {
                 vm.endPointerGesture()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 24))
+            .background(palette.surfaceLow, in: RoundedRectangle(cornerRadius: 24))
             VStack(spacing: 4) {
                 Image(systemName: "hand.draw").font(Theme.font(.title2)).opacity(0.15)
                 Text(policy.isLegacy ? (isImage && context == "player"
@@ -623,7 +630,7 @@ struct RemoteControlView: View {
 
     private var dpad: some View {
         ZStack {
-            Circle().fill(Theme.surfaceContainer).frame(width: 236, height: 236)
+            Circle().fill(palette.surface).frame(width: 236, height: 236)
             Circle().stroke(Theme.outlineVariant, lineWidth: 1).frame(width: 236, height: 236)
             VStack(spacing: 4) {
                 pad("chevron.up", "Up", "dpad_up")
@@ -632,8 +639,8 @@ struct RemoteControlView: View {
                     Button { vm.remote("dpad_center") } label: {
                         Text("OK").font(Theme.font(size: 16, weight: .bold))
                             .frame(width: 72, height: 72)
-                            .foregroundStyle(Theme.onPrimary)
-                            .background(Theme.primary, in: Circle())
+                            .foregroundStyle(palette.onAccent)
+                            .background(palette.accent, in: Circle())
                     }.accessibilityLabel("Select").disabled(!keyAllowed("dpad_center"))
                         .opacity(keyAllowed("dpad_center") ? 1 : 0).accessibilityHidden(!keyAllowed("dpad_center"))
                     pad("chevron.right", "Right", "dpad_right")
@@ -864,7 +871,7 @@ struct RemoteControlView: View {
         HStack {
             Text(label).fontWeight(selected ? .semibold : .regular)
             Spacer()
-            if selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
+            if selected { Image(systemName: "checkmark").foregroundStyle(palette.accent) }
         }
     }
 
@@ -874,7 +881,7 @@ struct RemoteControlView: View {
                 ForEach(options, id: \.1) { option in
                     Button(option.0) { onSelect(option.1) }
                         .buttonStyle(.borderedProminent)
-                        .tint(option.1 == selected ? Theme.primaryDim : Theme.surfaceContainerHigh)
+                        .tint(option.1 == selected ? Theme.primaryDim : palette.surfaceHigh)
                 }
             }
         }
