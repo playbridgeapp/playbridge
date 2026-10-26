@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,6 +59,10 @@ internal fun RemoteQueueRow(
     collapsed: Boolean,
     dispatch: (RemoteAction) -> Unit,
 ) {
+    if (phoneListPlaying(state)) {
+        PhoneQueueRow(collapsed, dispatch)
+        return
+    }
     val items = state.queue?.items.orEmpty()
     if (items.size <= 1) return
 
@@ -224,6 +230,91 @@ private fun QueueEpisodes(
                         } else {
                             Spacer(Modifier.height(3.dp))
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The inline Up next for a phone list: the whole list the phone holds, not the TV's window. */
+@Composable
+private fun PhoneQueueRow(
+    collapsed: Boolean,
+    dispatch: (RemoteAction) -> Unit,
+    phoneQueue: com.playbridge.sender.cast.PhoneQueueCoordinator = org.koin.compose.koinInject(),
+) {
+    val queue by phoneQueue.state.collectAsStateWithLifecycle()
+    if (queue.remaining <= 0) return
+    val openAll = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Queue)) }
+    if (collapsed) {
+        TextButton(
+            enabled = LocalRemoteControlsEnabled.current,
+            onClick = openAll,
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("remote.upNext.compact"),
+        ) { Text("Up next (${queue.remaining}) ›", maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        return
+    }
+    // The current item and what comes next; played items are left out (Previous still steps back).
+    val shown = remember(queue.items, queue.position) { queue.items.drop(queue.position) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(queue.position) { listState.animateScrollToItem(0) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Up Next", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(
+                enabled = LocalRemoteControlsEnabled.current,
+                onClick = openAll,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) { Text("All (${queue.count}) ›", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold) }
+        }
+        LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 2.dp),
+        ) {
+            itemsIndexed(shown, key = { _, item -> item.id }) { offset, item ->
+                val index = queue.position + offset
+                val isCurrent = offset == 0
+                Surface(
+                    modifier = Modifier
+                        .width(140.dp)
+                        .height(100.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(
+                            width = if (isCurrent) 1.5.dp else 0.dp,
+                            color = if (isCurrent) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        .clickable(enabled = LocalRemoteControlsEnabled.current && !isCurrent) { phoneQueue.playItem(item.id) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                ) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (isCurrent) Text("▶", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        }
+                        Text(
+                            item.title,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(3.dp))
                     }
                 }
             }

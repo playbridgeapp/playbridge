@@ -85,6 +85,8 @@ class PhoneQueueCoordinator(
     private var dirty = false
     /** Skip TV reports older than our last confirmed change. */
     private var awaitRevision = -1L
+    /** An item being jumped to: window updates wait until the TV is on it. */
+    private var jumpingTo: String? = null
     /** Ids removed from the phone's list that the TV still holds. */
     private val pendingRemoves = LinkedHashSet<String>()
     private var itemsChanged = true
@@ -170,6 +172,26 @@ class PhoneQueueCoordinator(
             val pid = playbackId ?: return false
             Jump(entry, latest?.items?.any { it.itemId == entry.id } == true, pid, generation)
         }
+        // Until the TV is on the new item, a window update would see it as far ahead of the old
+        // current item and remove it again.
+        // It ends when the TV reports the new item (in reconcile), or after a few seconds.
+        mutex.withLock { jumpingTo = entry.id }
+        var jumped = false
+        try {
+            jumped = jumpInto(entry, onTv, pid, session)
+        } finally {
+            if (!jumped) mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
+            wake.trySend(Unit)
+        }
+        if (jumped) scope.launch {
+            delay(JUMP_SETTLE_MS)
+            mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
+            wake.trySend(Unit)
+        }
+        return jumped
+    }
+
+    private suspend fun jumpInto(entry: Entry, onTv: Boolean, pid: String, session: Long): Boolean {
         if (!onTv) {
             val payload = packager.packageItems(listOf(entry.item), listOf(entry.id))?.firstOrNull() ?: return false
             val requestId = UUID.randomUUID().toString()
@@ -184,6 +206,18 @@ class PhoneQueueCoordinator(
         }
         return command("playlist_jump", pid) { put("itemId", entry.id) }?.ok == true
     }
+
+    // Up next and the Remote call these from UI that may close straight away (the sheet
+    // dismisses on tap), so the work runs in this coordinator's scope, not the caller's.
+    fun playItem(id: String) {
+        scope.launch {
+            val index = mutex.withLock { entries.indexOfFirst { it.id == id } }
+            if (index >= 0 && !jumpTo(index)) Log.w(TAG, "Couldn't play queue item $index")
+        }
+    }
+    fun removeItem(id: String) { scope.launch { remove(id) } }
+    fun moveItem(id: String, toIndex: Int) { scope.launch { move(id, toIndex) } }
+    fun clearQueue() { scope.launch { clearUpcoming() } }
 
     /** Removes entry [id] (not the current one) from the list, and from the TV if it holds it. */
     suspend fun remove(id: String) {
@@ -307,6 +341,8 @@ class PhoneQueueCoordinator(
             val pid = playbackId ?: return
             if (status.queueRevision < awaitRevision) return
             val current = status.currentItemId ?: return
+            // A jump is under way; update once the TV reports it is on the new item.
+            jumpingTo?.let { target -> if (current != target) return else jumpingTo = null }
             val tv = status.items.mapNotNull { it.itemId }
             val at = entries.indexOfFirst { it.id == current }
             if (at < 0) return // Something another controller added is playing; wait for ours.
@@ -407,6 +443,7 @@ class PhoneQueueCoordinator(
         dirty = false
         awaitRevision = -1L
         pendingRemoves.clear()
+        jumpingTo = null
         itemsChanged = true
         generation++
         mutableState.value = PhoneQueueState()
@@ -429,6 +466,8 @@ class PhoneQueueCoordinator(
         const val RETRY_MS = 2_000L
         const val CONFIRM_MS = 8_000L
         const val ATTACH_TIMEOUT_MS = 8_000L
+        /** How long window updates wait for the TV to report a jump. */
+        const val JUMP_SETTLE_MS = 5_000L
         /** PlayBridge TVs reject larger `queue_add` messages. */
         const val APPEND_LIMIT = 50
     }

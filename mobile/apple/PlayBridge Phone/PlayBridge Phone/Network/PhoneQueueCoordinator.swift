@@ -49,6 +49,8 @@ import Foundation
     private var playbackId: String?
     private var latest: PlaylistUiState?
     private var dirty = false
+    /// An item being jumped to: window updates wait until the receiver is on it.
+    private var jumpingTo: String?
     /// Ids removed from the phone's list that the receiver still holds.
     private var pendingRemoves: [String] = []
     private var awaitRevision: UInt64 = 0
@@ -100,6 +102,22 @@ import Foundation
         guard active, entries.indices.contains(index), let vm, let library, let pid = playbackId else { return false }
         let entry = entries[index]
         let session = generation
+        // Until the receiver is on the new item, a window update would see it as far ahead of
+        // the old current item and remove it again.
+        // It ends when the receiver reports the new item (in update), or after a few seconds.
+        jumpingTo = entry.id
+        var jumped = false
+        defer {
+            if !jumped, jumpingTo == entry.id { jumpingTo = nil }
+            if jumped {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    if self?.jumpingTo == entry.id { self?.jumpingTo = nil }
+                    self?.scheduleUpdate()
+                }
+            }
+            scheduleUpdate()
+        }
         if latest?.items.contains(where: { $0.itemId == entry.id }) != true {
             guard let url = try? await library.resolve(entry.media),
                   let media = await LocalFileServer.shared.add(fileURL: url) else { return false }
@@ -111,9 +129,10 @@ import Foundation
             served[entry.id] = media
         }
         let requestID = UUID().uuidString
-        return await vm.sendConfirmedQueueCommand(
+        jumped = await vm.sendConfirmedQueueCommand(
             WireProtocol.playlistJumpCommand(index: 0, itemId: entry.id, playbackId: pid, useQueueV1: true, requestID: requestID),
             requestID: requestID)?.ok == true
+        return jumped
     }
 
     /// Removes entry `id` (not the current one) from the list, and from the receiver if it holds it.
@@ -256,8 +275,9 @@ import Foundation
             if pendingUpdate { pendingUpdate = false; scheduleUpdate() }
         }
         guard let status = latest, let pid = playbackId, status.queueRevision >= awaitRevision,
-              let current = status.currentItemId,
+              let current = status.currentItemId, jumpingTo == nil || jumpingTo == current,
               let at = entries.firstIndex(where: { $0.id == current }) else { return }
+        jumpingTo = nil
         let tv = status.items.compactMap(\.itemId)
         cursor = at
         if !dirty {
@@ -345,6 +365,7 @@ import Foundation
         playbackId = nil
         latest = nil
         dirty = false
+        jumpingTo = nil
         pendingRemoves = []
         awaitRevision = 0
         generation += 1

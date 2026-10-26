@@ -293,7 +293,9 @@ struct RemoteControlView: View {
     }
 
     @ViewBuilder private var episodes: some View {
-        if let playlist = vm.coordinator.playlist, playlist.items.count > 1, canShowQueue {
+        if phoneListPlaying {
+            phoneListRow
+        } else if let playlist = vm.coordinator.playlist, playlist.items.count > 1, canShowQueue {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Up Next").font(Theme.font(.subheadline).bold())
@@ -320,6 +322,54 @@ struct RemoteControlView: View {
                     .frame(height: 90)
                     .onAppear { reader.scrollTo(max(0, playlist.currentIndex - 1), anchor: .leading) }
                     .onChange(of: playlist.currentIndex) { index in withAnimation { reader.scrollTo(max(0, index - 1), anchor: .leading) } }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    /// The inline Up next for a phone list: from the list this iPhone holds, not the receiver's window.
+    /// Shows the current item and what comes next; played items are left out (Previous still steps back).
+    @ViewBuilder private var phoneListRow: some View {
+        if phoneQueue.remaining > 0 {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Up Next").font(Theme.font(.subheadline).bold())
+                    Spacer()
+                    Button { presented = .queue } label: {
+                        HStack(spacing: 4) {
+                            Text("All (\(phoneQueue.count))")
+                            Image(systemName: "chevron.right")
+                        }.font(Theme.font(.caption))
+                    }.accessibilityLabel("Show all \(phoneQueue.count) items")
+                }
+                ScrollViewReader { reader in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 10) {
+                            ForEach(Array(phoneQueue.items.enumerated().dropFirst(phoneQueue.position)), id: \.element.id) { index, item in
+                                let current = index == phoneQueue.position
+                                Button { if !current { phoneQueue.play(item.id) } } label: {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack {
+                                            Text("\(index + 1)").font(Theme.font(.caption2).bold())
+                                            Spacer()
+                                            if current { Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary) }
+                                        }
+                                        Text(item.media.title).font(Theme.font(.caption)).lineLimit(2)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(width: 136, height: 70, alignment: .leading).padding(10)
+                                    .background(current ? Theme.secondaryContainer : Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                                }
+                                .buttonStyle(.plain).id(index)
+                            }
+                        }
+                    }
+                    .frame(height: 90)
+                    .onAppear { reader.scrollTo(phoneQueue.position, anchor: .leading) }
+                    .onChange(of: phoneQueue.position) { index in withAnimation { reader.scrollTo(index, anchor: .leading) } }
                 }
             }
             .fixedSize(horizontal: false, vertical: true)

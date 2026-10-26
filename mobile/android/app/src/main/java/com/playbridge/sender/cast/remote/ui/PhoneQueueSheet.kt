@@ -38,7 +38,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +61,6 @@ import com.playbridge.sender.cast.remote.PlayerSetting
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
 import com.playbridge.sender.cast.remote.RemoteUiState
-import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -81,7 +79,6 @@ internal fun PhoneQueueSheet(
     phoneQueue: PhoneQueueCoordinator = koinInject(),
 ) {
     val queue by phoneQueue.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
     val close = { dispatch(RemoteAction.CloseSheet) }
     val upcoming = remember(queue.items, queue.position) { queue.items.drop(queue.position + 1) }
     // Local order while dragging; the phone list takes the move on release.
@@ -177,17 +174,16 @@ internal fun PhoneQueueSheet(
                                         val at = order.indexOfFirst { it.id == id }
                                         draggingId = null
                                         dragOffset = 0f
-                                        if (id != null && at >= 0) scope.launch { phoneQueue.move(id, queue.position + 1 + at) }
+                                        if (id != null && at >= 0) phoneQueue.moveItem(id, queue.position + 1 + at)
                                     },
                                     onDragCancel = { draggingId = null; dragOffset = 0f; order = upcoming },
                                 )
                             },
                             onPlay = {
-                                val at = queue.items.indexOfFirst { it.id == item.id }
-                                if (at >= 0) scope.launch { phoneQueue.jumpTo(at) }
+                                phoneQueue.playItem(item.id)
                                 close()
                             },
-                            onRemove = { scope.launch { phoneQueue.remove(item.id) } },
+                            onRemove = { phoneQueue.removeItem(item.id) },
                         )
                     }
                 }
@@ -206,7 +202,7 @@ internal fun PhoneQueueSheet(
             }
             if (order.isNotEmpty()) {
                 TextButton(
-                    onClick = { scope.launch { phoneQueue.clearUpcoming() } },
+                    onClick = { phoneQueue.clearQueue() },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Clear queue", color = MaterialTheme.colorScheme.error) }
             }
