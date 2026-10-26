@@ -213,6 +213,22 @@ fun AppNavHost(
     val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
     val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
+    val phoneQueueCoordinator: com.playbridge.sender.cast.PhoneQueueCoordinator = koinInject()
+    /** The mini player's Up next pill opens the Remote with Up next showing. */
+    var openRemoteQueue by remember { mutableStateOf(false) }
+    LaunchedEffect(phoneQueueCoordinator) {
+        phoneQueueCoordinator.saveRequests.collect { items ->
+            addToCollectionDrafts = items.map { item ->
+                com.playbridge.sender.data.collection.CollectionItemDraft(
+                    title = item.title,
+                    url = item.uri,
+                    kind = com.playbridge.sender.data.collection.CollectionItemKind.LOCAL,
+                    mimeType = item.mime,
+                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.PHONE_FILE,
+                )
+            }
+        }
+    }
     val linkedPageCastState by linkedPageCastCoordinator.uiState.collectAsStateWithLifecycle()
 
     // 2. Collect Live Flows / Collected states locally.
@@ -1023,6 +1039,8 @@ fun AppNavHost(
                 Screen.Remote -> {
                     BackHandler(onBack = onRemoteBack)
                     com.playbridge.sender.cast.remote.RemoteRoute(
+                        openQueue = openRemoteQueue,
+                        onQueueOpened = { openRemoteQueue = false },
                         subtitleSourceKey = Triple(remoteCastSourceTabId, remoteCastTitle, VideoDetector.processingVersion),
                         detectedSubtitles = { title ->
                             if (remoteCastSourceTabId != null && remoteCastTitle == title) {
@@ -1744,6 +1762,10 @@ fun AppNavHost(
                     onOpenRemote = {
                         onScreenChange(Screen.Remote)
                     },
+                    onOpenUpNext = {
+                        openRemoteQueue = true
+                        onScreenChange(Screen.Remote)
+                    },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         // Clear the system navigation bar, plus the Library's bottom
@@ -1838,8 +1860,14 @@ private fun NowPlayingBarHost(
     accentColor: androidx.compose.ui.graphics.Color?,
     showDevicePicker: () -> Unit,
     onOpenRemote: () -> Unit,
+    onOpenUpNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
+    val linkedCoordinator = koinInject<LinkedPageCastCoordinator>()
+    val linkedPage by linkedCoordinator.uiState.collectAsStateWithLifecycle()
+    val phoneQueue by koinInject<com.playbridge.sender.cast.PhoneQueueCoordinator>().state.collectAsStateWithLifecycle()
+    val tvPlaylist by connectionCoordinator.tvPlaylistState.collectAsStateWithLifecycle()
     val selectedRemoteDevice by connectionViewModel.selectedRemoteDevice.collectAsStateWithLifecycle()
     val remoteTVRows by connectionViewModel.remoteTVDirectory.rows.collectAsStateWithLifecycle()
     val remoteTV = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey && castRoute is CastSessionManager.Route.NativeTv }
@@ -1882,13 +1910,25 @@ private fun NowPlayingBarHost(
         else -> Icons.Default.Smartphone
     }
 
+    // The phone list's current item, when the TV is playing one of this phone's lists.
+    val phoneItem = phoneQueue.current?.takeIf { phoneQueue.active && !externalActive && nativePlaying }
+    val linked = linkedPage.active && nativePlaying
+    val upNextCount = when {
+        !playing || externalActive -> 0
+        phoneItem != null -> phoneQueue.remaining
+        else -> tvPlaylist?.let { list ->
+            val at = list.items.indexOfFirst { if (list.currentItemId != null) it.itemId == list.currentItemId else it.index == list.currentIndex }
+            if (at >= 0) list.items.size - at - 1 else (list.totalCount - list.currentIndex - 1)
+        }?.coerceAtLeast(0) ?: 0
+    }
+
     val primaryText: String
     val secondaryText: String?
     when {
         playing -> {
-            primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
-            secondaryText = "on ${resolvedDeviceName ?: "TV"}" +
-                protocolName?.let { " · $it" }.orEmpty()
+            primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title ?: phoneItem?.title) ?: "Now playing"
+            val on = "on ${resolvedDeviceName ?: "TV"}"
+            secondaryText = if (linked) "Controlled by ${linkedPage.controllerName ?: "a website"} · $on" else on
         }
         remoteTV?.paired == true && !wsConnected -> {
             primaryText = remoteTV.device.name
@@ -1899,7 +1939,7 @@ private fun NowPlayingBarHost(
             secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
         }
         else -> {
-            primaryText = "This Device"
+            primaryText = "This phone"
             secondaryText = "Tap to cast to a device"
         }
     }
@@ -1924,12 +1964,24 @@ private fun NowPlayingBarHost(
         isPlaying = playing,
         isPaused = paused,
         progress = if (playing) playbackProgress else null,
-        showTvIcon = playing,
-        onTvIconClick = {
-            showDevicePicker()
+        ready = !playing && (externalActive || nativeSelected && wsConnected),
+        thumbnail = phoneItem?.let { item ->
+            {
+                com.playbridge.sender.cast.MediaThumbnail(
+                    item.uri.toUri(), item.kind, android.util.Size(256, 144), Modifier.fillMaxSize(),
+                )
+            }
         },
-        // Poster-matched accent on the library detail screen (the old FAB's
-        // dynamic styling); FAB-like primaryContainer elsewhere.
+        upNextCount = upNextCount,
+        onUpNext = onOpenUpNext,
+        onPlayPause = {
+            if (externalActive) {
+                if (paused) connectionViewModel.externalPlay() else connectionViewModel.externalPause()
+            } else {
+                scope.launch { connectionViewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.TogglePlayPause) }
+            }
+        },
+        onUnlinkClick = if (linked) ({ linkedCoordinator.unlink("unlinked") }) else null,
         accentColor = accentColor,
         modifier = modifier,
     )

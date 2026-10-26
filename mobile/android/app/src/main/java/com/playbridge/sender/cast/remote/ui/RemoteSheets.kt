@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast.remote.ui
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
 import com.playbridge.sender.cast.remote.RemoteCapabilities
 import com.playbridge.sender.cast.remote.PlayerSetting
 import com.playbridge.sender.cast.remote.Support
@@ -551,8 +553,21 @@ internal fun RemoteSheets(
                 },
                 onAdjustOffset = { dispatch(RemoteAction.AdjustSubtitleOffset(it)) },
             )
-            RemoteSheet.Queue -> if (layout.showQueue) RemoteQueueSheet(state, dispatch)
+            RemoteSheet.Queue -> when {
+                // A phone list playing here: Up next shows the whole list the phone holds.
+                phoneListPlaying(state) -> PhoneQueueSheet(state, dispatch)
+                layout.showQueue -> RemoteQueueSheet(state, dispatch)
+            }
             else -> Unit
         }
     }
+}
+
+/** The TV is playing a phone list from this phone (its current item is one of the list's). */
+@Composable
+internal fun phoneListPlaying(state: RemoteUiState): Boolean {
+    val phoneQueue = org.koin.compose.koinInject<com.playbridge.sender.cast.PhoneQueueCoordinator>()
+    val queue by phoneQueue.state.collectAsStateWithLifecycle()
+    val current = state.queue?.currentItemId
+    return queue.active && current != null && queue.items.any { it.id == current }
 }

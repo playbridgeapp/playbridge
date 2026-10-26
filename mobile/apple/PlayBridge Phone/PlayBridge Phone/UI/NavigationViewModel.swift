@@ -31,6 +31,8 @@ final class NavigationViewModel: ObservableObject {
     @Published var settingsOrigin: AppScreen? = nil
     @Published var playOnRequest: PlayOnRequest?
     @Published var pendingAtvPairing = false
+    /// The mini player's Up next pill: the Remote opens with Up next showing.
+    @Published var openRemoteQueue = false
     var playOnSuppressCount = 0
     /// Banner dismissals last for this process, including after the sheet closes and reopens.
     var playOnDismissedBanners = Set<String>()

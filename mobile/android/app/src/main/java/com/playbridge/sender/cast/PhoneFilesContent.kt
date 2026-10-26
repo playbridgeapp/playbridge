@@ -729,13 +729,18 @@ private object ThumbnailCache : LruCache<String, Bitmap>(32 * 1024 * 1024) {
 
 /** Video frame, photo or album art loaded via ContentResolver; icon fallback. */
 @Composable
-internal fun MediaThumbnail(media: PhoneMediaItem, size: Size, modifier: Modifier) {
+internal fun MediaThumbnail(media: PhoneMediaItem, size: Size, modifier: Modifier) =
+    MediaThumbnail(media.uri, media.mediaKind, size, modifier)
+
+/** Thumbnail of a phone file by its content URI (Up next, the mini player). */
+@Composable
+internal fun MediaThumbnail(uri: android.net.Uri, kind: MediaKind, size: Size, modifier: Modifier) {
     val context = LocalContext.current
-    val cacheKey = "${media.uri}@${size.width}x${size.height}"
+    val cacheKey = "$uri@${size.width}x${size.height}"
     val bitmap by produceState(initialValue = ThumbnailCache.get(cacheKey), cacheKey) {
         if (value != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@produceState
         value = withContext(Dispatchers.IO) {
-            runCatching { context.contentResolver.loadThumbnail(media.uri, size, null) }.getOrNull()
+            runCatching { context.contentResolver.loadThumbnail(uri, size, null) }.getOrNull()
                 ?.also { ThumbnailCache.put(cacheKey, it) }
         }
     }
@@ -745,7 +750,7 @@ internal fun MediaThumbnail(media: PhoneMediaItem, size: Size, modifier: Modifie
             Image(bitmap = bmp.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         } else {
             Icon(
-                imageVector = when (media.mediaKind) {
+                imageVector = when (kind) {
                     MediaKind.AUDIO -> Icons.Default.Audiotrack
                     MediaKind.IMAGE -> Icons.Default.Photo
                     MediaKind.VIDEO -> Icons.Default.Movie

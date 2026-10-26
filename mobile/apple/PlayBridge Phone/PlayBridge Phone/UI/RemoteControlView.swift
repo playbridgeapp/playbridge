@@ -5,6 +5,8 @@ struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var atv: AtvRemoteCoordinator
     @EnvironmentObject private var browserStore: BrowserStore
+    @EnvironmentObject private var nav: NavigationViewModel
+    @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
     @AppStorage(RemoteHapticPreferences.enabledKey) private var hapticsEnabled = true
     @AppStorage(RemoteHapticPreferences.levelKey) private var hapticsLevel: RemoteHapticLevel = .light
     @State private var padPreferences = RemotePadPreferences()
@@ -125,7 +127,15 @@ struct RemoteControlView: View {
                 case .scripts: scripts
                 case .agents: agents
                 case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
-                case .queue: queueSheet
+                case .queue:
+                    if phoneListPlaying {
+                        PhoneQueueSheet(looping: policy.isLegacy ? looping : vm.coordinator.receiverLoop ?? looping,
+                                        canLoop: canLoop) { value in
+                            looping = value; playerCommand(value ? "loop_on" : "loop_off")
+                        }
+                    } else {
+                        queueSheet
+                    }
                 case .keyboard: keyboardSheet
                 }
             }
@@ -147,7 +157,11 @@ struct RemoteControlView: View {
             if !allowed.contains("scripts") { importingScript = false }
             if !allowed.contains("agents") { addingAgent = false }
         }
-        .onAppear { RemoteHaptics.shared.prepare() }
+        .onAppear {
+            RemoteHaptics.shared.prepare()
+            openRequestedQueue()
+        }
+        .onChange(of: nav.openRemoteQueue) { _ in openRequestedQueue() }
         .onDisappear { vm.cancelNavigation() }
         .onChange(of: playback?.title) { _ in looping = false }
         .onChange(of: vm.destinationID) { _ in
@@ -834,6 +848,19 @@ struct RemoteControlView: View {
             Image(systemName: icon).font(Theme.font(size: 20))
                 .frame(maxWidth: .infinity).frame(minHeight: 48).contentShape(Rectangle()).foregroundStyle(tint)
         }.buttonStyle(.plain).accessibilityLabel(label)
+    }
+
+    /// The receiver is playing a phone list from this iPhone (its current item is one of the list's).
+    private var phoneListPlaying: Bool {
+        guard phoneQueue.active, let current = vm.coordinator.playlist?.currentItemId else { return false }
+        return phoneQueue.items.contains { $0.id == current }
+    }
+
+    /// The mini player's Up next pill asked for Up next.
+    private func openRequestedQueue() {
+        guard nav.openRemoteQueue else { return }
+        nav.openRemoteQueue = false
+        if phoneListPlaying || canShowQueue { presented = .queue }
     }
 
     private func playerCommand(_ command: String) {

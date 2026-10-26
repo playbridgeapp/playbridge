@@ -20,17 +20,24 @@ import Foundation
     enum Mode { case replace, next, end }
     enum Outcome: Equatable { case playing, added, addedAtEnd, failed(String) }
 
-    private struct Entry {
+    /// One entry of the phone's list, as Up next shows it.
+    struct Item: Identifiable, Equatable {
         let id: String
         let media: PhoneMedia
         let displayDurationMs: Int?
     }
+    private typealias Entry = Item
 
     /// The list is playing on the receiver.
     @Published private(set) var active = false
     /// Index of the current item in the phone's list.
     @Published private(set) var position = 0
     @Published private(set) var count = 0
+    /// The whole list, for Up next.
+    @Published private(set) var items: [Item] = []
+    /// Items after the current one.
+    var remaining: Int { max(0, count - position - 1) }
+    var current: Item? { items.indices.contains(position) ? items[position] : nil }
 
     private var entries: [Entry] = []
     private var byId: [String: Entry] = [:]
@@ -42,6 +49,8 @@ import Foundation
     private var playbackId: String?
     private var latest: PlaylistUiState?
     private var dirty = false
+    /// Ids removed from the phone's list that the receiver still holds.
+    private var pendingRemoves: [String] = []
     private var awaitRevision: UInt64 = 0
     private var generation = 0
     private var updating = false
@@ -105,6 +114,48 @@ import Foundation
         return await vm.sendConfirmedQueueCommand(
             WireProtocol.playlistJumpCommand(index: 0, itemId: entry.id, playbackId: pid, useQueueV1: true, requestID: requestID),
             requestID: requestID)?.ok == true
+    }
+
+    /// Removes entry `id` (not the current one) from the list, and from the receiver if it holds it.
+    func remove(_ id: String) {
+        guard let index = entries.firstIndex(where: { $0.id == id }), index != cursor else { return }
+        entries.remove(at: index)
+        byId[id] = nil
+        if index < cursor { cursor -= 1 }
+        if sent.contains(id) { pendingRemoves.append(id) }
+        edited()
+    }
+
+    /// Moves entries at `offsets` of the upcoming items to `destination` among them (List.onMove).
+    func moveUpcoming(from offsets: IndexSet, to destination: Int) {
+        guard entries.indices.contains(cursor) else { return }
+        var upcoming = Array(entries[(cursor + 1)...])
+        upcoming.move(fromOffsets: offsets, toOffset: destination)
+        entries = Array(entries[...cursor]) + upcoming
+        edited()
+    }
+
+    /// Clear queue: drops everything after the current item, which keeps playing.
+    func clearUpcoming() {
+        guard entries.indices.contains(cursor) else { return }
+        for entry in entries[(cursor + 1)...] {
+            byId[entry.id] = nil
+            if sent.contains(entry.id) { pendingRemoves.append(entry.id) }
+        }
+        entries.removeSubrange((cursor + 1)...)
+        edited()
+    }
+
+    /// Plays entry `id` of the list.
+    func play(_ id: String) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        Task { _ = await jump(to: index) }
+    }
+
+    private func edited() {
+        dirty = true
+        publish()
+        scheduleUpdate()
     }
 
     /// Forgets the list; the receiver keeps playing what it holds.
@@ -223,7 +274,11 @@ import Foundation
         }
         dirty = false
         publish()
-        let plan = PhoneQueueWindow.plan(order: entries.map(\.id), cursor: cursor, tv: tv, tvCurrent: current, limits: limits)
+        let onTv = Set(tv)
+        pendingRemoves.removeAll { !onTv.contains($0) }
+        var plan = PhoneQueueWindow.plan(order: entries.map(\.id), cursor: cursor, tv: tv, tvCurrent: current, limits: limits)
+        let extra = pendingRemoves.filter { !plan.removes.contains($0) }
+        plan.removes = extra + plan.removes
         guard !plan.isEmpty else { return }
         if await !apply(plan, playbackId: pid, session: generation) {
             Task { [weak self] in
@@ -254,6 +309,7 @@ import Foundation
             guard ok(await vm.sendConfirmedQueueCommand(
                 WireProtocol.queueRemove(itemIds: plan.removes, playbackId: pid, requestID: requestID), requestID: requestID))
             else { return false }
+            pendingRemoves.removeAll { plan.removes.contains($0) }
             for id in plan.removes {
                 sent.remove(id)
                 if let url = served.removeValue(forKey: id) { LocalFileServer.shared.remove(served: url) }
@@ -289,6 +345,7 @@ import Foundation
         playbackId = nil
         latest = nil
         dirty = false
+        pendingRemoves = []
         awaitRevision = 0
         generation += 1
         active = false
@@ -298,6 +355,7 @@ import Foundation
     private func publish() {
         position = cursor
         count = entries.count
+        if items.count != entries.count || items.map(\.id) != entries.map(\.id) { items = entries }
         if entries.isEmpty { active = false }
     }
 }

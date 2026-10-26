@@ -25,13 +25,28 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** Where the phone's list is, for the slideshow controls and Up next. */
+/** One entry of the phone's list, as Up next shows it. */
+data class PhoneQueueItem(
+    val id: String,
+    val title: String,
+    val durationMs: Long,
+    val uri: String,
+    val kind: MediaKind,
+    val mime: String?,
+)
+
+/** Where the phone's list is, for the slideshow controls, Up next and the mini player. */
 data class PhoneQueueState(
     val active: Boolean = false,
     /** Index of the current item in the phone's list. */
     val position: Int = 0,
     val count: Int = 0,
-)
+    val items: List<PhoneQueueItem> = emptyList(),
+) {
+    val current: PhoneQueueItem? get() = items.getOrNull(position)
+    /** Items after the current one. */
+    val remaining: Int get() = (count - position - 1).coerceAtLeast(0)
+}
 
 /**
  * Plays a list of phone files of any length on a PlayBridge TV. The phone keeps the whole
@@ -54,7 +69,9 @@ class PhoneQueueCoordinator(
     private val castSessionManager: CastSessionManager,
     private val scope: CoroutineScope,
 ) {
-    private class Entry(val id: String, val item: LocalCastItem)
+    private class Entry(val id: String, val item: LocalCastItem) {
+        val view = PhoneQueueItem(id, item.title ?: "Phone file", item.durationMs, item.uri, item.kind, item.mime)
+    }
 
     private val mutex = Mutex()
     private var entries: MutableList<Entry> = mutableListOf()
@@ -68,12 +85,23 @@ class PhoneQueueCoordinator(
     private var dirty = false
     /** Skip TV reports older than our last confirmed change. */
     private var awaitRevision = -1L
+    /** Ids removed from the phone's list that the TV still holds. */
+    private val pendingRemoves = LinkedHashSet<String>()
+    private var itemsChanged = true
     private var generation = 0L
     private var attachJob: Job? = null
 
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val mutableState = MutableStateFlow(PhoneQueueState())
     val state: StateFlow<PhoneQueueState> = mutableState.asStateFlow()
+
+    /** Up next's Save as collection: the app opens the collection picker with these. */
+    private val mutableSaveRequests = kotlinx.coroutines.flow.MutableSharedFlow<List<PhoneQueueItem>>(extraBufferCapacity = 1)
+    val saveRequests: kotlinx.coroutines.flow.SharedFlow<List<PhoneQueueItem>> = mutableSaveRequests
+
+    fun requestSave() {
+        mutableSaveRequests.tryEmit(mutableState.value.items)
+    }
 
     init {
         scope.launch { connectionCoordinator.tvPlaylistState.collect { onStatus(it) } }
@@ -96,6 +124,7 @@ class PhoneQueueCoordinator(
             clearLocked()
             entries = list.toMutableList()
             list.forEach { byId[it.id] = it }
+            itemsChanged = true
             ++generation
         }
         return sendFrom(0, session)
@@ -108,6 +137,7 @@ class PhoneQueueCoordinator(
             entries.addAll(cursor + 1, added)
             added.forEach { byId[it.id] = it }
             dirty = true
+            itemsChanged = true
             publishLocked()
         }
         wake.trySend(Unit)
@@ -120,6 +150,7 @@ class PhoneQueueCoordinator(
             entries.addAll(added)
             added.forEach { byId[it.id] = it }
             dirty = true
+            itemsChanged = true
             publishLocked()
         }
         wake.trySend(Unit)
@@ -152,6 +183,50 @@ class PhoneQueueCoordinator(
             }
         }
         return command("playlist_jump", pid) { put("itemId", entry.id) }?.ok == true
+    }
+
+    /** Removes entry [id] (not the current one) from the list, and from the TV if it holds it. */
+    suspend fun remove(id: String) {
+        mutex.withLock {
+            val index = entries.indexOfFirst { it.id == id }
+            if (index < 0 || index == cursor) return
+            entries.removeAt(index)
+            byId.remove(id)
+            if (index < cursor) cursor--
+            if (id in sent) pendingRemoves += id
+            dirty = true
+            itemsChanged = true
+            publishLocked()
+        }
+        wake.trySend(Unit)
+    }
+
+    /** Moves entry [id] to [toIndex] in the list (after the current one). */
+    suspend fun move(id: String, toIndex: Int) {
+        mutex.withLock {
+            val from = entries.indexOfFirst { it.id == id }
+            if (from < 0 || from == cursor) return
+            val entry = entries.removeAt(from)
+            val target = toIndex.coerceIn(cursor + 1, entries.size)
+            entries.add(target, entry)
+            dirty = true
+            itemsChanged = true
+            publishLocked()
+        }
+        wake.trySend(Unit)
+    }
+
+    /** Clear queue: drops everything after the current item, which keeps playing. */
+    suspend fun clearUpcoming() {
+        mutex.withLock {
+            val upcoming = entries.subList(cursor + 1, entries.size)
+            upcoming.forEach { byId.remove(it.id); if (it.id in sent) pendingRemoves += it.id }
+            upcoming.clear()
+            dirty = true
+            itemsChanged = true
+            publishLocked()
+        }
+        wake.trySend(Unit)
     }
 
     /** Forgets the list; the TV keeps playing what it holds. */
@@ -243,11 +318,15 @@ class PhoneQueueCoordinator(
                     entries.filter { it.id !in kept }.forEach { byId.remove(it.id); sent.remove(it.id) }
                     entries = adopted.mapNotNull(byId::get).toMutableList()
                     cursor = entries.indexOfFirst { it.id == current }
+                    itemsChanged = true
                 }
             }
             dirty = false
             publishLocked()
-            val plan = PhoneQueueWindow.plan(entries.map { it.id }, cursor, tv, current)
+            val onTv = tv.toHashSet()
+            pendingRemoves.retainAll(onTv)
+            val window = PhoneQueueWindow.plan(entries.map { it.id }, cursor, tv, current)
+            val plan = window.copy(removes = (pendingRemoves + window.removes).distinct())
             if (plan.isEmpty) return
             Triple(plan, pid, generation)
         }
@@ -274,7 +353,10 @@ class PhoneQueueCoordinator(
                 put("itemIds", buildJsonArray { plan.removes.forEach { add(JsonPrimitive(it)) } })
             }
             if (!ok(result)) return false
-            mutex.withLock { sent.removeAll(plan.removes.toSet()) }
+            mutex.withLock {
+                sent.removeAll(plan.removes.toSet())
+                pendingRemoves.removeAll(plan.removes.toSet())
+            }
         }
         if (plan.adds.isNotEmpty()) {
             val toAdd = mutex.withLock { plan.adds.mapNotNull(byId::get) }
@@ -324,12 +406,18 @@ class PhoneQueueCoordinator(
         latest = null
         dirty = false
         awaitRevision = -1L
+        pendingRemoves.clear()
+        itemsChanged = true
         generation++
         mutableState.value = PhoneQueueState()
     }
 
     private fun publishLocked(active: Boolean = mutableState.value.active) {
-        mutableState.value = PhoneQueueState(active = active && entries.isNotEmpty(), position = cursor, count = entries.size)
+        val items = if (itemsChanged) entries.map { it.view } else mutableState.value.items
+        itemsChanged = false
+        mutableState.value = PhoneQueueState(
+            active = active && entries.isNotEmpty(), position = cursor, count = entries.size, items = items,
+        )
     }
 
     private data class Jump(val entry: Entry, val onTv: Boolean, val playbackId: String, val session: Long)
