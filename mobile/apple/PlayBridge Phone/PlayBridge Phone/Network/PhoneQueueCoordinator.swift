@@ -69,7 +69,7 @@ import Foundation
     func send(_ items: [PhoneMedia], mode: Mode, displayDurationMs: Int? = nil,
               library: PhoneMediaLibrary, vm: ConnectionViewModel) async -> Outcome {
         guard !items.isEmpty else { return .failed("Nothing to play.") }
-        guard vm.localQueueSupported else { return .failed("This receiver plays one item at a time.") }
+        guard vm.localListSupported else { return .failed("This receiver plays one item at a time.") }
         attach(vm: vm, library: library)
         let newEntries = items.map {
             Entry(id: UUID().uuidString, media: $0, displayDurationMs: $0.kind == .image ? displayDurationMs : nil)
@@ -78,6 +78,7 @@ import Foundation
         if mode == .replace || !playing || !active {
             if mode != .replace, playing, !active {
                 // Something else is playing: add to the receiver's own queue, one by one.
+                guard vm.localQueueSupported else { return .failed("This receiver plays one item at a time.") }
                 return await appendToForeignQueue(newEntries, vm: vm, library: library)
             }
             return await start(newEntries) ? .playing : .failed("Couldn’t send to \(PhoneMediaCasting.receiverName(vm)).")
@@ -105,34 +106,44 @@ import Foundation
         // Until the receiver is on the new item, a window update would see it as far ahead of
         // the old current item and remove it again.
         // It ends when the receiver reports the new item (in update), or after a few seconds.
+        // An unconfirmed jump (nil) may still happen: a receiver can take a while to confirm (the
+        // desktop confirms once the item has opened), so it keeps the guard for longer.
         jumpingTo = entry.id
-        var jumped = false
+        var outcome: Bool? = false
         defer {
-            if !jumped, jumpingTo == entry.id { jumpingTo = nil }
-            if jumped {
+            if outcome == false, jumpingTo == entry.id { jumpingTo = nil }
+            if outcome != false {
+                let wait: UInt64 = outcome == true ? 5_000_000_000 : 15_000_000_000
                 Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    try? await Task.sleep(nanoseconds: wait)
                     if self?.jumpingTo == entry.id { self?.jumpingTo = nil }
                     self?.scheduleUpdate()
                 }
             }
             scheduleUpdate()
         }
+        var unconfirmedAdd = false
         if latest?.items.contains(where: { $0.itemId == entry.id }) != true {
             guard let url = try? await library.resolve(entry.media),
                   let media = await LocalFileServer.shared.add(fileURL: url) else { return false }
-            guard await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
-                                           displayDurationMs: entry.displayDurationMs, itemId: entry.id, playbackId: pid)?.ok == true,
-                  session == generation
-            else { LocalFileServer.shared.remove(served: media); return false }
-            sent.insert(entry.id)
+            let added = await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                                 displayDurationMs: entry.displayDurationMs,
+                                                 visualMetadata: await LocalAudioMetadata.visualMetadata(for: entry.media, fileURL: url),
+                                                 itemId: entry.id, playbackId: pid)
+            guard session == generation, added?.ok != false else { LocalFileServer.shared.remove(served: media); return false }
+            // Not confirmed in time, but the receiver may well hold it (and be loading it): keep
+            // serving the file and try the jump anyway.
             served[entry.id] = media
+            if added != nil { sent.insert(entry.id) } else { unconfirmedAdd = true }
         }
         let requestID = UUID().uuidString
-        jumped = await vm.sendConfirmedQueueCommand(
+        guard let result = await vm.sendConfirmedQueueCommand(
             WireProtocol.playlistJumpCommand(index: 0, itemId: entry.id, playbackId: pid, useQueueV1: true, requestID: requestID),
-            requestID: requestID)?.ok == true
-        return jumped
+            requestID: requestID)
+        else { outcome = nil; return false }
+        outcome = result.ok
+        if result.ok, unconfirmedAdd, session == generation { sent.insert(entry.id) }
+        return result.ok
     }
 
     /// Removes entry `id` (not the current one) from the list, and from the receiver if it holds it.
@@ -204,8 +215,10 @@ import Foundation
         guard let url = try? await library.resolve(entry.media),
               let media = await LocalFileServer.shared.serve(fileURL: url, subtitle: nil)?.media,
               session == generation, vm.isConnected else { return false }
+        let metadata = await LocalAudioMetadata.visualMetadata(for: entry.media, fileURL: url)
+        guard session == generation, vm.isConnected else { return false }
         vm.castLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
-                          displayDurationMs: entry.displayDurationMs, itemId: entry.id)
+                          displayDurationMs: entry.displayDurationMs, visualMetadata: metadata, itemId: entry.id)
         PhoneFilesNowPlaying.shared.itemID = entry.media.id
         cursor = index
         sent.insert(entry.id)
@@ -237,7 +250,9 @@ import Foundation
                   let url = try? await library.resolve(entry.media),
                   let media = await LocalFileServer.shared.add(fileURL: url),
                   await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
-                                           displayDurationMs: entry.displayDurationMs, itemId: entry.id, playbackId: pid)?.ok == true
+                                           displayDurationMs: entry.displayDurationMs,
+                                           visualMetadata: await LocalAudioMetadata.visualMetadata(for: entry.media, fileURL: url),
+                                           itemId: entry.id, playbackId: pid)?.ok == true
             else { return .failed("Couldn’t add \(entry.media.title).") }
         }
         return .added
@@ -339,9 +354,15 @@ import Foundation
             guard session == generation, let entry = byId[id] else { return false }
             guard let url = try? await library.resolve(entry.media),
                   let media = await LocalFileServer.shared.add(fileURL: url) else { return false }
-            guard ok(await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
-                                              displayDurationMs: entry.displayDurationMs, itemId: id, playbackId: pid))
-            else { LocalFileServer.shared.remove(served: media); return false }
+            let result = await vm.queueLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                                  displayDurationMs: entry.displayDurationMs,
+                                                  visualMetadata: await LocalAudioMetadata.visualMetadata(for: entry.media, fileURL: url),
+                                                  itemId: id, playbackId: pid)
+            // Unconfirmed (nil): the receiver may hold it after all, so the file stays served.
+            guard ok(result) else {
+                if result == nil { served[id] = media } else { LocalFileServer.shared.remove(served: media) }
+                return false
+            }
             sent.insert(id)
             served[id] = media
         }

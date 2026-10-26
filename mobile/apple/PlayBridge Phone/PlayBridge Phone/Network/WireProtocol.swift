@@ -87,11 +87,13 @@ enum WireProtocol {
         detectedBy: String? = nil,
         playerMode: String? = nil,
         displayDurationMs: Int? = nil,
-        itemId: String? = nil
+        itemId: String? = nil,
+        visualMetadata: [String: Any]? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
         if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
         if let itemId { item["itemId"] = itemId }
+        if let visualMetadata { item["visualMetadata"] = visualMetadata }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
@@ -118,11 +120,13 @@ enum WireProtocol {
         useQueueV1: Bool = false,
         displayDurationMs: Int? = nil,
         itemId: String? = nil,
+        visualMetadata: [String: Any]? = nil,
         requestID: String? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
         if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
         if let itemId { item["itemId"] = itemId }
+        if let visualMetadata { item["visualMetadata"] = visualMetadata }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }

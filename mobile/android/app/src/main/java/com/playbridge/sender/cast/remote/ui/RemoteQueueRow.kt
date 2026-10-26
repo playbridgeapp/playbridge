@@ -245,7 +245,7 @@ private fun PhoneQueueRow(
     phoneQueue: com.playbridge.sender.cast.PhoneQueueCoordinator = org.koin.compose.koinInject(),
 ) {
     val queue by phoneQueue.state.collectAsStateWithLifecycle()
-    if (queue.remaining <= 0) return
+    if (queue.count <= 1) return
     val openAll = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Queue)) }
     if (collapsed) {
         TextButton(
@@ -255,10 +255,9 @@ private fun PhoneQueueRow(
         ) { Text("Up next (${queue.remaining}) ›", maxLines = 1, overflow = TextOverflow.Ellipsis) }
         return
     }
-    // The current item and what comes next; played items are left out (Previous still steps back).
-    val shown = remember(queue.items, queue.position) { queue.items.drop(queue.position) }
-    val listState = rememberLazyListState()
-    LaunchedEffect(queue.position) { listState.animateScrollToItem(0) }
+    // The whole list, scrolled so the current item comes first; played items stay to its left.
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = queue.position)
+    LaunchedEffect(queue.position) { listState.animateScrollToItem(queue.position) }
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = 6.dp),
@@ -278,9 +277,8 @@ private fun PhoneQueueRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 2.dp),
         ) {
-            itemsIndexed(shown, key = { _, item -> item.id }) { offset, item ->
-                val index = queue.position + offset
-                val isCurrent = offset == 0
+            itemsIndexed(queue.items, key = { _, item -> item.id }) { index, item ->
+                val isCurrent = index == queue.position
                 Surface(
                     modifier = Modifier
                         .width(140.dp)

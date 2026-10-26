@@ -175,36 +175,44 @@ class PhoneQueueCoordinator(
         // Until the TV is on the new item, a window update would see it as far ahead of the old
         // current item and remove it again.
         // It ends when the TV reports the new item (in reconcile), or after a few seconds.
+        // An unconfirmed jump (null) may still happen: a receiver can take a while to confirm
+        // (the desktop confirms once the item has opened), so it keeps the guard for longer.
         mutex.withLock { jumpingTo = entry.id }
-        var jumped = false
+        var outcome: Boolean? = false
         try {
-            jumped = jumpInto(entry, onTv, pid, session)
+            outcome = jumpInto(entry, onTv, pid, session)
         } finally {
-            if (!jumped) mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
+            if (outcome == false) mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
             wake.trySend(Unit)
         }
-        if (jumped) scope.launch {
-            delay(JUMP_SETTLE_MS)
+        if (outcome != false) scope.launch {
+            delay(if (outcome == true) JUMP_SETTLE_MS else JUMP_UNCONFIRMED_MS)
             mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
             wake.trySend(Unit)
         }
-        return jumped
+        return outcome == true
     }
 
-    private suspend fun jumpInto(entry: Entry, onTv: Boolean, pid: String, session: Long): Boolean {
+    /** True once the TV confirms the jump, false if it refused, null if it didn't answer in time. */
+    private suspend fun jumpInto(entry: Entry, onTv: Boolean, pid: String, session: Long): Boolean? {
+        var unconfirmedAdd = false
         if (!onTv) {
             val payload = packager.packageItems(listOf(entry.item), listOf(entry.id))?.firstOrNull() ?: return false
             val requestId = UUID.randomUUID().toString()
             val added = connectionCoordinator.sendConfirmedQueueCommand(
                 requestId, createQueueAddCommandJson(listOf(payload), pid, requestId), CONFIRM_MS,
             )
-            if (added?.ok != true) return false
+            if (added?.ok == false) return false
             mutex.withLock {
                 if (session != generation) return false
-                sent += entry.id
+                if (added != null) sent += entry.id
             }
+            // Not confirmed in time, but the TV may well hold it: try the jump anyway.
+            unconfirmedAdd = added == null
         }
-        return command("playlist_jump", pid) { put("itemId", entry.id) }?.ok == true
+        val jumped = command("playlist_jump", pid) { put("itemId", entry.id) } ?: return null
+        if (jumped.ok && unconfirmedAdd) mutex.withLock { if (session == generation) sent += entry.id }
+        return jumped.ok
     }
 
     // Up next and the Remote call these from UI that may close straight away (the sheet
@@ -468,6 +476,7 @@ class PhoneQueueCoordinator(
         const val ATTACH_TIMEOUT_MS = 8_000L
         /** How long window updates wait for the TV to report a jump. */
         const val JUMP_SETTLE_MS = 5_000L
+        const val JUMP_UNCONFIRMED_MS = 15_000L
         /** PlayBridge TVs reject larger `queue_add` messages. */
         const val APPEND_LIMIT = 50
     }

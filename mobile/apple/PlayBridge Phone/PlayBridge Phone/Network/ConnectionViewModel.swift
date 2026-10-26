@@ -770,8 +770,15 @@ final class ConnectionViewModel: ObservableObject {
         sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title))
     }
 
+    /// A PlayBridge receiver is connected, so a list of phone files can be started on it
+    /// (Play all, Shuffle, Slideshow). Unlike `localQueueSupported`, it doesn't need the
+    /// receiver's player to be open already.
+    var localListSupported: Bool {
+        isConnected && playBridgeOutputSelected && !isAirPlay && !isExternalReceiver
+    }
+
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
-    /// Phone-file queues (Play all, Play next, Add to queue) need a PlayBridge receiver that appends.
+    /// The receiver's open player takes queue adds (adding to a queue another sender started).
     var localQueueSupported: Bool {
         isConnected && playBridgeOutputSelected && !isAirPlay && !isExternalReceiver && nativeRemotePolicy.allowsQueue("append")
     }
@@ -782,14 +789,14 @@ final class ConnectionViewModel: ObservableObject {
     /// Appends one phone file (already served by this phone) to the receiver's queue under
     /// `itemId`, tied to `playbackId`, and waits for the receiver to confirm it.
     func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil,
-                         itemId: String, playbackId: String) async -> QueueCommandResult? {
+                         visualMetadata: [String: Any]? = nil, itemId: String, playbackId: String) async -> QueueCommandResult? {
         guard localQueueSupported, supportsQueueV1 else { return nil }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         let requestID = UUID().uuidString
         let command = WireProtocol.queueVideoCommand(
             url: url, title: title, contentType: contentType, mediaKind: kind,
             playbackId: playbackId, useQueueV1: true, displayDurationMs: displayDurationMs,
-            itemId: itemId, requestID: requestID
+            itemId: itemId, visualMetadata: visualMetadata, requestID: requestID
         )
         return await sendConfirmedQueueCommand(command, requestID: requestID)
     }
@@ -818,7 +825,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
-                        itemId: String? = nil) {
+                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) {
         onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
@@ -831,7 +838,8 @@ final class ConnectionViewModel: ObservableObject {
         } else {
             guard playBridgeOutputSelected else { return }
             ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
-                                                    mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId))
+                                                    mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId,
+                                                    visualMetadata: visualMetadata))
         }
     }
 

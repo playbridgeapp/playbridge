@@ -39,7 +39,8 @@ struct PhoneFilesScreen: View {
     private var selecting: Bool { !selection.isEmpty }
     private var toTV: Bool { PhoneMediaCasting.castsToSelectedReceiver(vm) }
     /// PlayBridge receivers take lists; Google Cast, DLNA, Roku and AirPlay play one item at a time.
-    private var queueEnabled: Bool { vm.localQueueSupported }
+    /// Lists start on any connected PlayBridge receiver, playing or not (as on Android).
+    private var queueEnabled: Bool { vm.localListSupported }
     private var onTvID: String? {
         guard vm.isConnected, vm.coordinator.activeContext == "player" || vm.isExternalReceiver || vm.isAirPlay else { return nil }
         return nowPlaying.itemID

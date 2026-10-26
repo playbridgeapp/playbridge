@@ -330,10 +330,10 @@ struct RemoteControlView: View {
         }
     }
 
-    /// The inline Up next for a phone list: from the list this iPhone holds, not the receiver's window.
-    /// Shows the current item and what comes next; played items are left out (Previous still steps back).
+    /// The inline Up next for a phone list: the whole list this iPhone holds, not the receiver's
+    /// window, scrolled so the current item comes first.
     @ViewBuilder private var phoneListRow: some View {
-        if phoneQueue.remaining > 0 {
+        if phoneQueue.count > 1 {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Up Next").font(Theme.font(.subheadline).bold())
@@ -348,7 +348,7 @@ struct RemoteControlView: View {
                 ScrollViewReader { reader in
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 10) {
-                            ForEach(Array(phoneQueue.items.enumerated().dropFirst(phoneQueue.position)), id: \.element.id) { index, item in
+                            ForEach(Array(phoneQueue.items.enumerated()), id: \.element.id) { index, item in
                                 let current = index == phoneQueue.position
                                 Button { if !current { phoneQueue.play(item.id) } } label: {
                                     VStack(alignment: .leading, spacing: 6) {

@@ -32,8 +32,11 @@ import QuickLookThumbnailing
             return "Couldn’t serve this file. Check Wi-Fi and Local Network access, then try again."
         }
         guard vm.destinationID == target, vm.isConnected else { return "The connected device changed. Try casting again." }
+        let metadata = await LocalAudioMetadata.visualMetadata(for: item, fileURL: url)
+        guard vm.destinationID == target, vm.isConnected else { return "The connected device changed. Try casting again." }
         vm.castLocalMedia(url: served.media, title: item.title, contentType: LocalFileServer.mimeType(for: url),
-                          subtitles: served.subtitle.map { [$0] } ?? [], displayDurationMs: displayDurationMs)
+                          subtitles: served.subtitle.map { [$0] } ?? [], displayDurationMs: displayDurationMs,
+                          visualMetadata: metadata)
         PhoneFilesNowPlaying.shared.itemID = item.id
         return nil
     }
@@ -89,7 +92,7 @@ struct PhoneMediaDetail: View {
                     }.buttonStyle(.plain)
                 }
                 HStack(spacing: 8) {
-                    if vm.localQueueSupported {
+                    if vm.localListSupported {
                         tile("Play next", systemImage: "text.line.first.and.arrowtriangle.forward") { enqueue(.next) }
                         tile("Add to queue", systemImage: "text.badge.plus") { enqueue(.end) }
                     }

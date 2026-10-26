@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Up next for a phone list (Remote canvas, board 30): the whole list this iPhone holds, not
-/// just the window the receiver has. Drag to reorder, remove, Repeat this, Save as collection,
-/// Clear queue; tapping an item plays it. The receiver follows through PhoneQueueCoordinator.
+/// just the window the receiver has, scrolled so the current item comes first. Played items
+/// stay above it. Drag to reorder what's next, remove, Repeat this, Save as collection, Clear
+/// queue; tapping an item plays it. The receiver follows through PhoneQueueCoordinator.
 struct PhoneQueueSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
@@ -13,10 +14,12 @@ struct PhoneQueueSheet: View {
     let onLoop: (Bool) -> Void
     @State private var saving: SavingItems?
 
+    private var played: [PhoneQueueCoordinator.Item] { Array(queue.items.prefix(queue.position)) }
     private var upcoming: [PhoneQueueCoordinator.Item] { Array(queue.items.dropFirst(queue.position + 1)) }
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { reader in
             List {
                 Section {
                     if let current = queue.current { nowPlaying(current) }
@@ -28,8 +31,14 @@ struct PhoneQueueSheet: View {
                     .listRowSeparator(.hidden)
                 }
                 Section {
-                    if upcoming.isEmpty {
+                    if queue.items.count <= 1 {
                         Text("Nothing else is queued.").foregroundColor(Theme.onSurfaceVariant)
+                    }
+                    ForEach(played) { item in row(item).opacity(0.6) }
+                    if let current = queue.current, queue.items.count > 1 {
+                        row(current, isCurrent: true)
+                            .listRowBackground(Theme.secondaryContainer)
+                            .id(current.id)
                     }
                     ForEach(upcoming) { item in row(item) }
                         .onMove { offsets, destination in queue.moveUpcoming(from: offsets, to: destination) }
@@ -48,6 +57,11 @@ struct PhoneQueueSheet: View {
                 }
             }
             .environment(\.editMode, .constant(.active))
+            .onAppear { if let id = queue.current?.id { reader.scrollTo(id, anchor: .top) } }
+            .onChange(of: queue.position) { _ in
+                if let id = queue.current?.id { withAnimation { reader.scrollTo(id, anchor: .top) } }
+            }
+            }
             .navigationTitle("Up next").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -82,7 +96,8 @@ struct PhoneQueueSheet: View {
         .padding(.vertical, 4)
     }
 
-    private func row(_ item: PhoneQueueCoordinator.Item) -> some View {
+    /// A list row; the current item can't be played again or removed.
+    private func row(_ item: PhoneQueueCoordinator.Item, isCurrent: Bool = false) -> some View {
         HStack(spacing: 10) {
             Button {
                 queue.play(item.id)
@@ -102,13 +117,18 @@ struct PhoneQueueSheet: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Play \(item.media.title) now")
-            Button { queue.remove(item.id) } label: {
-                Image(systemName: "xmark").frame(width: 44, height: 44)
+            .disabled(isCurrent)
+            .accessibilityLabel(isCurrent ? "Now playing: \(item.media.title)" : "Play \(item.media.title) now")
+            if isCurrent {
+                Image(systemName: "play.circle.fill").foregroundStyle(Theme.primary).frame(width: 44, height: 44)
+            } else {
+                Button { queue.remove(item.id) } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(Theme.onSurfaceVariant)
+                .accessibilityLabel("Remove from queue")
             }
-            .buttonStyle(.borderless)
-            .foregroundColor(Theme.onSurfaceVariant)
-            .accessibilityLabel("Remove from queue")
         }
     }
 

@@ -49,6 +49,23 @@ final class LocalFileServer {
         return base + path
     }
 
+    /// Serves cover art (image bytes) under a path fixed by `key`, so the same song's art is
+    /// written and served once. Kept until the server stops.
+    func addArtwork(_ data: Data, key: String) async -> String? {
+        let png = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cast-artwork", isDirectory: true)
+            .appendingPathComponent(key + (png ? ".png" : ".jpg"))
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: file.path) { try data.write(to: file, options: .atomic) }
+        } catch { return nil }
+        let path = "/art/" + file.lastPathComponent
+        register(path, url: file, contentType: png ? "image/png" : "image/jpeg")
+        guard let base = await startListener() else { unregister(path); return nil }
+        return base + path
+    }
+
     /// Stops serving a file returned by `add` (a queue item the receiver no longer holds).
     func remove(served: String) {
         guard let path = URL(string: served)?.path, !path.isEmpty else { return }

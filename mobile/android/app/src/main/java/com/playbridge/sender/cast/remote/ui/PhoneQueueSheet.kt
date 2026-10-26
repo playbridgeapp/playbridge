@@ -15,13 +15,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -68,8 +74,9 @@ private val RowHeight = 64.dp
 
 /**
  * Up next for a phone list (Remote canvas, board 30): the whole list the phone holds, not
- * just the window the TV has. Drag to reorder, remove, Repeat this, Save as collection,
- * Clear queue; tapping an item plays it. The TV follows through [PhoneQueueCoordinator].
+ * just the window the TV has, scrolled so the current item comes first. Played items stay
+ * above it. Drag to reorder what's next, remove, Repeat this, Save as collection, Clear
+ * queue; tapping an item plays it. The TV follows through [PhoneQueueCoordinator].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,7 +87,10 @@ internal fun PhoneQueueSheet(
 ) {
     val queue by phoneQueue.state.collectAsStateWithLifecycle()
     val close = { dispatch(RemoteAction.CloseSheet) }
+    val played = remember(queue.items, queue.position) { queue.items.take(queue.position) }
     val upcoming = remember(queue.items, queue.position) { queue.items.drop(queue.position + 1) }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = queue.position)
+    LaunchedEffect(queue.position) { listState.animateScrollToItem(queue.position) }
     // Local order while dragging; the phone list takes the move on release.
     var order by remember(upcoming) { mutableStateOf(upcoming) }
     var draggingId by remember { mutableStateOf<String?>(null) }
@@ -130,7 +140,7 @@ internal fun PhoneQueueSheet(
                 ) { Text("Save as collection") }
             }
 
-            if (order.isEmpty()) {
+            if (queue.items.size <= 1) {
                 Text(
                     "Nothing else is queued.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -139,12 +149,39 @@ internal fun PhoneQueueSheet(
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 420.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 ) {
+                    items(played, key = { it.id }) { item ->
+                        QueueRow(
+                            item = item,
+                            last = false,
+                            modifier = Modifier.alpha(0.6f),
+                            dragHandle = null,
+                            onPlay = {
+                                phoneQueue.playItem(item.id)
+                                close()
+                            },
+                            onRemove = { phoneQueue.removeItem(item.id) },
+                        )
+                    }
+                    queue.current?.let { current ->
+                        item(key = current.id) {
+                            QueueRow(
+                                item = current,
+                                last = order.isEmpty(),
+                                modifier = Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)),
+                                dragHandle = null,
+                                current = true,
+                                onPlay = {},
+                                onRemove = null,
+                            )
+                        }
+                    }
                     itemsIndexed(order, key = { _, item -> item.id }) { index, item ->
                         val dragging = item.id == draggingId
                         QueueRow(
@@ -236,23 +273,31 @@ private fun NowPlayingCard(current: PhoneQueueItem, state: RemoteUiState) {
     }
 }
 
+/** A list row. Played and current items have no [dragHandle]; the current one can't be removed. */
 @Composable
 private fun QueueRow(
     item: PhoneQueueItem,
     last: Boolean,
     modifier: Modifier,
-    dragHandle: Modifier,
+    dragHandle: Modifier?,
     onPlay: () -> Unit,
-    onRemove: () -> Unit,
+    onRemove: (() -> Unit)?,
+    current: Boolean = false,
 ) {
     Column(modifier.fillMaxWidth().height(RowHeight)) {
         Row(
-            Modifier.weight(1f).fillMaxWidth().clickable(onClick = onPlay).padding(start = 2.dp, end = 4.dp),
+            Modifier.weight(1f).fillMaxWidth().clickable(enabled = !current, onClick = onPlay).padding(start = 2.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Box(dragHandle.size(40.dp).semantics { contentDescription = "Drag to reorder" }, contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.DragIndicator, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (dragHandle != null) {
+                Box(dragHandle.size(40.dp).semantics { contentDescription = "Drag to reorder" }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.DragIndicator, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    if (current) Icon(Icons.Default.PlayArrow, contentDescription = "Now playing", tint = MaterialTheme.colorScheme.primary)
+                }
             }
             Box(Modifier.size(64.dp, 36.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
                 MediaThumbnail(item.uri.toUri(), item.kind, Size(256, 144), Modifier.width(64.dp).height(36.dp))
@@ -263,8 +308,12 @@ private fun QueueRow(
                     Text(PhoneFilesModel.clock(item.durationMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            IconButton(onClick = onRemove, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Remove from queue", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (onRemove != null) {
+                IconButton(onClick = onRemove, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Remove from queue", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                Spacer(Modifier.size(44.dp))
             }
         }
         if (!last) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
