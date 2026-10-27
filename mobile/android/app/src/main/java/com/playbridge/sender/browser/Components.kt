@@ -642,7 +642,7 @@ object Components {
                 sender: GeckoWebExtension.MessageSender
             ): GeckoResult<Any>? {
                 debugDetectorLog(
-                    "NATIVE MESSAGE from=$nativeApp sender=${sender.webExtension?.id} body=$message",
+                    "NATIVE MESSAGE from=$nativeApp sender=${sender.webExtension?.id}",
                 )
                 
                 processMessage(message)

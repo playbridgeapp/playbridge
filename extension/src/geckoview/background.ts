@@ -1,3 +1,4 @@
+import { subtitleContentHash, validSubtitleText } from "../core/blob-subtitles";
 /**
  * Phone GeckoView video detector background.
  *
@@ -123,6 +124,9 @@ interface VideoData {
   frameId?: number;
   navigationGeneration?: number;
   mediaKind?: DetectedMediaKind;
+  subtitleText?: string;
+  subtitleFormat?: "vtt" | "srt";
+  subtitleLabel?: string;
   width?: number;
   height?: number;
 }
@@ -688,6 +692,9 @@ function nativeVideoMessage(video: VideoData): Record<string, unknown> {
     qualities: out.qualities ?? null,
     mediaKind:
       out.mediaKind ?? detectedMediaKind(out.url, out.contentType, out.hlsRole),
+    subtitleText: out.subtitleText ?? null,
+    subtitleFormat: out.subtitleFormat ?? null,
+    subtitleLabel: out.subtitleLabel ?? null,
     width: out.width ?? null,
     height: out.height ?? null,
     detectorEpoch: DETECTOR_EPOCH,
@@ -971,6 +978,7 @@ function reportVideo(
       annotated.contentType !== "unknown" &&
       !annotated.contentType.endsWith("/unknown");
     const metadataEnriched =
+      (annotated.subtitleLabel != null && existing.subtitleLabel !== annotated.subtitleLabel) ||
       (annotated.mediaKind != null && existing.mediaKind !== annotated.mediaKind) ||
       (annotated.width != null && existing.width !== annotated.width) ||
       (annotated.height != null && existing.height !== annotated.height) ||
@@ -988,6 +996,7 @@ function reportVideo(
       existing.hlsRole = annotated.hlsRole;
     }
     if (evidenceEnriched) existing.detectedBy = annotated.detectedBy;
+    if (annotated.subtitleLabel) existing.subtitleLabel = annotated.subtitleLabel;
     if (annotated.mediaKind) existing.mediaKind = annotated.mediaKind;
     if (annotated.width != null) existing.width = annotated.width;
     if (annotated.height != null) existing.height = annotated.height;
@@ -1731,6 +1740,9 @@ browser.runtime.onMessage.addListener(
   (
     message: {
       action?: string;
+      subtitleText?: unknown;
+      subtitleFormat?: unknown;
+      subtitleLabel?: unknown;
       url?: string;
       origin?: string;
       contentType?: string;
@@ -1742,6 +1754,23 @@ browser.runtime.onMessage.addListener(
     },
     sender: { tab?: { id?: number; url?: string }; frameId?: number },
   ) => {
+    if (message?.action === "blob_subtitle_found") {
+      const tabId = sender.tab?.id;
+      if (tabId == null || !detectionPolicy.allows(tabId) || !detectionPolicy.options.subtitles) return false;
+      const mime = message.subtitleFormat === "vtt" ? "text/vtt"
+        : message.subtitleFormat === "srt" ? "application/x-subrip" : "";
+      const subtitle = validSubtitleText(message.subtitleText, mime);
+      if (!subtitle || !mime) return false;
+      reportVideo({
+        ...subtitle,
+        url: `playbridge-subtitle:${subtitleContentHash(subtitle.subtitleText)}.${subtitle.subtitleFormat}`,
+        subtitleLabel: typeof message.subtitleLabel === "string" ? message.subtitleLabel.slice(0, 256) : "Subtitles",
+        tabId, contentType: mime, mediaKind: "subtitle", detectedBy: "blob_subtitle",
+        originUrl: message.origin ?? "", timestamp: Date.now(), frameId: sender.frameId,
+        navigationGeneration: currentNavigationGeneration(tabNavigationGenerations, tabId),
+      }, tabId, null);
+      return false;
+    }
     if (
       message?.action !== "dom_video_found" &&
       message?.action !== "player_video_found" &&

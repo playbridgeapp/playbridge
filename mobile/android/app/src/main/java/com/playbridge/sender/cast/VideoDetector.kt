@@ -18,8 +18,13 @@ import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist as Media3HlsMedia
 import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist as Media3HlsMultivariantPlaylist
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser as Media3HlsPlaylistParser
 import com.playbridge.sender.BuildConfig
+import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.shared.logging.redactLogText
 import com.playbridge.shared.logging.redactUrlForLog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
@@ -525,6 +530,57 @@ object VideoDetector {
     private const val SAME_DOCUMENT_ADOPT_GRACE_MS = 2_000L
 
     private var appContext: Context? = null
+    private val subtitleScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    private class LocalSubtitles {
+        val files = mutableMapOf<String, Pair<File, String>>()
+        val jobs = mutableMapOf<String, Job>()
+        val messages = mutableMapOf<String, Pair<JsonObject, DetectorSubtitleText>>()
+    }
+    private val localSubtitles = mutableMapOf<String, LocalSubtitles>()
+
+    private fun captureSubtitle(message: JsonObject, tabId: String) {
+        val subtitle = detectorSubtitleText(message) ?: return
+        val context = appContext ?: return
+        val page = localSubtitles.getOrPut(tabId) { LocalSubtitles() }
+        val hash = subtitle.hash
+        page.files[hash]?.let { (_, url) ->
+            onMessageReceived(publishedSubtitleMessage(message, subtitle, url), tabId)
+            return
+        }
+        page.messages[hash] = message to subtitle
+        if (page.jobs.containsKey(hash)) return
+        page.jobs[hash] = subtitleScope.launch {
+            var file: File? = null
+            var retained = false
+            try {
+                val url = withContext(Dispatchers.IO) {
+                    val cache = File(context.cacheDir, "detected-subtitles").apply { mkdirs() }
+                    val output = File.createTempFile("subtitle-", ".${subtitle.format}", cache)
+                    file = output
+                    output.writeText(subtitle.text, Charsets.UTF_8)
+                    DlnaProxyHolder.proxy(context).publishLocal(Uri.fromFile(output), subtitle.mime)
+                }
+                if (localSubtitles[tabId] !== page) return@launch
+                page.files[hash] = requireNotNull(file) to url
+                retained = true
+                val (latestMessage, latestSubtitle) = page.messages.remove(hash) ?: return@launch
+                onMessageReceived(publishedSubtitleMessage(latestMessage, latestSubtitle, url), tabId)
+            } catch (_: Exception) {
+                // A cancelled document or unavailable local server contributes no detection.
+            } finally {
+                if (!retained) file?.delete()
+                page.messages.remove(hash)
+                page.jobs.remove(hash)
+            }
+        }
+    }
+
+    private fun clearLocalSubtitles(tabId: String) {
+        localSubtitles.remove(tabId)?.let { page ->
+            page.jobs.values.forEach { it.cancel() }
+            page.files.values.forEach { (file, _) -> file.delete() }
+        }
+    }
 
     /**
      * Detection diagnostics may include media URLs, origins, and header *names*.
@@ -546,12 +602,12 @@ object VideoDetector {
     private fun debugLogJson(label: String, message: JsonObject) {
         if (!BuildConfig.DEBUG) return
         val pretty = try {
-            detectorDebugJson.encodeToString(message)
+            detectorDebugJson.encodeToString(JsonObject(message.filterKeys { it != "subtitleText" }))
         } catch (_: Exception) {
             try {
-                org.json.JSONObject(message.toString()).toString(2)
+                org.json.JSONObject(JsonObject(message.filterKeys { it != "subtitleText" }).toString()).toString(2)
             } catch (_: Exception) {
-                message.toString()
+                "Detector payload unavailable"
             }
         }
         redactLogText(pretty).lineSequence().forEach { line ->
@@ -792,6 +848,12 @@ object VideoDetector {
      * associating it with the given Kotlin tab ID.
      */
     fun onMessageReceived(message: JsonObject, kotlinTabId: String) {
+        if (message["subtitleText"] != null &&
+            message["subtitleText"] != kotlinx.serialization.json.JsonNull
+        ) {
+            if (message["type"]?.jsonPrimitive?.contentOrNull == "video_detected") captureSubtitle(message, kotlinTabId)
+            return
+        }
         debugLogJson("Received message for tab $kotlinTabId", message)
 
         val type = message["type"]?.jsonPrimitive?.content
@@ -876,6 +938,7 @@ object VideoDetector {
                                 ?: existing.originUrl,
                             contentType = message["contentType"]?.jsonPrimitive?.content
                                 ?: existing.contentType,
+                            title = message["title"]?.jsonPrimitive?.contentOrNull ?: existing.title,
                             originalMessage = message.toString(),
                             playlistBody = playlistBody ?: existing.playlistBody,
                             audioUrl = audioUrl ?: existing.audioUrl,
@@ -945,6 +1008,7 @@ object VideoDetector {
                     originUrl = message["originUrl"]?.jsonPrimitive?.content,
                     headers = headers,
                     timestamp = incomingTimestamp,
+                    title = message["title"]?.jsonPrimitive?.contentOrNull,
                     originalMessage = message.toString(),
                     playlistBody = message["playlistBody"]?.jsonPrimitive?.contentOrNull,
                     audioUrl = message["audioUrl"]?.jsonPrimitive?.contentOrNull,
@@ -1186,9 +1250,7 @@ object VideoDetector {
                         }).take(200)
                         video.subtitleLanguage = SubtitleLanguageDetector.detect(languageText)
                         video.subtitlePreviewChecked = true
-                        debugLog(
-                            "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}",
-                        )
+                        debugLog("Subtitle preview loaded")
                         video.subtitlePreview
                     } else {
                         video.subtitlePreviewChecked = true
@@ -1996,7 +2058,7 @@ object VideoDetector {
 
     /** Include suspended tabs whose content-script policy port is no longer connected. */
     internal fun filterDetections(allowsTab: (String) -> Boolean, allowsKind: (DetectedMediaKind) -> Boolean) {
-        tabVideos.keys.toList().forEach { tabId ->
+        (tabVideos.keys + localSubtitles.keys).toSet().forEach { tabId ->
             if (allowsTab(tabId)) retainDetections(tabId, allowsKind)
             else clearDetections(tabId)
         }
@@ -2004,6 +2066,7 @@ object VideoDetector {
 
     /** Remove disabled categories while preserving page ordering and remaining detections. */
     internal fun retainDetections(tabId: String, allows: (DetectedMediaKind) -> Boolean) {
+        if (!allows(DetectedMediaKind.SUBTITLE)) clearLocalSubtitles(tabId)
         val videos = tabVideos[tabId] ?: return
         val removed = videos.filterNot { allows(it.kind) }
         if (removed.isEmpty()) return
@@ -2014,6 +2077,7 @@ object VideoDetector {
     }
 
     private fun clearTabMedia(tabId: String) {
+        clearLocalSubtitles(tabId)
         if (tabVideos.containsKey(tabId) || tabSeenUrls.containsKey(tabId)) {
             debugLog("Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")
         }
@@ -2028,6 +2092,7 @@ object VideoDetector {
      * Clear all detected videos across all tabs.
      */
     fun clear() {
+        localSubtitles.keys.toList().forEach(::clearLocalSubtitles)
         debugLog("Clearing all detected videos across ${tabVideos.size} tabs")
         tabVideos.clear()
         tabSeenUrls.clear()

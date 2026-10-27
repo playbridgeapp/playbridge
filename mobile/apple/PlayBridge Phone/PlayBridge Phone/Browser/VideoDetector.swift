@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CryptoKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -56,6 +57,11 @@ final class VideoDetector: ObservableObject {
     private var lifecycleIndex = 0
     private let now: () -> Int64
     private var seen = Set<String>()
+    private var subtitlePage = UUID()
+    private var subtitleTasks: [String: Task<Void, Never>] = [:]
+    private var subtitleMessages: [String: [String: Any]] = [:]
+    private var localSubtitles: [String: (url: URL, stop: () -> Void)] = [:]
+    private let publishSubtitle: (String, String) async throws -> (url: URL, stop: () -> Void)
     private enum Work { case qualities, thumbnail }
     private struct Job {
         let id = UUID()
@@ -81,14 +87,20 @@ final class VideoDetector: ObservableObject {
         loadThumbnail: @escaping (DetectedVideo) async -> UIImage? = { video in
             await Thumbnailer.thumbnail(url: video.url, headers: VideoDetector.mediaHeaders(for: video), isHLS: video.kind == .hls)
         },
-        now: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) }
+        now: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
+        publishSubtitle: @escaping (String, String) async throws -> (url: URL, stop: () -> Void) = {
+            try await AirPlaySubtitleService.publishDetected(text: $0, format: $1)
+        }
     ) {
         self.now = now
+        self.publishSubtitle = publishSubtitle
         self.loadQualities = loadQualities
         self.loadThumbnail = loadThumbnail
     }
 
     deinit {
+        for task in subtitleTasks.values { task.cancel() }
+        for publication in localSubtitles.values { publication.stop() }
         for task in running.values { task.cancel() }
     }
 
@@ -198,8 +210,56 @@ final class VideoDetector: ObservableObject {
         return "other"
     }
 
+    private func captureSubtitle(_ body: [String: Any]) {
+        guard body["mediaKind"] as? String == "subtitle",
+              let format = body["subtitleFormat"] as? String, ["vtt", "srt"].contains(format),
+              let text = body["subtitleText"] as? String, !text.isEmpty,
+              text.utf8.count <= 2 * 1024 * 1024 else { return }
+        let mime = (body["contentType"] as? String ?? "").lowercased()
+        guard !["video/", "audio/", "image/"].contains(where: mime.hasPrefix) else { return }
+        let start = String(text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}"))).prefix(8192))
+        let isVtt = start.range(of: #"^WEBVTT(?:[ \t]|\r?\n|$)"#, options: .regularExpression) != nil
+        let isSrt = start.range(of: #"^(?:\d+\s*\r?\n)?\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}"#, options: .regularExpression) != nil
+        let detectedFormat = isVtt ? "vtt" : isSrt ? "srt" : mime.components(separatedBy: ";")[0] == "text/vtt" ? "vtt" : mime.contains("subrip") ? "srt" : nil
+        guard detectedFormat == format else { return }
+        let hash = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+        var message = body
+        message.removeValue(forKey: "subtitleText")
+        message["contentType"] = format == "vtt" ? "text/vtt" : "application/x-subrip"
+        message["detectedBy"] = "blob_subtitle"
+        let label = (body["subtitleLabel"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        message["title"] = label.isEmpty ? "Subtitles" : String(label.prefix(256))
+        if let publication = localSubtitles[hash] {
+            message["url"] = publication.url.absoluteString
+            ingest(message)
+            return
+        }
+        subtitleMessages[hash] = message
+        guard subtitleTasks[hash] == nil else { return }
+        let page = subtitlePage
+        let publish = publishSubtitle
+        subtitleTasks[hash] = Task { @MainActor [weak self] in
+            do {
+                let publication = try await publish(text, format)
+                guard let self, self.subtitlePage == page, !Task.isCancelled else { publication.stop(); return }
+                self.localSubtitles[hash] = publication
+                if var latest = self.subtitleMessages.removeValue(forKey: hash) {
+                    latest["url"] = publication.url.absoluteString
+                    self.ingest(latest)
+                }
+            } catch { /* A failed local publication contributes no detection. */ }
+            guard let self, self.subtitlePage == page else { return }
+            self.subtitleTasks.removeValue(forKey: hash)
+            self.subtitleMessages.removeValue(forKey: hash)
+        }
+    }
+
     /// Ingest one `{type:'video', url, contentType, detectedBy, originUrl, ua}` message.
     func ingest(_ body: [String: Any]) {
+        if body["subtitleText"] != nil {
+            captureSubtitle(body)
+            return
+        }
         guard let url = body["url"] as? String, !url.isEmpty else { return }
 
         let detectionSource = body["detectedBy"] as? String ?? "unknown"
@@ -214,7 +274,7 @@ final class VideoDetector: ObservableObject {
 
         let detectedBy = (body["detectedBy"] as? String) ?? "unknown"
         let originUrl = body["originUrl"] as? String
-        let requestHeaders = Self.requestHeaders(
+        let requestHeaders = detectedBy == "blob_subtitle" ? [:] : Self.requestHeaders(
             originUrl: originUrl,
             userAgent: body["ua"] as? String,
             // Subtitle body/disposition detections also come from fetch/XHR.
@@ -225,6 +285,7 @@ final class VideoDetector: ObservableObject {
         if seen.contains(url), let idx = videos.firstIndex(where: { $0.url == url }) {
             var updated = videos[idx]
             updated.lastSeen = now()
+            if let title = body["title"] as? String { updated.title = title }
             let strongerEvidence = CastStreamRanking.evidenceScore(detectedBy) > CastStreamRanking.evidenceScore(updated.detectedBy)
             if strongerEvidence {
                 updated.detectedBy = detectedBy
@@ -256,7 +317,8 @@ final class VideoDetector: ObservableObject {
             kind: kind,
             timestamp: now(),
             lastSeen: now(),
-            lifecycleIndex: lifecycleIndex
+            lifecycleIndex: lifecycleIndex,
+            title: body["title"] as? String
         )
         videos.append(video)
         let limit = video.isImage || video.isAudio ? 30 : 50
@@ -304,6 +366,12 @@ final class VideoDetector: ObservableObject {
     }
 
     func clear() {
+        subtitlePage = UUID()
+        for task in subtitleTasks.values { task.cancel() }
+        subtitleTasks = [:]
+        subtitleMessages = [:]
+        for publication in localSubtitles.values { publication.stop() }
+        localSubtitles = [:]
 #if DEBUG
         debugTraces = [:]
         playbackDiagnostics = [:]

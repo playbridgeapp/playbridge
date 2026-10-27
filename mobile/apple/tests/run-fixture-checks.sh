@@ -42,7 +42,8 @@ fi
 "${compiler[@]}" "$source_root/Browser/ThumbnailFramePolicy.swift" \
   "$test_root/ThumbnailFramePolicyTests.swift" -o "$build_dir/thumbnail-policy"
 "$build_dir/thumbnail-policy"
-node "$test_root/DetectionScriptLifecycleTests.js"
+node --test "$test_root/DetectionScriptLifecycleTests.js" "$test_root/DetectionScriptTests.js" \
+  "$test_root/BlobSubtitleScriptTests.js"
 
 swiftc -module-cache-path "$build_dir/modules" \
   "$source_root/Models/IptvModels.swift" "$source_root/Data/IptvStore.swift" \

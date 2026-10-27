@@ -114,6 +114,88 @@ enum DetectionScript {
           post(message);
         }
 
+        var BLOB_SUBTITLE_LIMIT = 2 * 1024 * 1024;
+        var blobLabels = new Map();
+        var blobTracks = new Set();
+        var blobFetch = window.fetch;
+        function blobLabel(url) {
+          var tracks = document.querySelectorAll('track');
+          for (var i = 0; i < tracks.length; i++) {
+            var track = tracks[i];
+            if (track.src === url && (track.kind === 'subtitles' || track.kind === 'captions')) {
+              return (track.label || track.srclang || 'Subtitles').slice(0, 256);
+            }
+          }
+          return 'Subtitles';
+        }
+        function blobHash(text) {
+          var first = 0x811c9dc5, second = 0x9e3779b9;
+          for (var i = 0; i < text.length; i++) {
+            first = Math.imul(first ^ text.charCodeAt(i), 0x01000193);
+            second = Math.imul(second ^ text.charCodeAt(i), 0x85ebca6b);
+          }
+          return (first >>> 0).toString(16).padStart(8, '0') + (second >>> 0).toString(16).padStart(8, '0');
+        }
+        function blobSubtitleType(text, mime) {
+          if (/^(video|audio|image)\//i.test(mime)) return '';
+          return subtitleTypeFromBody(text) || (/^text\/vtt(?:;|$)/i.test(mime) ? 'text/vtt' :
+            /subrip/i.test(mime) ? 'application/x-subrip' : '');
+        }
+        async function captureSubtitleBlob(blob, url) {
+          if (!active || !options.subtitles) return;
+          try {
+            // Native accessors reject MediaSource without reading video/MSE data.
+            var size = Object.getOwnPropertyDescriptor(Blob.prototype, 'size').get.call(blob);
+            var mime = Object.getOwnPropertyDescriptor(Blob.prototype, 'type').get.call(blob);
+            if (!size || size > BLOB_SUBTITLE_LIMIT || /^(video|audio|image)\//i.test(mime)) return;
+            var head = await Blob.prototype.slice.call(blob, 0, 8192).text();
+            if (!active || !blobSubtitleType(head, mime)) return;
+            var text = await Blob.prototype.text.call(blob);
+            if (!active || !text || text.length > BLOB_SUBTITLE_LIMIT || new TextEncoder().encode(text).length > BLOB_SUBTITLE_LIMIT) return;
+            var type = blobSubtitleType(text, mime);
+            if (!type) return;
+            var hash = blobHash(text), label = blobLabel(url), previous = blobLabels.get(hash);
+            if (previous && (previous !== 'Subtitles' || label === 'Subtitles')) return;
+            blobLabels.set(hash, label);
+            var format = type === 'text/vtt' ? 'vtt' : 'srt';
+            post({type: 'video', url: 'playbridge-subtitle:' + hash + '.' + format,
+              mediaKind: 'subtitle', detectedBy: 'blob_subtitle', contentType: type,
+              subtitleText: text, subtitleFormat: format, subtitleLabel: label, originUrl: location.href});
+          } catch (_) {}
+        }
+        if (options.subtitles && window.URL && window.URL.createObjectURL) {
+          try {
+            var originalCreateObjectURL = window.URL.createObjectURL;
+            var wrappedCreateObjectURL = function () {
+              var url = originalCreateObjectURL.apply(this, arguments);
+              try { captureSubtitleBlob(arguments[0], url).catch(function () {}); } catch (_) {}
+              return url;
+            };
+            window.URL.createObjectURL = wrappedCreateObjectURL;
+            cleanups.push(function () {
+              if (window.URL.createObjectURL === wrappedCreateObjectURL) window.URL.createObjectURL = originalCreateObjectURL;
+            });
+          } catch (_) {}
+        }
+        function scanBlobTrack(track) {
+          var url = track.src;
+          if (!active || !options.subtitles || !blobFetch || blobTracks.has(url)) return;
+          blobTracks.add(url);
+          try {
+            blobFetch.call(window, url).then(function (response) {
+              if (!active) return null;
+              var mime = response.headers.get('content-type') || '';
+              var length = Number(response.headers.get('content-length'));
+              if (/^(video|audio|image)\//i.test(mime) || !isFinite(length) || length <= 0 || length > BLOB_SUBTITLE_LIMIT) return null;
+              return response.blob();
+            }).then(function (blob) { if (blob) return captureSubtitleBlob(blob, url); })
+              .catch(function () {}).finally(function () { blobTracks.delete(url); });
+          } catch (_) { blobTracks.delete(url); }
+        }
+        listen(window, 'pagehide', function () {
+          if (stopDetection) { var stop = stopDetection; stopDetection = null; configured = null; stop(); }
+        });
+
         function looksMedia(url) {
           if (!url) return false;
           var path = ('' + url).split('?')[0];
@@ -310,7 +392,10 @@ enum DetectionScript {
               el.addEventListener('load', loaded, {once: true});
             }
           } else if (el.tagName === 'TRACK') {
-            if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_track_element', 'subtitle');
+            if (el.src && (el.kind === 'subtitles' || el.kind === 'captions')) {
+              if (el.src.indexOf('blob:') === 0) scanBlobTrack(el);
+              else report(el.src, '', 'dom_track_element', 'subtitle');
+            }
           }
         }
         var selectors = [];
@@ -340,7 +425,7 @@ enum DetectionScript {
             }
           });
           observer.observe(document.documentElement, {
-            childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'srcset', 'poster']
+            childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'srcset', 'poster', 'kind', 'label', 'srclang']
           });
           cleanups.push(function () { observer.disconnect(); });
         } catch (e) {}
