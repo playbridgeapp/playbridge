@@ -157,6 +157,79 @@ class AdtsAacTest {
         assertNull(AdtsAac.split(ByteBuffer.wrap(adts()), 0, Long.MAX_VALUE))
     }
 
+    @Test
+    fun recoversAFrameAfterOneStrayLeadingByte() {
+        val payload = ByteArray(32) { it.toByte() }
+        val bytes = byteArrayOf(0x1c) + adts(payload)
+        assertEquals(40, bytes.size)
+        assertNull(AdtsAac.split(ByteBuffer.wrap(bytes), 123))
+        val sample = requireNotNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 123))
+        assertEquals(listOf(AdtsAac.Frame(8, 32, 123)), sample.frames)
+        assertArrayEquals(payload, bytes.copyOfRange(sample.frames.single().offset, bytes.size))
+        assertArrayEquals(byteArrayOf(0x11, 0x90.toByte()), sample.config.audioSpecificConfig())
+    }
+
+    @Test
+    fun recoversPackedFramesAfterLeadingGarbageIncludingFalseSync() {
+        val prefix = byteArrayOf(0, 0xff.toByte(), 0xf1.toByte(), 0xff.toByte(), 0)
+        val bytes = prefix + adts(crc = true) + adts()
+        val sample = requireNotNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 100))
+        assertEquals(listOf(AdtsAac.Frame(14, 4, 100), AdtsAac.Frame(25, 4, 21_433)), sample.frames)
+    }
+
+    @Test
+    fun keepsCompleteFramesBeforeATrailingPartialHeaderOrPayload() {
+        for (crc in listOf(false, true)) {
+            val tail = adts(crc = crc)
+            for (length in 1 until tail.size) {
+                val bytes = adts() + tail.copyOf(length)
+                assertNull(AdtsAac.split(ByteBuffer.wrap(bytes), 0))
+                val sample = requireNotNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 0))
+                assertEquals(listOf(AdtsAac.Frame(7, 4, 0)), sample.frames)
+            }
+        }
+    }
+
+    @Test
+    fun recoversWithBothLeadingGarbageAndATrailingPartialFrame() {
+        val bytes = byteArrayOf(0x1c) + adts() + adts(crc = true).dropLast(1).toByteArray()
+        val sample = requireNotNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 50, 50))
+        assertEquals(listOf(AdtsAac.Frame(8, 4, 51)), sample.frames)
+    }
+
+    @Test
+    fun dropsSamplesWithoutAnyCompleteAdtsFrames() {
+        for (bytes in listOf(
+            byteArrayOf(), ByteArray(100) { 0x1c }, byteArrayOf(0xff.toByte()),
+            adts().dropLast(1).toByteArray(), adts(frequencyIndex = 15),
+        )) {
+            assertNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 0))
+        }
+    }
+
+    @Test
+    fun resyncRequiresAContiguousSuffixWithTheTrackConfiguration() {
+        val config = requireNotNull(AdtsAac.configuration(ByteBuffer.wrap(adts())))
+        assertNull(AdtsAac.recover(ByteBuffer.wrap(adts(frequencyIndex = 4)), 0, expectedConfig = config))
+        assertNull(AdtsAac.recover(ByteBuffer.wrap(adts() + byteArrayOf(0)), 0))
+        val bytes = adts() + byteArrayOf(0) + adts(crc = true)
+        val sample = requireNotNull(AdtsAac.recover(ByteBuffer.wrap(bytes), 100, expectedConfig = config))
+        assertEquals(listOf(AdtsAac.Frame(21, 4, 100)), sample.frames)
+    }
+
+    @Test
+    fun recoveryPreservesDirectReadOnlyBufferBounds() {
+        val bytes = byteArrayOf(0x1c) + adts()
+        val buffer = ByteBuffer.allocateDirect(bytes.size + 2)
+        buffer.put(0).put(bytes).put(0)
+        buffer.position(1)
+        buffer.limit(1 + bytes.size)
+        val readOnly = buffer.asReadOnlyBuffer()
+        assertEquals(9, requireNotNull(AdtsAac.recover(readOnly, 0)).frames.single().offset)
+        assertEquals(1, readOnly.position())
+        assertEquals(1 + bytes.size, readOnly.limit())
+    }
+
     private fun adts(
         payload: ByteArray = byteArrayOf(1, 2, 3, 4),
         crc: Boolean = false,

@@ -66,12 +66,20 @@ class PlatformMuxer : Muxer {
                 buffer.position(0)
                 buffer.limit(size)
                 val aacTrack = aacTracks[extractor.sampleTrackIndex]
-                val aacSample = aacTrack?.let {
+                val cleanSample = aacTrack?.let {
                     AdtsAac.split(buffer, extractor.sampleTime, it.lastTimeUs)
+                        ?.takeIf { sample -> it.config == null || it.config == sample.config }
                 }
-                if (aacTrack != null && aacSample != null &&
-                    (aacTrack.config == null || aacTrack.config == aacSample.config)
-                ) {
+                val aacSample = cleanSample ?: aacTrack?.takeIf { it.adts }?.let {
+                    AdtsAac.recover(buffer, extractor.sampleTime, it.lastTimeUs, it.config)
+                }
+                if (aacTrack != null && aacSample != null) {
+                    aacTrack.adts = true
+                    aacTrack.config = aacSample.config
+                    if (cleanSample == null) {
+                        aacTrack.recovered++
+                        Log.w(TAG, "Resynchronized ADTS sample; recovered=${aacTrack.recovered}")
+                    }
                     for (frame in aacSample.frames) {
                         info.set(frame.offset, frame.size, frame.presentationTimeUs, MediaCodec.BUFFER_FLAG_KEY_FRAME)
                         muxer.writeSampleData(muxTrack, buffer, info)
@@ -80,8 +88,14 @@ class PlatformMuxer : Muxer {
                     extractor.advance()
                     continue
                 }
-                if (aacTrack != null && (aacTrack.adts || AdtsAac.hasSync(buffer))) {
-                    Log.w(TAG, "AAC sample could not be split as ADTS; copying unchanged")
+                if (aacTrack != null && aacTrack.adts) {
+                    aacTrack.dropped++
+                    Log.w(TAG, "Dropping invalid ADTS sample; dropped=${aacTrack.dropped}")
+                    extractor.advance()
+                    continue
+                }
+                if (aacTrack != null && AdtsAac.hasSync(buffer)) {
+                    Log.w(TAG, "Non-ADTS AAC sample could not be split; copying unchanged")
                 }
                 info.offset = 0
                 info.size = size
@@ -102,7 +116,13 @@ class PlatformMuxer : Muxer {
         output
     }
 
-    private data class AacTrack(val adts: Boolean, val config: AdtsAac.Config?, var lastTimeUs: Long? = null)
+    private data class AacTrack(
+        var adts: Boolean,
+        var config: AdtsAac.Config?,
+        var lastTimeUs: Long? = null,
+        var recovered: Int = 0,
+        var dropped: Int = 0,
+    )
 
     private fun prepareAacTrack(input: File, track: Int, format: MediaFormat): AacTrack {
         val declaredAdts = format.containsKey(MediaFormat.KEY_IS_ADTS) &&
@@ -119,7 +139,7 @@ class PlatformMuxer : Muxer {
             val size = probe.readSampleData(buffer, 0)
             buffer.position(0)
             buffer.limit(maxOf(0, size))
-            val sample = AdtsAac.split(buffer, 0)
+            val sample = AdtsAac.split(buffer, 0) ?: AdtsAac.recover(buffer, 0)
             val adts = declaredAdts || sample != null
             val config = sample?.config ?: if (declaredAdts) AdtsAac.configuration(buffer) else null
             if (adts) {
