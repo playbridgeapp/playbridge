@@ -168,6 +168,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var imageTransformAnchorActive = false
     private var imageTimerJob: Job? = null
     private var imageTimerRunning = false
+    /** URL of the photo now on screen; a timed photo's clock only runs once it is visible. */
+    private var shownImageUrl: String? = null
+    private var imageLoadFallback: Job? = null
     private val attemptedRenderers = linkedSetOf<RendererKind>()
     private var startupWatchdog: Runnable? = null
     private var failureFinishRunnable: Runnable? = null
@@ -496,6 +499,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         imageOffsetX = imageOffsetX,
                         imageOffsetY = imageOffsetY,
                         imageRotation = imageRotation,
+                        onImageShown = ::onImageShown,
                     )
                     PlayerControlsOverlay(
                     state = state,
@@ -863,6 +867,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         imageTimerJob?.cancel()
+        imageLoadFallback?.cancel()
         imageTimerJob = null
         cancelFailureFinish()
         subtitleStageJob?.cancel()
@@ -899,6 +904,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         imageTimerJob?.cancel()
+        imageLoadFallback?.cancel()
         imageTimerJob = null
         imageTimerRunning = false
         cancelFailureFinish()
@@ -917,8 +923,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
         currentMediaKind = resolveMediaKind(playlist.items[playbackCoordinator.index])
-        presentationPayload = playlist.items[playbackCoordinator.index]
-            .takeIf { currentMediaKind != MediaKind.VIDEO }
+        setPresentation(
+            playlist.items[playbackCoordinator.index].takeIf { currentMediaKind != MediaKind.VIDEO },
+        )
         session = sessionCoordinator.begin(
             if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else targetKind,
         )
@@ -1157,7 +1164,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
         currentMediaKind = resolveMediaKind(payload)
-        presentationPayload = payload.takeIf { currentMediaKind != MediaKind.VIDEO }
+        setPresentation(payload.takeIf { currentMediaKind != MediaKind.VIDEO })
         if (currentMediaKind == MediaKind.IMAGE) {
             configureProgress(payload)
             startImagePresentation(payload, currentSession.sessionId)
@@ -1253,6 +1260,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         imageTimerJob?.cancel()
+        imageLoadFallback?.cancel()
         preparedSessionId = sessionId
         hostPlaying = payload.display_duration_ms?.let { it > 0L } == true
         imageTimerRunning = hostPlaying
@@ -1279,13 +1287,38 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         broadcastTracks()
         broadcastCurrentState()
+        if (lastDurationMs > 0L && shownImageUrl != payload.url) {
+            // Slow phone-served photos can take seconds to arrive; don't let their time run
+            // out before they are seen. A photo that never loads still advances eventually.
+            imageLoadFallback = lifecycleScope.launch {
+                delay(IMAGE_LOAD_TIMEOUT_MS)
+                onImageShown(payload.url)
+            }
+        }
         if (lastDurationMs > 0L) startImageTimer(sessionId)
         refreshKeepScreenOn()
+    }
+
+    private fun setPresentation(payload: PlayPayload?) {
+        if (payload?.url != presentationPayload?.url) shownImageUrl = null
+        presentationPayload = payload
+    }
+
+    /** The photo for [url] finished loading (or failed): start its display time. */
+    private fun onImageShown(url: String) {
+        if (url != presentationPayload?.url || shownImageUrl == url) return
+        shownImageUrl = url
+        imageLoadFallback?.cancel()
+        val currentSession = session ?: return
+        if (currentMediaKind == MediaKind.IMAGE && preparedSessionId == currentSession.sessionId) {
+            startImageTimer(currentSession.sessionId)
+        }
     }
 
     private fun startImageTimer(sessionId: Long) {
         imageTimerJob?.cancel()
         if (!imageTimerRunning || lastDurationMs <= 0L) return
+        if (shownImageUrl == null || shownImageUrl != presentationPayload?.url) return
         imageTimerJob = lifecycleScope.launch {
             var previous = SystemClock.elapsedRealtime()
             while (session?.sessionId == sessionId && imageTimerRunning) {
@@ -2006,10 +2039,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val payload = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
         val outgoingSession = session
         imageTimerJob?.cancel()
+        imageLoadFallback?.cancel()
         imageTimerJob = null
         imageTimerRunning = false
         currentMediaKind = resolveMediaKind(payload)
-        presentationPayload = payload.takeIf { currentMediaKind != MediaKind.VIDEO }
+        setPresentation(payload.takeIf { currentMediaKind != MediaKind.VIDEO })
         if (currentMediaKind == MediaKind.IMAGE && outgoingSession != null) {
             runCatchingLogged(TAG, "Renderer detach before playlist item failed", ::logPlayerFailure) {
                 renderer.detachSurface(outgoingSession.sessionId)
@@ -2081,6 +2115,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
         }
         imageTimerJob?.cancel()
+        imageLoadFallback?.cancel()
         imageTimerJob = null
         finish()
     }
@@ -3398,6 +3433,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         private const val TAG = "PlayerHostActivity"
         const val EXTRA_RENDERER = "renderer"
         private const val RENDERER_OPEN_TIMEOUT_MS = 60_000L
+        private const val IMAGE_LOAD_TIMEOUT_MS = 20_000L
         private const val FAILURE_VISIBLE_MS = 600L
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
         private val activeHostCount = java.util.concurrent.atomic.AtomicInteger(0)

@@ -51,6 +51,7 @@ fun MediaPresentation(
     imageOffsetX: Float = 0f,
     imageOffsetY: Float = 0f,
     imageRotation: Float = 0f,
+    onImageShown: (String) -> Unit = {},
 ) {
     when (mediaKind) {
         "audio" -> MusicPresentation(payload)
@@ -60,6 +61,7 @@ fun MediaPresentation(
             imageOffsetX,
             imageOffsetY,
             imageRotation,
+            onImageShown,
         )
     }
 }
@@ -195,6 +197,7 @@ private fun ImagePresentation(
     offsetX: Float,
     offsetY: Float,
     rotation: Float,
+    onImageShown: (String) -> Unit,
 ) {
     val context = LocalContext.current
     // Keep scale, rotation, and anchor-compensating translation on one timeline so
@@ -231,6 +234,8 @@ private fun ImagePresentation(
             model = request,
             contentDescription = payload?.title ?: "Cast image",
             contentScale = ContentScale.Fit,
+            onSuccess = { payload?.url?.let(onImageShown) },
+            onError = { payload?.url?.let(onImageShown) },
             modifier = imageModifier.graphicsLayer {
                 scaleX = animatedScale.value
                 scaleY = animatedScale.value

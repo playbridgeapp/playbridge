@@ -29,10 +29,15 @@ final class CastPlaybackSession {
     static let reconnectGrace: TimeInterval = 120
     static let pausedAudioGrace: TimeInterval = 300
     static let statusGrace: TimeInterval = 120
+    static let itemGapGrace: TimeInterval = 15
 
     var onCommand: ((String) -> Bool)?
     var onReconnect: (() -> Void)?
     var onReleaseResources: (() -> Void)?
+    /// True while a list of phone files plays. Receivers can report a stop as they move from
+    /// one item to the next, so a stop then waits `itemGapGrace` for the next item before the
+    /// session ends (and the phone stops serving the list's files).
+    var holdsBetweenItems: (() -> Bool)?
     private(set) var snapshot: CastNowPlayingSnapshot?
     private(set) var connected = false
     private let renderer: CastPlaybackRendering
@@ -92,14 +97,14 @@ final class CastPlaybackSession {
                  speed: Double = 1, isLive: Bool = false, canSeek: Bool = true) {
         guard connected else { return }
         guard let status else {
-            if deferEndForNewPlayback() { return }
+            if deferEndForNewPlayback() || deferEndBetweenItems() { return }
             stoppedUntilIdle = false
             end()
             return
         }
         let state = status.state.lowercased()
         if ["stopped", "idle", "ended", "finished", "error"].contains(state) {
-            if deferEndForNewPlayback() { return }
+            if deferEndForNewPlayback() || deferEndBetweenItems() { return }
             stoppedUntilIdle = false
             end()
             return
@@ -224,6 +229,16 @@ final class CastPlaybackSession {
         guard let deadline = newPlaybackGraceUntil, clock() < deadline else { return false }
         pendingEnd = true
         return true
+    }
+
+    private func deferEndBetweenItems() -> Bool {
+        guard snapshot != nil, holdsBetweenItems?() == true else { return false }
+        guard pendingEnd else {
+            newPlaybackGraceUntil = clock() + Self.itemGapGrace
+            pendingEnd = true
+            return true
+        }
+        return deferEndForNewPlayback()
     }
 
     private func seekCommand(_ seconds: TimeInterval, snapshot: CastNowPlayingSnapshot) -> String? {

@@ -20,6 +20,8 @@ import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.MediaKind
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.shared.protocol.createPlaylistCommandJson
+import com.playbridge.shared.protocol.createQueueAddCommandJson
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import playbridge.PlayPayload
 import kotlinx.coroutines.flow.*
@@ -28,6 +30,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import java.io.File
 import java.net.Socket
 import java.net.InetSocketAddress
@@ -49,6 +54,7 @@ class ConnectionViewModel(
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
+    private val localCastPackager by lazy { LocalCastPackager(getApplication()) }
     private val prefs = application.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
 
     // Exposed Flows
@@ -522,6 +528,8 @@ class ConnectionViewModel(
         artist: String? = null,
         album: String? = null,
         trackNumber: Int? = null,
+        /** Sidecar subtitle URLs already published through the local proxy. */
+        subtitleUrls: List<String> = emptyList(),
     ): Boolean {
         val resolvedMediaKind = mediaKind ?: when {
             mime?.startsWith("audio/", ignoreCase = true) == true -> MediaKind.AUDIO
@@ -534,57 +542,16 @@ class ConnectionViewModel(
             mediaKind = resolvedMediaKind,
             title = title,
             durationMs = durationMs,
+            subtitles = subtitleUrls.map { com.playbridge.sender.cast.SubtitleRef(url = it) },
         )
         if (castSessionManager.load(media)) return true
-        if (route.value is CastSessionManager.Route.NativeTv &&
-            connectionState.value is WebSocketClient.ConnectionState.Connected
-        ) {
+        if (localQueueSupported()) {
             viewModelScope.launch {
                 try {
-                    val app = getApplication<Application>()
-                    val routeService = com.playbridge.sender.cast.proxy.StreamRouteService(app)
-                    val packaged = routeService.packageForCast(
-                            media = com.playbridge.sender.cast.proxy.CastableMedia(
-                                url = uriString,
-                                contentType = mime,
-                                title = title,
-                                localUri = uriString.toUri(),
-                            ),
-                            mode = com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PHONE,
-                        )
-                    val packagedArtwork = if (resolvedMediaKind == MediaKind.AUDIO) {
-                        packageLocalAudioArtwork(
-                            app = app,
-                            mediaUri = uriString,
-                            routeService = routeService,
-                        )
-                    } else {
-                        null
-                    }
-                    val visualMetadata = if (
-                        resolvedMediaKind == MediaKind.AUDIO &&
-                        listOf(artist, album, packagedArtwork).any { !it.isNullOrBlank() }
-                    ) {
-                        playbridge.VisualMetadata(
-                            title = title.orEmpty(),
-                            artist = artist,
-                            album = album,
-                            track_number = trackNumber,
-                            artwork_url = packagedArtwork,
-                        )
-                    } else {
-                        null
-                    }
-                    val cmd = createSingleVideoCommandJson(
-                        PlayPayload(
-                            url = packaged.url,
-                            title = title ?: "Phone file",
-                            content_type = packaged.contentType ?: mime,
-                            media_kind = resolvedMediaKind.wireValue,
-                            visual_metadata = visualMetadata,
-                        ),
+                    val payload = localCastPackager.packageItem(
+                        LocalCastItem(uriString, mime, title, durationMs, resolvedMediaKind, artist, album, trackNumber, subtitleUrls = subtitleUrls),
                     )
-                    sendCommandAndRecord(cmd, "play", packaged.url, title)
+                    sendCommandAndRecord(createSingleVideoCommandJson(payload), "play", payload.url, title)
                     // The TV only reports context when queried — flip it locally like every
                     // other play path, so the session FGS + NowPlayingBar engage.
                     castSessionManager.notifyNativePlaybackStarted()
@@ -597,73 +564,80 @@ class ConnectionViewModel(
         return false
     }
 
-    private suspend fun packageLocalAudioArtwork(
-        app: Application,
-        mediaUri: String,
-        routeService: com.playbridge.sender.cast.proxy.StreamRouteService,
-    ): String? {
-        suspend fun packageUri(uri: android.net.Uri, contentType: String?): String? =
-            runCatching {
-                routeService.packageForCast(
-                    media = com.playbridge.sender.cast.proxy.CastableMedia(
-                        url = uri.toString(),
-                        contentType = contentType ?: "image/jpeg",
-                        localUri = uri,
-                    ),
-                    mode = com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PHONE,
-                ).url
-            }.getOrNull()
+    /** Phone-file queues (Play all, Play next, Add to queue) need a connected PlayBridge receiver. */
+    fun localQueueSupported(): Boolean =
+        route.value is CastSessionManager.Route.NativeTv &&
+            connectionState.value is WebSocketClient.ConnectionState.Connected
 
-        // Prefer artwork embedded in this exact file. MediaStore album IDs can group
-        // unrelated downloads under one synthetic album, which would send the same cover.
-        val extracted = kotlinx.coroutines.withContext(Dispatchers.IO) {
-            val directory = File(app.cacheDir, "cast-artwork").apply { mkdirs() }
-            val stem = Integer.toUnsignedString(mediaUri.hashCode())
-            val retriever = MediaMetadataRetriever()
-            val embedded = try {
-                retriever.setDataSource(app, mediaUri.toUri())
-                retriever.embeddedPicture
-            } catch (_: Exception) {
-                null
-            } finally {
-                retriever.release()
-            }
-            if (embedded != null) {
-                val extension = when {
-                    embedded.size >= 8 && embedded[0] == 0x89.toByte() && embedded[1] == 0x50.toByte() -> "png"
-                    embedded.size >= 12 && String(embedded, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
-                    else -> "jpg"
-                }
-                File(directory, "$stem.$extension").apply { writeBytes(embedded) }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // This is the same per-item thumbnail path used by the Phone Files UI.
-                runCatching {
-                    val thumbnail = app.contentResolver.loadThumbnail(
-                        mediaUri.toUri(),
-                        Size(1_024, 1_024),
-                        null,
-                    )
-                    File(directory, "$stem.jpg").apply {
-                        outputStream().use { output ->
-                            thumbnail.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, output)
-                        }
-                    }
-                }.getOrNull()
-            } else {
-                null
-            }
+    /**
+     * Sends phone files to the PlayBridge receiver. [LocalQueueMode.REPLACE] (or anything
+     * when nothing is playing) starts a phone list of any length: the TV holds a moving window
+     * of it ([com.playbridge.sender.cast.PhoneQueueCoordinator]). NEXT and END edit that list
+     * while it plays; when something else is playing they `queue_add` onto the TV's own queue,
+     * and NEXT then moves the new items after the current one, when the receiver allows it.
+     */
+    suspend fun castLocalQueue(items: List<LocalCastItem>, mode: LocalQueueMode, source: String? = null): LocalQueueResult {
+        if (items.isEmpty() || !localQueueSupported()) return LocalQueueResult.FAILED
+        val coordinator = org.koin.core.context.GlobalContext.get().get<ConnectionCoordinator>()
+        val phoneQueue = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.cast.PhoneQueueCoordinator>()
+        val playing = coordinator.tvActiveContext.value == "player" && coordinator.tvPlaylistState.value != null
+        if (mode == LocalQueueMode.REPLACE || !playing) {
+            return if (phoneQueue.start(items, source)) LocalQueueResult.PLAYING else LocalQueueResult.FAILED
         }
-        if (extracted != null) {
-            val contentType = when (extracted.extension.lowercase()) {
-                "png" -> "image/png"
-                "webp" -> "image/webp"
-                else -> "image/jpeg"
-            }
-            packageUri(extracted.toUri(), contentType)?.let { return it }
+        if (phoneQueue.isActive) {
+            if (mode == LocalQueueMode.NEXT) phoneQueue.playNext(items) else phoneQueue.addToEnd(items)
+            return LocalQueueResult.ADDED
         }
-
-        return null
+        val payloads = localCastPackager.packageItems(items) ?: return LocalQueueResult.FAILED
+        val registry = org.koin.core.context.GlobalContext.get()
+            .get<com.playbridge.sender.cast.remote.RemoteControllerRegistry>()
+        val controller = registry.controller.value
+        fun queueIds(): List<String> =
+            controller?.snapshot?.value?.state?.queue?.items.orEmpty().mapNotNull { it.itemId }
+        val before = queueIds().toSet()
+        for (chunk in payloads.chunked(LOCAL_QUEUE_CHUNK)) {
+            if (!webSocketClient.send(createQueueAddCommandJson(chunk, ifPlaybackId = null))) return LocalQueueResult.FAILED
+        }
+        if (mode == LocalQueueMode.END || controller == null) return LocalQueueResult.ADDED
+        // Wait for the receiver to echo the new items, then move them, last first, to play next.
+        val added = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+            controller.snapshot.first { snapshot ->
+                snapshot.state.queue?.items.orEmpty().count { it.itemId != null && it.itemId !in before } >= payloads.size
+            }
+            queueIds().filter { it !in before }
+        } ?: return LocalQueueResult.ADDED_AT_END
+        for (id in com.playbridge.sender.cast.PhoneFilesModel.playNextMoveOrder(added.takeLast(payloads.size))) {
+            val result = controller.execute(com.playbridge.sender.cast.remote.RemoteAction.PlayNext(id))
+            if (result !is com.playbridge.sender.cast.remote.RemoteCommandResult.Submitted &&
+                result !is com.playbridge.sender.cast.remote.RemoteCommandResult.Confirmed
+            ) return LocalQueueResult.ADDED_AT_END
+        }
+        return LocalQueueResult.ADDED
     }
+
+    /** Runs a Remote action on the current receiver; true when it was sent. */
+    suspend fun executeRemote(action: com.playbridge.sender.cast.remote.RemoteAction): Boolean {
+        val controller = org.koin.core.context.GlobalContext.get()
+            .get<com.playbridge.sender.cast.remote.RemoteControllerRegistry>().controller.value ?: return false
+        val result = controller.execute(action)
+        return result is com.playbridge.sender.cast.remote.RemoteCommandResult.Submitted ||
+            result is com.playbridge.sender.cast.remote.RemoteCommandResult.Confirmed
+    }
+
+    /** Steps the receiver's queue by [delta] items (slideshow previous and next). */
+    suspend fun stepQueue(delta: Int): Boolean {
+        val phoneQueue = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.cast.PhoneQueueCoordinator>()
+        if (phoneQueue.isActive) return phoneQueue.step(delta)
+        val controller = org.koin.core.context.GlobalContext.get()
+            .get<com.playbridge.sender.cast.remote.RemoteControllerRegistry>().controller.value ?: return false
+        val queue = controller.snapshot.value.state.queue ?: return false
+        val position = queue.items.indexOfFirst {
+            if (queue.currentItemId != null) it.itemId == queue.currentItemId else it.index == queue.currentIndex
+        }
+        val target = queue.items.getOrNull(position + delta) ?: return false
+        return executeRemote(com.playbridge.sender.cast.remote.RemoteAction.JumpToEpisode(target.index, target.itemId))
+    }
+
 
     /**
      * Cast a web stream (e.g. an IPTV channel) with optional request [headers] to the active
@@ -884,5 +858,34 @@ class ConnectionViewModel(
         private const val SCAN_WINDOW_MS = 15_000L
         /** Quiet rescan interval while Connection UI / cast sheet holds discovery. */
         private const val BACKGROUND_RESCAN_MS = 45_000L
+        /** Items per queue_add message; PlayBridge TVs reject larger appends. */
+        private const val LOCAL_QUEUE_CHUNK = 50
     }
+}
+
+/** One phone file to send as part of a queue. */
+data class LocalCastItem(
+    val uri: String,
+    val mime: String?,
+    val title: String?,
+    val durationMs: Long = 0L,
+    val kind: MediaKind,
+    val artist: String? = null,
+    val album: String? = null,
+    val trackNumber: Int? = null,
+    /** Slideshow photos: how long the TV shows each one. */
+    val displayDurationMs: Long? = null,
+    val subtitleUrls: List<String> = emptyList(),
+)
+
+enum class LocalQueueMode { REPLACE, NEXT, END }
+
+enum class LocalQueueResult {
+    /** A new list started playing. */
+    PLAYING,
+    /** Added where asked. */
+    ADDED,
+    /** Play next was asked, but the receiver kept the items at the end. */
+    ADDED_AT_END,
+    FAILED,
 }

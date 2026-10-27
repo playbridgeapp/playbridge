@@ -7,6 +7,8 @@ struct RemoteNavigationPad: View {
     let end: (UUID) -> Void
     let cancel: () -> Void
     let send: (String, UUID?) -> Void
+    /// The pad's fill: the theme's, or a phone list's artwork tone.
+    var fill: Color = Theme.surfaceContainerLow
     @Environment(\.isEnabled) private var enabled
 
     private func accessibleKey(_ key: String) {
@@ -17,7 +19,7 @@ struct RemoteNavigationPad: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 24)
-            .fill(Theme.surfaceContainerLow)
+            .fill(fill)
             .overlay {
                 VStack(spacing: 4) {
                     Image(systemName: "hand.draw").font(Theme.font(.title2))

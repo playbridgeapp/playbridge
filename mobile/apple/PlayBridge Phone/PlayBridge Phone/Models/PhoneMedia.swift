@@ -28,4 +28,17 @@ struct PhoneMedia: Codable, Identifiable, Hashable {
     var duration: Double?
     var bytes: Int64?
     var assetIdentifier: String?
+    /// Imported audio tags (read from the file); nil when untagged or not audio.
+    var artist: String?
+    var album: String?
+    var trackNumber: Int?
+    /// Tags were read once, so older imports are backfilled only once.
+    var tagsRead: Bool?
+}
+
+/// A Photos album: its id, name and the asset ids it holds.
+struct PhotoAlbum: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let assetIDs: Set<String>
 }

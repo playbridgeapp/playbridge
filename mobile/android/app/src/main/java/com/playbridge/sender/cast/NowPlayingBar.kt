@@ -1,12 +1,6 @@
 package com.playbridge.sender.cast
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
+import com.playbridge.sender.cast.remote.ui.QueueTint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,48 +12,45 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LinkOff
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /**
- * Persistent cast mini-bar shown across the main screens. It has two visual modes:
+ * The shared mini player (Phone Files canvas, "Mini player" board), shown across the main
+ * screens. The host computes the texts and flags from the live connection state:
  *
- *  - **Playing**: a cast session is active with media loaded — shows the title + "on <device>";
- *    tapping opens the Remote. Shows a TV icon button on the right to open the connection dialog,
- *    an animated equalizer on the left (frozen into a pause glyph while [isPaused]), and a thin
- *    [progress] line along the bottom edge.
- *  - **Idle**: no media is playing — shows the current cast destination (a connected TV/renderer,
- *    or "This Device" when nothing is connected) and tapping opens the device picker.
+ *  - **Playing / paused**: thumbnail, title, "on <TV>" (or "Paused · on <TV>"), an Up next
+ *    pill with the count when anything is queued, and play/pause. Tapping opens the Remote.
+ *  - **Linked to a website**: as playing, plus Unlink; the subtitle names the website.
+ *  - **TV chosen, nothing playing** and **This phone**: the destination with a chevron;
+ *    tapping opens Play on.
  *
- * The bar is intentionally "dumb": the host computes [primaryText]/[secondaryText]/[leadingIcon]
- * and the mode flags from the live connection state.
- *
- * Styling: a glassy capsule — the container color ([accentColor] when the library detail poster
- * provides one, else primaryContainer) swept into a subtle horizontal gradient, with a
- * luminance-adaptive hairline border and content color.
+ * A thin progress line runs along the bottom while media is loaded. [accentColor] (the
+ * library detail poster) replaces the container colour when given. A phone list's [listTint]
+ * colours the bar like Up next's current card: the artwork's light tint fills as it plays.
  */
 @Composable
 fun NowPlayingBar(
@@ -70,184 +61,125 @@ fun NowPlayingBar(
     modifier: Modifier = Modifier,
     isPlaying: Boolean = false,
     isPaused: Boolean = false,
-    /** 0..1 playback progress for the bottom edge line; null hides it (e.g. live streams). */
+    /** 0..1 playback progress for the bottom line; null hides it (e.g. live streams). */
     progress: Float? = null,
-    showTvIcon: Boolean = false,
-    onTvIconClick: (() -> Unit)? = null,
+    /** Idle with a connected TV: the destination icon shows as ready. */
+    ready: Boolean = false,
+    /** Playing: the item's thumbnail; null shows [leadingIcon] in a tile. */
+    thumbnail: (@Composable () -> Unit)? = null,
+    upNextCount: Int = 0,
+    onUpNext: (() -> Unit)? = null,
+    onPlayPause: (() -> Unit)? = null,
     onUnlinkClick: (() -> Unit)? = null,
     accentColor: Color? = null,
+    listTint: QueueTint? = null,
 ) {
-    val container = accentColor ?: MaterialTheme.colorScheme.primaryContainer
+    val container = listTint?.cardBase ?: accentColor ?: MaterialTheme.colorScheme.surfaceContainerHighest
     val content = when {
+        listTint != null -> listTint.onCard
         accentColor != null -> if (accentColor.luminance() > 0.5f) Color.Black else Color.White
-        else -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
     }
-    // Subtle depth: sweep the container toward its darker sibling instead of a flat fill.
-    val gradient = Brush.horizontalGradient(
-        colors = listOf(
-            container,
-            lerp(container, Color.Black, if (container.luminance() > 0.5f) 0.10f else 0.35f),
-        )
-    )
-    val hairline = content.copy(alpha = 0.18f)
+    val muted = content.copy(alpha = 0.68f)
 
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-            .clickable(onClick = onClick),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         shape = RoundedCornerShape(18.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, hairline),
+        color = container,
         shadowElevation = 8.dp,
     ) {
-        Column(modifier = Modifier.background(gradient)) {
+        Box(Modifier.height(64.dp)) {
+            if (listTint != null && isPlaying && progress != null) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).background(listTint.cardFill))
+            }
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.fillMaxHeight().padding(start = 8.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Leading slot in a soft rounded tile: equalizer while playing, a pause
-                // glyph while paused (the equalizer must NOT keep dancing then), or the
-                // destination icon when idle.
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(content.copy(alpha = 0.14f)),
-                    contentAlignment = Alignment.Center,
+                Row(
+                    Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
+                        .semantics { contentDescription = if (isPlaying) "Open remote" else "Change where to play" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    when {
-                        isPlaying && isPaused -> Icon(
-                            imageVector = Icons.Default.Pause,
-                            contentDescription = "Paused",
-                            tint = content,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        isPlaying -> PlayingEqualizer(
-                            color = content,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        else -> Icon(
-                            imageVector = leadingIcon,
-                            contentDescription = null,
-                            tint = content,
-                            modifier = Modifier.size(20.dp),
-                        )
+                    if (isPlaying) {
+                        Box(
+                            Modifier.size(64.dp, 36.dp).clip(RoundedCornerShape(8.dp)).background(content.copy(alpha = 0.14f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            thumbnail?.invoke() ?: Icon(leadingIcon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+                        }
+                    } else {
+                        Box(
+                            Modifier.size(40.dp).clip(CircleShape)
+                                .background(if (ready) Color(0xFF16301F) else content.copy(alpha = 0.10f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(leadingIcon, contentDescription = null, tint = if (ready) Color(0xFF46D483) else content, modifier = Modifier.size(20.dp))
+                        }
                     }
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = primaryText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = content,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (secondaryText != null) {
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            text = if (isPlaying && isPaused) "Paused · $secondaryText" else secondaryText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = content.copy(alpha = 0.75f),
+                            primaryText,
+                            style = if (isPlaying) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = content,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                    }
-                }
-                if (onUnlinkClick != null) {
-                    IconButton(onClick = onUnlinkClick) {
-                        Icon(
-                            imageVector = Icons.Default.LinkOff,
-                            contentDescription = "Unlink website",
-                            tint = content,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                } else if (showTvIcon && onTvIconClick != null) {
-                    IconButton(onClick = onTvIconClick) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(content.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Tv,
-                                contentDescription = "Connection Sheet",
-                                tint = content,
-                                modifier = Modifier.size(18.dp),
+                        if (secondaryText != null) {
+                            Text(
+                                if (isPlaying && isPaused) "Paused · $secondaryText" else secondaryText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = muted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
+                    if (!isPlaying) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = muted, modifier = Modifier.padding(end = 8.dp))
+                    }
+                }
+                if (isPlaying && upNextCount > 0 && onUpNext != null) {
+                    Row(
+                        Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).background(content.copy(alpha = 0.08f))
+                            .clickable(onClick = onUpNext).padding(horizontal = 12.dp)
+                            .semantics { contentDescription = "Up next, $upNextCount items" },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null, tint = content, modifier = Modifier.size(16.dp))
+                        Text(upNextCount.toString(), style = MaterialTheme.typography.labelLarge, color = content)
+                    }
+                }
+                if (isPlaying && onUnlinkClick != null) {
+                    IconButton(onClick = onUnlinkClick, modifier = Modifier.size(44.dp)) {
+                        Icon(Icons.Default.LinkOff, contentDescription = "Unlink website", tint = muted, modifier = Modifier.size(20.dp))
+                    }
+                }
+                if (isPlaying && onPlayPause != null) {
+                    IconButton(
+                        onClick = onPlayPause,
+                        modifier = Modifier.size(44.dp).clip(CircleShape).background(listTint?.onCard ?: MaterialTheme.colorScheme.primary),
+                    ) {
+                        Icon(
+                            if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = if (isPaused) "Play" else "Pause",
+                            tint = listTint?.cardFill ?: MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
                 }
             }
-
-            // Thin progress line hugging the bottom edge while media is loaded.
-            // Perf: position ticks at ~1Hz, so no tween (it would never settle) —
-            // drive the bar directly off the raw fraction.
-            if (isPlaying && progress != null) {
-                val directProgress = progress.coerceIn(0f, 1f)
+            // Perf: position ticks at ~1 Hz, so no tween (it would never settle).
+            if (isPlaying && progress != null && listTint == null) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .background(content.copy(alpha = 0.20f)),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(directProgress)
-                            .fillMaxHeight()
-                            .background(content),
-                    )
-                }
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth(progress.coerceIn(0f, 1f)).height(2.dp)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
             }
-        }
-    }
-}
-
-/**
- * A small "now playing" equalizer: a few bars that bounce up and down forever.
- * Purely decorative — signals active playback in the mini-bar. Hosts must swap it
- * out (not just let it run) when playback is paused; see [NowPlayingBar]'s leading slot.
- */
-@Composable
-private fun PlayingEqualizer(
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    val transition = rememberInfiniteTransition(label = "equalizer")
-    // Staggered phase per bar so they don't bounce in unison.
-    val delays = listOf(0, 220, 90, 310)
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        delays.forEach { delay ->
-            val fraction by transition.animateFloat(
-                initialValue = 0.3f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(
-                        durationMillis = 480,
-                        delayMillis = delay,
-                        easing = LinearEasing,
-                    ),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-                label = "bar",
-            )
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .fillMaxHeight(fraction)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(color),
-            )
         }
     }
 }

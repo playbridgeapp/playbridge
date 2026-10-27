@@ -85,9 +85,15 @@ enum WireProtocol {
         mediaKind: String? = nil,
         headers: [String: String] = [:],
         detectedBy: String? = nil,
-        playerMode: String? = nil
+        playerMode: String? = nil,
+        displayDurationMs: Int? = nil,
+        itemId: String? = nil,
+        visualMetadata: [String: Any]? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
+        if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
+        if let itemId { item["itemId"] = itemId }
+        if let visualMetadata { item["visualMetadata"] = visualMetadata }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
@@ -111,9 +117,16 @@ enum WireProtocol {
         detectedBy: String? = nil,
         playerMode: String? = nil,
         playbackId: String? = nil,
-        useQueueV1: Bool = false
+        useQueueV1: Bool = false,
+        displayDurationMs: Int? = nil,
+        itemId: String? = nil,
+        visualMetadata: [String: Any]? = nil,
+        requestID: String? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
+        if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
+        if let itemId { item["itemId"] = itemId }
+        if let visualMetadata { item["visualMetadata"] = visualMetadata }
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
@@ -126,7 +139,7 @@ enum WireProtocol {
         if let playbackId { payload["ifPlaybackId"] = playbackId }
         return envelope(
             action: "queue_add", payload: payload,
-            requestID: useQueueV1 ? UUID().uuidString : nil
+            requestID: useQueueV1 ? requestID ?? UUID().uuidString : nil
         )
     }
 
@@ -170,13 +183,14 @@ enum WireProtocol {
         index: Int,
         itemId: String? = nil,
         playbackId: String? = nil,
-        useQueueV1: Bool = false
+        useQueueV1: Bool = false,
+        requestID: String? = nil
     ) -> String {
         var payload: [String: Any] = itemId.map { ["itemId": $0] } ?? ["index": index]
         if let playbackId { payload["ifPlaybackId"] = playbackId }
         return envelope(
             action: "playlist_jump", payload: payload,
-            requestID: useQueueV1 ? UUID().uuidString : nil
+            requestID: useQueueV1 ? requestID ?? UUID().uuidString : nil
         )
     }
 
@@ -184,17 +198,17 @@ enum WireProtocol {
         envelope(action: "queue_query", payload: [:], requestID: UUID().uuidString)
     }
 
-    static func queueRemove(itemIds: [String], playbackId: String?) -> String {
+    static func queueRemove(itemIds: [String], playbackId: String?, requestID: String = UUID().uuidString) -> String {
         var payload: [String: Any] = ["itemIds": itemIds]
         if let playbackId { payload["ifPlaybackId"] = playbackId }
-        return envelope(action: "queue_remove", payload: payload, requestID: UUID().uuidString)
+        return envelope(action: "queue_remove", payload: payload, requestID: requestID)
     }
 
-    static func queueMove(itemId: String, beforeItemId: String?, playbackId: String?) -> String {
+    static func queueMove(itemId: String, beforeItemId: String?, playbackId: String?, requestID: String = UUID().uuidString) -> String {
         var payload: [String: Any] = ["itemId": itemId]
         if let beforeItemId { payload["beforeItemId"] = beforeItemId }
         if let playbackId { payload["ifPlaybackId"] = playbackId }
-        return envelope(action: "queue_move", payload: payload, requestID: UUID().uuidString)
+        return envelope(action: "queue_move", payload: payload, requestID: requestID)
     }
 
     static func queueClear(playbackId: String?) -> String {

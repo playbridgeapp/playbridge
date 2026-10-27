@@ -1,26 +1,24 @@
 package com.playbridge.sender.cast
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
-import android.util.Size
+import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,620 +27,840 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.playbridge.sender.R
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.player.PlayerLauncher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.koin.compose.koinInject
 
-/** How the Phone Files list is ordered. */
-enum class SortKey { UNSORTED, NAME, SIZE, MODIFIED }
+/** What Phone Files may read for one kind of media. */
+internal enum class MediaAccess { FULL, PICKED, NONE }
 
 /**
  * Hoisted UI state for [PhoneFilesScreen]. Held by the navigation host (which stays in
- * composition) so the user's tab, search, sort, folder selection and scroll position survive
- * leaving and returning to the screen — e.g. round-tripping through the Remote screen, which
- * disposes the Phone Files content.
+ * composition) so the tab, search, sort, folder, open album and scroll positions survive
+ * leaving and returning to the screen, e.g. round-tripping through the Remote.
  */
 class PhoneFilesUiState {
-    var tab by mutableIntStateOf(0) // 0 = Videos, 1 = Audio, 2 = Images
+    var tab by mutableStateOf(PhoneFilesTab.VIDEOS)
     var query by mutableStateOf("")
     var searchActive by mutableStateOf(false)
-    var sortKey by mutableStateOf(SortKey.UNSORTED)
-    var ascending by mutableStateOf(true)
-    var selectedFolderId by mutableStateOf<Long?>(null)
-    val listState = LazyListState()
-    val folderScrollState = ScrollState(0)
+    var sort by mutableStateOf(SortKey.NEWEST)
+    var videosAsList by mutableStateOf(false)
+    var musicView by mutableStateOf(MusicView.SONGS)
+    /** Album, artist or folder page open in Music, by [SongGroup.key]. */
+    var openGroupKey by mutableStateOf<String?>(null)
+    /** Selected items (content URIs) in pick order; non-empty means select mode. */
+    var selection by mutableStateOf<List<String>>(emptyList())
+    /** Last item this screen cast, for the ON TV badge. */
+    var lastCastUri by mutableStateOf<String?>(null)
+    /** Slideshow options (board 8), kept between slideshows. */
+    var slideSeconds by mutableIntStateOf(5)
+    var slideShuffle by mutableStateOf(false)
+    var slideVideos by mutableStateOf(true)
+    val folderByTab = mutableStateMapOf<PhoneFilesTab, Long?>()
+    internal val askedKinds = mutableStateMapOf<MediaKind, Boolean>()
+    /** Loaded media by kind. Kept here so returning shows the lists at once, at the same scroll. */
+    internal val items = mutableStateMapOf<MediaKind, List<PhoneMediaItem>>()
+    val videoGrid = LazyGridState()
+    val photoGrid = LazyGridState()
+    val musicList = LazyListState()
+    val musicGrid = LazyGridState()
+    val groupList = LazyListState()
+
+    val selecting: Boolean get() = selection.isNotEmpty()
+    var folderId: Long?
+        get() = folderByTab[tab]
+        set(value) { folderByTab[tab] = value }
 }
 
 /**
- * Phone Files: in-app Videos/Audio/Images tabs listing on-device media (MediaStore) with thumbnails.
- * Each item is cast to the active target (DLNA renderer or native receiver) when one is
- * connected, or opened on this device when nothing is connected.
- *
- * The top bar offers a SAF file picker, search (filters the current tab), and a sort sheet;
- * a folder row under the tabs filters the current tab by containing folder.
+ * Phone Files (Phone Files canvas, boards 1–10): Videos, Music and Photos tabs over the phone's
+ * MediaStore. Items play on the chosen TV through the local proxy, or on this phone when no TV
+ * is chosen. The shared mini player (drawn by the nav host) shows what is playing.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhoneFilesScreen(
     viewModel: ConnectionViewModel,
     uiState: PhoneFilesUiState,
     onBack: () -> Unit,
-    onAddToCollection: (PhoneMediaItem) -> Unit = {},
+    onAddToCollection: (List<PhoneMediaItem>) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var showDevicePicker by remember { mutableStateOf(false) }
     var showSortSheet by remember { mutableStateOf(false) }
+    var detailsFor by remember { mutableStateOf<PhoneMediaItem?>(null) }
+    var slideshow by remember { mutableStateOf<Slideshow?>(null) }
 
+    val connectionCoordinator: ConnectionCoordinator = koinInject()
     val connectionState by viewModel.connectionState.collectAsState()
     val nativeDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val castRoute by viewModel.route.collectAsState()
-    val hasExternalTarget = activeExternalDevice != null ||
-        (castRoute is CastSessionManager.Route.NativeTv &&
-            connectionState is WebSocketClient.ConnectionState.Connected)
+    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsState()
+    val externalMediaTitle by viewModel.externalMediaTitle.collectAsState()
+    val nativeConnected = castRoute is CastSessionManager.Route.NativeTv &&
+        connectionState is WebSocketClient.ConnectionState.Connected
+    val hasExternalTarget = activeExternalDevice != null || nativeConnected
+    val tvName = activeExternalDevice?.playOnName ?: nativeDevice?.playOnName?.takeIf { nativeConnected }
+    val tvPlaying = (nativeConnected && tvActiveContext == "player") ||
+        (activeExternalDevice != null && externalMediaTitle != null)
+    val tvPlaylist by connectionCoordinator.tvPlaylistState.collectAsState()
+    val phoneQueueState by koinInject<PhoneQueueCoordinator>().state.collectAsState()
+    // PlayBridge receivers take whole lists; Google Cast, DLNA and Roku play one item at a time.
+    val queueEnabled = nativeConnected
 
-    val requiredPerms = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_AUDIO,
-                Manifest.permission.READ_MEDIA_IMAGES,
-            )
-        } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
+    // ---- Access -------------------------------------------------------------------------
+    val activity = remember(context) { context.findActivity() }
+    fun granted(permission: String) =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    fun access(kind: MediaKind): MediaAccess = when {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ->
+            if (granted(Manifest.permission.READ_EXTERNAL_STORAGE)) MediaAccess.FULL else MediaAccess.NONE
+        granted(fullPermission(kind)) -> MediaAccess.FULL
+        kind != MediaKind.AUDIO && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) -> MediaAccess.PICKED
+        else -> MediaAccess.NONE
     }
-    fun hasAnyPerm() = requiredPerms.any {
-        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-    }
 
-    var granted by remember { mutableStateOf(hasAnyPerm()) }
-    var permissionRevision by remember { mutableIntStateOf(0) }
-    var allItems by remember { mutableStateOf<List<PhoneMediaItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-
-    val videos = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.VIDEO } }
-    val audio = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.AUDIO } }
-    val images = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.IMAGE } }
+    var accessRevision by remember { mutableIntStateOf(0) }
+    val accessByKind = remember(accessRevision) { MediaKind.entries.associateWith { access(it) } }
+    val items = uiState.items
+    var loadingKind by remember { mutableStateOf<MediaKind?>(null) }
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        granted = it.values.any { value -> value } || hasAnyPerm()
-        permissionRevision++
+    ) { accessRevision++ }
+
+    fun requestAccess(kind: MediaKind) {
+        uiState.askedKinds[kind] = true
+        permLauncher.launch(permissionsFor(kind))
     }
 
-    LaunchedEffect(Unit) {
-        val missingPermissions = requiredPerms.filter {
-            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+    /** Denied and Android won't ask again: the button opens app settings instead. */
+    fun blocked(kind: MediaKind): Boolean =
+        uiState.askedKinds[kind] == true && accessByKind[kind] == MediaAccess.NONE && activity != null &&
+            permissionsFor(kind).none { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
+
+    // Re-read access and media whenever the screen resumes (Settings, the system picker).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) accessRevision++
         }
-        if (missingPermissions.isNotEmpty()) permLauncher.launch(missingPermissions.toTypedArray())
-    }
-    LaunchedEffect(granted, permissionRevision) {
-        if (granted) {
-            loading = true
-            allItems = PhoneMediaStore.query(context)
-            loading = false
-        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Switch tab and reset the per-tab folder selection (folders differ per tab).
-    fun selectTab(index: Int) {
-        if (uiState.tab != index) {
-            uiState.tab = index
-            uiState.selectedFolderId = null
-        }
+    // Ask once for the open tab's kind; other tabs ask when opened (board 10).
+    LaunchedEffect(uiState.tab) {
+        val kind = uiState.tab.kind
+        if (access(kind) == MediaAccess.NONE && uiState.askedKinds[kind] != true) requestAccess(kind)
     }
-
-    // Play on the active external target, or in the in-app player ("This Device").
-    fun playOrCast(media: PhoneMediaItem) {
-        if (hasExternalTarget) {
-            if (castRoute is CastSessionManager.Route.NativeTv &&
-                nativeDevice?.supportsNativeMediaKind(media.mediaKind.wireValue) == false
-            ) {
-                scope.launch {
-                    snackbar.showSnackbar("This receiver does not support this media type")
-                }
-                return
+    LaunchedEffect(accessByKind) {
+        for (kind in MediaKind.entries) {
+            if (accessByKind[kind] == MediaAccess.NONE) {
+                items.remove(kind)
+                continue
             }
-            val ok = viewModel.castLocalFile(
-                uriString = media.uri.toString(),
-                mime = media.mimeType,
-                title = media.title,
-                durationMs = media.durationMs,
-                mediaKind = media.mediaKind,
-                artist = media.artist,
-                album = media.album,
-                trackNumber = media.trackNumber,
-            )
-            if (ok) {
-                scope.launch { snackbar.showSnackbar("Casting ${media.title}") }
-            } else {
-                // Lost the target between the check and the send — offer the picker.
-                showDevicePicker = true
-            }
-        } else if (media.mediaKind == MediaKind.IMAGE) {
-            // The phone player is video/audio-only; use the system image viewer locally.
+            if (items[kind] == null) loadingKind = kind
+            items[kind] = PhoneMediaStore.query(context, kind)
+            if (loadingKind == kind) loadingKind = null
+        }
+    }
+
+    // ---- Playback ------------------------------------------------------------------------
+    var subtitle by remember { mutableStateOf<Pair<String, String>?>(null) } // url to file name
+
+    fun playOnPhone(media: PhoneMediaItem) {
+        if (media.mediaKind == MediaKind.IMAGE) {
+            // The phone player is video/audio-only; images open in the system viewer.
             runCatching {
                 context.startActivity(
                     Intent(Intent.ACTION_VIEW)
                         .setDataAndType(media.uri, media.mimeType ?: "image/*")
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
                 )
-            }.onFailure {
-                scope.launch { snackbar.showSnackbar("No image viewer is available") }
-            }
+            }.onFailure { scope.launch { snackbar.showSnackbar("No image viewer is available") } }
         } else {
-            // No cast target → play locally in the in-app player (no proxy needed).
             PlayerLauncher.start(context, media.uri.toString(), media.title, media.mimeType)
         }
     }
 
-    // SAF picker: lets the user cast/play files MediaStore hasn't indexed.
-    val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri: Uri? ->
+    fun unsupportedOnTv(media: PhoneMediaItem): Boolean =
+        castRoute is CastSessionManager.Route.NativeTv &&
+            nativeDevice?.supportsNativeMediaKind(media.mediaKind.wireValue) == false
+
+    fun playOnTv(media: PhoneMediaItem, subtitleUrl: String? = null) {
+        if (unsupportedOnTv(media)) {
+            scope.launch { snackbar.showSnackbar("${tvName ?: "This TV"} can't play this kind of file") }
+            return
+        }
+        val ok = viewModel.castLocalFile(
+            uriString = media.uri.toString(),
+            mime = media.mimeType,
+            title = media.title,
+            durationMs = media.durationMs,
+            mediaKind = media.mediaKind,
+            artist = media.artist,
+            album = media.album,
+            trackNumber = media.trackNumber,
+            subtitleUrls = listOfNotNull(subtitleUrl),
+        )
+        if (ok) {
+            uiState.lastCastUri = media.uri.toString()
+            val verb = if (media.mediaKind == MediaKind.IMAGE) "Showing" else "Playing"
+            scope.launch { snackbar.showSnackbar("$verb on ${tvName ?: "TV"}") }
+        } else {
+            // Lost the target between the check and the send: offer the picker.
+            showDevicePicker = true
+        }
+    }
+
+    fun play(media: PhoneMediaItem) = if (hasExternalTarget) playOnTv(media) else playOnPhone(media)
+
+    fun castItem(media: PhoneMediaItem, displayDurationMs: Long? = null) = com.playbridge.sender.connection.LocalCastItem(
+        uri = media.uri.toString(),
+        mime = media.mimeType,
+        title = media.title,
+        durationMs = media.durationMs,
+        kind = media.mediaKind,
+        artist = media.artist,
+        album = media.album,
+        trackNumber = media.trackNumber,
+        displayDurationMs = displayDurationMs.takeIf { media.mediaKind == MediaKind.IMAGE },
+    )
+
+    fun sendQueue(list: List<com.playbridge.sender.connection.LocalCastItem>, mode: com.playbridge.sender.connection.LocalQueueMode, source: String? = null) {
+        if (list.isEmpty()) return
+        scope.launch {
+            val result = viewModel.castLocalQueue(list, mode, source)
+            val tv = tvName ?: "TV"
+            val count = if (list.size == 1) "1 item" else "${list.size} items"
+            val message = when (result) {
+                com.playbridge.sender.connection.LocalQueueResult.PLAYING -> {
+                    uiState.lastCastUri = list.first().uri
+                    if (list.size == 1) "Playing on $tv" else "Playing $count on $tv"
+                }
+                com.playbridge.sender.connection.LocalQueueResult.ADDED ->
+                    if (mode == com.playbridge.sender.connection.LocalQueueMode.NEXT) "Plays next on $tv" else "Added $count to Up next"
+                com.playbridge.sender.connection.LocalQueueResult.ADDED_AT_END -> "$tv can't reorder its queue, so it was added at the end"
+                com.playbridge.sender.connection.LocalQueueResult.FAILED -> "Couldn't send to $tv"
+            }
+            snackbar.showSnackbar(message)
+        }
+    }
+
+    fun queue(list: List<PhoneMediaItem>, mode: com.playbridge.sender.connection.LocalQueueMode, source: String? = null) =
+        sendQueue(list.filterNot(::unsupportedOnTv).map { castItem(it) }, mode, source)
+
+    /** Play all / Play N / Shuffle: a new list on the TV, or in order on this phone. [source] names it in Up next. */
+    fun playList(list: List<PhoneMediaItem>, shuffle: Boolean, source: String) {
+        val ordered = if (shuffle) list.shuffled() else list
+        when {
+            queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE, if (shuffle) "$source, shuffled" else source)
+            !hasExternalTarget -> {
+                val playable = ordered.filter { it.mediaKind != MediaKind.IMAGE }
+                if (playable.isEmpty()) return
+                PlayerLauncher.startPlaylist(context, playable.map { it.uri.toString() }, playable.map { it.title }, startIndex = 0)
+            }
+        }
+    }
+
+    /** Photos (and optionally the folder's videos) as a timed list (board 8). */
+    fun startSlideshow(show: Slideshow) {
+        val ordered = PhoneFilesModel.slideshow(
+            show.photos, show.videos, uiState.slideVideos, uiState.slideShuffle, 0, Int.MAX_VALUE,
+        )
+        slideshow = show.copy(ordered = ordered)
+        sendQueue(ordered.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE, "Slideshow · ${show.title}")
+    }
+
+    /** Same order, new time per photo: restart from the photo on screen. */
+    fun retimeSlideshow(show: Slideshow, from: Int) {
+        val rotated = show.ordered.drop(from) + show.ordered.take(from)
+        slideshow = show.copy(ordered = rotated)
+        sendQueue(rotated.map { castItem(it, uiState.slideSeconds * 1000L) }, com.playbridge.sender.connection.LocalQueueMode.REPLACE, "Slideshow · ${show.title}")
+    }
+
+    fun share(list: List<PhoneMediaItem>) {
+        if (list.isEmpty()) return
+        val intent = if (list.size == 1) {
+            Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, list[0].uri).setType(list[0].mimeType ?: "*/*")
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE)
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(list.map { it.uri }))
+                .setType("*/*")
+        }
+        runCatching {
+            context.startActivity(
+                Intent.createChooser(intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), null),
+            )
+        }
+    }
+
+    // Browse other files (system picker): files MediaStore hasn't indexed.
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
             // Persist read access so the proxy can still read the file when the TV fetches it.
             runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                )
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             val mime = context.contentResolver.getType(uri)
-            playOrCast(
-                PhoneMediaItem(
-                    uri = uri,
-                    title = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "File",
-                    durationMs = 0L,
-                    mimeType = mime,
-                    mediaKind = when {
-                        mime?.startsWith("audio/") == true -> MediaKind.AUDIO
-                        mime?.startsWith("image/") == true -> MediaKind.IMAGE
-                        else -> MediaKind.VIDEO
-                    },
-                ),
+            detailsFor = PhoneMediaItem(
+                uri = uri,
+                title = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "File",
+                durationMs = 0L,
+                mimeType = mime,
+                mediaKind = when {
+                    mime?.startsWith("audio/") == true -> MediaKind.AUDIO
+                    mime?.startsWith("image/") == true -> MediaKind.IMAGE
+                    else -> MediaKind.VIDEO
+                },
             )
         }
     }
+    val browseOtherFiles = { filePicker.launch(arrayOf("video/*", "audio/*", "image/*")) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    if (uiState.searchActive) {
-                        TextField(
-                            value = uiState.query,
-                            onValueChange = { uiState.query = it },
-                            placeholder = {
-                                Text(
-                                    "Search ${when (uiState.tab) {
-                                        0 -> "videos"
-                                        1 -> "audio"
-                                        else -> "images"
-                                    }}",
-                                )
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-                                unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-                            ),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(),
-                        )
-                    } else {
-                        Text("Phone Files")
-                    }
-                },
-                navigationIcon = {
-                    if (uiState.searchActive) {
-                        IconButton(onClick = {
-                            uiState.searchActive = false
-                            uiState.query = ""
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close search")
-                        }
-                    } else {
-                        // Dashboard (blocks) icon → Dashboard, matching the other top-level screens.
-                        IconButton(onClick = onBack) {
-                            com.playbridge.sender.ui.DashboardBlocksIcon(
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        // OpenDocument also covers media that MediaStore has not indexed.
-                        filePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
-                    }) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "Pick a file")
-                    }
-                    IconButton(onClick = {
-                        uiState.searchActive = !uiState.searchActive
-                        if (!uiState.searchActive) uiState.query = ""
-                    }) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
-                    }
-                    IconButton(onClick = { showSortSheet = true }) {
-                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort")
-                    }
-                },
-            )
-        },
-        // Lift snackbars above the overlaid cast bar so they aren't hidden behind it.
-        snackbarHost = {
-            SnackbarHost(
-                snackbar,
-                modifier = Modifier.padding(
-                    bottom = WindowInsets.navigationBars.asPaddingValues()
-                        .calculateBottomPadding() + 80.dp
-                ),
-            )
-        },
-    ) { pad ->
-        Box(modifier = Modifier.padding(pad).fillMaxSize()) {
-            when {
-                !granted -> Column(
-                    modifier = Modifier.fillMaxSize().padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text(
-                        "Permission needed to list your videos, audio, and images.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { permLauncher.launch(requiredPerms) }) { Text("Grant permission") }
+    val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) subtitle = publishLocalSubtitle(context, uri)
+    }
+
+    // ---- Derived lists -------------------------------------------------------------------
+    val tabItems = items[uiState.tab.kind].orEmpty()
+    val folders = remember(tabItems) { PhoneFilesModel.folders(tabItems) }
+    val shown = remember(tabItems, uiState.folderId, uiState.query, uiState.sort) {
+        PhoneFilesModel.visible(tabItems, uiState.folderId, uiState.query, uiState.sort)
+    }
+    val byUri = remember(items.toMap()) { items.values.flatten().associateBy { it.uri.toString() } }
+    val selectedItems = uiState.selection.mapNotNull { byUri[it] }
+    // The TV's current item: the last thing sent, or a phone file with the current item's title.
+    val currentTvTitle = tvPlaylist?.let { list -> list.items.firstOrNull { it.index == list.currentIndex }?.title }
+    val onTvUri = when {
+        !tvPlaying -> null
+        currentTvTitle == null -> uiState.lastCastUri
+        byUri[uiState.lastCastUri]?.title == currentTvTitle -> uiState.lastCastUri
+        else -> items.values.asSequence().flatten().firstOrNull { it.title == currentTvTitle }?.uri?.toString()
+    }
+
+    BackHandler(enabled = uiState.selecting || uiState.searchActive || uiState.openGroupKey != null) {
+        when {
+            uiState.selecting -> uiState.selection = emptyList()
+            uiState.openGroupKey != null -> uiState.openGroupKey = null
+            else -> {
+                uiState.searchActive = false
+                uiState.query = ""
+            }
+        }
+    }
+
+    val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // Leaves room for the shared mini player, or for the selection bar in select mode.
+    val listBottomPadding = bottomInset + if (uiState.selecting) 150.dp else 88.dp
+    val callbacks = PhoneFilesCallbacks(
+        onOpen = { media ->
+            if (uiState.selecting) {
+                uiState.selection = PhoneFilesModel.toggle(uiState.selection, media.uri.toString())
+            } else {
+                when (media.mediaKind) {
+                    MediaKind.VIDEO -> detailsFor = media
+                    else -> play(media)
                 }
+            }
+        },
+        onLongPress = { media -> uiState.selection = PhoneFilesModel.toggle(uiState.selection, media.uri.toString()) },
+        onAddToCollection = { onAddToCollection(listOf(it)) },
+        onPlayOnPhone = ::playOnPhone,
+        queueEnabled = queueEnabled,
+        playListAvailable = queueEnabled || !hasExternalTarget,
+        onPlayNext = { queue(listOf(it), com.playbridge.sender.connection.LocalQueueMode.NEXT) },
+        onAddToQueue = { queue(listOf(it), com.playbridge.sender.connection.LocalQueueMode.END) },
+        onPlayList = ::playList,
+        onSlideshow = { title, photos ->
+            val folder = uiState.folderByTab[PhoneFilesTab.PHOTOS]
+            val videos = items[MediaKind.VIDEO].orEmpty().filter { folder == null || it.bucketId == folder }
+            startSlideshow(Slideshow(title, photos, videos))
+        },
+        slideshowAvailable = queueEnabled && nativeDevice?.supportsNativeMediaKind(MediaKind.IMAGE.wireValue) != false,
+    )
 
-                loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-
-                else -> Column(modifier = Modifier.fillMaxSize()) {
-                    TabRow(selectedTabIndex = uiState.tab) {
-                        Tab(
-                            selected = uiState.tab == 0,
-                            onClick = { selectTab(0) },
-                            text = { Text("Videos (${videos.size})") },
-                        )
-                        Tab(
-                            selected = uiState.tab == 1,
-                            onClick = { selectTab(1) },
-                            text = { Text("Audio (${audio.size})") },
-                        )
-                        Tab(
-                            selected = uiState.tab == 2,
-                            onClick = { selectTab(2) },
-                            text = { Text("Images (${images.size})") },
-                        )
-                    }
-
-                    val base = when (uiState.tab) {
-                        0 -> videos
-                        1 -> audio
-                        else -> images
-                    }
-
-                    // Distinct folders for the current tab (id → display name), preserving order.
-                    val folders = remember(base) {
-                        base.mapNotNull { item ->
-                            item.bucketId?.let { id -> id to (item.bucketName ?: "Folder") }
-                        }.distinctBy { it.first }
-                    }
-                    if (folders.isNotEmpty()) {
-                        FolderRow(
-                            folders = folders,
-                            selectedId = uiState.selectedFolderId,
-                            scrollState = uiState.folderScrollState,
-                            onSelect = { uiState.selectedFolderId = it },
-                        )
-                    }
-
-                    // Folder filter → search filter → sort.
-                    val shown = remember(base, uiState.selectedFolderId, uiState.query, uiState.sortKey, uiState.ascending) {
-                        val filtered = base.asSequence()
-                            .filter { uiState.selectedFolderId == null || it.bucketId == uiState.selectedFolderId }
-                            .filter { uiState.query.isBlank() || it.title.contains(uiState.query, ignoreCase = true) }
-                            .toList()
-                        val sorted = when (uiState.sortKey) {
-                            SortKey.UNSORTED -> filtered.sortedByDescending { it.dateAdded }
-                            SortKey.NAME -> filtered.sortedBy { it.title.lowercase() }
-                            SortKey.SIZE -> filtered.sortedBy { it.sizeBytes }
-                            SortKey.MODIFIED -> filtered.sortedBy { it.dateModified }
-                        }
-                        if (uiState.sortKey != SortKey.UNSORTED && !uiState.ascending) sorted.reversed() else sorted
-                    }
-
-                    if (shown.isEmpty()) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(
-                                when {
-                                    uiState.query.isNotBlank() -> "No matches."
-                                    uiState.tab == 0 -> "No videos found."
-                                    uiState.tab == 1 -> "No audio found."
-                                    else -> "No images found."
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            val group = uiState.openGroupKey
+            when {
+                uiState.selecting -> SelectionHeader(
+                    count = uiState.selection.size,
+                    onCancel = { uiState.selection = emptyList() },
+                    onSelectAll = {
+                        val visible = if (uiState.tab == PhoneFilesTab.MUSIC) {
+                            PhoneFilesModel.sorted(
+                                tabItems.filter { PhoneFilesModel.matches(it, uiState.query) },
+                                uiState.sort,
                             )
+                        } else shown
+                        uiState.selection = (uiState.selection + visible.map { it.uri.toString() }).distinct()
+                    },
+                )
+                group != null -> Unit // The group page draws its own header.
+                uiState.searchActive -> SearchHeader(
+                    query = uiState.query,
+                    placeholder = "Search ${uiState.tab.label.lowercase()}",
+                    onQueryChange = { uiState.query = it },
+                    onClose = {
+                        uiState.searchActive = false
+                        uiState.query = ""
+                    },
+                )
+                else -> PhoneFilesHeader(
+                    onDashboard = onBack,
+                    onBrowseOtherFiles = browseOtherFiles,
+                    onSearch = { uiState.searchActive = true },
+                    onSortAndView = { showSortSheet = true },
+                )
+            }
+
+            if (group != null && uiState.tab == PhoneFilesTab.MUSIC) {
+                val songs = items[MediaKind.AUDIO].orEmpty()
+                val songGroup = remember(songs, group) {
+                    (PhoneFilesModel.albums(songs) + PhoneFilesModel.artists(songs) + PhoneFilesModel.musicFolders(songs))
+                        .firstOrNull { it.key == group }
+                }
+                if (songGroup == null) {
+                    LaunchedEffect(group) { uiState.openGroupKey = null }
+                } else {
+                    SongGroupPage(
+                        group = songGroup,
+                        listState = uiState.groupList,
+                        playingUri = onTvUri,
+                        tvName = tvName,
+                        selection = uiState.selection,
+                        bottomPadding = listBottomPadding,
+                        onBack = { uiState.openGroupKey = null },
+                        callbacks = callbacks,
+                    )
+                }
+                return@Column
+            }
+
+            MediaTabs(
+                selected = uiState.tab,
+                counts = PhoneFilesTab.entries.associateWith { tab ->
+                    items[tab.kind]?.size.takeIf { accessByKind[tab.kind] != MediaAccess.NONE }
+                },
+                onSelect = { tab ->
+                    if (uiState.tab != tab) {
+                        uiState.tab = tab
+                        uiState.selection = emptyList()
+                    }
+                },
+            )
+
+            val kind = uiState.tab.kind
+            val tabAccess = accessByKind[kind] ?: MediaAccess.NONE
+            when {
+                tabAccess == MediaAccess.NONE -> AccessCard(
+                    kind = kind,
+                    blocked = blocked(kind),
+                    onAllow = {
+                        if (blocked(kind)) {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
+                            )
+                        } else {
+                            requestAccess(kind)
                         }
-                    } else {
-                        LazyColumn(
-                            state = uiState.listState,
-                            modifier = Modifier.fillMaxSize(),
-                            // Keep the last row clear of the system navigation bar and the
-                            // overlaid cast bar.
-                            contentPadding = PaddingValues(
-                                bottom = WindowInsets.navigationBars.asPaddingValues()
-                                    .calculateBottomPadding() + 84.dp
-                            ),
-                        ) {
-                            items(shown) { media ->
-                                PhoneMediaRow(
-                                    media = media,
-                                    onClick = { playOrCast(media) },
-                                    onAddToCollection = { onAddToCollection(media) },
-                                )
-                            }
-                        }
+                    },
+                    onBrowseOtherFiles = browseOtherFiles,
+                )
+                loadingKind == kind && tabItems.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                else -> {
+                    if (tabAccess == MediaAccess.PICKED) {
+                        PickedAccessNote(onChange = { requestAccess(kind) })
+                    }
+                    when (uiState.tab) {
+                        PhoneFilesTab.VIDEOS -> VideosTab(
+                            uiState = uiState,
+                            folders = folders,
+                            videos = shown,
+                            onTvUri = onTvUri,
+                            bottomPadding = listBottomPadding,
+                            callbacks = callbacks,
+                        )
+                        PhoneFilesTab.MUSIC -> MusicTab(
+                            uiState = uiState,
+                            songs = tabItems,
+                            onTvUri = onTvUri,
+                            bottomPadding = listBottomPadding,
+                            callbacks = callbacks,
+                        )
+                        PhoneFilesTab.PHOTOS -> PhotosTab(
+                            uiState = uiState,
+                            folders = folders,
+                            photos = shown,
+                            onTvUri = onTvUri,
+                            bottomPadding = listBottomPadding,
+                            callbacks = callbacks,
+                        )
                     }
                 }
             }
         }
+
+        if (uiState.selecting) {
+            SelectionBar(
+                selected = selectedItems,
+                tvName = tvName.takeIf { hasExternalTarget },
+                queueEnabled = queueEnabled,
+                playAvailable = callbacks.playListAvailable && selectedItems.any { it.mediaKind != MediaKind.IMAGE || queueEnabled },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset),
+                onPlay = { shuffle ->
+                    playList(selectedItems, shuffle, "Your selection")
+                    uiState.selection = emptyList()
+                },
+                onAddToQueue = {
+                    queue(selectedItems, com.playbridge.sender.connection.LocalQueueMode.END)
+                    uiState.selection = emptyList()
+                },
+                onAddToCollection = {
+                    onAddToCollection(selectedItems)
+                    uiState.selection = emptyList()
+                },
+                onShare = { share(selectedItems) },
+            )
+        }
+
+        SnackbarHost(
+            snackbar,
+            // Lift snackbars above the shared mini player.
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset + 80.dp),
+        )
+    }
+
+    detailsFor?.let { media ->
+        MediaDetailsSheet(
+            media = media,
+            tvName = tvName.takeIf { hasExternalTarget },
+            unsupportedOnTv = unsupportedOnTv(media),
+            subtitleName = subtitle?.second,
+            onDismiss = {
+                detailsFor = null
+                subtitle = null
+            },
+            onPlayOnTv = {
+                playOnTv(media, subtitle?.first)
+                detailsFor = null
+                subtitle = null
+            },
+            onPlayOnPhone = {
+                playOnPhone(media)
+                detailsFor = null
+            },
+            onPickTv = { showDevicePicker = true },
+            onAddToCollection = { onAddToCollection(listOf(media)) },
+            onShare = { share(listOf(media)) },
+            onPlayNext = if (queueEnabled) ({
+                queue(listOf(media), com.playbridge.sender.connection.LocalQueueMode.NEXT)
+                detailsFor = null
+            }) else null,
+            onAddToQueue = if (queueEnabled) ({
+                queue(listOf(media), com.playbridge.sender.connection.LocalQueueMode.END)
+                detailsFor = null
+            }) else null,
+            onAddSubtitles = { subtitlePicker.launch(arrayOf("*/*")) },
+            onRemoveSubtitles = { subtitle = null },
+        )
     }
 
     if (showSortSheet) {
-        SortSheet(
-            sortKey = uiState.sortKey,
-            ascending = uiState.ascending,
-            onSortKeyChange = { uiState.sortKey = it },
-            onAscendingChange = { uiState.ascending = it },
+        SortAndViewSheet(
+            tab = uiState.tab,
+            sort = uiState.sort,
+            videosAsList = uiState.videosAsList,
+            onSort = { uiState.sort = it },
+            onVideosAsList = { uiState.videosAsList = it },
+            onBrowseOtherFiles = {
+                showSortSheet = false
+                browseOtherFiles()
+            },
             onDismiss = { showSortSheet = false },
         )
     }
 
-    // Opened when a file is tapped but the cast target was lost mid-flight.
+    slideshow?.let { show ->
+        SlideshowSheet(
+            show = show,
+            tvName = tvName ?: "TV",
+            position = phoneQueueState.position.plus(1).takeIf { phoneQueueState.active && tvPlaying },
+            seconds = uiState.slideSeconds,
+            shuffle = uiState.slideShuffle,
+            includeVideos = uiState.slideVideos,
+            hasVideos = show.videos.isNotEmpty(),
+            onSeconds = {
+                uiState.slideSeconds = it
+                retimeSlideshow(show, from = if (phoneQueueState.active) phoneQueueState.position else 0)
+            },
+            onShuffle = {
+                uiState.slideShuffle = it
+                startSlideshow(show)
+            },
+            onIncludeVideos = {
+                uiState.slideVideos = it
+                startSlideshow(show)
+            },
+            onPrevious = { scope.launch { viewModel.stepQueue(-1) } },
+            onTogglePause = { scope.launch { viewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.TogglePlayPause) } },
+            onNext = { scope.launch { viewModel.stepQueue(1) } },
+            onStop = {
+                scope.launch { viewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.StopPlayback) }
+                slideshow = null
+            },
+            onDismiss = { slideshow = null },
+        )
+    }
+
     if (showDevicePicker) {
-        PlayOnSheet(
-            onDismiss = { showDevicePicker = false },
-            showThisDevice = true,
-        )
+        PlayOnSheet(onDismiss = { showDevicePicker = false }, showThisDevice = true)
     }
 }
 
+/** Item actions shared by every tab. */
+internal class PhoneFilesCallbacks(
+    val onOpen: (PhoneMediaItem) -> Unit,
+    val onLongPress: (PhoneMediaItem) -> Unit,
+    val onAddToCollection: (PhoneMediaItem) -> Unit,
+    val onPlayOnPhone: (PhoneMediaItem) -> Unit,
+    /** Play next and Add to queue: PlayBridge receivers only. */
+    val queueEnabled: Boolean = false,
+    /** Play all / Shuffle: PlayBridge receivers, or this phone. */
+    val playListAvailable: Boolean = false,
+    val onPlayNext: (PhoneMediaItem) -> Unit = {},
+    val onAddToQueue: (PhoneMediaItem) -> Unit = {},
+    /** Items, shuffle, and the name Up next shows for the list ("All songs", an album). */
+    val onPlayList: (List<PhoneMediaItem>, Boolean, String) -> Unit = { _, _, _ -> },
+    val onSlideshow: (String, List<PhoneMediaItem>) -> Unit = { _, _ -> },
+    val slideshowAvailable: Boolean = false,
+)
+
+/** A running slideshow: what it shows, in the order sent. */
+internal data class Slideshow(
+    val title: String,
+    val photos: List<PhoneMediaItem>,
+    val videos: List<PhoneMediaItem>,
+    val ordered: List<PhoneMediaItem> = emptyList(),
+) {
+    val count: Int get() = ordered.size
+}
+
+/** Keeps one `playlist` message a reasonable size for every receiver. */
+
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private fun fullPermission(kind: MediaKind): String = when (kind) {
+    MediaKind.VIDEO -> Manifest.permission.READ_MEDIA_VIDEO
+    MediaKind.AUDIO -> Manifest.permission.READ_MEDIA_AUDIO
+    MediaKind.IMAGE -> Manifest.permission.READ_MEDIA_IMAGES
+}
+
+/**
+ * Permissions to request for [kind]. Videos and photos are asked together, as Android shows
+ * them as one prompt; on Android 14+ that prompt offers "Select photos and videos".
+ */
+private fun permissionsFor(kind: MediaKind): Array<String> = when {
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    kind == MediaKind.AUDIO -> arrayOf(Manifest.permission.READ_MEDIA_AUDIO)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(
+        Manifest.permission.READ_MEDIA_VIDEO,
+        Manifest.permission.READ_MEDIA_IMAGES,
+        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+    )
+    else -> arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 @Composable
-private fun FolderRow(
-    folders: List<Pair<Long, String>>,
-    selectedId: Long?,
-    scrollState: ScrollState,
-    onSelect: (Long?) -> Unit,
+private fun PhoneFilesHeader(
+    onDashboard: () -> Unit,
+    onBrowseOtherFiles: () -> Unit,
+    onSearch: () -> Unit,
+    onSortAndView: () -> Unit,
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(
-            selected = selectedId == null,
-            onClick = { onSelect(null) },
-            label = { Text("All") },
-        )
-        folders.forEach { (id, name) ->
-            FilterChip(
-                selected = selectedId == id,
-                onClick = { onSelect(id) },
-                label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SortSheet(
-    sortKey: SortKey,
-    ascending: Boolean,
-    onSortKeyChange: (SortKey) -> Unit,
-    onAscendingChange: (Boolean) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                "Sort by",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
-            OptionRow("Unsorted", sortKey == SortKey.UNSORTED) { onSortKeyChange(SortKey.UNSORTED) }
-            OptionRow("Name", sortKey == SortKey.NAME) { onSortKeyChange(SortKey.NAME) }
-            OptionRow("Size", sortKey == SortKey.SIZE) { onSortKeyChange(SortKey.SIZE) }
-            OptionRow("Modified date", sortKey == SortKey.MODIFIED) { onSortKeyChange(SortKey.MODIFIED) }
-
-            Text(
-                "Order",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
-            )
-            OptionRow("Ascending", ascending, enabled = sortKey != SortKey.UNSORTED) { onAscendingChange(true) }
-            OptionRow("Descending", !ascending, enabled = sortKey != SortKey.UNSORTED) { onAscendingChange(false) }
-        }
-    }
-}
-
-@Composable
-private fun OptionRow(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        RadioButton(selected = selected, enabled = enabled, onClick = onClick)
+        IconButton(onClick = onDashboard) {
+            com.playbridge.sender.ui.DashboardBlocksIcon(modifier = Modifier.size(22.dp))
+        }
         Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (enabled) MaterialTheme.colorScheme.onSurface
-            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            "Phone files",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onBrowseOtherFiles) {
+            Icon(Icons.Outlined.Folder, contentDescription = "Browse other files")
+        }
+        IconButton(onClick = onSearch) {
+            Icon(Icons.Default.Search, contentDescription = "Search")
+        }
+        IconButton(onClick = onSortAndView) {
+            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort and view")
+        }
+    }
+}
+
+@Composable
+private fun SearchHeader(
+    query: String,
+    placeholder: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close search") }
+        TextField(
+            value = query,
+            onValueChange = onQueryChange,
+            placeholder = { Text(placeholder) },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+            ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         )
     }
 }
 
 @Composable
-private fun PhoneMediaRow(
-    media: PhoneMediaItem,
-    onClick: () -> Unit,
-    onAddToCollection: () -> Unit = {},
+private fun SelectionHeader(count: Int, onCancel: () -> Unit, onSelectAll: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(start = 4.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = "Cancel selection") }
+        Text(
+            "$count selected",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onSelectAll) { Text("Select all") }
+    }
+}
+
+/** Videos · Music · Photos segmented tabs with counts (null count: no access yet). */
+@Composable
+private fun MediaTabs(
+    selected: PhoneFilesTab,
+    counts: Map<PhoneFilesTab, Int?>,
+    onSelect: (PhoneFilesTab) -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        MediaThumbnail(media)
-        Spacer(Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                media.title,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (media.durationMs > 0) {
+        PhoneFilesTab.entries.forEach { tab ->
+            val isSelected = tab == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                    .clickable { onSelect(tab) }
+                    .semantics {
+                        role = Role.Tab
+                        this.selected = isSelected
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    clockShort(media.durationMs),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    counts[tab]?.let { "${tab.label} · $it" } ?: tab.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
-        }
-        IconButton(onClick = onAddToCollection) {
-            Icon(
-                Icons.AutoMirrored.Filled.PlaylistAdd,
-                contentDescription = "Add to Collection",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** Thumbnail (video frame / album art) loaded lazily via ContentResolver; icon fallback. */
-@Composable
-private fun MediaThumbnail(media: PhoneMediaItem) {
-    val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(initialValue = null, media.uri) {
-        value = withContext(Dispatchers.IO) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                runCatching { context.contentResolver.loadThumbnail(media.uri, Size(128, 128), null) }.getOrNull()
-            } else {
-                null
-            }
-        }
-    }
-    Box(
-        modifier = Modifier
-            .size(48.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center,
-    ) {
-        val bmp = bitmap
-        if (bmp != null) {
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Icon(
-                imageVector = when (media.mediaKind) {
-                    MediaKind.AUDIO -> Icons.Default.Audiotrack
-                    MediaKind.IMAGE -> Icons.Default.Photo
-                    MediaKind.VIDEO -> Icons.Default.Movie
-                },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp),
-            )
         }
     }
 }
 
 /** Resolves a human display name for a SAF content URI; null when unavailable. */
-private fun queryDisplayName(context: android.content.Context, uri: Uri): String? = runCatching {
+private fun queryDisplayName(context: Context, uri: Uri): String? = runCatching {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) {
             val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -650,11 +868,3 @@ private fun queryDisplayName(context: android.content.Context, uri: Uri): String
         } else null
     }
 }.getOrNull()
-
-private fun clockShort(ms: Long): String {
-    val s = (ms / 1000).coerceAtLeast(0)
-    val h = s / 3600
-    val m = (s % 3600) / 60
-    val sec = s % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
-}

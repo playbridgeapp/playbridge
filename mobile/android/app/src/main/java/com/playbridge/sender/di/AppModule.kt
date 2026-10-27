@@ -204,6 +204,17 @@ val appModule = module {
         )
     }
 
+    // 5b'. PhoneQueueCoordinator — phone file lists of any length as a moving TV queue window.
+    single {
+        com.playbridge.sender.cast.PhoneQueueCoordinator(
+            packager = com.playbridge.sender.connection.LocalCastPackager(androidContext() as android.app.Application),
+            webSocketClient = get(),
+            connectionCoordinator = get(),
+            castSessionManager = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
+        )
+    }
+
     // 5c. ExternalQueueCoordinator — phone-driven episode auto-advance for third-party receivers
     single {
         com.playbridge.sender.connection.ExternalQueueCoordinator(

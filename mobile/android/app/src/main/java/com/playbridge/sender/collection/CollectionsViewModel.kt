@@ -43,6 +43,15 @@ class CollectionsViewModel(
         onResult(repository.addItem(collectionId, draft))
     }
 
+    /** Adds [drafts] in order; [onResult] gets how many were not already there. */
+    fun addItems(
+        collectionId: Long,
+        drafts: List<CollectionItemDraft>,
+        onResult: (addedCount: Int) -> Unit = {},
+    ) = viewModelScope.launch {
+        onResult(drafts.count { repository.addItem(collectionId, it) })
+    }
+
     fun removeItem(item: CollectionItemEntity) = viewModelScope.launch {
         repository.removeItem(item)
     }

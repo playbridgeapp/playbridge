@@ -23,6 +23,8 @@ import java.util.concurrent.ConcurrentHashMap
 data class QueueCommandResult(
     val ok: Boolean,
     val error: String?,
+    /** The receiver's queue revision after the command, when it reports one. */
+    val queueRevision: Long? = null,
 )
 
 /** Result of asking the connected TV for its persisted diagnostic log. */
@@ -241,6 +243,7 @@ class ConnectionCoordinator internal constructor(
                                     QueueCommandResult(
                                         ok = json.optBoolean("ok", false),
                                         error = json.optString("error", "").ifEmpty { null },
+                                        queueRevision = (json.opt("queueRevision") as? Number)?.toLong(),
                                     ),
                                 )
                             }

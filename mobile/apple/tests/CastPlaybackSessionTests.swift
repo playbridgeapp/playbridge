@@ -139,6 +139,30 @@ private final class Renderer: CastPlaybackRendering {
                               title: "https://example.test/video?token=private"),
                         receiverName: "TV", mediaKind: "video")
         precondition(renderer.snapshot?.title == "Casting to TV", "URLs must not become system metadata titles")
+        // A phone list: the receiver reports a stop between items, which must not end the
+        // session (and stop serving the list) unless no next item follows in time.
+        var listPlaying = true
+        session.holdsBetweenItems = { listPlaying }
+        session.connectionChanged(connected: true)
+        session.allowNewPlayback()
+        receive(id: "list")
+        let beforeGap = released
+        receive("stopped", id: "list")
+        now += 3
+        session.tick()
+        precondition(session.isActive && released == beforeGap && renderer.keepAlive, "A gap between items keeps the session")
+        receive(id: "list")
+        receive("ended", id: "list")
+        now += CastPlaybackSession.itemGapGrace + 1
+        session.tick()
+        precondition(!session.isActive && released == beforeGap + 1, "A list that doesn't go on still ends")
+        listPlaying = false
+        session.allowNewPlayback()
+        receive(id: "single")
+        receive("stopped", id: "single")
+        precondition(!session.isActive, "Without a list, a stop ends the session at once")
+        session.holdsBetweenItems = nil
+
         print("Cast session timing, controls, disconnect retention/expiry, STOP fencing, pause grace, live media and cleanup checks passed")
     }
 }

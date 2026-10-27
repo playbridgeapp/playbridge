@@ -2,34 +2,111 @@ import Foundation
 import Network
 import UniformTypeIdentifiers
 
-/// Minimal LAN HTTP/1.1 server that serves a single local media file with byte-range
-/// support, so a connected receiver (PlayBridge TV / DLNA) can fetch and play files
-/// straight from the phone. Mirrors the Android `LocalProxyServer` role for local files.
+/// Minimal LAN HTTP/1.1 server that serves local media files with byte-range support, so a
+/// connected receiver (PlayBridge TV / DLNA) can fetch and play files straight from the phone.
+/// Mirrors the Android `LocalProxyServer` role for local files. A single cast serves one file
+/// (plus an optional subtitle); a queue adds more files while earlier ones keep playing.
 ///
-/// The file is streamed from disk in chunks (never loaded fully into memory), so
+/// Files are streamed from disk in chunks (never loaded fully into memory), so
 /// multi-gigabyte videos are fine.
 final class LocalFileServer {
     static let shared = LocalFileServer()
 
+    private struct Entry {
+        let url: URL
+        let contentType: String
+        let scoped: Bool
+    }
+
     private let queue = DispatchQueue(label: "com.playbridge.localfileserver")
     private var listener: NWListener?
-    private var fileURL: URL?
-    private var scoped = false
-    private var contentType = "application/octet-stream"
+    /// Served files by request path (`/media.mp4`, `/subtitle.srt`, `/q/<id>.mp4`). Read on `queue`.
+    private var entries: [String: Entry] = [:]
     private(set) var port: UInt16 = 0
 
     /// Start (or restart) serving `url`. Returns the LAN URL the receiver should
     /// fetch, or nil if the server or local IP couldn't be resolved.
     func serve(fileURL url: URL) async -> String? {
+        await serve(fileURL: url, subtitle: nil)?.media
+    }
+
+    /// Serves only `url` plus an optional subtitle file; returns both LAN URLs.
+    func serve(fileURL url: URL, subtitle: URL?) async -> (media: String, subtitle: String?)? {
         stop()
+        let mediaPath = "/media" + Self.suffix(url)
+        register(mediaPath, url: url, contentType: Self.mimeType(for: url))
+        let subtitlePath = subtitle.map { "/subtitle.\($0.pathExtension.lowercased())" }
+        if let subtitle, let subtitlePath { register(subtitlePath, url: subtitle, contentType: Self.subtitleMimeType(subtitle)) }
+        guard let base = await startListener() else { stop(); return nil }
+        return (base + mediaPath, subtitlePath.map { base + $0 })
+    }
 
-        scoped = url.startAccessingSecurityScopedResource()
-        fileURL = url
-        contentType = Self.mimeType(for: url)
+    /// Adds `url` alongside what is already served (queues), starting the server if needed.
+    func add(fileURL url: URL) async -> String? {
+        let path = "/q/\(UUID().uuidString)" + Self.suffix(url)
+        register(path, url: url, contentType: Self.mimeType(for: url))
+        guard let base = await startListener() else { unregister(path); return nil }
+        return base + path
+    }
 
+    /// Serves cover art (image bytes) under a path fixed by `key`, so the same song's art is
+    /// written and served once. Kept until the server stops.
+    func addArtwork(_ data: Data, key: String) async -> String? {
+        let png = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cast-artwork", isDirectory: true)
+            .appendingPathComponent(key + (png ? ".png" : ".jpg"))
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: file.path) { try data.write(to: file, options: .atomic) }
+        } catch { return nil }
+        let path = "/art/" + file.lastPathComponent
+        register(path, url: file, contentType: png ? "image/png" : "image/jpeg")
+        guard let base = await startListener() else { unregister(path); return nil }
+        return base + path
+    }
+
+    /// Stops serving a file returned by `add` (a queue item the receiver no longer holds).
+    func remove(served: String) {
+        guard let path = URL(string: served)?.path, !path.isEmpty else { return }
+        unregister(path)
+    }
+
+    /// A phone file is being offered to a receiver right now.
+    var isServing: Bool { listener != nil }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+        let removed = queue.sync { () -> [Entry] in
+            let all = Array(entries.values)
+            entries.removeAll()
+            return all
+        }
+        for entry in removed where entry.scoped { entry.url.stopAccessingSecurityScopedResource() }
+        port = 0
+    }
+
+    private func register(_ path: String, url: URL, contentType: String) {
+        let entry = Entry(url: url, contentType: contentType, scoped: url.startAccessingSecurityScopedResource())
+        queue.sync { entries[path] = entry }
+    }
+
+    private func unregister(_ path: String) {
+        if let entry = queue.sync(execute: { entries.removeValue(forKey: path) }), entry.scoped {
+            entry.url.stopAccessingSecurityScopedResource()
+        }
+    }
+
+    private static func suffix(_ url: URL) -> String { url.pathExtension.isEmpty ? "" : ".\(url.pathExtension)" }
+
+    /// Returns `http://<lan ip>:<port>`, starting the listener when it isn't running.
+    private func startListener() async -> String? {
+        guard let ip = Self.lanIPAddress() else { return nil }
+        if listener != nil, port != 0 { return "http://\(ip):\(port)" }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        guard let listener = try? NWListener(using: params) else { stop(); return nil }
+        guard let listener = try? NWListener(using: params) else { return nil }
         self.listener = listener
         listener.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
 
@@ -47,25 +124,9 @@ final class LocalFileServer {
             }
             listener.start(queue: queue)
         }
-
-        guard ready, let p = listener.port?.rawValue, let ip = Self.lanIPAddress() else {
-            stop(); return nil
-        }
+        guard ready, self.listener === listener, let p = listener.port?.rawValue else { return nil }
         port = p
-        let ext = url.pathExtension.isEmpty ? "" : ".\(url.pathExtension)"
-        return "http://\(ip):\(port)/media\(ext)"
-    }
-
-    /// A phone file is being offered to a receiver right now.
-    var isServing: Bool { listener != nil }
-
-    func stop() {
-        listener?.cancel()
-        listener = nil
-        if scoped, let u = fileURL { u.stopAccessingSecurityScopedResource() }
-        scoped = false
-        fileURL = nil
-        port = 0
+        return "http://\(ip):\(p)"
     }
 
     // MARK: - Connection handling
@@ -92,15 +153,19 @@ final class LocalFileServer {
     }
 
     private func respond(_ conn: NWConnection, requestHeader: String) {
-        guard let fileURL,
+        let lines = requestHeader.components(separatedBy: "\r\n")
+        let requestLine = lines.first ?? ""
+        let parts = requestLine.split(separator: " ")
+        let method = parts.first.map(String.init) ?? "GET"
+        let path = (parts.count > 1 ? String(parts[1]) : "/").split(separator: "?").first.map(String.init) ?? "/"
+        // `respond` runs on `queue`, which owns `entries`.
+        let entry = entries[path]
+        let contentType = entry?.contentType ?? "application/octet-stream"
+        guard let fileURL = entry?.url,
               let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
               let fileSize = (attrs[.size] as? NSNumber)?.int64Value else {
             sendNotFound(conn); return
         }
-
-        let lines = requestHeader.components(separatedBy: "\r\n")
-        let requestLine = lines.first ?? ""
-        let method = requestLine.split(separator: " ").first.map(String.init) ?? "GET"
 
         // Parse an optional Range header (bytes=start-end) matching stream-proxy-rust.
         var rangeHeaderValue: String?
@@ -179,6 +244,14 @@ final class LocalFileServer {
     }
 
     // MARK: - Helpers
+
+    static func subtitleMimeType(_ url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "vtt": return "text/vtt"
+        case "ass", "ssa": return "text/x-ssa"
+        default: return "application/x-subrip"
+        }
+    }
 
     static func mimeType(for url: URL) -> String {
         switch url.pathExtension.lowercased() {

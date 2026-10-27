@@ -46,9 +46,12 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         val inputMode = if (identityChanged || browserBecameActive) preferred else old.inputMode
         val progressKeys = incoming.queue.progressKeys().map(RemoteProgressKey::contentKey).toSet()
         baseCapabilities = incoming.capabilities
+        // Up next stays open as the queue moves to another item on the same connection.
+        val keepsQueue = old.sheet == RemoteSheet.Queue && incoming.sessionId == old.sessionId && incoming.connection.ready
         state = incoming.copy(
             inputMode = inputMode,
-            preferences = preferences, sheet = if (reset || old.sheet == RemoteSheet.BrowserMore && inputMode != old.inputMode) null else old.sheet,
+            preferences = preferences,
+            sheet = if (reset && !keepsQueue || old.sheet == RemoteSheet.BrowserMore && inputMode != old.inputMode) null else old.sheet,
             pending = if (reset) RemotePendingState() else old.pending,
             notice = if (reset) null else old.notice,
             queueProgress = old.queueProgress.filterKeys { it in progressKeys },

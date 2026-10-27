@@ -13,6 +13,17 @@ struct RemoteControlScreen: View {
     @State private var appTicket: AtvControlTicket?
     private var combined: CombinedRemotePolicy { vm.combinedRemote }
     @State private var castURL = ""
+    @EnvironmentObject private var library: PhoneMediaLibrary
+    @ObservedObject private var phoneQueue = PhoneQueueCoordinator.shared
+    @ObservedObject private var tints = QueueTintStore.shared
+
+    /// The phone list's current item while it plays: the screen takes its artwork's gradient.
+    private var listItem: PhoneQueueCoordinator.Item? { phoneQueue.tintedItem(on: vm) }
+    private var screenBackground: AnyShapeStyle {
+        guard listItem != nil else { return AnyShapeStyle(Theme.surface) }
+        let tint = tints.tint
+        return AnyShapeStyle(LinearGradient(colors: [tint.top, tint.middle, tint.bottom], startPoint: .top, endPoint: .bottom))
+    }
 
     var body: some View {
         let controlTicket = combined.fullControl.ticket
@@ -88,8 +99,11 @@ struct RemoteControlScreen: View {
             } else { RemoteControlView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .padding(.horizontal, 16).padding(.bottom, 12)
-        .foregroundStyle(Theme.onSurface)
-        .background(Theme.surface.ignoresSafeArea())
+        .foregroundStyle(listItem == nil ? Theme.onSurface : .white)
+        .background(screenBackground, ignoresSafeAreaEdges: .all)
+        .task(id: listItem?.id) {
+            if let listItem { await tints.load(listItem.media, url: library.localURL(listItem.media)) }
+        }
         .onAppear {
             selectionRevision = vm.destinationSelectionRevision
             vm.queryContext()

@@ -259,6 +259,25 @@ void main() {
     expect(controller.queueItemIds, isNot(contains(secondId)));
   });
 
+  test('keeps sender item ids, replacing missing or repeated ones', () async {
+    QueueItem sent(int n, String? id) =>
+        QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n', senderItemId: id);
+    final controller = PlayerController(engineForTest: _FakeEngine());
+    await controller
+        .playPlaylist([sent(1, 'a'), sent(2, null), sent(3, 'a')], 0);
+    final ids = controller.queueItemIds;
+    expect(ids[0], 'a');
+    expect(ids[1], isNot('a'));
+    expect(ids[2], isNot('a'));
+    expect(ids.toSet().length, 3);
+
+    expect(await controller.queueAddAll([sent(4, 'b'), sent(5, 'a')]), isTrue);
+    expect(controller.queueItemIds[3], 'b');
+    expect(controller.queueItemIds[4], isNot('a'));
+    expect(await controller.jumpToItem('b'), isTrue);
+    expect(controller.currentItemId, 'b');
+  });
+
   test('guarded index jump advances the queue revision exactly once', () async {
     final controller = PlayerController(engineForTest: _FakeEngine());
     await controller.playPlaylist([item(1), item(2)], 0);

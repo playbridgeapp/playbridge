@@ -146,6 +146,8 @@ final class ConnectionViewModel: ObservableObject {
         }
         castPlaybackSession.onReconnect = { [weak self] in self?.reconnectActiveCast() }
         castPlaybackSession.onReleaseResources = { [weak self] in self?.releaseCastResources() }
+        // The session runs on the main thread (see CastPlaybackSession).
+        castPlaybackSession.holdsBetweenItems = { MainActor.assumeIsolated { PhoneQueueCoordinator.shared.active } }
         CastSystemPlayback.shared.onAction = { [weak self] action in
             self?.castPlaybackSession.perform(action) ?? false
         }
@@ -770,10 +772,67 @@ final class ConnectionViewModel: ObservableObject {
         sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title))
     }
 
+    /// A PlayBridge receiver is connected, so a list of phone files can be started on it
+    /// (Play all, Shuffle, Slideshow). Unlike `localQueueSupported`, it doesn't need the
+    /// receiver's player to be open already.
+    var localListSupported: Bool {
+        isConnected && playBridgeOutputSelected && !isAirPlay && !isExternalReceiver
+    }
+
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
-    func castLocalMedia(url: String, title: String, contentType: String) {
+    /// The receiver's open player takes queue adds (adding to a queue another sender started).
+    var localQueueSupported: Bool {
+        isConnected && playBridgeOutputSelected && !isAirPlay && !isExternalReceiver && nativeRemotePolicy.allowsQueue("append")
+    }
+
+    /// The receiver can move queued items, so Play next can place them after the current one.
+    var localQueueReorders: Bool { localQueueSupported && supportsQueueV1 && nativeRemotePolicy.allowsQueue("move") }
+
+    /// Appends one phone file (already served by this phone) to the receiver's queue under
+    /// `itemId`, tied to `playbackId`, and waits for the receiver to confirm it.
+    func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil,
+                         visualMetadata: [String: Any]? = nil, itemId: String, playbackId: String) async -> QueueCommandResult? {
+        guard localQueueSupported, supportsQueueV1 else { return nil }
+        let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
+        let requestID = UUID().uuidString
+        let command = WireProtocol.queueVideoCommand(
+            url: url, title: title, contentType: contentType, mediaKind: kind,
+            playbackId: playbackId, useQueueV1: true, displayDurationMs: displayDurationMs,
+            itemId: itemId, visualMetadata: visualMetadata, requestID: requestID
+        )
+        return await sendConfirmedQueueCommand(command, requestID: requestID)
+    }
+
+    /// Sends a queue command carrying `requestID` and waits for the receiver's result.
+    /// Nil when it couldn't be sent or wasn't confirmed in time.
+    func sendConfirmedQueueCommand(_ command: String, requestID: String, timeout: TimeInterval = 8) async -> QueueCommandResult? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<QueueCommandResult?, Never>) in
+            var finished = false
+            var subscription: AnyCancellable?
+            let finish: (QueueCommandResult?) -> Void = { result in
+                guard !finished else { return }
+                finished = true
+                subscription?.cancel()
+                continuation.resume(returning: result)
+            }
+            subscription = coordinator.$lastCommandResult
+                .compactMap { $0 }
+                .filter { $0.requestId == requestID }
+                .first()
+                .receive(on: DispatchQueue.main)
+                .sink { finish($0) }
+            guard ws.send(command) else { finish(nil); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(nil) }
+        }
+    }
+
+    /// False when it couldn't be sent to a PlayBridge receiver; AirPlay and external
+    /// receivers load asynchronously and report their own errors.
+    @discardableResult
+    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
+                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) -> Bool {
         onUserMediaAction?()
-        if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
+        if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return true }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         noteNewCast(mediaKind: kind, title: title)
         if isExternalReceiver, let mediaURL = URL(string: url) {
@@ -781,10 +840,12 @@ final class ConnectionViewModel: ObservableObject {
                 do { _ = try await externalLoad(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
-        } else {
-            guard playBridgeOutputSelected else { return }
-            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, mediaKind: kind))
+            return true
         }
+        guard playBridgeOutputSelected else { return false }
+        return ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
+                                                       mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId,
+                                                       visualMetadata: visualMetadata))
     }
 
     /// Cast an arbitrary media URL with optional request headers (IPTV channels and

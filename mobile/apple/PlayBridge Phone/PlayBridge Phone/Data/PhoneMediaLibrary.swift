@@ -11,6 +11,8 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
     @Published private(set) var photos: [PhoneMedia] = []
     @Published private(set) var authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var isScanning = false
+    /// Photos albums with at least one item, for the Phone Files chips.
+    @Published private(set) var albums: [PhotoAlbum] = []
     @Published var error: String?
     let directory: URL
     private var scanGeneration = UUID()
@@ -18,6 +20,7 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
     private struct PhotoScanResult: @unchecked Sendable {
         let assets: PHFetchResult<PHAsset>
         let records: [PhoneMedia]
+        let albums: [PhotoAlbum]
     }
     private var photoFetchResult: PHFetchResult<PHAsset>?
     private var photoScanTask: Task<PhotoScanResult?, Never>?
@@ -32,6 +35,7 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
         if let data = try? Data(contentsOf: indexURL), let records = try? JSONDecoder().decode([PhoneMedia].self, from: data) {
             imported = records
         }
+        Task { await backfillAudioTags() }
     }
     deinit {
         photoScanTask?.cancel()
@@ -54,7 +58,7 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
         guard status == .authorized || status == .limited else {
             photoScanTask?.cancel(); photoScanTask = nil
             scanGeneration = UUID()
-            photoFetchResult = nil; photos = []; isScanning = false
+            photoFetchResult = nil; photos = []; albums = []; isScanning = false
             return
         }
         if !observing { PHPhotoLibrary.shared().register(self); observing = true }
@@ -112,7 +116,8 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
                     kind: kind, source: .photos, addedAt: asset.creationDate ?? .distantPast,
                     filename: filename, duration: kind == .video ? asset.duration : nil, assetIdentifier: asset.localIdentifier))
             }
-            return Task.isCancelled ? nil : PhotoScanResult(assets: resolvedAssets, records: result)
+            guard !Task.isCancelled else { return nil }
+            return PhotoScanResult(assets: resolvedAssets, records: result, albums: Self.fetchAlbums())
         }
         photoScanTask = task
         Task { @MainActor in
@@ -122,6 +127,7 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
             if let result {
                 photoFetchResult = result.assets
                 photos = result.records
+                albums = result.albums
             }
             isScanning = false
         }
@@ -157,9 +163,11 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
                         let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
                         var duration: Double?
                         if kind != .image { duration = try? await AVURLAsset(url: destination).load(.duration).seconds }
-                        return PhoneMedia(id: id, title: source.deletingPathExtension().lastPathComponent,
+                        var item = PhoneMedia(id: id, title: source.deletingPathExtension().lastPathComponent,
                             kind: kind, source: .imported, addedAt: Date(), filename: name,
                             duration: duration.flatMap { $0.isFinite ? $0 : nil }, bytes: size.map(Int64.init))
+                        if kind == .audio { item = await Self.withAudioTags(item, url: destination) }
+                        return item
                     } catch { try? FileManager.default.removeItem(at: folder); throw error }
                 }.value
                 imported.insert(item, at: 0)
@@ -175,6 +183,67 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
             try save()
         } catch { self.error = "Couldn’t remove the imported copy." }
     }
+    /// Smart albums people use most, then the user's own albums; empty ones are skipped.
+    nonisolated private static func fetchAlbums() -> [PhotoAlbum] {
+        var albums: [PhotoAlbum] = []
+        func add(_ collection: PHAssetCollection) {
+            let assets = PHAsset.fetchAssets(in: collection, options: nil)
+            guard assets.count > 0 else { return }
+            var ids = Set<String>()
+            assets.enumerateObjects { asset, _, _ in ids.insert(asset.localIdentifier) }
+            albums.append(PhotoAlbum(id: collection.localIdentifier, title: collection.localizedTitle ?? "Album", assetIDs: ids))
+        }
+        for subtype in [PHAssetCollectionSubtype.smartAlbumFavorites, .smartAlbumScreenshots, .smartAlbumSelfPortraits] {
+            PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil)
+                .enumerateObjects { collection, _, _ in add(collection) }
+        }
+        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+            .enumerateObjects { collection, _, _ in add(collection) }
+        return albums
+    }
+
+    /// Reads title, artist, album and track number from an audio file's tags.
+    nonisolated static func withAudioTags(_ item: PhoneMedia, url: URL) async -> PhoneMedia {
+        var item = item
+        item.tagsRead = true
+        guard let metadata = try? await AVURLAsset(url: url).load(.metadata) else { return item }
+        func string(_ identifiers: [AVMetadataIdentifier]) async -> String? {
+            for identifier in identifiers {
+                for entry in AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: identifier) {
+                    if let value = try? await entry.load(.stringValue), !value.trimmingCharacters(in: .whitespaces).isEmpty {
+                        return value.trimmingCharacters(in: .whitespaces)
+                    }
+                }
+            }
+            return nil
+        }
+        if let title = await string([.commonIdentifierTitle]) { item.title = title }
+        item.artist = await string([.commonIdentifierArtist, .iTunesMetadataAlbumArtist, .id3MetadataLeadPerformer])
+        item.album = await string([.commonIdentifierAlbumName])
+        item.trackNumber = PhoneFilesModel.trackNumber(from: await string([.id3MetadataTrackNumber]))
+        if item.trackNumber == nil {
+            // iTunes "trkn" is binary: two bytes pad, then a big-endian UInt16 track number.
+            for entry in AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .iTunesMetadataTrackNumber) {
+                if let data = try? await entry.load(.dataValue), data.count >= 4 {
+                    let number = Int(data[data.startIndex + 2]) << 8 | Int(data[data.startIndex + 3])
+                    if number > 0 { item.trackNumber = number; break }
+                }
+            }
+        }
+        return item
+    }
+
+    /// Imports made before tags were read get them once.
+    private func backfillAudioTags() async {
+        var changed = false
+        for item in imported where item.kind == .audio && item.tagsRead != true {
+            guard let url = localURL(item), FileManager.default.fileExists(atPath: url.path) else { continue }
+            let tagged = await Self.withAudioTags(item, url: url)
+            if let index = imported.firstIndex(where: { $0.id == item.id }) { imported[index] = tagged; changed = true }
+        }
+        if changed { try? save() }
+    }
+
     private func save() throws { try JSONEncoder().encode(imported).write(to: indexURL, options: .atomic) }
 
     enum LibraryError: LocalizedError {

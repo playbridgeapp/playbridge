@@ -56,6 +56,16 @@ fun AddToCollectionSheet(
     draft: CollectionItemDraft,
     onDismiss: () -> Unit,
     onAdded: (collectionName: String, added: Boolean) -> Unit = { _, _ -> },
+) = AddToCollectionSheet(viewModel, listOf(draft), onDismiss) { name, added -> onAdded(name, added > 0) }
+
+/** Adds every one of [drafts] to the picked collection; [onAdded] reports how many were new. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddToCollectionSheet(
+    viewModel: CollectionsViewModel,
+    drafts: List<CollectionItemDraft>,
+    onDismiss: () -> Unit,
+    onAdded: (collectionName: String, addedCount: Int) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val collections by viewModel.collections.collectAsState()
@@ -88,8 +98,8 @@ fun AddToCollectionSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                viewModel.addItem(collection.id, draft) { added ->
-                                    onAdded(collection.name, added)
+                                viewModel.addItems(collection.id, drafts) { addedCount ->
+                                    onAdded(collection.name, addedCount)
                                 }
                                 onDismiss()
                             }
@@ -129,10 +139,10 @@ fun AddToCollectionSheet(
             confirmLabel = "Create & add",
             onConfirm = { name ->
                 viewModel.createCollection(name) { id ->
-                    viewModel.addItem(id, draft)
+                    viewModel.addItems(id, drafts)
                 }
                 showCreate = false
-                onAdded(name, true) // brand-new collection — always added
+                onAdded(name, drafts.size) // brand-new collection — always added
                 onDismiss()
             },
             onDismiss = { showCreate = false },

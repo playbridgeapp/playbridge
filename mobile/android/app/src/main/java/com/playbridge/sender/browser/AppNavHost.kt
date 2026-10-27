@@ -198,9 +198,9 @@ fun AppNavHost(
     val iptvViewModel: com.playbridge.sender.iptv.IptvViewModel = koinViewModel()
     val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
     // Centralized "Add to Collection": any screen sets this draft → one shared sheet shows.
-    var addToCollectionDraft by remember { mutableStateOf<com.playbridge.sender.data.collection.CollectionItemDraft?>(null) }
+    var addToCollectionDrafts by remember { mutableStateOf<List<com.playbridge.sender.data.collection.CollectionItemDraft>>(emptyList()) }
     val onAddToCollection: (com.playbridge.sender.data.collection.CollectionItemDraft) -> Unit =
-        { addToCollectionDraft = it }
+        { addToCollectionDrafts = listOf(it) }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val playbackFailure by connectionCoordinator.playbackFailure.collectAsStateWithLifecycle()
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
@@ -213,6 +213,22 @@ fun AppNavHost(
     val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
     val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
+    val phoneQueueCoordinator: com.playbridge.sender.cast.PhoneQueueCoordinator = koinInject()
+    /** The mini player's Up next pill opens the Remote with Up next showing. */
+    var openRemoteQueue by remember { mutableStateOf(false) }
+    LaunchedEffect(phoneQueueCoordinator) {
+        phoneQueueCoordinator.saveRequests.collect { items ->
+            addToCollectionDrafts = items.map { item ->
+                com.playbridge.sender.data.collection.CollectionItemDraft(
+                    title = item.title,
+                    url = item.uri,
+                    kind = com.playbridge.sender.data.collection.CollectionItemKind.LOCAL,
+                    mimeType = item.mime,
+                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.PHONE_FILE,
+                )
+            }
+        }
+    }
     val linkedPageCastState by linkedPageCastCoordinator.uiState.collectAsStateWithLifecycle()
 
     // 2. Collect Live Flows / Collected states locally.
@@ -1023,6 +1039,8 @@ fun AppNavHost(
                 Screen.Remote -> {
                     BackHandler(onBack = onRemoteBack)
                     com.playbridge.sender.cast.remote.RemoteRoute(
+                        openQueue = openRemoteQueue,
+                        onQueueOpened = { openRemoteQueue = false },
                         subtitleSourceKey = Triple(remoteCastSourceTabId, remoteCastTitle, VideoDetector.processingVersion),
                         detectedSubtitles = { title ->
                             if (remoteCastSourceTabId != null && remoteCastTitle == title) {
@@ -1633,15 +1651,15 @@ fun AppNavHost(
                         uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
                         onAddToCollection = { media ->
-                            onAddToCollection(
+                            addToCollectionDrafts = media.map { item ->
                                 com.playbridge.sender.data.collection.CollectionItemDraft(
-                                    title = media.title,
-                                    url = media.uri.toString(),
+                                    title = item.title,
+                                    url = item.uri.toString(),
                                     kind = com.playbridge.sender.data.collection.CollectionItemKind.LOCAL,
-                                    mimeType = media.mimeType,
+                                    mimeType = item.mimeType,
                                     sourceTag = com.playbridge.sender.data.collection.CollectionSource.PHONE_FILE,
                                 )
-                            )
+                            }
                         },
                     )
                 }
@@ -1722,7 +1740,8 @@ fun AppNavHost(
             val libSelectedTab by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
             val showNowPlayingBar = (targetScreen == Screen.Library ||
-                targetScreen == Screen.PhoneFiles ||
+                // Phone Files' select mode puts its own action bar where the mini player sits.
+                (targetScreen == Screen.PhoneFiles && !phoneFilesUiState.selecting) ||
                 targetScreen == Screen.Downloads ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
@@ -1741,6 +1760,10 @@ fun AppNavHost(
                     accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
                     showDevicePicker = { showDevicePicker = true },
                     onOpenRemote = {
+                        onScreenChange(Screen.Remote)
+                    },
+                    onOpenUpNext = {
+                        openRemoteQueue = true
                         onScreenChange(Screen.Remote)
                     },
                     modifier = Modifier
@@ -1800,15 +1823,21 @@ fun AppNavHost(
     } // Main content column: the same persistent notice also covers Remote.
 
     // Shared Add-to-Collection sheet, driven by any screen's onAddToCollection(draft).
-    addToCollectionDraft?.let { draft ->
+    if (addToCollectionDrafts.isNotEmpty()) {
+        val drafts = addToCollectionDrafts
         com.playbridge.sender.collection.AddToCollectionSheet(
             viewModel = collectionsViewModel,
-            draft = draft,
-            onDismiss = { addToCollectionDraft = null },
-            onAdded = { name, added ->
+            drafts = drafts,
+            onDismiss = { addToCollectionDrafts = emptyList() },
+            onAdded = { name, addedCount ->
                 Toast.makeText(
                     context,
-                    if (added) "Added to $name" else "Already in $name",
+                    when {
+                        addedCount == 0 && drafts.size == 1 -> "Already in $name"
+                        addedCount == 0 -> "All already in $name"
+                        drafts.size == 1 -> "Added to $name"
+                        else -> "Added $addedCount to $name"
+                    },
                     Toast.LENGTH_SHORT,
                 ).show()
             },
@@ -1831,8 +1860,14 @@ private fun NowPlayingBarHost(
     accentColor: androidx.compose.ui.graphics.Color?,
     showDevicePicker: () -> Unit,
     onOpenRemote: () -> Unit,
+    onOpenUpNext: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
+    val linkedCoordinator = koinInject<LinkedPageCastCoordinator>()
+    val linkedPage by linkedCoordinator.uiState.collectAsStateWithLifecycle()
+    val phoneQueue by koinInject<com.playbridge.sender.cast.PhoneQueueCoordinator>().state.collectAsStateWithLifecycle()
+    val tvPlaylist by connectionCoordinator.tvPlaylistState.collectAsStateWithLifecycle()
     val selectedRemoteDevice by connectionViewModel.selectedRemoteDevice.collectAsStateWithLifecycle()
     val remoteTVRows by connectionViewModel.remoteTVDirectory.rows.collectAsStateWithLifecycle()
     val remoteTV = remoteTVRows.firstOrNull { it.device.endpointKey == selectedRemoteDevice?.endpointKey && castRoute is CastSessionManager.Route.NativeTv }
@@ -1875,13 +1910,26 @@ private fun NowPlayingBarHost(
         else -> Icons.Default.Smartphone
     }
 
+    // The phone list's current item, when the TV is playing one of this phone's lists.
+    val phoneItem = phoneQueue.current?.takeIf { phoneQueue.active && !externalActive && nativePlaying }
+    val linked = linkedPage.active && nativePlaying
+    val listTint = com.playbridge.sender.cast.remote.ui.rememberQueueTint(phoneQueue.current?.takeIf { phoneQueue.active }?.uri, MaterialTheme.colorScheme.primary)
+    val upNextCount = when {
+        !playing || externalActive -> 0
+        phoneItem != null -> phoneQueue.remaining
+        else -> tvPlaylist?.let { list ->
+            val at = list.items.indexOfFirst { if (list.currentItemId != null) it.itemId == list.currentItemId else it.index == list.currentIndex }
+            if (at >= 0) list.items.size - at - 1 else (list.totalCount - list.currentIndex - 1)
+        }?.coerceAtLeast(0) ?: 0
+    }
+
     val primaryText: String
     val secondaryText: String?
     when {
         playing -> {
-            primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
-            secondaryText = "on ${resolvedDeviceName ?: "TV"}" +
-                protocolName?.let { " · $it" }.orEmpty()
+            primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title ?: phoneItem?.title) ?: "Now playing"
+            val on = "on ${resolvedDeviceName ?: "TV"}"
+            secondaryText = if (linked) "Controlled by ${linkedPage.controllerName ?: "a website"} · $on" else on
         }
         remoteTV?.paired == true && !wsConnected -> {
             primaryText = remoteTV.device.name
@@ -1892,7 +1940,7 @@ private fun NowPlayingBarHost(
             secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
         }
         else -> {
-            primaryText = "This Device"
+            primaryText = "This phone"
             secondaryText = "Tap to cast to a device"
         }
     }
@@ -1917,13 +1965,26 @@ private fun NowPlayingBarHost(
         isPlaying = playing,
         isPaused = paused,
         progress = if (playing) playbackProgress else null,
-        showTvIcon = playing,
-        onTvIconClick = {
-            showDevicePicker()
+        ready = !playing && (externalActive || nativeSelected && wsConnected),
+        thumbnail = phoneItem?.let { item ->
+            {
+                com.playbridge.sender.cast.MediaThumbnail(
+                    item.uri.toUri(), item.kind, android.util.Size(256, 144), Modifier.fillMaxSize(),
+                )
+            }
         },
-        // Poster-matched accent on the library detail screen (the old FAB's
-        // dynamic styling); FAB-like primaryContainer elsewhere.
+        upNextCount = upNextCount,
+        onUpNext = onOpenUpNext,
+        onPlayPause = {
+            if (externalActive) {
+                if (paused) connectionViewModel.externalPlay() else connectionViewModel.externalPause()
+            } else {
+                scope.launch { connectionViewModel.executeRemote(com.playbridge.sender.cast.remote.RemoteAction.TogglePlayPause) }
+            }
+        },
+        onUnlinkClick = if (linked) ({ linkedCoordinator.unlink("unlinked") }) else null,
         accentColor = accentColor,
+        listTint = listTint.takeIf { phoneQueue.active && !externalActive && nativeSelected && wsConnected },
         modifier = modifier,
     )
 }
