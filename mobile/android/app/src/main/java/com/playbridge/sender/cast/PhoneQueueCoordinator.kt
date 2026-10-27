@@ -188,17 +188,18 @@ class PhoneQueueCoordinator(
         // It ends when the TV reports the new item (in reconcile), or after a few seconds.
         // An unconfirmed jump (null) may still happen: a receiver can take a while to confirm
         // (the desktop confirms once the item has opened), so it keeps the guard for longer.
-        mutex.withLock { jumpingTo = entry.id }
+        // Up next and the colours follow the tap at once (see publishLocked).
+        mutex.withLock { jumpingTo = entry.id; publishLocked() }
         var outcome: Boolean? = false
         try {
             outcome = jumpInto(entry, onTv, pid, session)
         } finally {
-            if (outcome == false) mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
+            if (outcome == false) mutex.withLock { if (jumpingTo == entry.id) { jumpingTo = null; publishLocked() } }
             wake.trySend(Unit)
         }
         if (outcome != false) scope.launch {
             delay(if (outcome == true) JUMP_SETTLE_MS else JUMP_UNCONFIRMED_MS)
-            mutex.withLock { if (jumpingTo == entry.id) jumpingTo = null }
+            mutex.withLock { if (jumpingTo == entry.id) { jumpingTo = null; publishLocked() } }
             wake.trySend(Unit)
         }
         return outcome == true
@@ -468,11 +469,13 @@ class PhoneQueueCoordinator(
         mutableState.value = PhoneQueueState()
     }
 
+    /** While a jump is on its way, the item jumped to shows as current. */
     private fun publishLocked(active: Boolean = mutableState.value.active) {
         val items = if (itemsChanged) entries.map { it.view } else mutableState.value.items
         itemsChanged = false
+        val shown = jumpingTo?.let { id -> entries.indexOfFirst { it.id == id }.takeIf { it >= 0 } } ?: cursor
         mutableState.value = PhoneQueueState(
-            active = active && entries.isNotEmpty(), position = cursor, count = entries.size, items = items,
+            active = active && entries.isNotEmpty(), position = shown, count = entries.size, items = items,
             source = source,
         )
     }
