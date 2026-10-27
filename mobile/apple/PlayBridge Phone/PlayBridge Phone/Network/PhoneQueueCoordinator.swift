@@ -86,7 +86,7 @@ import Foundation
             }
             return await start(newEntries, source: source) ? .playing : .failed("Couldn’t send to \(PhoneMediaCasting.receiverName(vm)).")
         }
-        if mode == .next { entries.insert(contentsOf: newEntries, at: cursor + 1) } else { entries += newEntries }
+        if mode == .next { entries.insert(contentsOf: newEntries, at: anchor + 1) } else { entries += newEntries }
         newEntries.forEach { byId[$0.id] = $0 }
         dirty = true
         publish()
@@ -151,7 +151,7 @@ import Foundation
 
     /// Removes entry `id` (not the current one) from the list, and from the receiver if it holds it.
     func remove(_ id: String) {
-        guard let index = entries.firstIndex(where: { $0.id == id }), index != cursor else { return }
+        guard let index = entries.firstIndex(where: { $0.id == id }), index != cursor, index != anchor else { return }
         entries.remove(at: index)
         byId[id] = nil
         if index < cursor { cursor -= 1 }
@@ -160,23 +160,40 @@ import Foundation
     }
 
     /// Moves entries at `offsets` of the upcoming items to `destination` among them (List.onMove).
+    /// Up next counts upcoming items from `position`, which is `anchor`.
     func moveUpcoming(from offsets: IndexSet, to destination: Int) {
-        guard entries.indices.contains(cursor) else { return }
-        var upcoming = Array(entries[(cursor + 1)...])
+        let anchor = anchor
+        guard entries.indices.contains(anchor) else { return }
+        var upcoming = Array(entries[(anchor + 1)...])
         upcoming.move(fromOffsets: offsets, toOffset: destination)
-        entries = Array(entries[...cursor]) + upcoming
+        let playing = entries.indices.contains(cursor) ? entries[cursor].id : nil
+        entries = Array(entries[...anchor]) + upcoming
+        if let playing { cursor = entries.firstIndex { $0.id == playing } ?? cursor }
         edited()
     }
 
     /// Clear queue: drops everything after the current item, which keeps playing.
     func clearUpcoming() {
-        guard entries.indices.contains(cursor) else { return }
-        for entry in entries[(cursor + 1)...] {
+        let anchor = anchor
+        guard entries.indices.contains(anchor) else { return }
+        // Keep what the receiver is still playing until a backward jump lands on its target.
+        let playing = entries.indices.contains(cursor) ? entries[cursor].id : nil
+        let dropped = entries[(anchor + 1)...].filter { $0.id != playing }
+        for entry in dropped {
             byId[entry.id] = nil
             if sent.contains(entry.id) { pendingRemoves.append(entry.id) }
         }
-        entries.removeSubrange((cursor + 1)...)
+        let droppedIds = Set(dropped.map(\.id))
+        entries.removeAll { droppedIds.contains($0.id) }
+        if let playing { cursor = entries.firstIndex { $0.id == playing } ?? 0 }
         edited()
+    }
+
+    /// The item edits are made around: the one being jumped to while a jump is on its way (Up
+    /// next already shows it as current), else the current one. Play next, Clear and moves
+    /// using the old current item could drop the item jumped to or queue items behind it.
+    private var anchor: Int {
+        jumpingTo.flatMap { id in entries.firstIndex { $0.id == id } } ?? cursor
     }
 
     /// Plays entry `id` of the list.
@@ -221,8 +238,9 @@ import Foundation
               session == generation, vm.isConnected else { return false }
         let metadata = await LocalAudioMetadata.visualMetadata(for: entry.media, fileURL: url)
         guard session == generation, vm.isConnected else { return false }
-        vm.castLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
-                          displayDurationMs: entry.displayDurationMs, visualMetadata: metadata, itemId: entry.id)
+        guard vm.castLocalMedia(url: media, title: entry.media.title, contentType: LocalFileServer.mimeType(for: url),
+                                displayDurationMs: entry.displayDurationMs, visualMetadata: metadata, itemId: entry.id)
+        else { return false }
         PhoneFilesNowPlaying.shared.itemID = entry.media.id
         cursor = index
         sent.insert(entry.id)
@@ -270,7 +288,7 @@ import Foundation
             guard ids.contains(where: { byId[$0] != nil }) else { return }
             playbackId = status.playbackId
         } else if status.playbackId != playbackId {
-            clear()
+            clear(releasingFiles: true)
             return
         }
         latest = status
@@ -339,7 +357,7 @@ import Foundation
         guard let vm, let library else { return false }
         func ok(_ result: QueueCommandResult?) -> Bool {
             guard let result, session == generation else { return false }
-            if result.error == "stale_playback" || result.error == "no_active_playback" { clear(); return false }
+            if result.error == "stale_playback" || result.error == "no_active_playback" { clear(releasingFiles: true); return false }
             if let revision = result.queueRevision { awaitRevision = revision }
             return result.ok
         }
@@ -379,7 +397,10 @@ import Foundation
         return true
     }
 
-    private func clear() {
+    /// `releasingFiles`: the receiver has moved on from this list, so stop serving its files.
+    /// Otherwise they stay served, as the receiver may still play what it holds.
+    private func clear(releasingFiles: Bool = false) {
+        if releasingFiles { served.values.forEach { LocalFileServer.shared.remove(served: $0) } }
         attachTask?.cancel()
         settleTask?.cancel()
         entries = []
@@ -400,7 +421,7 @@ import Foundation
     }
 
     private func publish() {
-        position = jumpingTo.flatMap { id in entries.firstIndex { $0.id == id } } ?? cursor
+        position = anchor
         count = entries.count
         if items.count != entries.count || items.map(\.id) != entries.map(\.id) { items = entries }
         if entries.isEmpty { active = false }

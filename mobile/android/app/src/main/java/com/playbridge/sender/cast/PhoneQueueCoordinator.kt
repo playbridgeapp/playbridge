@@ -147,7 +147,7 @@ class PhoneQueueCoordinator(
     suspend fun playNext(items: List<LocalCastItem>) {
         mutex.withLock {
             val added = items.map { Entry(UUID.randomUUID().toString(), it) }
-            entries.addAll(cursor + 1, added)
+            entries.addAll(anchorLocked() + 1, added)
             added.forEach { byId[it.id] = it }
             dirty = true
             itemsChanged = true
@@ -243,7 +243,7 @@ class PhoneQueueCoordinator(
     suspend fun remove(id: String) {
         mutex.withLock {
             val index = entries.indexOfFirst { it.id == id }
-            if (index < 0 || index == cursor) return
+            if (index < 0 || index == cursor || index == anchorLocked()) return
             entries.removeAt(index)
             byId.remove(id)
             if (index < cursor) cursor--
@@ -258,10 +258,11 @@ class PhoneQueueCoordinator(
     /** Moves entry [id] to [toIndex] in the list (after the current one). */
     suspend fun move(id: String, toIndex: Int) {
         mutex.withLock {
+            val anchor = anchorLocked()
             val from = entries.indexOfFirst { it.id == id }
-            if (from < 0 || from == cursor) return
+            if (from <= anchor || from == cursor) return
             val entry = entries.removeAt(from)
-            val target = toIndex.coerceIn(cursor + 1, entries.size)
+            val target = toIndex.coerceIn(anchor + 1, entries.size)
             entries.add(target, entry)
             dirty = true
             itemsChanged = true
@@ -273,9 +274,13 @@ class PhoneQueueCoordinator(
     /** Clear queue: drops everything after the current item, which keeps playing. */
     suspend fun clearUpcoming() {
         mutex.withLock {
-            val upcoming = entries.subList(cursor + 1, entries.size)
+            if (entries.isEmpty()) return
+            // Keep what the TV is still playing until a backward jump lands on its target.
+            val playing = entries.getOrNull(cursor)
+            val upcoming = entries.subList(anchorLocked() + 1, entries.size).filter { it !== playing }
             upcoming.forEach { byId.remove(it.id); if (it.id in sent) pendingRemoves += it.id }
-            upcoming.clear()
+            entries.removeAll(upcoming.toSet())
+            cursor = entries.indexOf(playing).coerceAtLeast(0)
             dirty = true
             itemsChanged = true
             publishLocked()
@@ -469,11 +474,19 @@ class PhoneQueueCoordinator(
         mutableState.value = PhoneQueueState()
     }
 
+    /**
+     * The item edits are made around: the one being jumped to while a jump is on its way (Up
+     * next already shows it as current), else the current one. Play next, Clear and moves
+     * using the old current item could drop the item jumped to or queue items behind it.
+     */
+    private fun anchorLocked(): Int =
+        jumpingTo?.let { id -> entries.indexOfFirst { it.id == id }.takeIf { it >= 0 } } ?: cursor
+
     /** While a jump is on its way, the item jumped to shows as current. */
     private fun publishLocked(active: Boolean = mutableState.value.active) {
         val items = if (itemsChanged) entries.map { it.view } else mutableState.value.items
         itemsChanged = false
-        val shown = jumpingTo?.let { id -> entries.indexOfFirst { it.id == id }.takeIf { it >= 0 } } ?: cursor
+        val shown = anchorLocked()
         mutableState.value = PhoneQueueState(
             active = active && entries.isNotEmpty(), position = shown, count = entries.size, items = items,
             source = source,

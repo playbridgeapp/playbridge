@@ -826,10 +826,13 @@ final class ConnectionViewModel: ObservableObject {
         }
     }
 
+    /// False when it couldn't be sent to a PlayBridge receiver; AirPlay and external
+    /// receivers load asynchronously and report their own errors.
+    @discardableResult
     func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
-                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) {
+                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) -> Bool {
         onUserMediaAction?()
-        if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
+        if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return true }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         noteNewCast(mediaKind: kind, title: title)
         if isExternalReceiver, let mediaURL = URL(string: url) {
@@ -837,12 +840,12 @@ final class ConnectionViewModel: ObservableObject {
                 do { _ = try await externalLoad(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
-        } else {
-            guard playBridgeOutputSelected else { return }
-            ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
-                                                    mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId,
-                                                    visualMetadata: visualMetadata))
+            return true
         }
+        guard playBridgeOutputSelected else { return false }
+        return ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
+                                                       mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId,
+                                                       visualMetadata: visualMetadata))
     }
 
     /// Cast an arbitrary media URL with optional request headers (IPTV channels and

@@ -68,8 +68,8 @@ final class ConnectionViewModel: ObservableObject {
     var localQueueSupported = false
     var localListSupported = false
     var localQueueReorders = false
-    func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
-                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) {}
+    @discardableResult func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
+                        visualMetadata: [String: Any]? = nil, itemId: String? = nil) -> Bool { true }
     func queueLocalMedia(url: String, title: String, contentType: String, displayDurationMs: Int? = nil,
                          visualMetadata: [String: Any]? = nil, itemId: String, playbackId: String) async -> QueueCommandResult? { nil }
     func sendConfirmedQueueCommand(_ command: String, requestID: String, timeout: TimeInterval = 8) async -> QueueCommandResult? { nil }
