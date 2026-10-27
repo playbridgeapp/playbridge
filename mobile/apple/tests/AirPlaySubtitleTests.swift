@@ -1,6 +1,6 @@
 import Foundation
 
-// Minimal routing dependencies let these pure packaging checks run without an
+// Minimal routing dependencies let these host checks run without an
 // iOS simulator or the optional Rust XCFramework.
 final class PhoneProxyRegistration { let url = URL(string: "http://127.0.0.1/media")! }
 struct RoutedStream {
@@ -20,7 +20,7 @@ enum LocalFileServer { static func lanIPAddress() -> String? { "127.0.0.1" } }
 
 @main
 enum AirPlaySubtitleTests {
-    static func main() throws {
+    static func main() async throws {
         let base = URL(string: "https://media.example/root/master.m3u8?secret=test")!
         let master = """
         #EXTM3U
@@ -85,6 +85,20 @@ enum AirPlaySubtitleTests {
         let mediaMaster = try AirPlaySubtitleHLS.master(playlist, base: base, tracks: [("Captions", "captions.m3u8")])
         precondition(mediaMaster.contains(base.absoluteString))
         precondition(AirPlaySubtitleHLS.subtitlePlaylist(duration: 10.2, captionURI: "captions.vtt").contains("TARGETDURATION:11"))
+        for (text, format, mime) in [(String(decoding: srt, as: UTF8.self), "srt", "application/x-subrip"),
+                                     (vtt, "vtt", "text/vtt")] {
+            let publication = try await AirPlaySubtitleService.publishDetected(text: text, format: format)
+            defer { publication.stop() }
+            precondition(publication.url.path.hasSuffix("subtitles.\(format)"))
+            let (data, response) = try await URLSession.shared.data(from: publication.url)
+            precondition((response as? HTTPURLResponse)?.statusCode == 200)
+            precondition(response.mimeType == mime && data == Data(text.utf8))
+            var request = URLRequest(url: publication.url)
+            request.httpMethod = "HEAD"
+            let (head, headResponse) = try await URLSession.shared.data(for: request)
+            precondition(head.isEmpty && (headResponse as? HTTPURLResponse)?.statusCode == 200)
+        }
+        print("PASS: detected VTT/SRT subtitle bytes and MIME types served over loopback HTTP GET/HEAD")
         print("PASS: AirPlay HLS renditions, preserved audio/subtitle groups, finite timelines, SRT conversion and MPEG-TS timestamp mapping")
     }
 }

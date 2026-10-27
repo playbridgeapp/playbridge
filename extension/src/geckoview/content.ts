@@ -10,11 +10,15 @@ import { LINKED_PAGE_EVENTS, PAGE_API_PORT, normalizeLinkedPageRelay, validPageR
 import { injectPageScriptWithChannel } from "./page-channel";
 import { isSupportedDomImage } from "./detected-media-kind";
 import { installPluginBridge } from "./plugin-bridge";
+import { installBlobSubtitleCapture } from "./blob-subtitles";
 
 let detectionEnabled = false;
+let detectionAuthorized = false;
+let documentActive = true;
 let options = detectionOptions();
 let policyUpdate = 0;
 let videoObserver: MutationObserver | undefined;
+let blobSubtitles: ReturnType<typeof installBlobSubtitleCapture> | undefined;
 
 browser.runtime.onMessage.addListener((message: { type?: string }) => {
   if (message?.type === "detector_same_document_navigation" && options.navigationRescans) scanAll();
@@ -105,7 +109,10 @@ function scanElement(el: Element): void {
     return;
   }
   if (typeof HTMLTrackElement !== "undefined" && el instanceof HTMLTrackElement) {
-    if (el.kind === "subtitles" || el.kind === "captions") reportMediaSrc("dom_subtitle_found", el.src);
+    if (el.kind === "subtitles" || el.kind === "captions") {
+      if (el.src.startsWith("blob:")) blobSubtitles?.track(el);
+      else reportMediaSrc("dom_subtitle_found", el.src);
+    }
     return;
   }
   if (el instanceof HTMLImageElement && options.images) {
@@ -133,14 +140,25 @@ function scanAll(): void {
 }
 
 function setDetectionEnabled(enabled: boolean): void {
+  detectionAuthorized = enabled;
+  enabled = enabled && documentActive;
   if (enabled === detectionEnabled) return;
   detectionEnabled = enabled;
   if (!enabled) {
+    blobSubtitles?.stop();
+    blobSubtitles = undefined;
     videoObserver?.disconnect();
     videoObserver = undefined;
     document.removeEventListener("DOMContentLoaded", startDocumentDetection);
     window.dispatchEvent(new Event("PlayBridgeStopDetection"));
     return;
+  }
+  if (options.subtitles) {
+    blobSubtitles = installBlobSubtitleCapture(subtitle => {
+      if (!detectionEnabled || !options.subtitles) return;
+      void browser.runtime.sendMessage({ action: "blob_subtitle_found", origin: window.location.href, ...subtitle })
+        .catch(() => {});
+    });
   }
   if (options.domScanning && mediaSelector()) {
     videoObserver = new MutationObserver((mutations) => {
@@ -173,7 +191,7 @@ function observeDocument(): void {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["src", "srcset", "poster"],
+    attributeFilter: ["src", "srcset", "poster", "kind", "label", "srclang"],
   });
 }
 
@@ -181,6 +199,15 @@ function startDocumentDetection(): void {
   observeDocument();
   scanAll();
 }
+
+window.addEventListener("pagehide", () => {
+  documentActive = false;
+  setDetectionEnabled(detectionAuthorized);
+});
+window.addEventListener("pageshow", () => {
+  documentActive = true;
+  setDetectionEnabled(detectionAuthorized);
+});
 
 // Native session ownership is authoritative even when an app and a browser tab
 // have identical URLs. No scanning starts before the native policy arrives.

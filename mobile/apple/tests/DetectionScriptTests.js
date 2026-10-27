@@ -21,7 +21,7 @@ function browser(options = {}) {
   const elements = [image,
     { tagName: 'VIDEO', src: 'https://media.test/movie.mp4' },
     { tagName: 'AUDIO', src: 'https://media.test/sound.mp3' },
-    { tagName: 'TRACK', src: 'https://media.test/subtitles.vtt' }];
+    { tagName: 'TRACK', kind: 'subtitles', src: 'https://media.test/subtitles.vtt' }];
   Object.assign(document, {
     readyState: 'complete', documentElement: {},
     querySelectorAll(selector) {

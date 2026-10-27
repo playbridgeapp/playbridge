@@ -163,7 +163,7 @@ function script(name: string): string {
   return readFileSync(new URL(`./geckoview-runtime/${name}.js`, import.meta.url), "utf8");
 }
 
-function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active = true) {
+function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active = true, blobURL?: any) {
   const listeners = new Map<string, Function[]>();
   const responses: any[] = [];
   let scans = 0;
@@ -178,8 +178,10 @@ function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active 
     },
   };
   window.top = mainFrame ? window : {};
+  if (blobURL) window.wrappedJSObject = { URL: blobURL };
   const firstChannel = channels.length;
-  const context = createContext({ ...h.sandbox, ...pageGlobals, window,
+  const context = createContext({ ...h.sandbox, ...pageGlobals, window, Blob,
+    exportFunction: (fn: Function) => fn,
     navigator: { userActivation: { isActive: active } },
     EventTarget,
     crypto: { randomUUID: () => `fixture-request-${Math.random()}` },
@@ -579,7 +581,8 @@ test("app content injects casting without DOM scans, observers, player timers or
     dispatchEvent: (event: any) => { for (const listener of windowListeners.get(event.type) ?? []) listener(event); },
   };
   window.top = window;
-  const context = createContext({ ...h.sandbox, ...pageGlobals, window,
+  const context = createContext({ ...h.sandbox, ...pageGlobals, window, Blob,
+    exportFunction: (fn: Function) => fn,
     crypto: { randomUUID: () => "test-request" },
     Event: class { constructor(public type: string) {} },
     CustomEvent: class { detail: any; constructor(public type: string, options?: any) { this.detail = options?.detail; } },
@@ -1036,4 +1039,62 @@ test("background heartbeat pings only the binding it opened", async () => {
     operation: "ping", sessionId: opened.sessionId, payload: { ready: true }, tabId: 8, navigationGeneration: 99,
   });
   assert.equal(forged.error, "invalid_request");
+});
+
+
+test("blob hooks wait for native policy in every frame and stop with the subtitle option", async () => {
+  for (const mainFrame of [true, false]) {
+    const h = harness();
+    const original = (_blob?: unknown) => "blob:https://app.example/fixture";
+    const target = { createObjectURL: original };
+    const page = contentHarness(h, mainFrame, true, target);
+    assert.equal(target.createObjectURL, original);
+    for (const listener of h.policyMessages.listeners) listener(policy(true));
+    await flush();
+    assert.notEqual(target.createObjectURL, original);
+    target.createObjectURL(new Blob(["WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"]));
+    await until(() => h.messages.some(message => message.action === "blob_subtitle_found"));
+    page.window.dispatchEvent({ type: "pagehide" });
+    assert.equal(target.createObjectURL, original);
+    page.window.dispatchEvent({ type: "pageshow" });
+    assert.notEqual(target.createObjectURL, original);
+    for (const listener of h.policyMessages.listeners) listener({ ...policy(true, 2), options: { subtitles: false } });
+    await flush();
+    assert.equal(target.createObjectURL, original);
+  }
+});
+
+test("background forwards bounded subtitle text independently of DOM scanning and clears its identity on navigation", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const sender = { tab: { id: 7, url: "https://normal.example/watch" }, frameId: 0 };
+  const commit = h.browser.webNavigation.onCommitted.listeners[0];
+  commit({ frameId: 0, tabId: 7, url: sender.tab.url });
+  await h.nativePolicy({ ...policy(true), options: { domScanning: false } }, sender);
+  await settle();
+  const runtimeMessage = h.onMessage.listeners[0];
+  const message = { action: "blob_subtitle_found", subtitleText: "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n",
+    subtitleFormat: "vtt", subtitleLabel: "English", origin: sender.tab.url };
+  runtimeMessage(message, sender);
+  await flush();
+  const videos = () => h.nativeMessages.filter(message => message.type === "video_detected");
+  assert.equal(videos().length, 1);
+  assert.equal(videos()[0].subtitleText, message.subtitleText);
+  assert.equal(videos()[0].subtitleLabel, "English");
+  assert.equal(videos()[0].mediaKind, "subtitle");
+  assert.match(videos()[0].url, /^playbridge-subtitle:/);
+  const generation = videos()[0].navigationGeneration;
+  runtimeMessage({ ...message, url: "blob:https://normal.example/another" }, sender);
+  runtimeMessage({ ...message, subtitleText: "x".repeat(2 * 1024 * 1024 + 1) }, sender);
+  await flush();
+  assert.equal(videos().length, 1);
+  commit({ frameId: 0, tabId: 7, url: sender.tab.url });
+  runtimeMessage(message, sender);
+  await flush();
+  assert.equal(videos().length, 2);
+  assert.equal(videos()[1].navigationGeneration, generation + 1);
+  await h.nativePolicy({ ...policy(true, 2), options: { subtitles: false } }, sender);
+  runtimeMessage(message, sender);
+  await flush();
+  assert.equal(videos().length, 2);
 });

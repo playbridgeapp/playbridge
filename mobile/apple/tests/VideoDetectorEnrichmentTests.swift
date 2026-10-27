@@ -3,6 +3,11 @@ import Foundation
 // Platform adapters are replaced so this runner exercises the production detector
 // and scheduler on macOS without WebKit, AVFoundation, networking or SwiftUI.
 final class UIImage {}
+enum AirPlaySubtitleService {
+    static func publishDetected(text: String, format: String) async throws -> (url: URL, stop: () -> Void) {
+        fatalError("Subtitle publication must be injected by host tests")
+    }
+}
 enum ContentBlocker {
     static var lastSource: String?
     static var lastType: String?
@@ -240,6 +245,51 @@ struct VideoDetectorEnrichmentTests {
         }
         precondition(filtered.count == 3)
 
+        var published = 0, stopped = 0
+        let blobDetector = VideoDetector(publishSubtitle: { text, format in
+            precondition(text.hasPrefix("WEBVTT") && format == "vtt")
+            published += 1
+            return (URL(string: "http://192.0.2.1:8080/subtitles.vtt")!, { stopped += 1 })
+        })
+        var blob: [String: Any] = ["url": "playbridge-subtitle:fixture.vtt", "mediaKind": "subtitle",
+            "subtitleText": "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n",
+            "subtitleFormat": "vtt", "contentType": "text/vtt", "subtitleLabel": "Subtitles",
+            "originUrl": "https://page.example/watch"]
+        blobDetector.ingest(blob)
+        await until { blobDetector.videos.count == 1 }
+        precondition(published == 1 && blobDetector.videos[0].url.hasPrefix("http://"))
+        precondition(blobDetector.videos[0].isSubtitle && blobDetector.videos[0].headers.isEmpty)
+        blob["subtitleLabel"] = "English"
+        blob["url"] = "playbridge-subtitle:another-url.vtt"
+        blobDetector.ingest(blob)
+        precondition(published == 1 && blobDetector.videos.count == 1)
+        precondition(blobDetector.videos[0].title == "English")
+        blobDetector.clear()
+        precondition(blobDetector.videos.isEmpty && stopped == 1)
+        var invalid = blob
+        invalid["contentType"] = "video/mp4"
+        blobDetector.ingest(invalid)
+        invalid = blob
+        invalid["subtitleText"] = String(repeating: "é", count: 1024 * 1024 + 1)
+        blobDetector.ingest(invalid)
+        invalid = blob
+        invalid["subtitleFormat"] = "srt"
+        blobDetector.ingest(invalid)
+        precondition(blobDetector.videos.isEmpty && published == 1)
+
+        var resumeSubtitle: CheckedContinuation<Void, Never>?
+        let lateBlobDetector = VideoDetector(publishSubtitle: { _, _ in
+            await withCheckedContinuation { resumeSubtitle = $0 }
+            return (URL(string: "http://192.0.2.1:8080/late.vtt")!, { stopped += 1 })
+        })
+        lateBlobDetector.ingest(blob)
+        await until { resumeSubtitle != nil }
+        lateBlobDetector.clear()
+        resumeSubtitle?.resume()
+        await until { stopped == 2 }
+        precondition(lateBlobDetector.videos.isEmpty, "A late publication must not survive navigation")
+
+        print("PASS: blob subtitle publication, deduplication, labels, bounds and navigation cancellation")
         print("PASS: eager enrichment, subtitle body/disposition upgrades, deduplication, concurrency, navigation invalidation and detector teardown")
     }
 }

@@ -115,7 +115,7 @@ async function subtitleChecks() {
     { tagName: 'IMG', src: 'https://media.example/pixel.png', width: 1, height: 1, complete: true },
   ] });
   assert.deepEqual(mediaDOM.messages.map(message => message.mediaKind), ['audio', 'audio', 'image']);
-  const track = fixture(true, { elements: [{ tagName: 'TRACK', src: 'https://subs.example/english.vtt' }] });
+  const track = fixture(true, { elements: [{ tagName: 'TRACK', kind: 'subtitles', src: 'https://subs.example/english.vtt' }] });
   assert.equal(track.messages.length, 1);
   assert.equal(track.messages[0].detectedBy, 'dom_track_element');
 

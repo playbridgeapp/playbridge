@@ -34,6 +34,16 @@ enum AirPlaySubtitleError: LocalizedError {
 /// Packages external captions as genuine HLS renditions so the AirPlay receiver
 /// can render them. Phone overlays cannot provide captions on an AirPlay TV.
 enum AirPlaySubtitleService {
+    static func publishDetected(text: String, format: String) async throws -> (url: URL, stop: () -> Void) {
+        let path = "subtitles.\(format)"
+        let mime = format == "vtt" ? "text/vtt; charset=utf-8" : "application/x-subrip; charset=utf-8"
+        let server = AirPlaySubtitleHTTPServer(resources: [path: .init(data: Data(text.utf8), contentType: mime)])
+        do {
+            let url = try await server.start(path: path)
+            return (url, { server.stop() })
+        } catch { server.stop(); throw error }
+    }
+
     static func prepare(media: RoutedStream, subtitles: [AirPlaySubtitleSource]) async throws -> AirPlaySubtitlePresentation {
         guard !subtitles.isEmpty, subtitles.count <= 16 else {
             throw AirPlaySubtitleError.message("Choose between 1 and 16 external subtitles.")
@@ -350,7 +360,7 @@ private final class AirPlaySubtitleHTTPServer: @unchecked Sendable {
 
     init(resources: [String: Resource]) { self.resources = resources }
 
-    func start() async throws -> URL {
+    func start(path: String = "master.m3u8") async throws -> URL {
         guard let address = LocalFileServer.lanIPAddress() else {
             throw AirPlaySubtitleError.message("Connect to Wi-Fi to share subtitles with AirPlay.")
         }
@@ -368,7 +378,7 @@ private final class AirPlaySubtitleHTTPServer: @unchecked Sendable {
                     guard let self, let listener else { return }
                     switch state {
                     case .ready:
-                        if let port = listener.port, let url = URL(string: "http://\(address):\(port.rawValue)/\(self.token)/master.m3u8") {
+                        if let port = listener.port, let url = URL(string: "http://\(address):\(port.rawValue)/\(self.token)/\(path)") {
                             finish(.success(url))
                         }
                     case .failed, .cancelled:
