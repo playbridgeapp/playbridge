@@ -147,6 +147,28 @@ changes, and `context_query`. Tuning survives engine switches and playlist advan
 within a cast session; a new session starts with defaults. Audio boost and quality
 capping remain unavailable.
 
+Apple TV advertises `mediaKinds: ["video", "audio", "image"]` in both successful auth
+and protected credentials. Both engine descriptors include `imageTransforms`:
+`pan`, `scroll`, `zoom`, `rotate`, `anchor`, and `reset`. These operations apply only
+while an image is current; browser pointer/text control remains unavailable.
+The image presentation is shared by both engine selections and does not open a decoder.
+Images report empty tracks/timeline, `isSeekable: false`, `isLive: false`, and neutral
+settings with speed/scaling/subtitle offset, engine switching, and loop unavailable.
+Positive image durations start after load success/failure or a 15-second load fallback,
+pause with transport commands, and advance the same queue; absent/zero durations stay
+paused until navigation. GIFs display their first frame. Audio uses the selected engine
+with artwork/artist/album presentation beneath its existing transport controls.
+`player_home_v1` enables phone Home to leave playback, including pre-play and the
+still-watching prompt, and report idle. Browser, mirroring, system volume, and diagnostic
+logs are not advertised.
+
+Image/artwork downloads use ephemeral URLSession and ImageIO, with item headers only on
+their declared origin (including redirects), bounded downloads, and standard TLS trust.
+Apple TV cannot yet enforce DNS/connected-peer grants for page-controlled requests, so
+these downloads reject `page_cast`/`linked_page` rather than treating
+`allowedPrivateOrigins` as a network-policy bypass. Ordinary direct HTTP(S) casts,
+including phone-served LAN URLs, retain the existing Apple transport policy.
+
 Desktop's `internal_mpv` advertises `speed`, `loop`, `scaling`, and `subtitle_offset`,
 and reports a complete `player_settings` snapshot on authenticated sync, settings changes,
 new items, and `context_query`. It does not advertise quality capping, engine switching,
@@ -250,8 +272,12 @@ media and keyboard draft identity.
 Android TV rebuilds availability for Gecko plugin package add/remove/change/replacement while
 running. One serialized publication owner supplies auth, protected pairing and opted-in pushes;
 a later auth/pairing sees the same current descriptor. During package replacement, ignore the
-intermediate removal and recheck on add/replaced. Apple TV, Desktop and CLI receivers do not have
-runtime capability changes and do **not** send this frame. iPhone/Desktop/CLI sender subscription
+intermediate removal and recheck on add/replaced. Apple TV advertises
+`receiver_capabilities_v1`, keeps a per-authenticated-socket subscription, and sends the
+static complete descriptor at numeric revision 1 immediately on every subscription;
+there are no subsequent pushes while that descriptor is unchanged. Disconnect/receiver
+stop clears subscriptions. Desktop publishes volume-adapter availability changes to
+subscribed sockets. CLI does not send live updates. iPhone/Desktop/CLI sender subscription
 and consumption are step 9b; until implemented they must not opt in. Rust's existing unknown-frame
 decoder safely ignores this frame, independently of subscription policy.
 

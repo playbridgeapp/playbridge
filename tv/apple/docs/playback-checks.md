@@ -1,6 +1,6 @@
 # Apple TV playback checks
 
-The receiver has two playback engines: AVPlayer (default) and MPV. VLC and
+The receiver has two playback engines: MPV (default) and AVPlayer. VLC and
 its proxy/dependency are removed. Auth/capability replies advertise only
 `avplayer` and `mpv`. Reconnect a sender to refresh cached capabilities.
 Legacy `vlc` player-mode/control requests route to MPV, and the persisted
@@ -75,3 +75,59 @@ only; there is no CocoaPods workspace). Generic unsigned
 builds validate compilation/linking, not signing, installation or audible
 playback. The old VLC proxy test runner no longer exists because that
 production path no longer exists.
+
+## Mixed-media receiver parity (manual checks still required)
+
+Host/model checks and unsigned generic tvOS builds do not establish decoding, visible
+rendering, sound, focus, or network behavior on a real Apple TV. Run the following
+with both MPV and AVPlayer selected, using synthetic/public samples or private
+samples kept outside the repository. Reconnect the phone to refresh capabilities.
+
+- Verify auth and protected credentials include `video`, `audio`, `image`, both
+  engine descriptors include image transforms, and no browser/mirroring/system-volume
+  or diagnostic-log capability appears. Subscribe twice on one authenticated WSS
+  socket: each response is a complete `receiver_capabilities` frame with numeric
+  revision 1. An unauthenticated or unsubscribed socket receives none; reconnect
+  creates a fresh subscription.
+- Supply stable item IDs to a playlist and queue append. Check `currentItemId`,
+  item IDs in `playlist_status`, and webhook IDs match them. Omitted IDs are assigned.
+  Duplicate/blank/over-128-UTF-16-unit IDs reject the entire mutation with
+  `invalid_command`, leaving playback and queue revision unchanged.
+- Cast JPEG, PNG, WebP, GIF (first frame), BMP, HEIC/HEIF, and AVIF. Check aspect fit
+  on black, correct orientation, and safe failure UI for unsupported/corrupt files.
+  Check a header-protected image and same-origin/cross-origin redirects: headers
+  follow only their original origin. Standard TLS validation must remain active.
+- A timed image starts counting after it becomes visible, pauses/resumes via phone
+  play/pause/toggle and Siri Remote Select/Play-Pause, and advances once at the end.
+  Pause before loading completes, then resume. Slow/failed loads must progress after
+  the 15-second fallback plus display duration. Negative durations become zero;
+  durations above 24 hours are clamped.
+- Untimed/zero-duration images report paused with zero position/duration and remain
+  visible until next/previous/jump/stop. Seek/tuning commands do not alter the image;
+  tracks and timeline are empty, isLive/isSeekable are false, and speed/scaling/
+  subtitle-offset controls are unavailable. Image history has no resume progress or
+  captured artwork; `skipHistory` casts create no history entry.
+- From the phone, zoom (1–8×), pan/move, scroll, rotate, set/clear an anchor, and reset
+  through both JSON and binary pointer input. Anchor zoom/rotation should stay under
+  the gesture focus; pan clamps at the viewport. Repeated zoom-out restores center.
+  Malformed/short/non-finite packets have no effect. Input on audio/video is ignored.
+- Siri Remote Left/Right changes images, Select pauses/resumes, and Menu exits.
+  Phone Home exits from timed/untimed/loading/failed images, music, video, buffering,
+  paused playback, every overlay, pre-play, and the still-watching prompt; the sender
+  receives idle and no stale player status afterward.
+- Cast music with artwork, poster-only, backdrop-only, a failing artwork URL, and no
+  artwork. Check fallback/placeholder, blurred background, title/artist/album and
+  Now Playing metadata/artwork. Confirm actual sound, transport/scrubber, tracks,
+  speed, app volume, and switching between MPV and AVPlayer.
+- Play video → timed image → music → untimed image → video in one queue; repeat with
+  music/image first. Advance, go back, jump, append, move/remove the current item,
+  clear, stop, and reconnect mid-playback. Keep one playback ID and player context
+  until exit; status and every playlist item carry the current resolved media kind.
+  Pre-play appears only for video, honors skipPreplay, and cannot appear over music
+  or images when the first item changes kind.
+
+Page-controlled image/artwork downloads (`page_cast` / `linked_page`) are rejected:
+Apple TV has no DNS/connected-peer grant enforcement yet. Direct HTTP(S), including
+phone-served LAN media, uses standard URLSession trust and scoped headers. Do not
+interpret `allowedPrivateOrigins` as permission to bypass TLS or page network policy.
+Diagnostic logs over WSS are deferred and are not advertised.

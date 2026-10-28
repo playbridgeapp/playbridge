@@ -2,6 +2,18 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- Mixed video, music, and image queues with per-item media-kind reporting; artwork, artist, album, and Now Playing metadata for music through MPV or AVPlayer.
+- ImageIO image presentation with origin-scoped request headers, first-frame GIF support, a pausable load-gated slideshow timer, and JSON/binary phone pan, zoom, rotation, anchor, and reset controls.
+- Authenticated per-socket capability subscriptions and advertised player Home support, including pre-play and still-watching exits.
+
+### Fixed
+- Preserve valid sender queue item IDs; reject duplicate, blank, and oversized IDs without changing the queue.
+- Advertise implemented media kinds and image transformations in auth/protected credentials and descriptors; report empty tracks/timeline and honest image settings.
+- Keep pre-play video-only and retain player context while switching media kinds.
+
 ## [0.15.0] — 2026-10-09 (build 6)
 
 ### Added

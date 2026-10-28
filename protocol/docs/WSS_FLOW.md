@@ -219,7 +219,16 @@ is not part of the canonical sender contract. Each playlist item may independent
 `displayDurationMs` runs a pausable auto-advance timer, while omitted or zero duration keeps the
 image visible until explicit navigation. Receivers advertise supported kinds through
 `auth_response.mediaKinds` and echo the resolved per-item kind in `status` and
-`playlist_status`.
+`playlist_status`. Apple TV supports all three kinds with either engine selection:
+images use a shared aspect-fit ImageIO presentation; audio keeps its selected engine
+with music artwork/title/artist/album beneath the transport controls. Pre-play is video-only.
+Apple TV clamps image duration to 0–24 hours and starts timing after the image is
+shown, loading fails, or a 15-second load fallback expires. Images are not seekable;
+tracks and timeline are empty, and settings report unavailable image-inapplicable tuning.
+GIFs use their first frame. JSON `command/mouse` and compact binary pointer frames
+apply pan/scroll/zoom/rotate/anchor/reset only to images, never to a browser surface.
+Apple image/artwork downloads retain origin-scoped headers and standard TLS trust;
+page-controlled image/artwork downloads are rejected until its transport can enforce DNS/peer grants.
 
 ### Receiver to sender
 
@@ -288,7 +297,7 @@ advertised capabilities.
 | `playlist`, `queue_add`, `playlist_jump` | Sends | Sends | Sends | Handles | Handles | Handles |
 | Player `control` | Sends | Sends | Sends | Handles | Handles | Handles |
 | D-pad/system `remote` | Sends | Sends | Limited | Handles | Player-focused | Volume-focused |
-| JSON or binary mouse/touchpad | Sends | Sends | No | Handles | No | No |
+| JSON or binary mouse/touchpad | Sends | Sends | No | Handles | Image transforms only | Image transforms only |
 | `browser`, `browser_control` | Sends | Sends | No | Handles when browser capability exists | No | No |
 | User scripts / user agents | Sends | No | No | Handles | No | No |
 | `context`, `status`, `playlist_status` | Receives | Receives | Receives | Sends | Sends | Sends |
@@ -329,7 +338,7 @@ or replacement by a new connection.
   remains authoritative for required JSON snapshot fields. Generated protobuf JSON adapters may
   need to normalize integer/default/presence representation before emitting canonical WSS frames.
   `StatusMessage.fullscreen` is optional and is sent by browser surfaces.
-- Android TV advertises `player_home_v1` when remote Home finishes the player and returns to the receiver idle screen. Receivers that omit the feature keep Home unavailable in the player.
+- Android TV and Apple TV advertise `player_home_v1` when remote Home finishes the player and returns to the receiver idle screen. Receivers that omit the feature keep Home unavailable in the player.
 - Legacy receivers may have included the `token` in `auth_response`. Current receivers must never
   return the token, and senders must ignore it if present, retaining the token they already hold.
 - Apple TV still accepts the legacy `command/play` action for compatibility. Canonical senders
@@ -471,7 +480,9 @@ revision (1..2^53-1). Senders drop invalid/nonincreasing/stale-session updates. 
 versions retain the current descriptor while advancing ordering; malformed recognized v1 fails
 closed. New connections clear descriptor and revision state. Auth, protected pairing and pushes
 share one current receiver advertisement. Android TV rechecks Gecko package changes while running;
-Apple TV/Desktop/CLI receivers do not push. Sender support outside Android is deferred to step 9b.
+Desktop publishes volume-adapter availability changes to subscribers. Apple TV sends its
+static descriptor at numeric revision 1 on subscription and does not push unchanged snapshots;
+subscriptions are per authenticated socket and cleared on disconnect. CLI does not push. Sender support outside Android is deferred to step 9b.
 See the linked capability contract for bounds, numeric JSON encoding and UI/execution fencing.
 
 See [Receiver capabilities v1](RECEIVER_CAPABILITIES.md) for the complete shape, known identifiers,
