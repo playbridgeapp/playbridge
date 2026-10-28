@@ -69,6 +69,7 @@ struct LibraryListView: View {
                     .padding(.horizontal, 60)
                     .padding(.vertical, 20)
                 }
+                .appRemoteScroll()
             }
         }
         .appRemoteConfirmation("Clear Data", isPresented: $showClearConfirm,

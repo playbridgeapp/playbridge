@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 /// Lists the text files in the app bundle's Licenses folder.
 struct OpenSourceLicencesScreen: View {
@@ -9,31 +10,35 @@ struct OpenSourceLicencesScreen: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                Section {
-                    Button("Close") { dismiss() }
-                        .appRemoteAction { dismiss() }
-                    Text("PlayBridge's own code is licensed under MPL-2.0. The text is in this list.")
-                    Text("Source: https://github.com/playbridgeapp/playbridge")
-                        .foregroundColor(Theme.secondaryText)
-                }
-                Section("Bundled notices") {
-                    if files.isEmpty {
-                        Text("No licence files were found in this build.")
-                    } else {
-                        ForEach(files, id: \.lastPathComponent) { url in
-                            Button(url.lastPathComponent) {
-                                path.append(url.lastPathComponent)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    Section {
+                        Button("Close") { dismiss() }
+                            .appRemoteAction { dismiss() }
+                        Text("PlayBridge's own code is licensed under MPL-2.0. The text is in this list.")
+                        Text("Source: https://github.com/playbridgeapp/playbridge")
+                            .foregroundColor(Theme.secondaryText)
+                    }
+                    Section("Bundled notices") {
+                        if files.isEmpty {
+                            Text("No licence files were found in this build.")
+                        } else {
+                            ForEach(files, id: \.lastPathComponent) { url in
+                                Button(url.lastPathComponent) {
+                                    path.append(url.lastPathComponent)
+                                }
+                                .appRemoteAction { path.append(url.lastPathComponent) }
                             }
-                            .appRemoteAction { path.append(url.lastPathComponent) }
                         }
                     }
                 }
+                .padding(40)
             }
+            .appRemoteScroll()
             .navigationTitle("Open source licences")
             .navigationDestination(for: String.self) { name in
                 if let url = files.first(where: { $0.lastPathComponent == name }) {
-                    TVLicenceText(url: url, onBack: { if !path.isEmpty { path.removeLast() } })
+                    TVLicenceText(url: url, onBack: { if !path.isEmpty { path.removeLast() } }, onHome: { dismiss() })
                         .navigationBarBackButtonHidden(true)
                 }
             }
@@ -51,6 +56,7 @@ struct OpenSourceLicencesScreen: View {
 private struct TVLicenceText: View {
     let url: URL
     let onBack: () -> Void
+    let onHome: () -> Void
     @State private var text = ""
 
     var body: some View {
@@ -61,6 +67,7 @@ private struct TVLicenceText: View {
             FocusableLicenceText(text: text)
                 .ignoresSafeArea(edges: .horizontal)
         }
+        .appRemoteScope(back: onBack, home: onHome)
         .navigationTitle(url.lastPathComponent)
         .onAppear {
             if text.isEmpty { text = BundledLicenceFiles.text(at: url) }
@@ -70,60 +77,62 @@ private struct TVLicenceText: View {
 
 /// A text view the Siri remote can focus and scroll. A plain ScrollView of Text
 /// often never becomes focused, so the remote cannot move through a long licence.
-private struct FocusableLicenceText: UIViewRepresentable {
+private struct FocusableLicenceText: View {
     let text: String
-
-    func makeUIView(context: Context) -> FocusableTextView {
-        let view = FocusableTextView()
-        view.text = text
-        return view
-    }
-
-    func updateUIView(_ uiView: FocusableTextView, context: Context) {
-        if uiView.text != text { uiView.text = text }
+    @StateObject private var scrolling = LicenceTextScroll()
+    @Environment(\.appRemoteDriver) private var driver
+    var body: some View {
+        LicenceText(text: text, scrolling: scrolling)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .focusable()
+            .appRemoteAction({}, direction: scrolling.move)
+            .onMoveCommand { direction in
+                let key: String
+                switch direction {
+                case .up: key = "dpad_up"
+                case .down: key = "dpad_down"
+                case .left: key = "dpad_left"
+                case .right: key = "dpad_right"
+                @unknown default: return
+                }
+                driver?.handle(key)
+            }
     }
 }
 
-private final class FocusableTextView: UITextView {
-    override var canBecomeFocused: Bool { true }
-
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+private final class LicenceTextScroll: ObservableObject {
+    weak var view: UITextView?
+    func move(_ direction: AppFocusDirection) -> Bool {
+        guard let view, direction == .up || direction == .down else { return false }
+        let maximum = max(0, view.contentSize.height - view.bounds.height + view.adjustedContentInset.bottom)
+        let offset = min(maximum, max(0, view.contentOffset.y + (direction == .up ? -1 : 1) * view.bounds.height * 0.85))
+        guard abs(offset - view.contentOffset.y) > 1 else { return false }
+        view.setContentOffset(CGPoint(x: view.contentOffset.x, y: offset), animated: false)
+        return true
     }
+}
 
-    override init(frame: CGRect, textContainer: NSTextContainer?) {
-        super.init(frame: frame, textContainer: textContainer)
-        isSelectable = true
-        isScrollEnabled = true
-        isUserInteractionEnabled = true
-        backgroundColor = .clear
-        textColor = .white
-        font = .monospacedSystemFont(ofSize: 22, weight: .regular)
-        textContainerInset = UIEdgeInsets(top: 24, left: 48, bottom: 80, right: 48)
-        panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
-        showsVerticalScrollIndicator = true
-        bounces = true
+private final class PassiveLicenceTextView: UITextView {
+    override var canBecomeFocused: Bool { false }
+}
+
+private struct LicenceText: UIViewRepresentable {
+    let text: String
+    let scrolling: LicenceTextScroll
+    func makeUIView(context: Context) -> UITextView {
+        let view = PassiveLicenceTextView()
+        view.isSelectable = false
+        view.isScrollEnabled = true
+        view.backgroundColor = .clear
+        view.textColor = .white
+        view.font = .monospacedSystemFont(ofSize: 22, weight: .regular)
+        view.textContainerInset = UIEdgeInsets(top: 24, left: 48, bottom: 80, right: 48)
+        view.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        scrolling.view = view
+        return view
     }
-
-    required init?(coder: NSCoder) {
-        fatalError("FocusableTextView is created in code")
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        guard presses.count == 1, let press = presses.first else {
-            super.pressesBegan(presses, with: event)
-            return
-        }
-        let page = max(bounds.height * 0.85, 1)
-        let maxY = max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
-        switch press.type {
-        case .upArrow where contentOffset.y > 1:
-            setContentOffset(CGPoint(x: contentOffset.x, y: max(0, contentOffset.y - page)), animated: true)
-        case .downArrow where contentOffset.y < maxY - 1:
-            setContentOffset(CGPoint(x: contentOffset.x, y: min(maxY, contentOffset.y + page)), animated: true)
-        default:
-            super.pressesBegan(presses, with: event)
-        }
+    func updateUIView(_ view: UITextView, context: Context) {
+        if view.text != text { view.text = text }
     }
 }
 

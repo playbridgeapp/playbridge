@@ -12,6 +12,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Data/PlaylistStore.swift" \
   "$source_root/Data/QueueItemIDs.swift" \
   "$source_root/Network/ReceiverCapabilitySubscription.swift" \
+  "$source_root/UI/AppFocusModel.swift" \
   "$source_root/UI/AppFocusGeometry.swift" \
   "$source_root/Models/PairedDevice.swift" \
   "$source_root/Models/PairingCredentialState.swift" \

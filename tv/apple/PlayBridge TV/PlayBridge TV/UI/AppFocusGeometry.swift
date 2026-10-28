@@ -46,14 +46,7 @@ enum AppFocusGeometry {
         return best?.id
     }
 
-    /// The smallest containing registration wins for nested controls such as Favorite.
-    static func action(at focus: CGRect, targets: [AppFocusTarget]) -> Int? {
-        targets.filter { $0.rect.contains(CGPoint(x: focus.midX, y: focus.midY)) }
-            .min { a, b in
-                let first = a.rect.width * a.rect.height, second = b.rect.width * b.rect.height
-                return first == second ? a.id < b.id : first < second
-            }?.id
-    }
+
 }
 
 enum AppRemoteInputGate {

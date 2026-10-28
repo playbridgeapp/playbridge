@@ -79,7 +79,7 @@ struct PairingApprovalCard: View {
 struct PairingIdleView: View {
     @EnvironmentObject var server: WebSocketServer
     @State private var showDevices = false
-    @FocusState private var manageFocused: Bool
+    @State private var manageFocused = false
 
     var body: some View {
         VStack(spacing: 60) {
@@ -121,8 +121,7 @@ struct PairingIdleView: View {
                     .animation(.interactiveSpring(), value: manageFocused)
                 }
                 .buttonStyle(.plain)
-                .focused($manageFocused)
-                .appRemoteAction { showDevices = true }
+                .appRemoteAction({ showDevices = true }, focusChanged: { manageFocused = $0 })
                 .sheet(isPresented: $showDevices) {
                     DevicesSheetView()
                         .environmentObject(server)
@@ -137,8 +136,9 @@ struct PairingIdleView: View {
 private struct DevicesSheetView: View {
     @EnvironmentObject var server: WebSocketServer
     @Environment(\.dismiss) private var dismiss
-    @FocusState private var removeAllFocused: Bool
-    @FocusState private var doneFocused: Bool
+    @State private var removeAllFocused = false
+    @State private var doneFocused = false
+    @State private var doneID = AppFocusID()
     @State private var confirmRemoveAll = false
 
     var body: some View {
@@ -159,8 +159,7 @@ private struct DevicesSheetView: View {
                             .cornerRadius(10)
                     }
                     .buttonStyle(.plain)
-                    .focused($removeAllFocused)
-                    .appRemoteAction { confirmRemoveAll = true }
+                    .appRemoteAction({ confirmRemoveAll = true }, focusChanged: { removeAllFocused = $0 })
                     .appRemoteConfirmation("Remove all paired devices?", isPresented: $confirmRemoveAll,
                                            message: "Each phone will need a new pairing code to connect again.", confirm: "Remove All") {
                         server.forgetAllDevices()
@@ -176,8 +175,7 @@ private struct DevicesSheetView: View {
                         .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-                .focused($doneFocused)
-                .appRemoteAction { dismiss() }
+                .appRemoteAction({ dismiss() }, id: doneID, focusChanged: { doneFocused = $0 })
             }
             .padding(.horizontal, 60)
             .padding(.top, 60)
@@ -205,11 +203,11 @@ private struct DevicesSheetView: View {
                     .padding(.horizontal, 60)
                     .padding(.bottom, 40)
                 }
+                .appRemoteScroll()
             }
         }
         // Land on Done, not the destructive Remove All, when the sheet opens.
-        .defaultFocus($doneFocused, true)
-        .appRemoteScope(back: { dismiss() }, home: { dismiss() })
+        .appRemoteScope(back: { dismiss() }, home: { dismiss() }, initialFocus: doneID)
     }
 }
 

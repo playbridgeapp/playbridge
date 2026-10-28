@@ -191,6 +191,7 @@ struct ContentView: View {
             playbackSessionID &+= 1
             stillWatching.reset()
         }
+        .appRemoteScope(root: true)
         .environment(\.appRemoteDriver, appRemote)
         .environmentObject(historyStore)
         .environmentObject(playlistStore)

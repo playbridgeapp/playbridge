@@ -6,15 +6,35 @@ Home returns to Pair Device (the idle root); it never opens tvOS Home or another
 Pairing approval and cancellation remain physical-remote-only: all phone app keys
 are ignored while a pairing request is pending, even from an already paired phone.
 
-The shared UIKit driver reads the current focus item and public focus containers,
-chooses a directional target by beam overlap then edge/center distance, reveals it
-in scroll views, and requests a UIKit focus update. It only scans on a received key.
-OK invokes the focused control's registered primary action; it never synthesizes a
-press. App-owned confirmation sheets share the same mechanism and default to Cancel.
-System alerts/background apps are excluded by foreground/key-window/focus ownership
-checks. History materializes its bounded (100-item) lightweight rows to keep offscreen
-focus targets available. Native SwiftUI focus sections and UIKit focus validation
-remain in place; actual visual focus/scroll behavior requires hardware verification.
+Each root/presentation hierarchy owns a SwiftUI `FocusState<AppFocusID?>`.
+Controls register an opaque ID, frame, primary action and optional scroll handler.
+The driver selects only registered frames in the top eligible scope using beam
+and distance, reveals the target with `ScrollViewReader`, and assigns that scope's
+FocusState binding. OK uses the focused ID directly. UIKit is used only for geometry,
+text scrolling and foreground/key-window/system-alert guards, never to redirect focus.
+Owned confirmations have independent scopes and prefer Cancel. Licence text has its
+own scope; Back restores the licence list and closing a cover restores the root.
+Settings/licence rows are eager so offscreen targets remain registered, like bounded
+History. Scope registrations reattach when a presenting view returns to its window.
+
+Both phone idle-app navigation bars now show an explicit OK button outside the swipe
+recognizer. Quick taps still work; a stationary press above 300 ms is deliberately
+not a swipe-pad tap. On iOS, idle-app OK uses a discrete receiver write so a subsequent
+swipe/new gesture cannot replace it in the latest-pending navigation slot. Other
+player/browser/companion gesture behavior is unchanged.
+
+Debug builds emit a single line after the focus update, containing only a known key
+and opaque control IDs (or `none`), for example:
+
+```text
+[AppDpad] key=dpad_down target=00000000-0000-0000-0000-000000000002 focused=00000000-0000-0000-0000-000000000002
+[AppDpad] key=dpad_center target=none focused=none
+```
+
+These are illustrative IDs. `focused` is the scope's FocusState value read on the
+next main-queue turn, not a claim about rendered pixels. Edge/blocked/no-focus input
+can produce `target=none`. Logging is compiled only under `#if DEBUG`; it contains no
+media, titles, device names, URLs, credentials or pairing data.
 
 ## Manual Apple TV and phone checklist
 
@@ -22,6 +42,9 @@ No device or simulator interaction was performed for this change. Test with both
 Android and iOS phones after reconnecting to refresh the descriptor:
 
 - Idle Pair Device, History, Favorites, and Settings show a phone pad plus OK/Back/Home.
+  Check the visible OK button in both swipe and button modes, a short tap, and a
+  longer stationary press followed by explicit OK. On iOS, press OK while a previous
+  direction write is slow, then immediately swipe: OK should arrive once.
   A v1 receiver without `app` keeps its previous idle UI. Player/browser contexts
   use only their own keys, even if `app` has additional keys. Repeat with several
   app engines: only their common keys may appear or execute.

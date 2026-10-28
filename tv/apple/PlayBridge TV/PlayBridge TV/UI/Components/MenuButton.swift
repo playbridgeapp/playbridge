@@ -5,7 +5,7 @@ struct MenuButton: View {
     let icon: String
     @Binding var currentScreen: AppScreen
     let screen: AppScreen
-    @FocusState private var isFocused: Bool
+    @State private var isFocused = false
 
     var isSelected: Bool { currentScreen == screen }
 
@@ -29,7 +29,6 @@ struct MenuButton: View {
             .animation(.interactiveSpring(), value: isFocused)
         }
         .buttonStyle(.plain)
-        .focused($isFocused)
-        .appRemoteAction { currentScreen = screen }
+        .appRemoteAction({ currentScreen = screen }, focusChanged: { isFocused = $0 })
     }
 }

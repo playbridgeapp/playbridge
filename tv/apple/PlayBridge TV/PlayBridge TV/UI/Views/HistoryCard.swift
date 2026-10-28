@@ -4,7 +4,7 @@ struct HistoryCard: View {
     let item: PlaybackHistoryItem
     @EnvironmentObject var historyStore: HistoryStore
     let action: () -> Void
-    @FocusState private var isFocused: Bool
+    @State private var isFocused = false
 
     private var resumeTimeLabel: String? {
         guard let position = item.resumePositionMs else { return nil }
@@ -50,8 +50,7 @@ struct HistoryCard: View {
                 }
             }
             .buttonStyle(.plain)
-            .focused($isFocused)
-            .appRemoteAction(action)
+            .appRemoteAction(action, focusChanged: { isFocused = $0 })
             Button(action: { historyStore.toggleFavorite(item: item) }) {
                 Image(systemName: item.isFavorite ? "star.fill" : "star")
                     .font(.system(size: 28))
