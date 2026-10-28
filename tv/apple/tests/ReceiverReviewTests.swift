@@ -2108,9 +2108,22 @@ private func runMediaContractTests() {
     assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "audio/mpeg") == .audio)
     assert(MediaKind.resolve(explicit: nil, url: "a.mp3", contentType: "video/mp4") == .video)
     assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "application/vnd.apple.mpegurl") == .video)
-    for type in ["status", "playlist_status"] {
-        assert(MediaKind.image.enriching(["type": type])["mediaKind"] as? String == "image")
-    }
+    let status = MediaKind.image.enriching(["type": "status", "state": "paused", "position": 0, "duration": 0])
+    let playlist: [String: Any] = ["type": "playlist_status", "items": [
+        MediaKind.image.enriching(["index": 0, "itemId": "photo", "title": "Photo"]),
+        MediaKind.audio.enriching(["index": 1, "itemId": "song", "title": "Song"]),
+    ]]
+    let statusJSON = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: status)) as! [String: Any]
+    let playlistJSON = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: playlist)) as! [String: Any]
+    assert(statusJSON["mediaKind"] as? String == "image")
+    assert((playlistJSON["items"] as! [[String: Any]]).map { $0["mediaKind"] as! String } == ["image", "audio"])
+    let media = PlayerMediaIdentity(playbackID: "queue-a", itemID: "photo")
+    assert(media.matches(playbackID: "queue-a", itemID: "photo", active: true))
+    assert(!media.matches(playbackID: "queue-a", itemID: "song", active: true))
+    assert(!media.matches(playbackID: "queue-b", itemID: "photo", active: true))
+    assert(!media.matches(playbackID: nil, itemID: nil, active: false))
+    assert(!media.matches(playbackID: "queue-a", itemID: "photo", active: false))
+    assert(!PlayerMediaIdentity(playbackID: nil, itemID: nil).matches(playbackID: nil, itemID: nil, active: true))
     let ids = QueueItemIDs.resolve(["sender-1", nil, " sender-2 "])!
     assert(ids[0] == "sender-1" && ids[2] == " sender-2 " && UUID(uuidString: ids[1]) != nil)
     assert(QueueItemIDs.resolve(["same", "same"]) == nil)

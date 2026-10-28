@@ -1066,13 +1066,13 @@ class WebSocketServer: ObservableObject {
             if let p = try? Playbridge_PlayPayload(jsonString: payloadJson), p.validURL != nil {
                 handlePlay(p, requestID: requestID, connection: connection)
             } else {
-                print("WebSocket Play Error: Failed to decode PlayPayload or invalid URL")
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             }
         case "playlist":
             if let p = try? Playbridge_PlaylistPayload(jsonString: payloadJson) {
                 handlePlaylist(p, requestID: requestID, connection: connection)
             } else {
-                print("WebSocket Playlist Error: Failed to decode PlaylistPayload")
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             }
         case "queue_add":
             guard let p = try? Playbridge_QueueAddPayload(jsonString: payloadJson) else {
@@ -1319,7 +1319,7 @@ class WebSocketServer: ObservableObject {
             }
             if let connection { self.completeCommand(requestID, ok: true, to: connection) }
             self.skipPreplayForCurrentRequest = false
-            self.currentPlayRequest = payload
+            self.currentPlayRequest = self.playlistStore?.currentItem ?? payload
         }
     }
 

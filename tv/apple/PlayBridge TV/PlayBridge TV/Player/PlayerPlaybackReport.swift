@@ -8,6 +8,17 @@ struct PlayerReportIdentity: Equatable {
     var generation: Int
 }
 
+/// Queue identity survives view teardown long enough to reject late decoder/timer callbacks.
+struct PlayerMediaIdentity: Equatable {
+    let playbackID: String?
+    let itemID: String?
+
+    func matches(playbackID: String?, itemID: String?, active: Bool) -> Bool {
+        active && self.playbackID != nil && self.itemID != nil
+            && self.playbackID == playbackID && self.itemID == itemID
+    }
+}
+
 enum PlayerEndDecision: Equatable {
     /// Repeat the item that just ended, including when a playlist has a later item.
     case repeatCurrentItem
