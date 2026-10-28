@@ -46,8 +46,8 @@ struct ReceiverRemotePolicy {
         var policy = Self(isLegacy: false, state: state)
         guard case .descriptor(let descriptor) = capabilities else { return policy }
         let player = state.context == "player", browser = state.context == "browser"
-        let engines = descriptor.surfaces[player ? "player" : browser ? "browser" : ""] ?? [:]
-        let reported = state.contextEngine ?? (player && !state.settingsEngine.isEmpty || browser && engines[state.settingsEngine] != nil ? state.settingsEngine : nil)
+        let engines = descriptor.surfaces[player ? "player" : browser ? "browser" : state.context == "idle" ? "app" : ""] ?? [:]
+        let reported = (player || browser ? state.contextEngine : nil) ?? (player && !state.settingsEngine.isEmpty || browser && engines[state.settingsEngine] != nil ? state.settingsEngine : nil)
         let unique = Set(state.players.filter { engines[$0] != nil })
         let candidate = reported ?? (player && unique.count == 1 ? unique.first : nil)
         let operations: ReceiverDescriptor.Operations

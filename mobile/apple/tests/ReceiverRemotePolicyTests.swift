@@ -114,6 +114,22 @@ struct ReceiverRemotePolicyTests {
         state.context = "idle"
         precondition(resolve(android).keys.isEmpty && resolve(android).transport.isEmpty && resolve(android).allowsLaunch(nil))
         precondition(resolve(apple).hasVolume("relative_step")) // Common volume is surface-independent.
+        let idleApple = resolve(apple)
+        precondition(idleApple.keys == ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"])
+        precondition(idleApple.hasDpad && idleApple.keys.allSatisfy(idleApple.allowsKey))
+        let idleLayout = RemoteInputLayout(policy: idleApple, context: "idle", image: false, external: false, externalProtocol: nil)
+        precondition(idleLayout.hasNavigation && idleLayout.surface(in: "idle", preferences: .init()) == .swipe)
+        let noApp = descriptor(["mpv": ["keys": ["dpad_left"]]])
+        precondition(resolve(noApp).keys.isEmpty && !resolve(noApp).hasDpad)
+        let appEngines = descriptor(["native": ["keys": ["dpad_up", "back"]], "future": ["keys": ["back", "home"]]], surface: "app")
+        state.contextEngine = "native"
+        precondition(resolve(appEngines).keys == ["back"], "Idle ignores stale engine reports and intersects all app engines")
+        state.context = "player"
+        precondition(resolve(appEngines).keys.isEmpty, "App keys never leak into player controls")
+        state.context = "browser"
+        precondition(resolve(appEngines).keys.isEmpty)
+        state.context = "idle"
+        precondition(ReceiverRemotePolicy.resolve(.legacy, state: state).isLegacy)
         state.context = "mirror"
         precondition(resolve(android).keys.isEmpty && resolve(android).settings.isEmpty)
         state.context = "player"; state.contextEngine = nil; state.players = []; state.mediaKind = "image"
