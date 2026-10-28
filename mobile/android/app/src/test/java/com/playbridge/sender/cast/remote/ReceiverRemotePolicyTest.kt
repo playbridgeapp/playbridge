@@ -81,6 +81,36 @@ class ReceiverRemotePolicyTest {
     private fun engine(transport: Set<String> = emptySet(), keys: Set<String> = emptySet(), settings: Set<String> = emptySet(), queue: Set<String> = emptySet()) =
         ReceiverEngine(transport = transport, keys = keys, settings = settings, queue = queue)
 
+    @Test fun idleAppKeysUseOnlyTheirOwnEngineIntersectionAndDispatch() {
+        val navigation = setOf("dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home")
+        val descriptor = ReceiverDescriptor(1, mapOf(
+            "app" to ReceiverSurface(mapOf("native" to engine(keys = navigation))),
+            "player" to ReceiverSurface(mapOf("mpv" to engine(keys = setOf("dpad_left")))),
+        ))
+        val raw = state(descriptor, RemoteContext.Idle)
+        val idle = resolveReceiverRemotePolicy(raw.copy(receiverProtocol = raw.receiverProtocol.copy(contextEngine = "mpv")), listOf("mpv"), guarded)
+        assertEquals(setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok, RemoteKey.Back, RemoteKey.Home), idle.capabilities.keys)
+        assertTrue(resolveRemoteLayout(idle, RemoteViewport()).modes.contains(RemoteInputMode.Pad))
+        for (key in idle.capabilities.keys) assertTrue(idle.receiverActionSupported(RemoteAction.Key(key)))
+        assertEquals(Support.Unsupported, idle.capabilities.transport.playPause)
+        assertFalse(idle.receiverActionSupported(RemoteAction.StopPlayback))
+        val noApp = state(descriptor.copy(surfaces = descriptor.surfaces - "app"), RemoteContext.Idle)
+        assertTrue(noApp.capabilities.keys.isEmpty())
+        assertFalse(resolveRemoteLayout(noApp, RemoteViewport()).modes.contains(RemoteInputMode.Pad))
+        assertFalse(noApp.receiverActionSupported(RemoteAction.Key(RemoteKey.Ok)))
+        assertEquals(setOf(RemoteKey.Left), state(descriptor, RemoteContext.Player).capabilities.keys)
+        assertTrue(state(descriptor, RemoteContext.Browser).capabilities.keys.isEmpty())
+        val multiple = descriptor.copy(surfaces = descriptor.surfaces + ("app" to ReceiverSurface(mapOf(
+            "native" to engine(keys = navigation), "future" to engine(keys = setOf("back")),
+        ))))
+        val intersected = resolveReceiverRemotePolicy(state(multiple, RemoteContext.Idle).copy(
+            receiverProtocol = ReceiverProtocolState(multiple, contextEngine = "native")), emptyList(), guarded)
+        assertEquals(setOf(RemoteKey.Back), intersected.capabilities.keys)
+        val legacy = state(null, RemoteContext.Idle).copy(receiver = testConfiguration(RemoteProfile.AppleTv).receiver)
+        val legacyApple = resolveReceiverRemotePolicy(legacy, listOf("mpv"), emptySet())
+        assertFalse(RemoteKey.Ok in legacyApple.capabilities.keys)
+    }
+
     @Test fun realPlayerDescriptorsExposeTheirActualControls() {
         for (name in listOf("android-tv", "android-tv-gecko", "apple-tv", "apple-tv-app-volume", "desktop", "cli")) {
             val resolved = state(fixture(name))

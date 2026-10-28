@@ -2,7 +2,7 @@ package com.playbridge.sender.cast.remote
 
 enum class RemoteInputPresentation { Absent, Full }
 
-/** A pad exists only for whole-device navigation (stage 4, and Roku ECP). PlayBridge playback keys are not a pad. */
+/** Native navigation follows the active surface; whole-device control remains an independent route. */
 internal fun RemoteUiState.hasPadRoute(): Boolean =
     if (capabilities.keyScope == ControlScope.WholeDevice)
         capabilities.keys.containsAll(setOf(RemoteKey.Up, RemoteKey.Down, RemoteKey.Left, RemoteKey.Right, RemoteKey.Ok))
