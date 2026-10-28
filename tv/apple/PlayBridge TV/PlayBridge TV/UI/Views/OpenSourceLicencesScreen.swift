@@ -33,11 +33,15 @@ struct OpenSourceLicencesScreen: View {
             .navigationTitle("Open source licences")
             .navigationDestination(for: String.self) { name in
                 if let url = files.first(where: { $0.lastPathComponent == name }) {
-                    TVLicenceText(url: url)
+                    TVLicenceText(url: url, onBack: { if !path.isEmpty { path.removeLast() } })
+                        .navigationBarBackButtonHidden(true)
                 }
             }
         }
         .onAppear { files = BundledLicenceFiles.urls() }
+        .onExitCommand {
+            if path.isEmpty { dismiss() } else { path.removeLast() }
+        }
         .appRemoteScope(back: {
             if path.isEmpty { dismiss() } else { path.removeLast() }
         }, home: { dismiss() })
@@ -46,15 +50,21 @@ struct OpenSourceLicencesScreen: View {
 
 private struct TVLicenceText: View {
     let url: URL
+    let onBack: () -> Void
     @State private var text = ""
 
     var body: some View {
-        FocusableLicenceText(text: text)
-            .ignoresSafeArea(edges: .horizontal)
-            .navigationTitle(url.lastPathComponent)
-            .onAppear {
-                if text.isEmpty { text = BundledLicenceFiles.text(at: url) }
-            }
+        VStack(alignment: .leading, spacing: 16) {
+            Button("Back", action: onBack)
+                .appRemoteAction(onBack)
+                .padding(.horizontal, 48)
+            FocusableLicenceText(text: text)
+                .ignoresSafeArea(edges: .horizontal)
+        }
+        .navigationTitle(url.lastPathComponent)
+        .onAppear {
+            if text.isEmpty { text = BundledLicenceFiles.text(at: url) }
+        }
     }
 }
 

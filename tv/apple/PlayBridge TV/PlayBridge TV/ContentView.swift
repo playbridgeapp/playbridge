@@ -147,9 +147,9 @@ struct ContentView: View {
         }
         .background(AppRemoteAnchor(
             driver: appRemote,
-            enabled: AppRemoteInputGate.allows(foreground: scenePhase == .active,
-                                              hasPlayer: server.currentPlayRequest != nil,
-                                              pairingPending: server.pendingPairingRequest != nil),
+            enabled: { AppRemoteInputGate.allows(foreground: scenePhase == .active,
+                                                hasPlayer: server.currentPlayRequest != nil,
+                                                pairingPending: server.pendingPairingRequest != nil) },
             onBack: { if currentScreen != .pairing { currentScreen = .pairing } },
             onHome: { currentScreen = .pairing }))
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in

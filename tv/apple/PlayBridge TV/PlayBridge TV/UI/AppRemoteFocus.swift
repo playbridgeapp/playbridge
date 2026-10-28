@@ -11,7 +11,8 @@ final class AppRemoteFocusDriver: ObservableObject {
     private var actions: [ObjectIdentifier: WeakAction] = [:]
     private var scopes: [Scope] = []
     weak var anchor: UIView?
-    var enabled = false
+    fileprivate weak var window: UIWindow?
+    var acceptsInput: () -> Bool = { false }
     var rootBack: () -> Void = {}
     var rootHome: () -> Void = {}
     private var navigationRevision = 0
@@ -62,8 +63,8 @@ final class AppRemoteFocusDriver: ObservableObject {
     }
 
     private func context() -> Context? {
-        guard enabled, UIApplication.shared.applicationState == .active,
-              let window = anchor?.window, window.isKeyWindow,
+        guard acceptsInput(), UIApplication.shared.applicationState == .active,
+              let window = anchor?.window ?? window, window.isKeyWindow,
               window.windowScene?.activationState == .foregroundActive,
               var controller = window.rootViewController else { return nil }
         while let presented = controller.presentedViewController {
@@ -212,15 +213,28 @@ private struct AppRemoteAction: UIViewRepresentable {
     static func dismantleUIView(_ view: AppRemoteActionView, coordinator: ()) { view.driver?.unregister(view) }
 }
 
+private final class AppRemoteAnchorView: UIView {
+    weak var driver: AppRemoteFocusDriver?
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let window { driver?.window = window }
+    }
+}
+
 struct AppRemoteAnchor: UIViewRepresentable {
     let driver: AppRemoteFocusDriver
-    let enabled: Bool
+    let enabled: () -> Bool
     let onBack: () -> Void
     let onHome: () -> Void
-    func makeUIView(context: Context) -> UIView { UIView() }
+    func makeUIView(context: Context) -> UIView {
+        let view = AppRemoteAnchorView()
+        view.driver = driver
+        return view
+    }
     func updateUIView(_ view: UIView, context: Context) {
         driver.anchor = view
-        driver.enabled = enabled
+        if let window = view.window { driver.window = window }
+        driver.acceptsInput = enabled
         driver.rootBack = onBack
         driver.rootHome = onHome
     }
