@@ -1,0 +1,20 @@
+{
+  "type": "auth_response",
+  "success": true,
+  "capabilities": {
+    "version": 1,
+    "surfaces": {
+      "app": {
+        "keys": [
+          "dpad_up",
+          "dpad_down",
+          "dpad_left",
+          "dpad_right",
+          "dpad_center",
+          "back",
+          "home"
+        ]
+      }
+    }
+  }
+}

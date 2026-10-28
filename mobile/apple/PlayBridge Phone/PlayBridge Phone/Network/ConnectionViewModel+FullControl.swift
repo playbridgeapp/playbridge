@@ -59,7 +59,7 @@ extension ConnectionViewModel {
                   route != .atv || self.atvRemote?.fullControl.ticket == ticket else { return }
             self.operationError = (error as? AtvClientError)?.errorDescription ?? "Could not send TV control"
         }
-        if RemoteNavigationKey.names.contains(key) {
+        if policy.coalescesNavigation(key) {
             let context = coordinator.remoteContextGeneration
             navigationDispatcher.submit(gesture: gesture, send: { [weak self] authority in
                 guard let self, authority() else { throw AtvClientError.superseded }

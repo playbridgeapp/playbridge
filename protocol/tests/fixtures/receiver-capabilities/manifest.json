@@ -413,5 +413,10 @@
     "file": "invalid-timeline-empty-title.json",
     "schema": "Timeline",
     "valid": false
+  },
+  {
+    "file": "invalid-app-missing-engines.json",
+    "schema": "AuthResponse",
+    "valid": false
   }
 ]

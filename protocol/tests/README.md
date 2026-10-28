@@ -19,7 +19,7 @@ The Ruby checker validates structure/references only. The Python validator check
 schemas against the JSON Schema metaschema and validates actual payloads through local `$ref`,
 `oneOf`/`allOf`/`anyOf`, required/type/const/uniqueness/additional-property/range constraints.
 Its errors report fixture/schema paths without echoing payloads. The manifest includes 47 valid
-and 36 invalid cases; every JSON fixture must be listed. Fixtures cover auth and decrypted bundles,
+and 37 invalid cases; every JSON fixture must be listed. Fixtures cover auth and decrypted bundles,
 with/without descriptors for Android-TV-like, Apple player-only, Desktop and CLI hosts, unknown
 identifiers and opaque future versions, empty complete sets, app/system volume and full settings.
 
@@ -29,6 +29,10 @@ claims of deployed Apple support. The `apple-tv-player-settings-mpv` and
 AVPlayer's unavailable subtitle offset while its sidecar overlay is inactive. Android-TV-like
 fixtures illustrate engine differences; real receiver builders must derive their advertisements
 from implemented dispatch/availability.
+
+Apple TV v1 auth/bundle fixtures also declare the idle `app` surface with the open
+`native` engine and seven in-app navigation keys. The invalid app fixture rejects
+operation sets placed directly on the surface without the required engine map.
 
 Negative fixtures reject wrong/missing version, contradictory surface arrays, duplicate/nonstring
 operations, transient state, plaintext outer-pairing descriptors, invalid live-update envelopes/revisions,

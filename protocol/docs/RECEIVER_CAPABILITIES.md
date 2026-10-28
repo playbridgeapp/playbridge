@@ -20,7 +20,7 @@ profile precedence, context/media restrictions, observed state fallbacks and ind
 control projection. Do not invent engines, infer a hosted browser from empty native arrays,
 reclassify Desktop as app-only volume, or add Apple Home/volume merely from an OS/feature hint.
 
-Version 1 is complete. `surfaces` is the single map of surface IDs (`player`, `browser`) to engine
+Version 1 is complete. `surfaces` is the single map of surface IDs (`player`, `browser`, `app`) to engine
 maps. There is no second surface list or parallel top-level player/browser block. An engine's
 presence means available; omit unavailable engines. An empty map/set or missing operation set
 means unsupported. Never fill absent operations from OS/profile guesses, legacy flags, another
@@ -82,8 +82,32 @@ may still overlay its keys/text/volume on a native receiver snapshot.
 
 This player-only example intentionally has no browser, pointer, text or volume support. Its
 engine list is illustrative; the real Apple builder must include all available engines. Known
-engine IDs are `exo`, `mpv`, `avplayer`, `internal_mpv`, `webview`, `gecko`. Engine labels and unknown
+engine IDs are `exo`, `mpv`, `avplayer`, `internal_mpv`, `webview`, `gecko`, and `native` (the app UI). Engine labels and unknown
 engine presentation remain sender concerns; an engine ID must never determine an OS capability.
+
+## In-app navigation surface
+
+`app` describes the receiver's own foreground UI outside the player/browser:
+idle home, History, Settings, Pairing, menus, and owned sheets/dialogs. It uses the
+same engine map; Apple TV uses the open engine ID `native`:
+
+```json
+{"app":{"engines":{"native":{"keys":["dpad_up","dpad_down","dpad_left","dpad_right","dpad_center","back","home"]}}}}
+```
+
+Use only this surface's keys when `context.active` is `idle`. Intersect the keys
+of all available app engines if more than one is present; player/browser engine
+reports never select an app engine. While player/browser is active, ignore `app`
+and use that surface's own operations. Never union surfaces. Wire commands remain
+`command/remote` with the exact key. Back dismisses the top owned presentation or
+navigates within the app and is a no-op at the root. Home closes owned presentations
+and returns to the receiver's idle root; neither key exits PlayBridge or opens tvOS
+Home. System alerts and background apps do not accept this route. Pairing approval
+and denial remain physical-remote-only, including for already authenticated senders.
+
+Surface/engine identifiers were already open in v1: old senders ignore `app`, no
+version bump or new protobuf message is required, and no app control follows from
+an OS hint. Android TV companion/Full control remains an independent route.
 
 ## Operation identifiers and command mapping
 

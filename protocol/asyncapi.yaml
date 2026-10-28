@@ -1217,9 +1217,9 @@ components:
           type: integer
           const: 1
         surfaces:
-          description: Single surface authority. Keys currently player and browser; unknown surface IDs are safely
+          description: Single surface authority. Known keys player, browser, and app; unknown surface IDs are safely
             preserved/ignored. Presence declares a surface, whose available engines own complete operation sets.
-            There is no second surface list or top-level player/browser block.
+            There is no second surface list or top-level player/browser block. App is the foreground receiver UI outside player/browser, used only with idle context.
           type: object
           maxProperties: 16
           propertyNames: *id001
@@ -1261,7 +1261,7 @@ components:
       properties:
         engines:
           description: Available engine IDs mapped to complete operation sets. Known IDs exo, mpv, avplayer, internal_mpv,
-            webview, gecko. Omit unavailable engines; active engine belongs to state reports. Do not union engine
+            webview, gecko, native (app UI). All engine IDs are open. Omit unavailable engines; active engine belongs to state reports. Do not union engine
             operation sets or inherit absent operations.
           type: object
           maxProperties: 16
@@ -1280,7 +1280,7 @@ components:
         keys:
           $ref: '#/components/schemas/CapabilityIdentifiers'
           description: Exact wire key IDs, including dpad_up/down/left/right/center, back, home, key_enter. Home
-            is PlayBridge app idle, not device Home.
+            is PlayBridge app idle, not device Home. App keys apply only in idle context, intersect app engines, and never union with player/browser keys; pairing approval/denial stays physical-only.
         pointer:
           $ref: '#/components/schemas/CapabilityIdentifiers'
           description: 'Browser pointer operations: move, click, down, up, scroll, zoom. Drag requires both down

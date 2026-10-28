@@ -531,6 +531,10 @@ struct RemoteControlView: View {
 
     private var navigationBar: some View {
         HStack(spacing: 0) {
+            if let key = policy.idleSelectKey {
+                action("checkmark", "OK") { vm.cancelNavigation(); vm.remote(key) }
+                    .accessibilityIdentifier("remote.appOK")
+            }
             if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("back")) { action("arrow.uturn.backward", "Back") { vm.remote("back") } }
             if (policy.isLegacy ? inputLayout.hasNavigation : keyAllowed("home")) { action("house", "Home") { vm.remote("home") } }
             keyboardButton

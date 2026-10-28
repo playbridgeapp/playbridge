@@ -29,6 +29,11 @@ struct CombinedRemotePolicy {
         if fullControlReady && !browserText { return .atv }
         return browserText || receiverReady && receiver.text.contains("replace") ? .receiver : .unavailable
     }
+    /// App OK is a discrete activation; a later swipe must not coalesce it away.
+    func coalescesNavigation(_ key: String) -> Bool {
+        RemoteNavigationKey.names.contains(key) && !(route(key) == .receiver && receiver.idleSelectKey == key)
+    }
+
     func route(_ key: String) -> RemoteCommandRoute {
         if AtvControlAction.remoteKey(key) != nil && fullControlReady { return .atv }
         if key == "menu" { return .unavailable }

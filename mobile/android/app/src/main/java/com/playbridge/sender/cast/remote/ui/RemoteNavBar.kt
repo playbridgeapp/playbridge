@@ -6,6 +6,7 @@ import com.playbridge.sender.cast.remote.fullControlReady
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.CircleShape
@@ -14,10 +15,12 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Home
+import com.playbridge.sender.cast.remote.appSelectAction
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -51,11 +55,12 @@ import com.playbridge.sender.cast.remote.RemoteVolumePill
 import com.playbridge.sender.cast.remote.remoteVolumePill
 
 @Composable
-internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "Volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null, volumePill: RemoteVolumePill? = null, onVolumePill: () -> Unit = {}, onStop: (() -> Unit)? = null) {
-    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && onStop == null) return
+internal fun RemoteNavBar(nav: RemoteNavAvailability, onRemoteKey: (String) -> Unit, onKeys: () -> Unit, volumeTitle: String = "Volume", mute: Boolean = false, enter: Boolean = false, delete: Boolean = false, muted: Boolean? = null, volumePill: RemoteVolumePill? = null, onVolumePill: () -> Unit = {}, onStop: (() -> Unit)? = null, onSelect: (() -> Unit)? = null) {
+    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && onStop == null && onSelect == null) return
     val haptics = rememberRemoteHaptics()
     Surface(color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f), shape = CircleShape) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            if (onSelect != null) TextButton(onClick = onSelect, modifier = Modifier.size(48.dp).testTag("remote.appOK")) { Text("OK") }
             if (nav.back) RemoteButton(Icons.AutoMirrored.Filled.Undo, "TV Back", true) { onRemoteKey("back") }
             if (nav.home) RemoteButton(Icons.Default.Home, "TV Home", true) { onRemoteKey("home") }
             if (nav.keys) RemoteButton(Icons.Default.Keyboard, "Keys", true, onKeys)
@@ -104,9 +109,10 @@ internal fun remoteVolumeLabel(
 
 @Composable
 internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispatch: (RemoteAction) -> Unit) {
+    val select = state.appSelectAction()
     val nav = RemoteNavAvailability(layout.nav.back.enabled, layout.nav.home.enabled, layout.nav.keys.enabled, layout.nav.volume.enabled)
     val nativeVolume = state.nativePolicy != null || state.fullControlReady
-    if (!nativeVolume && !nav.back && !nav.home && !nav.keys && !nav.volume) return
+    if (!nativeVolume && !nav.back && !nav.home && !nav.keys && !nav.volume && select == null) return
     val mute = state.fullControlSupports(RemoteAction.Key(RemoteKey.Mute)) ||
         (state.nativePolicy?.volume?.operations?.contains("mute_toggle") == true && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Mute in state.capabilities.keys)
     val enter = nativeVolume && state.connection is com.playbridge.sender.cast.remote.RemoteConnection.Connected && RemoteKey.Enter in state.capabilities.keys && !nav.keys
@@ -138,7 +144,7 @@ internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispat
     // Stop lives here (not in More) while something is playing.
     val stop = state.playback != null && state.context == com.playbridge.sender.cast.remote.RemoteContext.Player &&
         (state.nativePolicy == null || state.capabilities.transport.stop == Support.Supported)
-    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && label == null && !stop) return
+    if (!nav.back && !nav.home && !nav.keys && !nav.volume && !mute && !enter && !delete && label == null && !stop && select == null) return
     Column(Modifier.testTag("remote.nav"), horizontalAlignment = Alignment.CenterHorizontally) {
         if (label != null) {
             Text(
@@ -156,6 +162,7 @@ internal fun RemoteNavBar(state: RemoteUiState, layout: RemoteLayoutSpec, dispat
             onKeys = { dispatch(RemoteAction.OpenSheet(RemoteSheet.Keyboard)) },
             volumeTitle = volumeTitle, mute = mute, enter = enter, delete = delete, muted = state.capabilities.volume.muted,
             volumePill = pill, onVolumePill = { showVolumeSheet = true },
+            onSelect = select?.let { action -> { dispatch(action) } },
             onStop = if (stop) ({ dispatch(RemoteAction.StopPlayback) }) else null,
         )
     }

@@ -29,9 +29,9 @@ internal fun resolveReceiverRemotePolicy(state: RemoteUiState, players: List<Str
     ))
     val player = state.context == RemoteContext.Player
     val browser = state.context == RemoteContext.Browser
-    val surface = when { player -> "player"; browser -> "browser"; else -> null }
+    val surface = when { player -> "player"; browser -> "browser"; state.context == RemoteContext.Idle -> "app"; else -> null }
     val engines = descriptor?.surfaces?.get(surface)?.engines.orEmpty()
-    val reported = protocol.contextEngine ?: if (player) state.settings.engine else if (browser) when (state.browser?.engine) {
+    val reported = protocol.contextEngine?.takeIf { player || browser } ?: if (player) state.settings.engine else if (browser) when (state.browser?.engine) {
         RemoteBrowserEngine.WebView -> "webview"
         RemoteBrowserEngine.Gecko -> "gecko"
         else -> state.settings.engine?.takeIf { it in engines }
@@ -197,3 +197,8 @@ internal fun RemoteUiState.hasPointerRoute(): Boolean = capabilities.pointer.run
 
 internal fun RemoteUiState.volumeReportLabel(): String =
     if (!fullControlSupports(RemoteAction.AdjustVolume(1)) && nativePolicy?.reportedVolumeScope == "app") "App volume" else volumeLabel()
+
+/** Discrete OK stays visible beside the idle app pad, outside its timed tap recognizer. */
+internal fun RemoteUiState.appSelectAction(): RemoteAction.Key? =
+    if (context == RemoteContext.Idle && connection.ready &&
+        nativePolicy?.operations?.keys?.contains(RemoteKey.Ok.wireValue) == true && RemoteKey.Ok in capabilities.keys) RemoteAction.Key(RemoteKey.Ok) else null

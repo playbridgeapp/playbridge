@@ -46,8 +46,8 @@ struct ReceiverRemotePolicy {
         var policy = Self(isLegacy: false, state: state)
         guard case .descriptor(let descriptor) = capabilities else { return policy }
         let player = state.context == "player", browser = state.context == "browser"
-        let engines = descriptor.surfaces[player ? "player" : browser ? "browser" : ""] ?? [:]
-        let reported = state.contextEngine ?? (player && !state.settingsEngine.isEmpty || browser && engines[state.settingsEngine] != nil ? state.settingsEngine : nil)
+        let engines = descriptor.surfaces[player ? "player" : browser ? "browser" : state.context == "idle" ? "app" : ""] ?? [:]
+        let reported = (player || browser ? state.contextEngine : nil) ?? (player && !state.settingsEngine.isEmpty || browser && engines[state.settingsEngine] != nil ? state.settingsEngine : nil)
         let unique = Set(state.players.filter { engines[$0] != nil })
         let candidate = reported ?? (player && unique.count == 1 ? unique.first : nil)
         let operations: ReceiverDescriptor.Operations
@@ -108,6 +108,9 @@ struct ReceiverRemotePolicy {
     var canToggle: Bool { transport.contains("toggle") || transport.contains(state.playing ? "pause" : "play") }
     var toggleCommand: String { transport.contains("toggle") ? "toggle" : state.playing ? "pause" : "play" }
     var hasPointer: Bool { !pointer.isEmpty }
+    var idleSelectKey: String? {
+        !isLegacy && state.connected && state.context == "idle" && keys.contains("dpad_center") ? "dpad_center" : nil
+    }
     var hasDpad: Bool { !keys.isDisjoint(with: ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center"]) }
     /// Open surfaces follow the same live permissions as their entry buttons.
     var allowedPresentations: Set<String> {

@@ -4,7 +4,7 @@ struct DangerButton: View {
     let title: String
     let icon: String
     let action: () -> Void
-    @FocusState var isFocused: Bool
+    @State var isFocused = false
     
     var body: some View {
         Button(action: action) {
@@ -22,6 +22,6 @@ struct DangerButton: View {
             .cornerRadius(10)
         }
         .buttonStyle(.plain)
-        .focused($isFocused)
+        .appRemoteAction(action, focusChanged: { isFocused = $0 })
     }
 }
