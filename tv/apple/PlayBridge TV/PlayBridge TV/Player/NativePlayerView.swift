@@ -3,6 +3,7 @@ import AVKit
 
 final class ActivityAVPlayerViewController: AVPlayerViewController {
     var onPhysicalActivity: (() -> Void)?
+    let musicHost = MusicPresentationHost()
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         onPhysicalActivity?()
@@ -24,6 +25,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let initialTime: Double
     let isPreBuffering: Bool
     let title: String?
+    let musicPayload: Playbridge_PlayPayload?
     let onDismiss: () -> Void  // end-of-video: advance playlist or quit
     let onExit: () -> Void      // user pressed back: always quit
     let onSwitch: (PlaybackEngine, Double) -> Void
@@ -103,6 +105,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         controller.speeds = []
         controller.allowsPictureInPicturePlayback = true
         controller.loadViewIfNeeded()
+        if let container = controller.contentOverlayView {
+            controller.musicHost.update(musicPayload, in: controller, container: container, behindSubviews: true)
+        }
         context.coordinator.attachSubtitleOverlay(to: controller)
 
         let loopAction = UIAction(
@@ -163,6 +168,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        if let controller = uiViewController as? ActivityAVPlayerViewController,
+           let container = controller.contentOverlayView {
+            controller.musicHost.update(musicPayload, in: controller, container: container, behindSubviews: true)
+        }
         context.coordinator.setHasPlaylist(hasPlaylist)
         if let player = uiViewController.player, player.defaultRate != Float(playbackSpeed) {
             let wasPlaying = player.rate != 0
@@ -195,6 +204,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.teardown()
+        (uiViewController as? ActivityAVPlayerViewController)?.musicHost.remove()
         uiViewController.player = nil
     }
 

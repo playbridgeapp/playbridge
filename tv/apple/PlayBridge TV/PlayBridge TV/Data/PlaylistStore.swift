@@ -29,31 +29,39 @@ class PlaylistStore: ObservableObject {
         return currentIndex > 0
     }
 
-    func setPlaylist(items: [Playbridge_PlayPayload], startIndex: Int) {
-        let accepted = Array(items.prefix(Self.maxItems))
-        print("PlaylistStore: Setting playlist with \(accepted.count) items, start: \(startIndex)")
-        self.items = accepted
-        self.itemIDs = accepted.map { _ in UUID().uuidString }
-        self.playbackID = accepted.isEmpty ? nil : UUID().uuidString
+    @discardableResult
+    func setPlaylist(items: [Playbridge_PlayPayload], startIndex: Int) -> Bool {
+        guard items.count <= Self.maxItems,
+              let ids = QueueItemIDs.resolve(items.map { $0.hasItemID ? $0.itemID : nil }) else { return false }
+        self.items = zip(items, ids).map { item, id in
+            var item = item
+            item.itemID = id
+            return item
+        }
+        self.itemIDs = ids
+        self.playbackID = items.isEmpty ? nil : UUID().uuidString
         self.queueRevision &+= 1
-        self.currentIndex = (startIndex >= 0 && startIndex < accepted.count) ? startIndex : (accepted.isEmpty ? -1 : 0)
-        print("PlaylistStore: Updated items count: \(self.items.count), active index: \(self.currentIndex)")
+        self.currentIndex = items.indices.contains(startIndex) ? startIndex : (items.isEmpty ? -1 : 0)
+        return true
     }
 
-    func addToQueue(item: Playbridge_PlayPayload) {
-        _ = addToQueue(items: [item])
+    @discardableResult
+    func addToQueue(item: Playbridge_PlayPayload) -> Bool {
+        addToQueue(items: [item])
     }
 
     @discardableResult
     func addToQueue(items newItems: [Playbridge_PlayPayload]) -> Bool {
         guard !newItems.isEmpty, newItems.count <= Self.maxBatchItems,
-              items.count + newItems.count <= Self.maxItems else { return false }
-        if items.isEmpty {
-            setPlaylist(items: newItems, startIndex: 0)
-            return true
-        }
-        items.append(contentsOf: newItems)
-        itemIDs.append(contentsOf: newItems.map { _ in UUID().uuidString })
+              items.count + newItems.count <= Self.maxItems,
+              let ids = QueueItemIDs.resolve(newItems.map { $0.hasItemID ? $0.itemID : nil }, existing: itemIDs) else { return false }
+        if items.isEmpty { return setPlaylist(items: newItems, startIndex: 0) }
+        items.append(contentsOf: zip(newItems, ids).map { item, id in
+            var item = item
+            item.itemID = id
+            return item
+        })
+        itemIDs.append(contentsOf: ids)
         queueRevision &+= 1
         return true
     }

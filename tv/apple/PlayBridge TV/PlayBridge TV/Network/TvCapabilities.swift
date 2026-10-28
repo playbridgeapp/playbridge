@@ -3,7 +3,11 @@ import Foundation
 /// Stage 5 v1 ReceiverCapabilities descriptor and auth/bundle payload builder for Apple TV.
 /// Implements the contract defined in protocol/docs/RECEIVER_CAPABILITIES.md.
 enum TvCapabilities {
+    static let mediaKinds = ["video", "audio", "image"]
+
     static let defaultFeatures = [
+        "receiver_capabilities_v1",
+        "player_home_v1",
         "queue_crud_v1",
         "stable_item_ids",
         "command_results",
@@ -86,6 +90,7 @@ enum TvCapabilities {
             "tracks": playerTracks,
             "queue": playerQueue,
             "reporting": playerReporting,
+            "imageTransforms": ["pan", "scroll", "zoom", "rotate", "anchor", "reset"],
         ]
     }
 
@@ -125,6 +130,7 @@ enum TvCapabilities {
             "success": true,
             "players": players,
             "features": features,
+            "mediaKinds": mediaKinds,
         ]
         if let fp = certFingerprint { response["certFingerprint"] = fp }
         if let capabilities { response["capabilities"] = capabilities }
@@ -142,6 +148,7 @@ enum TvCapabilities {
             "token": token,
             "players": players,
             "features": features,
+            "mediaKinds": mediaKinds,
         ]
         if let fp = certFingerprint { credentials["certFingerprint"] = fp }
         if let capabilities { credentials["capabilities"] = capabilities }

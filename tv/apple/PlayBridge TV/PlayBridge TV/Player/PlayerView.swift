@@ -89,6 +89,10 @@ struct PlayerView: View {
 
     private func emitCurrent(engine: PlaybackEngine, generation: Int) {
         let identity = reportIdentity(engine: engine, generation: generation)
+        if (playlistStore.currentItem ?? payload).resolvedMediaKind == .image {
+            emit(PlayerPlaybackReport.imageSettings(engine: engine.rawValue), engine: engine.rawValue)
+            return
+        }
         guard let frame = settingsReporter.resync(identity: identity) else { return }
         emit(frame, engine: identity.engine)
     }
@@ -106,6 +110,7 @@ struct PlayerView: View {
     }
 
     private func applyTuning(_ command: PlayerTuning.Command) {
+        guard (playlistStore.currentItem ?? payload).resolvedMediaKind != .image else { return }
         let identity = liveVolumeIdentity()
         guard let frame = settingsReporter.apply(command, identity: identity) else { return }
         tuning = settingsReporter.tuning
@@ -145,7 +150,8 @@ struct PlayerView: View {
     }
 
     private func isCurrentPlayback(_ engine: PlaybackEngine, generation: Int) -> Bool {
-        mediaGeneration == generation && effectiveEngine(for: playlistStore.currentItem ?? payload) == engine
+        server.currentPlayRequest != nil && playlistStore.currentItem != nil &&
+            mediaGeneration == generation && effectiveEngine(for: playlistStore.currentItem ?? payload) == engine
     }
 
     /// Preserve protobuf presence: season/episode zero can identify specials.
@@ -221,6 +227,7 @@ struct PlayerView: View {
     }
 
     private func broadcast(_ json: [String: Any], for item: Playbridge_PlayPayload) {
+        guard server.currentPlayRequest != nil, item.itemID == playlistStore.currentItemID else { return }
         server.broadcast(json)
         if !isPreBuffering, !item.hasProgressIdentity { server.progressWebhook.finish(clear: false) }
         if !isPreBuffering, item.hasProgressIdentity,
@@ -235,7 +242,7 @@ struct PlayerView: View {
                                           content: content, state: json["state"] as? String ?? "",
                                           position: position, duration: duration)
         }
-        guard !isPreBuffering, !item.skipHistory, let url = item.validURL,
+        guard !isPreBuffering, !item.skipHistory, item.resolvedMediaKind != .image, let url = item.validURL,
               url == (playlistStore.currentItem ?? payload).validURL,
               json["type"] as? String == "status",
               let position = json["position"] as? Int,
@@ -263,6 +270,19 @@ struct PlayerView: View {
     }
 
     private func handleRemoteNavigation(_ key: String) {
+        if key == "home" { exitPlayback(); return }
+        if (playlistStore.currentItem ?? payload).resolvedMediaKind == .image,
+           !stillWatching.isPrompting, !showPlaylist {
+            switch key {
+            case "back": exitPlayback()
+            case "dpad_left": if playlistStore.hasPrevious { handleJump(to: playlistStore.currentIndex - 1) }
+            case "dpad_right": handleNext()
+            case "dpad_center":
+                NotificationCenter.default.post(name: WebSocketServer.controlCommand, object: nil, userInfo: ["command": "toggle"])
+            default: break
+            }
+            return
+        }
         if !stillWatching.isPrompting, !isPreBuffering, engineChrome.handleFailureKey(key) { return }
         let engine = exitGate.liveEngine
         let generation = exitGate.liveGeneration
@@ -350,7 +370,32 @@ struct PlayerView: View {
             if let currentURL = currentRequest.validURL {
                 let currentEngine = effectiveEngine(for: currentRequest)
                 let currentGeneration = mediaGeneration
-                if currentEngine == .mpv {
+                let mediaIdentity = PlayerMediaIdentity(playbackID: playlistStore.playbackID,
+                                                        itemID: playlistStore.currentItemID)
+                let isCurrentItem = {
+                    isCurrentPlayback(currentEngine, generation: currentGeneration) &&
+                        mediaIdentity.matches(playbackID: playlistStore.playbackID,
+                                              itemID: playlistStore.currentItemID,
+                                              active: server.currentPlayRequest != nil)
+                }
+                if currentRequest.resolvedMediaKind == .image {
+                    ImagePresentationView(
+                        payload: currentRequest, engine: currentEngine.rawValue,
+                        prompting: stillWatching.isPrompting,
+                        onBroadcast: { frame in
+                            guard isCurrentItem() else { return }
+                            broadcast(frame, for: currentRequest)
+                        },
+                        onNavigate: { delta in
+                            guard isCurrentItem() else { return }
+                            if delta > 0 { handleNext() }
+                            else if playlistStore.hasPrevious { handleJump(to: playlistStore.currentIndex - 1) }
+                        },
+                        onExit: { if isCurrentItem() { exitPlayback() } }
+                    )
+                    .focused($isPlayerFocused)
+                    .id("image-\(playlistStore.currentItemID ?? currentRequest.url)-\(currentGeneration)")
+                } else if currentEngine == .mpv {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
@@ -360,17 +405,18 @@ struct PlayerView: View {
                         mediaIdentity: mediaGeneration,
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
-                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
-                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
-                        onBack: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleRemoteNavigation("back") } },
-                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
+                        musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
+                        onDismiss: { if isCurrentItem() { handleNext() } },
+                        onExit: { if isCurrentItem() { exitPlayback() } },
+                        onBack: { if isCurrentItem() { handleRemoteNavigation("back") } },
+                        onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
                         onBroadcast: { frame in
-                            guard isCurrentPlayback(currentEngine, generation: currentGeneration) else { return }
+                            guard isCurrentItem() else { return }
                             if frame["state"] as? String == "error" { showPlaylist = false }
                             broadcast(frame, for: currentRequest)
                         },
-                        onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
-                        onEndOfFile: { identity in emitEnd(identity) },
+                        onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
+                        onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
                         initialLoop: settingsReporter.loop,
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
@@ -382,7 +428,7 @@ struct PlayerView: View {
                         hasNextItem: playlistStore.hasNext,
                         metadata: transportMetadata(for: currentRequest),
                         playlistVisible: showPlaylist,
-                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
+                        onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -400,12 +446,13 @@ struct PlayerView: View {
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
-                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
-                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
-                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } },
-                        onLoopChanged: { enabled, identity in emitLoop(enabled, identity: identity) },
-                        onEndOfFile: { identity in emitEnd(identity) },
+                        musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
+                        onDismiss: { if isCurrentItem() { handleNext() } },
+                        onExit: { if isCurrentItem() { exitPlayback() } },
+                        onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
+                        onBroadcast: { if isCurrentItem() { broadcast($0, for: currentRequest) } },
+                        onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
+                        onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
                         initialLoop: settingsReporter.loop,
                         appLevel: appVolume.level,
                         appMuted: appVolume.muted,
@@ -416,16 +463,16 @@ struct PlayerView: View {
                         subtitleOffsetMs: tuning.subtitleOffsetMs,
                         scaling: tuning.scaling,
                         onSidecarOverlayChanged: { active, identity in
-                            if let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
+                            if isCurrentItem(), let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
                                 emit(frame, engine: identity.engine)
                             }
                         },
-                        onLocalTuning: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { applyTuning($0) } }
+                        onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
                     .id("avplayer-\(mediaGeneration)")
-                    .onExitCommand { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } }
+                    .onExitCommand { if isCurrentItem() { exitPlayback() } }
                 }
             } else {
                 // Unreachable in normal flow: WebSocketServer rejects payloads with invalid URLs

@@ -1,6 +1,18 @@
 import CryptoKit
 import Foundation
 
+// Host runner exercises the production queue without importing the protobuf package.
+#if !canImport(SwiftProtobuf)
+struct Playbridge_PlayPayload {
+    private var suppliedID: String?
+    var hasItemID: Bool { suppliedID != nil }
+    var itemID: String {
+        get { suppliedID ?? "" }
+        set { suppliedID = newValue }
+    }
+}
+#endif
+
 private struct TestHistoryKeyProvider: HistoryKeyProvider {
     let key: SymmetricKey
     func loadOrCreateKey() throws -> SymmetricKey { key }
@@ -290,6 +302,9 @@ struct ReceiverReviewTests {
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
+        runMusicPresentationTests()
+        runImagePresentationTests()
+        runMediaContractTests()
         runRemoteNavigationTests()
         runTransportChromeTests()
         runTouchScrubTests()
@@ -803,7 +818,7 @@ private func runPlayerSettingsTests() {
         // Verified non-presence of unhandled operation categories
         assert(engineCaps["pointer"] == nil, "Apple TV player must not declare pointer")
         assert(engineCaps["text"] == nil, "Apple TV player must not declare text")
-        assert(engineCaps["imageTransforms"] == nil, "Apple TV player must not declare imageTransforms")
+        assert(engineCaps["imageTransforms"] as? [String] == ["pan", "scroll", "zoom", "rotate", "anchor", "reset"])
         assert(engineCaps["browser"] == nil, "Apple TV player must not declare browser")
     }
 
@@ -837,7 +852,7 @@ private func runPlayerSettingsTests() {
     assert(authResponse["players"] as? [String] == ["avplayer", "mpv"])
     assert(authResponse["features"] as? [String] == TvCapabilities.defaultFeatures)
     assert(authResponse["browsers"] == nil, "Browsers must not be added to Apple TV auth")
-    assert(authResponse["mediaKinds"] == nil, "mediaKinds must not be added to Apple TV auth")
+    assert(authResponse["mediaKinds"] as? [String] == TvCapabilities.mediaKinds)
     assert(authResponse["screenMirrorWebRtc"] == nil, "screenMirrorWebRtc must not be added to Apple TV auth")
 
     assert(credentialBundle["token"] as? String == token)
@@ -845,7 +860,7 @@ private func runPlayerSettingsTests() {
     assert(credentialBundle["players"] as? [String] == ["avplayer", "mpv"])
     assert(credentialBundle["features"] as? [String] == TvCapabilities.defaultFeatures)
     assert(credentialBundle["browsers"] == nil)
-    assert(credentialBundle["mediaKinds"] == nil)
+    assert(credentialBundle["mediaKinds"] as? [String] == TvCapabilities.mediaKinds)
     assert(credentialBundle["screenMirrorWebRtc"] == nil)
 
     // 6. Byte identity of existing fields when capabilities is stripped
@@ -2076,4 +2091,211 @@ private func runPlaybackStallTests() {
     assert(session.close(attempt: attempt))
     assert(!session.presentStall(attempt: attempt))
     print("PASS: stall startup/mid-play budgets, pause/seek/progress/buffer resets and failure fencing")
+}
+
+private func runMediaContractTests() {
+    for ext in ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "weba"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext.uppercased())?q=x#f", contentType: nil) == .audio)
+    }
+    for ext in ["jpg", "jpeg", "png", "webp", "avif", "gif", "bmp", "heic", "heif"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext)", contentType: nil) == .image)
+    }
+    for ext in ["mp4", "m4v", "mkv", "webm", "avi", "mov", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "unknown"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext)", contentType: nil) == .video)
+    }
+    assert(MediaKind.resolve(explicit: " AUDIO ", url: "a.jpg", contentType: "video/mp4") == .audio)
+    assert(MediaKind.resolve(explicit: "future", url: "a.mp3", contentType: " IMAGE/PNG; x=y") == .image)
+    assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "audio/mpeg") == .audio)
+    assert(MediaKind.resolve(explicit: nil, url: "a.mp3", contentType: "video/mp4") == .video)
+    assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "application/vnd.apple.mpegurl") == .video)
+    let status = MediaKind.image.enriching(["type": "status", "state": "paused", "position": 0, "duration": 0])
+    let playlist: [String: Any] = ["type": "playlist_status", "items": [
+        MediaKind.image.enriching(["index": 0, "itemId": "photo", "title": "Photo"]),
+        MediaKind.audio.enriching(["index": 1, "itemId": "song", "title": "Song"]),
+    ]]
+    let statusJSON = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: status)) as! [String: Any]
+    let playlistJSON = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: playlist)) as! [String: Any]
+    assert(statusJSON["mediaKind"] as? String == "image")
+    assert((playlistJSON["items"] as! [[String: Any]]).map { $0["mediaKind"] as! String } == ["image", "audio"])
+    let media = PlayerMediaIdentity(playbackID: "queue-a", itemID: "photo")
+    assert(media.matches(playbackID: "queue-a", itemID: "photo", active: true))
+    assert(!media.matches(playbackID: "queue-a", itemID: "song", active: true))
+    assert(!media.matches(playbackID: "queue-b", itemID: "photo", active: true))
+    assert(!media.matches(playbackID: nil, itemID: nil, active: false))
+    assert(!media.matches(playbackID: "queue-a", itemID: "photo", active: false))
+    assert(!PlayerMediaIdentity(playbackID: nil, itemID: nil).matches(playbackID: nil, itemID: nil, active: true))
+    let ids = QueueItemIDs.resolve(["sender-1", nil, " sender-2 "])!
+    assert(ids[0] == "sender-1" && ids[2] == " sender-2 " && UUID(uuidString: ids[1]) != nil)
+    assert(QueueItemIDs.resolve(["same", "same"]) == nil)
+    assert(QueueItemIDs.resolve(["same"], existing: ["same"]) == nil)
+    for invalid in ["", " \n\t", String(repeating: "x", count: 129), String(repeating: "😀", count: 65)] {
+        assert(QueueItemIDs.resolve([nil, invalid]) == nil)
+    }
+    assert(QueueItemIDs.resolve([String(repeating: "x", count: 128)]) != nil)
+    let queue = PlaylistStore()
+    var supplied = Playbridge_PlayPayload()
+    supplied.itemID = "sender-item"
+    assert(queue.setPlaylist(items: [supplied, Playbridge_PlayPayload()], startIndex: 0))
+    assert(queue.currentItemID == "sender-item" && queue.currentItem?.itemID == "sender-item")
+    assert(UUID(uuidString: queue.itemIDs[1]) != nil && queue.items[1].itemID == queue.itemIDs[1])
+    let before = queue.itemIDs
+    let revision = queue.queueRevision
+    let playback = queue.playbackID
+    assert(!queue.setPlaylist(items: [supplied, supplied], startIndex: 0))
+    assert(!queue.addToQueue(item: supplied))
+    assert(!queue.addToQueue(items: [Playbridge_PlayPayload(), supplied]))
+    assert(queue.itemIDs == before && queue.queueRevision == revision && queue.playbackID == playback)
+    assert(queue.addToQueue(item: Playbridge_PlayPayload()))
+    supplied.itemID = "sender-appended"
+    assert(queue.addToQueue(items: [supplied]))
+    assert(queue.itemIDs.last == "sender-appended")
+    assert(queue.jumpTo(itemID: "sender-appended")?.itemID == "sender-appended")
+    for invalid in ["", "  ", String(repeating: "x", count: 129)] {
+        supplied.itemID = invalid
+        assert(!queue.setPlaylist(items: [supplied], startIndex: 0))
+        assert(!queue.addToQueue(item: supplied))
+    }
+    var subscriptions = ReceiverCapabilitySubscription<Int>()
+    assert(subscriptions.subscribe(1, authorized: false) == nil && subscriptions.connections.isEmpty)
+    let frame = subscriptions.subscribe(1, authorized: true)!
+    let decoded = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: frame)) as! [String: Any]
+    assert(decoded["type"] as? String == "receiver_capabilities")
+    assert(decoded["revision"] as? Int == 1 && decoded["revision"] as? String == nil)
+    assert(decoded["capabilities"] is [String: Any])
+    assert(subscriptions.subscribe(1, authorized: true) != nil && subscriptions.connections == [1])
+    _ = subscriptions.subscribe(2, authorized: true)
+    subscriptions.remove(1)
+    assert(subscriptions.connections == [2])
+    subscriptions.removeAll()
+    assert(subscriptions.connections.isEmpty)
+    assert(TvCapabilities.defaultFeatures.contains("receiver_capabilities_v1"))
+    assert(TvCapabilities.defaultFeatures.contains("player_home_v1"))
+    print("PASS: media resolver, media-kind reports, sender IDs/validation and per-socket numeric capabilities snapshot")
+}
+
+private func runImagePresentationTests() {
+    var timer = ImagePresentationTimer(durationMs: 1000)
+    timer.start(now: 0)
+    assert(timer.isPlaying && !timer.isShown && timer.durationMs == 1000)
+    assert(!timer.tick(now: 2) && timer.positionMs == 0)
+    timer.shown(now: 2)
+    assert(!timer.tick(now: 2.25) && timer.positionMs == 250)
+    timer.setPlaying(false, now: 2.5)
+    assert(timer.positionMs == 500 && !timer.isPlaying)
+    assert(!timer.tick(now: 100) && timer.positionMs == 500)
+    timer.setPlaying(true, now: 100)
+    assert(!timer.tick(now: 100.25) && timer.positionMs == 750)
+    assert(timer.tick(now: 100.5) && timer.positionMs == 1000 && !timer.isPlaying)
+    assert(!timer.tick(now: 101), "Advance is emitted once")
+    assert(!timer.setPlaying(true, now: 102) && !timer.isPlaying)
+    for duration: Int64? in [nil, 0, -1, Int64.min] {
+        var untimed = ImagePresentationTimer(durationMs: duration)
+        untimed.start(now: 0)
+        untimed.shown(now: 1)
+        untimed.setPlaying(true, now: 2)
+        assert(!untimed.tick(now: 1000) && !untimed.isPlaying)
+        assert(untimed.positionMs == 0 && untimed.durationMs == 0)
+        assert(untimed.status["state"] as? String == "paused")
+    }
+    assert(ImagePresentationTimer(durationMs: Int64.max).durationMs == 86_400_000)
+    var fallback = ImagePresentationTimer(durationMs: 1000)
+    fallback.start(now: 0)
+    fallback.setPlaying(false, now: 1)
+    assert(!fallback.tick(now: ImagePresentationTimer.loadTimeout) && fallback.isShown)
+    assert(!fallback.tick(now: 100) && fallback.positionMs == 0)
+    fallback.setPlaying(true, now: 100)
+    assert(fallback.tick(now: 101))
+    var pausedLoad = ImagePresentationTimer(durationMs: 1000)
+    pausedLoad.start(now: 0)
+    pausedLoad.setPlaying(false, now: 1)
+    pausedLoad.shown(now: 2)
+    assert(!pausedLoad.tick(now: 20) && pausedLoad.positionMs == 0)
+    pausedLoad.setPlaying(true, now: 20)
+    pausedLoad.shown(now: 20.5) // duplicate image load cannot reset the timer
+    assert(pausedLoad.tick(now: 21))
+    var atCommand = ImagePresentationTimer(durationMs: 1000)
+    atCommand.start(now: 0)
+    atCommand.shown(now: 0)
+    assert(atCommand.setPlaying(false, now: 1), "A command at EOF must still advance")
+    let settings = PlayerPlaybackReport.imageSettings(engine: "mpv")
+    assert(PlayerPlaybackReport.isValidSnapshot(settings))
+    for key in ["speedAvailable", "scalingAvailable", "subtitleOffsetAvailable", "isSeekable", "isLive", "engineAvailable", "loopAvailable"] {
+        assert(settings[key] as? Bool == false)
+    }
+    func packet(_ type: UInt8, _ dx: Float, _ dy: Float) -> Data {
+        var bytes: [UInt8] = [type]
+        for value in [dx, dy] {
+            let bits = value.bitPattern
+            for shift in [24, 16, 8, 0] { bytes.append(UInt8((bits >> shift) & 255)) }
+        }
+        return Data(bytes)
+    }
+    for (index, event) in ImagePointer.events.enumerated() {
+        assert(ImagePointer(packet: packet(UInt8(index), 1.25, -2.5)) == ImagePointer(event: event, dx: 1.25, dy: -2.5))
+    }
+    assert(ImagePointer(packet: packet(9, 0, 0)) == nil)
+    assert(ImagePointer(packet: packet(0, .infinity, 0)) == nil)
+    assert(ImagePointer(packet: packet(0, 0, .nan)) == nil)
+    assert(ImagePointer(packet: Data(repeating: 0, count: 8)) == nil)
+    assert(ImagePointer(packet: Data(repeating: 0, count: 10)) == nil)
+    assert(ImagePointer(json: ["event": "reset"]) == ImagePointer(event: "reset", dx: 0, dy: 0))
+    assert(ImagePointer(json: ["event": "zoom", "dx": 1.5, "dy": 0])?.dx == 1.5)
+    assert(ImagePointer(json: ["event": "zoom", "dx": true, "dy": 0]) == nil)
+    assert(ImagePointer(json: ["event": "zoom", "dx": Double.infinity, "dy": 0]) == nil)
+    var transform = ImageTransform()
+    func apply(_ event: String, _ x: Double, _ y: Double = 0) {
+        transform.apply(ImagePointer(event: event, dx: x, dy: y)!, width: 1000, height: 500)
+    }
+    apply("move", 100, 100)
+    assert(transform.x == 0 && transform.y == 0)
+    apply("zoom", 2)
+    apply("move", 99999, -99999)
+    assert(transform.scale == 2 && transform.x == 500 && transform.y == -250)
+    apply("reset", 0)
+    apply("transform_anchor", 1, 0.5)
+    apply("zoom", 2)
+    assert(transform.x == -500 && transform.y == 0)
+    apply("rotate", 90)
+    assert(abs(transform.x - 500) < 0.001 && abs(transform.y + 1000) < 0.001)
+    apply("transform_anchor", -1, -1)
+    let x = transform.x, y = transform.y
+    apply("rotate", 400)
+    assert(transform.x == x && transform.y == y && transform.rotation == 180)
+    for _ in 0..<10 { apply("zoom", 99) }
+    assert(transform.scale == 8)
+    for _ in 0..<10 { apply("zoom", 0.01) }
+    assert(transform.scale == 1 && transform.x == 0 && transform.y == 0)
+    apply("reset", 0)
+    assert(transform.rotation == 0)
+    let source = URL(string: "https://example.com/image.jpg")!
+    let other = URL(string: "https://other.example/image.jpg")!
+    let fields = ["X-Image-Context": "synthetic"]
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields)?.value(forHTTPHeaderField: "X-Image-Context") == "synthetic")
+    assert(MediaImageRequest.request(url: other, headerOrigin: source, headers: fields)?.allHTTPHeaderFields?.isEmpty != false)
+    assert(MediaImageRequest.request(url: URL(string: "http://example.com/image.jpg")!, headerOrigin: source, headers: fields)?.value(forHTTPHeaderField: "X-Image-Context") == nil)
+    assert(MediaImageRequest.request(url: URL(string: "file:///image.jpg")!, headerOrigin: source, headers: [:]) == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, detectedBy: "page_cast") == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, detectedBy: "linked_page", allowedPrivateOrigins: ["https://example.com"]) == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, allowedPrivateOrigins: ["https://example.com/path"]) == nil)
+    print("PASS: image timer load/pause/resume/EOF/fallback/clamp, settings, JSON/binary pointers, transforms and origin-scoped image requests")
+}
+
+private func runMusicPresentationTests() {
+    func metadata(title: String? = "Track", metadataTitle: String? = "Metadata track",
+                  artwork: String? = "https://example.com/art.jpg", poster: String? = "https://example.com/poster.png",
+                  backdrop: String? = "https://example.com/backdrop.webp") -> MusicPresentationMetadata {
+        MusicPresentationMetadata(title: title, metadataTitle: metadataTitle, artist: "Artist", album: "Album",
+                                  artworkURL: artwork, posterURL: poster, backdropURL: backdrop)
+    }
+    let music = metadata()
+    assert(music.title == "Track" && music.artist == "Artist" && music.album == "Album")
+    assert(music.artworkURLs.map(\.lastPathComponent) == ["art.jpg", "poster.png", "backdrop.webp"])
+    assert(metadata(title: " ").title == "Metadata track")
+    assert(metadata(title: nil, metadataTitle: nil).title == "Music")
+    assert(metadata(artwork: nil).artworkURLs.first?.lastPathComponent == "poster.png")
+    assert(metadata(artwork: " ", poster: nil).artworkURLs.first?.lastPathComponent == "backdrop.webp")
+    assert(metadata(artwork: nil, poster: nil, backdrop: nil).artworkURLs.isEmpty)
+    assert(metadata(artwork: "file:///art.jpg").artworkURLs.first?.lastPathComponent == "poster.png")
+    assert(TvCapabilities.mediaKinds == ["video", "audio", "image"])
+    print("PASS: music metadata/title, artwork precedence/fallback/placeholder and all three advertised media kinds")
 }

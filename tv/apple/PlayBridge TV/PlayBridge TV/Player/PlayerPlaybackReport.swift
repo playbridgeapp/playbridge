@@ -8,6 +8,17 @@ struct PlayerReportIdentity: Equatable {
     var generation: Int
 }
 
+/// Queue identity survives view teardown long enough to reject late decoder/timer callbacks.
+struct PlayerMediaIdentity: Equatable {
+    let playbackID: String?
+    let itemID: String?
+
+    func matches(playbackID: String?, itemID: String?, active: Bool) -> Bool {
+        active && self.playbackID != nil && self.itemID != nil
+            && self.playbackID == playbackID && self.itemID == itemID
+    }
+}
+
 enum PlayerEndDecision: Equatable {
     /// Repeat the item that just ended, including when a playlist has a later item.
     case repeatCurrentItem
@@ -48,6 +59,15 @@ enum PlayerPlaybackReport {
             "engineAvailable": true,
             "loopAvailable": true,
         ]
+    }
+
+    static func imageSettings(engine: String) -> [String: Any] {
+        var frame = settings(engine: engine, loop: false, availability: .none)
+        frame["isSeekable"] = false
+        frame["isLive"] = false
+        frame["engineAvailable"] = false
+        frame["loopAvailable"] = false
+        return frame
     }
 
     /// `engine` is sent only while the player surface is active and an engine is known.
