@@ -111,6 +111,32 @@ class ReceiverRemotePolicyTest {
         assertFalse(RemoteKey.Ok in legacyApple.capabilities.keys)
     }
 
+    @Test fun visibleIdleOkEmitsOneNativeRemoteFrameWithoutGestureTiming() = runTest {
+        val descriptor = ReceiverDescriptor(1, mapOf("app" to ReceiverSurface(mapOf(
+            "native" to engine(keys = setOf("dpad_up", "dpad_down", "dpad_center", "back", "home")),
+        ))))
+        val config = testConfiguration(RemoteProfile.AppleTv).copy(receiverProtocol = MutableStateFlow(ReceiverProtocolState(descriptor)))
+        val transport = FakeNativeRemoteTransport(testSnapshot(RemoteContext.Idle))
+        val controller = NativeProfileRemoteController(RemoteSessionId(remoteTestEndpoint, 1), config, transport, backgroundScope)
+        runCurrent()
+        val state = controller.snapshot.value.state
+        val select = state.appSelectAction()
+        assertEquals(RemoteAction.Key(RemoteKey.Ok), select)
+        assertEquals(RemoteCallbackActions.key("dpad_center"), select)
+        assertEquals(RemoteCommandResult.Submitted, controller.execute(select!!))
+        assertEquals(listOf("""{"type":"command","action":"remote","payload":{"key":"dpad_center"}}"""), transport.commands)
+        assertNull(state.copy(context = RemoteContext.Player).appSelectAction())
+        assertNull(state.copy(context = RemoteContext.Browser).appSelectAction())
+        assertNull(state.copy(nativePolicy = null).appSelectAction())
+        assertNull(state.copy(capabilities = state.capabilities.copy(keys = emptySet())).appSelectAction())
+        assertNull(state.copy(connection = RemoteConnection.Disconnected).appSelectAction())
+        val noApp = state(ReceiverDescriptor(1, emptyMap()), RemoteContext.Idle)
+        val companionKeys = noApp.copy(capabilities = noApp.capabilities.copy(
+            keys = setOf(RemoteKey.Ok), keyScope = ControlScope.WholeDevice,
+        ))
+        assertNull("Companion keys cannot create native app controls", companionKeys.appSelectAction())
+    }
+
     @Test fun realPlayerDescriptorsExposeTheirActualControls() {
         for (name in listOf("android-tv", "android-tv-gecko", "apple-tv", "apple-tv-app-volume", "desktop", "cli")) {
             val resolved = state(fixture(name))
