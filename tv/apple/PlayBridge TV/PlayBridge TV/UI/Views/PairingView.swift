@@ -122,6 +122,7 @@ struct PairingIdleView: View {
                 }
                 .buttonStyle(.plain)
                 .focused($manageFocused)
+                .appRemoteAction { showDevices = true }
                 .sheet(isPresented: $showDevices) {
                     DevicesSheetView()
                         .environmentObject(server)
@@ -159,14 +160,10 @@ private struct DevicesSheetView: View {
                     }
                     .buttonStyle(.plain)
                     .focused($removeAllFocused)
-                    .confirmationDialog(
-                        "Remove all paired devices?", isPresented: $confirmRemoveAll,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Remove All", role: .destructive) { server.forgetAllDevices() }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("Each phone will need a new pairing code to connect again.")
+                    .appRemoteAction { confirmRemoveAll = true }
+                    .appRemoteConfirmation("Remove all paired devices?", isPresented: $confirmRemoveAll,
+                                           message: "Each phone will need a new pairing code to connect again.", confirm: "Remove All") {
+                        server.forgetAllDevices()
                     }
                 }
                 Button(action: { dismiss() }) {
@@ -180,6 +177,7 @@ private struct DevicesSheetView: View {
                 }
                 .buttonStyle(.plain)
                 .focused($doneFocused)
+                .appRemoteAction { dismiss() }
             }
             .padding(.horizontal, 60)
             .padding(.top, 60)
@@ -211,6 +209,7 @@ private struct DevicesSheetView: View {
         }
         // Land on Done, not the destructive Remove All, when the sheet opens.
         .defaultFocus($doneFocused, true)
+        .appRemoteScope(back: { dismiss() }, home: { dismiss() })
     }
 }
 

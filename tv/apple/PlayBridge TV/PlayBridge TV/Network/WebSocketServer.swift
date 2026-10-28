@@ -1059,7 +1059,9 @@ class WebSocketServer: ObservableObject {
             return
         }
 
+#if DEBUG
         print("WebSocket Handling Command: \(action)")
+#endif
 
         switch action {
         case "play":

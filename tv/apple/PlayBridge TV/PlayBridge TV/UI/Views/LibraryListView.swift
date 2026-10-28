@@ -48,7 +48,8 @@ struct LibraryListView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 16) {
+                    // History is capped at 100 lightweight rows; keep offscreen focus targets available.
+                    VStack(spacing: 16) {
                         if !continueWatching.isEmpty {
                             Text("Continue Watching")
                                 .font(.system(size: 34, weight: .bold))
@@ -70,9 +71,9 @@ struct LibraryListView: View {
                 }
             }
         }
-        .alert("Clear Data", isPresented: $showClearConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Erase All", role: .destructive) { historyStore.clearHistory() }
+        .appRemoteConfirmation("Clear Data", isPresented: $showClearConfirm,
+                               message: "Erase all saved history?", confirm: "Erase All") {
+            historyStore.clearHistory()
         }
     }
 

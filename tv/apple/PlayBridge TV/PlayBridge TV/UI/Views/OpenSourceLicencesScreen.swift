@@ -12,6 +12,7 @@ struct OpenSourceLicencesScreen: View {
             List {
                 Section {
                     Button("Close") { dismiss() }
+                        .appRemoteAction { dismiss() }
                     Text("PlayBridge's own code is licensed under MPL-2.0. The text is in this list.")
                     Text("Source: https://github.com/playbridgeapp/playbridge")
                         .foregroundColor(Theme.secondaryText)
@@ -24,6 +25,7 @@ struct OpenSourceLicencesScreen: View {
                             Button(url.lastPathComponent) {
                                 path.append(url.lastPathComponent)
                             }
+                            .appRemoteAction { path.append(url.lastPathComponent) }
                         }
                     }
                 }
@@ -36,6 +38,9 @@ struct OpenSourceLicencesScreen: View {
             }
         }
         .onAppear { files = BundledLicenceFiles.urls() }
+        .appRemoteScope(back: {
+            if path.isEmpty { dismiss() } else { path.removeLast() }
+        }, home: { dismiss() })
     }
 }
 

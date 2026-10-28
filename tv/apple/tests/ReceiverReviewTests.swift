@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import CoreGraphics
 
 // Host runner exercises the production queue without importing the protobuf package.
 #if !canImport(SwiftProtobuf)
@@ -305,6 +306,7 @@ struct ReceiverReviewTests {
         runMusicPresentationTests()
         runImagePresentationTests()
         runMediaContractTests()
+        runAppFocusTests()
         runRemoteNavigationTests()
         runTransportChromeTests()
         runTouchScrubTests()
@@ -788,7 +790,12 @@ private func runPlayerSettingsTests() {
     guard let surfaces = descriptor["surfaces"] as? [String: Any] else {
         fatalError("descriptor.surfaces missing")
     }
-    assert(Set(surfaces.keys) == ["player"], "Only player surface must be declared")
+    assert(Set(surfaces.keys) == ["player", "app"])
+    let app = (surfaces["app"] as? [String: Any])?["engines"] as? [String: Any]
+    assert(Set(app?.keys.map { $0 } ?? []) == ["native"])
+    let native = app?["native"] as? [String: Any]
+    assert(native?["keys"] as? [String] == ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"])
+    assert(Set(native?.keys.map { $0 } ?? []) == ["keys"])
     guard let playerSurface = surfaces["player"] as? [String: Any],
           let engines = playerSurface["engines"] as? [String: Any] else {
         fatalError("player.engines missing")
@@ -2298,4 +2305,37 @@ private func runMusicPresentationTests() {
     assert(metadata(artwork: "file:///art.jpg").artworkURLs.first?.lastPathComponent == "poster.png")
     assert(TvCapabilities.mediaKinds == ["video", "audio", "image"])
     print("PASS: music metadata/title, artwork precedence/fallback/placeholder and all three advertised media kinds")
+}
+
+private func runAppFocusTests() {
+    assert(AppRemoteInputGate.allows(foreground: true, hasPlayer: false, pairingPending: false))
+    for foreground in [false, true] {
+        for player in [false, true] {
+            assert(!AppRemoteInputGate.allows(foreground: foreground, hasPlayer: player, pairingPending: true), "Paired phones cannot act on pairing approval or denial")
+        }
+    }
+    assert(!AppRemoteInputGate.allows(foreground: false, hasPlayer: false, pairingPending: false))
+    assert(!AppRemoteInputGate.allows(foreground: true, hasPlayer: true, pairingPending: false))
+    let source = CGRect(x: 100, y: 100, width: 50, height: 50)
+    func target(_ id: Int, _ x: Double, _ y: Double, _ width: Double = 50, _ height: Double = 50) -> AppFocusTarget {
+        AppFocusTarget(id: id, rect: CGRect(x: x, y: y, width: width, height: height))
+    }
+    let around = [target(1, 100, 0), target(2, 100, 200), target(3, 0, 100), target(4, 200, 100)]
+    for (direction, expected): (AppFocusDirection, Int) in [(.up, 1), (.down, 2), (.left, 3), (.right, 4)] {
+        assert(AppFocusGeometry.nearest(from: source, direction: direction, targets: around) == expected)
+    }
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, 151, 151), target(2, 400, 100)]) == 2, "Beam wins over a closer diagonal")
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, 300, 100), target(2, 200, 100)]) == 2)
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, 200, 160), target(2, 200, 210)]) == 1)
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(9, 200, 100), target(2, 200, 100)]) == 2, "Ties have stable identity ordering")
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: []) == nil)
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, 0, 100), target(2, 100, 100)]) == nil)
+    assert(AppFocusGeometry.nearest(from: source, direction: .up, targets: [target(1, 100, 150)]) == nil)
+    assert(AppFocusGeometry.nearest(from: .null, direction: .right, targets: around) == nil)
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, .nan, 100), target(2, 200, 100, 0)]) == nil)
+    assert(AppFocusGeometry.nearest(from: source, direction: .right, targets: [target(1, 140, 110, 50, 50)]) == 1, "Partially overlapping forward targets remain eligible")
+    let nested = [target(1, 0, 0, 500, 500), target(2, 100, 100, 50, 50)]
+    assert(AppFocusGeometry.action(at: source, targets: nested) == 2)
+    assert(AppFocusGeometry.action(at: CGRect(x: 700, y: 700, width: 50, height: 50), targets: nested) == nil)
+    print("PASS: app focus directions, beam priority, distance, edges, stable ties, malformed rects and nested action identity")
 }

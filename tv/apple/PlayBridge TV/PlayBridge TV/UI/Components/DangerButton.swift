@@ -23,5 +23,6 @@ struct DangerButton: View {
         }
         .buttonStyle(.plain)
         .focused($isFocused)
+        .appRemoteAction(action)
     }
 }

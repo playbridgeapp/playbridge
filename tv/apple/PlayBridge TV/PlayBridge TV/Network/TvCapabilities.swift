@@ -106,6 +106,9 @@ enum TvCapabilities {
             "surfaces": [
                 "player": [
                     "engines": engineMap,
+                ],
+                "app": [
+                    "engines": ["native": ["keys": playerKeys]],
                 ]
             ],
             "volume": appVolume,

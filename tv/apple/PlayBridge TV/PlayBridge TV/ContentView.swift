@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var historyStore: HistoryStore
     @StateObject private var playlistStore: PlaylistStore
     @StateObject private var server: WebSocketServer
+    @StateObject private var appRemote = AppRemoteFocusDriver()
     @StateObject private var stillWatching = StillWatchingController()
     @AppStorage("enable_history") var enableHistory: Bool = true
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
@@ -144,6 +145,20 @@ struct ContentView: View {
                 .zIndex(5)
             }
         }
+        .background(AppRemoteAnchor(
+            driver: appRemote,
+            enabled: AppRemoteInputGate.allows(foreground: scenePhase == .active,
+                                              hasPlayer: server.currentPlayRequest != nil,
+                                              pairingPending: server.pendingPairingRequest != nil),
+            onBack: { if currentScreen != .pairing { currentScreen = .pairing } },
+            onHome: { currentScreen = .pairing }))
+        .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in
+            guard AppRemoteInputGate.allows(foreground: scenePhase == .active,
+                                           hasPlayer: server.currentPlayRequest != nil,
+                                           pairingPending: server.pendingPairingRequest != nil),
+                  let key = note.userInfo?["key"] as? String else { return }
+            appRemote.handle(key)
+        }
         .onAppear {
             server.start()
             UIApplication.shared.isIdleTimerDisabled = false
@@ -176,6 +191,7 @@ struct ContentView: View {
             playbackSessionID &+= 1
             stillWatching.reset()
         }
+        .environment(\.appRemoteDriver, appRemote)
         .environmentObject(historyStore)
         .environmentObject(playlistStore)
         .environmentObject(server)

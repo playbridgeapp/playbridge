@@ -30,5 +30,6 @@ struct MenuButton: View {
         }
         .buttonStyle(.plain)
         .focused($isFocused)
+        .appRemoteAction { currentScreen = screen }
     }
 }

@@ -27,6 +27,7 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    .appRemoteAction { preferredPlayer = "mpv" }
                     Button(action: { preferredPlayer = "avplayer" }) {
                         HStack {
                             Text("Native (AVPlayer)")
@@ -36,6 +37,7 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    .appRemoteAction { preferredPlayer = "avplayer" }
                     // A Picker here is not focusable on tvOS without a navigation stack;
                     // cycle on each press like the reminder rows below.
                     Button(action: selectNextSkipProvider) {
@@ -50,8 +52,11 @@ struct SettingsView: View {
                         }
                     }
                     .focused($focusedSetting, equals: .skipProvider)
+                    .appRemoteAction(selectNextSkipProvider)
                     Toggle("Save Cast History", isOn: $enableHistory)
+                        .appRemoteAction { enableHistory.toggle() }
                     Toggle("Still Watching Reminder", isOn: $stillWatchingEnabled)
+                        .appRemoteAction { stillWatchingEnabled.toggle() }
                     Button(action: selectNextStillWatchingThreshold) {
                         HStack {
                             Text("Reminder interval")
@@ -64,6 +69,7 @@ struct SettingsView: View {
                         }
                     }
                     .focused($focusedSetting, equals: .reminderInterval)
+                    .appRemoteAction(selectNextStillWatchingThreshold)
                     Button(action: selectNextStillWatchingResponseTime) {
                         HStack {
                             Text("Response time")
@@ -76,6 +82,7 @@ struct SettingsView: View {
                         }
                     }
                     .focused($focusedSetting, equals: .responseTime)
+                    .appRemoteAction(selectNextStillWatchingResponseTime)
                 }
 
                 Section("Server Information") {
@@ -101,6 +108,7 @@ struct SettingsView: View {
                         }
                         .foregroundColor(Theme.accent)
                     }
+                    .appRemoteAction { server.restart() }
                 }
 
                 // tvOS has no browser to open links, so the policy URL is shown for reading.
@@ -118,6 +126,7 @@ struct SettingsView: View {
                     }
                     .focusable()
                     Button("Open source licences") { showLicences = true }
+                        .appRemoteAction { showLicences = true }
                 }
             }
             .listStyle(.grouped)
