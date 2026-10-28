@@ -108,6 +108,9 @@ struct ReceiverRemotePolicy {
     var canToggle: Bool { transport.contains("toggle") || transport.contains(state.playing ? "pause" : "play") }
     var toggleCommand: String { transport.contains("toggle") ? "toggle" : state.playing ? "pause" : "play" }
     var hasPointer: Bool { !pointer.isEmpty }
+    var idleSelectKey: String? {
+        !isLegacy && state.connected && state.context == "idle" && keys.contains("dpad_center") ? "dpad_center" : nil
+    }
     var hasDpad: Bool { !keys.isDisjoint(with: ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center"]) }
     /// Open surfaces follow the same live permissions as their entry buttons.
     var allowedPresentations: Set<String> {

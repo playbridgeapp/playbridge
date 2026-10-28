@@ -117,10 +117,18 @@ struct ReceiverRemotePolicyTests {
         let idleApple = resolve(apple)
         precondition(idleApple.keys == ["dpad_up", "dpad_down", "dpad_left", "dpad_right", "dpad_center", "back", "home"])
         precondition(idleApple.hasDpad && idleApple.keys.allSatisfy(idleApple.allowsKey))
+        precondition(idleApple.idleSelectKey == "dpad_center")
+        let selectFrame = try raw(WireProtocol.remoteCommand(key: idleApple.idleSelectKey!)) as! [String: Any]
+        precondition(selectFrame["action"] as? String == "remote")
+        precondition((selectFrame["payload"] as? [String: Any])?["key"] as? String == "dpad_center")
+        precondition(applePlayer.idleSelectKey == nil)
+        var disconnected = state; disconnected.connected = false
+        precondition(ReceiverRemotePolicy.resolve(apple, state: disconnected).idleSelectKey == nil)
+        precondition(ReceiverRemotePolicy.resolve(.legacy, state: state).idleSelectKey == nil)
         let idleLayout = RemoteInputLayout(policy: idleApple, context: "idle", image: false, external: false, externalProtocol: nil)
         precondition(idleLayout.hasNavigation && idleLayout.surface(in: "idle", preferences: .init()) == .swipe)
         let noApp = descriptor(["mpv": ["keys": ["dpad_left"]]])
-        precondition(resolve(noApp).keys.isEmpty && !resolve(noApp).hasDpad)
+        precondition(resolve(noApp).keys.isEmpty && !resolve(noApp).hasDpad && resolve(noApp).idleSelectKey == nil)
         let appEngines = descriptor(["native": ["keys": ["dpad_up", "back"]], "future": ["keys": ["back", "home"]]], surface: "app")
         state.contextEngine = "native"
         precondition(resolve(appEngines).keys == ["back"], "Idle ignores stale engine reports and intersects all app engines")

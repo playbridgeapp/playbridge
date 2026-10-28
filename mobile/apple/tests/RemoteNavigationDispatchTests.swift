@@ -108,6 +108,40 @@ import Foundation
             d.endGesture(id); gate?.resume(throwing: AtvClientError.rejected); gate = nil; await pump()
             precondition(writes == 1 && atvWrites == 0 && haptics == 0 && !d.inFlight)
         }
+        // Idle app OK is independent of the replaceable swipe slot and its gesture epoch.
+        do {
+            var receiver = ReceiverRemotePolicy(isLegacy: false,
+                state: ReceiverRemoteState(connected: true, context: "idle"))
+            receiver.keys = ["dpad_up", "dpad_down", "dpad_center"]
+            let policy = CombinedRemotePolicy(receiver: receiver, endpoint: "playbridge:test", fullControl: .init(), native: true)
+            precondition(policy.coalescesNavigation("dpad_up") && !policy.coalescesNavigation("dpad_center"))
+            var writes: [String] = []
+            var gate: CheckedContinuation<Void, Error>?
+            let router = RemoteInputRouter(latest: { policy }, keyboardTicket: { nil }, sendReceiver: { _ in false },
+                sendReceiverNavigation: { key in
+                    writes.append(key)
+                    if key == "dpad_up" { try await withCheckedThrowingContinuation { gate = $0 } }
+                }, sendAtv: { _, _ in preconditionFailure("App OK must stay on the receiver") })
+            let dispatcher = RemoteNavigationDispatcher()
+            let gesture = dispatcher.beginGesture()
+            dispatcher.submit(gesture: gesture, send: { authority in
+                precondition(authority())
+                try await router.key("dpad_up", route: .receiver)
+            }, onSent: {}, onError: { _ in })
+            await pump()
+            dispatcher.cancel() // The visible OK button retires remaining swipe steps.
+            let selected = Task { try await router.key(receiver.idleSelectKey!, route: .receiver) }
+            _ = dispatcher.beginGesture() // A new swipe cannot cancel or replace this discrete activation.
+            try! await selected.value
+            precondition(writes == ["dpad_up", "dpad_center"])
+            gate?.resume(); gate = nil; await pump()
+            precondition(writes.filter { $0 == "dpad_center" }.count == 1)
+            var playerState = receiver.state; playerState.context = "player"
+            var playerReceiver = ReceiverRemotePolicy(isLegacy: false, state: playerState)
+            playerReceiver.keys = receiver.keys
+            let player = CombinedRemotePolicy(receiver: playerReceiver, endpoint: "playbridge:test", fullControl: .init(), native: true)
+            precondition(player.coalescesNavigation("dpad_center"), "Existing player/companion navigation behavior remains unchanged")
+        }
         print("PASS: one-flight/one-pending navigation, release/cancel/new-down retirement, no dropped-step haptics, awaited receiver writes and no retries")
     }
 }
