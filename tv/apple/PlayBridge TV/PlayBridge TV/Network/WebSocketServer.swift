@@ -31,6 +31,7 @@ class WebSocketServer: ObservableObject {
     private var tlsListener: NWListener?
     private var connectedConnections: [NWConnection] = []
     private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    private var capabilitySubscriptions = ReceiverCapabilitySubscription<ObjectIdentifier>()
     private var connectionAuthorization = ConnectionAuthorization<ObjectIdentifier>()
     private var authenticationTimeouts: [ObjectIdentifier: DispatchWorkItem] = [:]
     private var historyStore: HistoryStore?
@@ -349,6 +350,7 @@ class WebSocketServer: ObservableObject {
         authenticationTimeouts.removeAll()
         let connections = Array(activeConnections.values)
         activeConnections.removeAll()
+        capabilitySubscriptions.removeAll()
         connectionAuthorization.removeAll()
         connectedConnections.removeAll()
         for connection in connections {
@@ -463,6 +465,7 @@ class WebSocketServer: ObservableObject {
         let id = ObjectIdentifier(connection)
         guard activeConnections.removeValue(forKey: id) != nil else { return }
         authenticationTimeouts.removeValue(forKey: id)?.cancel()
+        capabilitySubscriptions.remove(id)
         connectionAuthorization.remove(id)
         connection.stateUpdateHandler = nil
         connection.viabilityUpdateHandler = nil
@@ -839,7 +842,7 @@ class WebSocketServer: ObservableObject {
                 if vm.hasTmdbID { obj["tmdbId"] = vm.tmdbID }
             }
             if item.hasBingeGroup { obj["bingeGroup"] = item.bingeGroup }
-            return obj
+            return item.resolvedMediaKind.enriching(obj)
         }
         var status: [String: Any] = [
             "type": "playlist_status",
@@ -870,6 +873,9 @@ class WebSocketServer: ObservableObject {
     private func enriched(_ json: [String: Any]) -> [String: Any] {
         guard ["status", "timeline"].contains(json["type"] as? String), let store = playlistStore else { return json }
         var result = json
+        if json["type"] as? String == "status", let item = store.currentItem {
+            result = item.resolvedMediaKind.enriching(result)
+        }
         if let playbackID = store.playbackID { result["playbackId"] = playbackID }
         if let currentItemID = store.currentItemID { result["currentItemId"] = currentItemID }
         return result
@@ -973,6 +979,14 @@ class WebSocketServer: ObservableObject {
 
         // context_query carries no payload — answer it (player vs idle, plus the active
         // engine when one is on screen) and replay the queue and player snapshots.
+        if action == "receiver_capabilities_subscribe" {
+            let id = ObjectIdentifier(connection)
+            if let frame = capabilitySubscriptions.subscribe(
+                id, authorized: connectionAuthorization.isAuthorized(id, credentials: pairingCredentials)) {
+                send(json: frame, to: connection)
+            }
+            return
+        }
         if action == "context_query" {
             DispatchQueue.main.async {
                 self.send(json: self.playbackContextFrame(), to: connection)
@@ -1031,13 +1045,13 @@ class WebSocketServer: ObservableObject {
         switch action {
         case "play":
             if let p = try? Playbridge_PlayPayload(jsonString: payloadJson), p.validURL != nil {
-                handlePlay(p)
+                handlePlay(p, requestID: requestID, connection: connection)
             } else {
                 print("WebSocket Play Error: Failed to decode PlayPayload or invalid URL")
             }
         case "playlist":
             if let p = try? Playbridge_PlaylistPayload(jsonString: payloadJson) {
-                handlePlaylist(p)
+                handlePlaylist(p, requestID: requestID, connection: connection)
             } else {
                 print("WebSocket Playlist Error: Failed to decode PlaylistPayload")
             }
@@ -1067,7 +1081,10 @@ class WebSocketServer: ObservableObject {
                     self.completeCommand(requestID, ok: false, error: "queue_full", to: connection)
                     return
                 }
-                _ = store.addToQueue(items: valid)
+                guard store.addToQueue(items: valid) else {
+                    self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                    return
+                }
                 self.completeCommand(requestID, ok: true, to: connection)
                 self.broadcastPlaylistStatus(to: connection)
             }
@@ -1267,22 +1284,27 @@ class WebSocketServer: ObservableObject {
         send(json: result, to: connection)
     }
 
-    func handlePlay(_ payload: Playbridge_PlayPayload) {
+    func handlePlay(_ payload: Playbridge_PlayPayload, requestID: String? = nil, connection: NWConnection? = nil) {
         guard let url = payload.validURL else { return }
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
         debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
-        if !payload.skipHistory { historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil) }
         DispatchQueue.main.async {
+            guard self.playlistStore?.setPlaylist(items: [payload], startIndex: 0) == true else {
+                if let connection { self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection) }
+                return
+            }
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.progressWebhook.finish(clear: true)
-            self.playlistStore?.clear()
-            self.playlistStore?.addToQueue(item: payload)
+            if !payload.skipHistory {
+                self.historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
+            }
+            if let connection { self.completeCommand(requestID, ok: true, to: connection) }
             self.skipPreplayForCurrentRequest = false
             self.currentPlayRequest = payload
         }
     }
 
-    private func handlePlaylist(_ payload: Playbridge_PlaylistPayload) {
+    private func handlePlaylist(_ payload: Playbridge_PlaylistPayload, requestID: String?, connection: NWConnection) {
         let indexed = payload.items.enumerated().filter { $0.element.validURL != nil }
         let valid = indexed.map(\.element)
         let startIndex = indexed.firstIndex { $0.offset == Int(payload.startIndex) } ?? 0
@@ -1296,11 +1318,19 @@ class WebSocketServer: ObservableObject {
                 )
             }
         }
-        guard !valid.isEmpty else { return }
+        guard !valid.isEmpty,
+              QueueItemIDs.resolve(payload.items.map { $0.hasItemID ? $0.itemID : nil }) != nil else {
+            completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+            return
+        }
         DispatchQueue.main.async {
+            guard self.playlistStore?.setPlaylist(items: valid, startIndex: startIndex) == true else {
+                self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.progressWebhook.finish(clear: true)
-            self.playlistStore?.setPlaylist(items: valid, startIndex: startIndex)
+            self.completeCommand(requestID, ok: true, to: connection)
             self.progressWebhook.configure(
                 url: payload.hasProgressWebhook ? payload.progressWebhook.url : nil,
                 token: payload.hasProgressWebhook ? payload.progressWebhook.bearerToken : nil,

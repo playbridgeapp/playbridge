@@ -1,6 +1,18 @@
 import CryptoKit
 import Foundation
 
+// Host runner exercises the production queue without importing the protobuf package.
+#if !canImport(SwiftProtobuf)
+struct Playbridge_PlayPayload {
+    private var suppliedID: String?
+    var hasItemID: Bool { suppliedID != nil }
+    var itemID: String {
+        get { suppliedID ?? "" }
+        set { suppliedID = newValue }
+    }
+}
+#endif
+
 private struct TestHistoryKeyProvider: HistoryKeyProvider {
     let key: SymmetricKey
     func loadOrCreateKey() throws -> SymmetricKey { key }
@@ -290,6 +302,7 @@ struct ReceiverReviewTests {
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
+        runMediaContractTests()
         runRemoteNavigationTests()
         runTransportChromeTests()
         runTouchScrubTests()
@@ -2076,4 +2089,71 @@ private func runPlaybackStallTests() {
     assert(session.close(attempt: attempt))
     assert(!session.presentStall(attempt: attempt))
     print("PASS: stall startup/mid-play budgets, pause/seek/progress/buffer resets and failure fencing")
+}
+
+private func runMediaContractTests() {
+    for ext in ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "weba"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext.uppercased())?q=x#f", contentType: nil) == .audio)
+    }
+    for ext in ["jpg", "jpeg", "png", "webp", "avif", "gif", "bmp", "heic", "heif"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext)", contentType: nil) == .image)
+    }
+    for ext in ["mp4", "m4v", "mkv", "webm", "avi", "mov", "wmv", "flv", "ts", "m2ts", "mpg", "mpeg", "unknown"] {
+        assert(MediaKind.resolve(explicit: nil, url: "https://example.com/a.\(ext)", contentType: nil) == .video)
+    }
+    assert(MediaKind.resolve(explicit: " AUDIO ", url: "a.jpg", contentType: "video/mp4") == .audio)
+    assert(MediaKind.resolve(explicit: "future", url: "a.mp3", contentType: " IMAGE/PNG; x=y") == .image)
+    assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "audio/mpeg") == .audio)
+    assert(MediaKind.resolve(explicit: nil, url: "a.mp3", contentType: "video/mp4") == .video)
+    assert(MediaKind.resolve(explicit: nil, url: "opaque", contentType: "application/vnd.apple.mpegurl") == .video)
+    for type in ["status", "playlist_status"] {
+        assert(MediaKind.image.enriching(["type": type])["mediaKind"] as? String == "image")
+    }
+    let ids = QueueItemIDs.resolve(["sender-1", nil, " sender-2 "])!
+    assert(ids[0] == "sender-1" && ids[2] == " sender-2 " && UUID(uuidString: ids[1]) != nil)
+    assert(QueueItemIDs.resolve(["same", "same"]) == nil)
+    assert(QueueItemIDs.resolve(["same"], existing: ["same"]) == nil)
+    for invalid in ["", " \n\t", String(repeating: "x", count: 129), String(repeating: "😀", count: 65)] {
+        assert(QueueItemIDs.resolve([nil, invalid]) == nil)
+    }
+    assert(QueueItemIDs.resolve([String(repeating: "x", count: 128)]) != nil)
+    let queue = PlaylistStore()
+    var supplied = Playbridge_PlayPayload()
+    supplied.itemID = "sender-item"
+    assert(queue.setPlaylist(items: [supplied, Playbridge_PlayPayload()], startIndex: 0))
+    assert(queue.currentItemID == "sender-item" && queue.currentItem?.itemID == "sender-item")
+    assert(UUID(uuidString: queue.itemIDs[1]) != nil && queue.items[1].itemID == queue.itemIDs[1])
+    let before = queue.itemIDs
+    let revision = queue.queueRevision
+    let playback = queue.playbackID
+    assert(!queue.setPlaylist(items: [supplied, supplied], startIndex: 0))
+    assert(!queue.addToQueue(item: supplied))
+    assert(!queue.addToQueue(items: [Playbridge_PlayPayload(), supplied]))
+    assert(queue.itemIDs == before && queue.queueRevision == revision && queue.playbackID == playback)
+    assert(queue.addToQueue(item: Playbridge_PlayPayload()))
+    supplied.itemID = "sender-appended"
+    assert(queue.addToQueue(items: [supplied]))
+    assert(queue.itemIDs.last == "sender-appended")
+    assert(queue.jumpTo(itemID: "sender-appended")?.itemID == "sender-appended")
+    for invalid in ["", "  ", String(repeating: "x", count: 129)] {
+        supplied.itemID = invalid
+        assert(!queue.setPlaylist(items: [supplied], startIndex: 0))
+        assert(!queue.addToQueue(item: supplied))
+    }
+    var subscriptions = ReceiverCapabilitySubscription<Int>()
+    assert(subscriptions.subscribe(1, authorized: false) == nil && subscriptions.connections.isEmpty)
+    let frame = subscriptions.subscribe(1, authorized: true)!
+    let decoded = try! JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: frame)) as! [String: Any]
+    assert(decoded["type"] as? String == "receiver_capabilities")
+    assert(decoded["revision"] as? Int == 1 && decoded["revision"] as? String == nil)
+    assert(decoded["capabilities"] is [String: Any])
+    assert(subscriptions.subscribe(1, authorized: true) != nil && subscriptions.connections == [1])
+    _ = subscriptions.subscribe(2, authorized: true)
+    subscriptions.remove(1)
+    assert(subscriptions.connections == [2])
+    subscriptions.removeAll()
+    assert(subscriptions.connections.isEmpty)
+    assert(TvCapabilities.defaultFeatures.contains("receiver_capabilities_v1"))
+    assert(TvCapabilities.defaultFeatures.contains("player_home_v1"))
+    print("PASS: media resolver, media-kind reports, sender IDs/validation and per-socket numeric capabilities snapshot")
 }

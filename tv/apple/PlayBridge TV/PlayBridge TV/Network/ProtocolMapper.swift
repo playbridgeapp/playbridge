@@ -36,6 +36,11 @@ func debugLogNetworkResponse(
 /// Convenience accessors over the Wire-generated proto types so the rest of the app
 /// doesn't have to parse strings or unwrap optionals at every consumer.
 extension Playbridge_PlayPayload {
+    var resolvedMediaKind: MediaKind {
+        MediaKind.resolve(explicit: hasMediaKind ? mediaKind : nil, url: url,
+                          contentType: hasContentType ? contentType : nil)
+    }
+
     /// Parsed `URL` from the proto's string `url` field. nil when malformed.
     var validURL: URL? {
         guard let parsed = URL(string: url), let scheme = parsed.scheme, !scheme.isEmpty else { return nil }

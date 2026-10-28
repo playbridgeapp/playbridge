@@ -263,6 +263,7 @@ struct PlayerView: View {
     }
 
     private func handleRemoteNavigation(_ key: String) {
+        if key == "home" { exitPlayback(); return }
         if !stillWatching.isPrompting, !isPreBuffering, engineChrome.handleFailureKey(key) { return }
         let engine = exitGate.liveEngine
         let generation = exitGate.liveGeneration

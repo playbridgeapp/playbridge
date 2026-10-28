@@ -4,6 +4,8 @@ import Foundation
 /// Implements the contract defined in protocol/docs/RECEIVER_CAPABILITIES.md.
 enum TvCapabilities {
     static let defaultFeatures = [
+        "receiver_capabilities_v1",
+        "player_home_v1",
         "queue_crud_v1",
         "stable_item_ids",
         "command_results",
