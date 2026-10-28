@@ -230,6 +230,15 @@ apply pan/scroll/zoom/rotate/anchor/reset only to images, never to a browser sur
 Apple image/artwork downloads retain origin-scoped headers and standard TLS trust;
 page-controlled image/artwork downloads are rejected until its transport can enforce DNS/peer grants.
 
+The native receiver descriptor may also declare `surfaces.app.engines.native.keys`
+(`native` is an open engine ID) for in-app idle navigation. With `context.active:
+"idle"`, supporting senders use only the app engines' key intersection for
+`command/remote`; player/browser contexts retain their own sets and never union app
+keys. This drives the foreground receiver UI, including owned sheets and dialogs,
+not tvOS Home, another app, or system volume. Back at the idle root is a no-op;
+Home closes owned presentations and returns to that root. Pairing Allow/Deny stays
+physical-remote-only; authenticated phone keys cannot authorize a new device.
+
 ### Receiver to sender
 
 | Type | When used |

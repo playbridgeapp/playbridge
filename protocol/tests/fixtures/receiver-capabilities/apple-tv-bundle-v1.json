@@ -101,6 +101,21 @@
             ]
           }
         }
+      },
+      "app": {
+        "engines": {
+          "native": {
+            "keys": [
+              "dpad_up",
+              "dpad_down",
+              "dpad_left",
+              "dpad_right",
+              "dpad_center",
+              "back",
+              "home"
+            ]
+          }
+        }
       }
     },
     "host": {
