@@ -36,6 +36,16 @@ func debugLogNetworkResponse(
 /// Convenience accessors over the Wire-generated proto types so the rest of the app
 /// doesn't have to parse strings or unwrap optionals at every consumer.
 extension Playbridge_PlayPayload {
+    var musicMetadata: MusicPresentationMetadata {
+        let metadata = visualMetadata
+        return MusicPresentationMetadata(
+            title: titleOrNil, metadataTitle: metadata.title,
+            artist: metadata.hasArtist ? metadata.artist : nil, album: metadata.hasAlbum ? metadata.album : nil,
+            artworkURL: metadata.hasArtworkURL ? metadata.artworkURL : nil,
+            posterURL: metadata.hasPosterURL ? metadata.posterURL : nil,
+            backdropURL: metadata.hasBackdropURL ? metadata.backdropURL : nil)
+    }
+
     var resolvedMediaKind: MediaKind {
         MediaKind.resolve(explicit: hasMediaKind ? mediaKind : nil, url: url,
                           contentType: hasContentType ? contentType : nil)

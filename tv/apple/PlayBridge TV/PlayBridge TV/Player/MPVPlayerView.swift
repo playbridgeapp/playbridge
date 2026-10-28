@@ -15,6 +15,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let mediaIdentity: Int
     let isPreBuffering: Bool
     let title: String?
+    let musicPayload: Playbridge_PlayPayload?
     let onDismiss: () -> Void
     let onExit: () -> Void
     let onBack: () -> Void
@@ -50,6 +51,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.mediaIdentity = mediaIdentity
         vc.isPreBuffering = isPreBuffering
         vc.mediaTitle = title
+        vc.musicPayload = musicPayload
         vc.onDismiss = onDismiss
         vc.onExit = onExit
         vc.onBack = onBack
@@ -73,6 +75,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: MPVViewController, context: Context) {
+        uiViewController.musicPayload = musicPayload
         uiViewController.isPreBuffering = isPreBuffering
         // Keep callbacks current (they're cheap value assignments).
         uiViewController.onDismiss = onDismiss
@@ -288,6 +291,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private class FocusableView: UIView {
         override var canBecomeFocused: Bool { true }
     }
+    var musicPayload: Playbridge_PlayPayload? {
+        didSet {
+            if isViewLoaded { musicHost.update(musicPayload, in: self, container: videoView) }
+        }
+    }
+    private let musicHost = MusicPresentationHost()
     private let videoView = FocusableView()
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -316,6 +325,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         metalLayer.backgroundColor = UIColor.black.cgColor
         updateRenderingSurface()
         videoView.layer.addSublayer(metalLayer)
+        musicHost.update(musicPayload, in: self, container: videoView)
 
         playbackState.title = mediaTitle ?? ""
         playbackState.metadata = transportMetadata
@@ -2451,6 +2461,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         guard !isMpvStopped else { return }
         discardTouchScrub()
         isMpvStopped = true
+        musicHost.remove()
         invalidateFailure()
         skipLoader.cancel()
         chapterThumbnailer?.cancel()

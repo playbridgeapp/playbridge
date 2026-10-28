@@ -106,6 +106,7 @@ struct ContentView: View {
 
             if let request = server.currentPlayRequest {
                 let isPreBuffering = !playerStarted &&
+                    request.resolvedMediaKind == .video &&
                     (playlistStore.currentItem ?? request).resolvedMediaKind == .video &&
                     request.hasVisualMetadata &&
                     !server.skipPreplayForCurrentRequest

@@ -3,7 +3,7 @@ import Foundation
 /// Stage 5 v1 ReceiverCapabilities descriptor and auth/bundle payload builder for Apple TV.
 /// Implements the contract defined in protocol/docs/RECEIVER_CAPABILITIES.md.
 enum TvCapabilities {
-    static let mediaKinds = ["video", "image"]
+    static let mediaKinds = ["video", "audio", "image"]
 
     static let defaultFeatures = [
         "receiver_capabilities_v1",

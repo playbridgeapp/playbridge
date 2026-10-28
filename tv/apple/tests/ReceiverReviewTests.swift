@@ -302,6 +302,7 @@ struct ReceiverReviewTests {
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
+        runMusicPresentationTests()
         runImagePresentationTests()
         runMediaContractTests()
         runRemoteNavigationTests()
@@ -2264,4 +2265,24 @@ private func runImagePresentationTests() {
     assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, detectedBy: "linked_page", allowedPrivateOrigins: ["https://example.com"]) == nil)
     assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, allowedPrivateOrigins: ["https://example.com/path"]) == nil)
     print("PASS: image timer load/pause/resume/EOF/fallback/clamp, settings, JSON/binary pointers, transforms and origin-scoped image requests")
+}
+
+private func runMusicPresentationTests() {
+    func metadata(title: String? = "Track", metadataTitle: String? = "Metadata track",
+                  artwork: String? = "https://example.com/art.jpg", poster: String? = "https://example.com/poster.png",
+                  backdrop: String? = "https://example.com/backdrop.webp") -> MusicPresentationMetadata {
+        MusicPresentationMetadata(title: title, metadataTitle: metadataTitle, artist: "Artist", album: "Album",
+                                  artworkURL: artwork, posterURL: poster, backdropURL: backdrop)
+    }
+    let music = metadata()
+    assert(music.title == "Track" && music.artist == "Artist" && music.album == "Album")
+    assert(music.artworkURLs.map(\.lastPathComponent) == ["art.jpg", "poster.png", "backdrop.webp"])
+    assert(metadata(title: " ").title == "Metadata track")
+    assert(metadata(title: nil, metadataTitle: nil).title == "Music")
+    assert(metadata(artwork: nil).artworkURLs.first?.lastPathComponent == "poster.png")
+    assert(metadata(artwork: " ", poster: nil).artworkURLs.first?.lastPathComponent == "backdrop.webp")
+    assert(metadata(artwork: nil, poster: nil, backdrop: nil).artworkURLs.isEmpty)
+    assert(metadata(artwork: "file:///art.jpg").artworkURLs.first?.lastPathComponent == "poster.png")
+    assert(TvCapabilities.mediaKinds == ["video", "audio", "image"])
+    print("PASS: music metadata/title, artwork precedence/fallback/placeholder and all three advertised media kinds")
 }
