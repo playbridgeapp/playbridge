@@ -50,6 +50,15 @@ enum PlayerPlaybackReport {
         ]
     }
 
+    static func imageSettings(engine: String) -> [String: Any] {
+        var frame = settings(engine: engine, loop: false, availability: .none)
+        frame["isSeekable"] = false
+        frame["isLive"] = false
+        frame["engineAvailable"] = false
+        frame["loopAvailable"] = false
+        return frame
+    }
+
     /// `engine` is sent only while the player surface is active and an engine is known.
     static func context(active: String, engine: String?) -> [String: Any] {
         var frame: [String: Any] = ["type": "context", "active": active]

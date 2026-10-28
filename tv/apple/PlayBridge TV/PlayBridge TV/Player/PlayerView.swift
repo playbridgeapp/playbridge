@@ -89,6 +89,10 @@ struct PlayerView: View {
 
     private func emitCurrent(engine: PlaybackEngine, generation: Int) {
         let identity = reportIdentity(engine: engine, generation: generation)
+        if (playlistStore.currentItem ?? payload).resolvedMediaKind == .image {
+            emit(PlayerPlaybackReport.imageSettings(engine: engine.rawValue), engine: engine.rawValue)
+            return
+        }
         guard let frame = settingsReporter.resync(identity: identity) else { return }
         emit(frame, engine: identity.engine)
     }
@@ -106,6 +110,7 @@ struct PlayerView: View {
     }
 
     private func applyTuning(_ command: PlayerTuning.Command) {
+        guard (playlistStore.currentItem ?? payload).resolvedMediaKind != .image else { return }
         let identity = liveVolumeIdentity()
         guard let frame = settingsReporter.apply(command, identity: identity) else { return }
         tuning = settingsReporter.tuning
@@ -235,7 +240,7 @@ struct PlayerView: View {
                                           content: content, state: json["state"] as? String ?? "",
                                           position: position, duration: duration)
         }
-        guard !isPreBuffering, !item.skipHistory, let url = item.validURL,
+        guard !isPreBuffering, !item.skipHistory, item.resolvedMediaKind != .image, let url = item.validURL,
               url == (playlistStore.currentItem ?? payload).validURL,
               json["type"] as? String == "status",
               let position = json["position"] as? Int,
@@ -264,6 +269,18 @@ struct PlayerView: View {
 
     private func handleRemoteNavigation(_ key: String) {
         if key == "home" { exitPlayback(); return }
+        if (playlistStore.currentItem ?? payload).resolvedMediaKind == .image,
+           !stillWatching.isPrompting, !showPlaylist {
+            switch key {
+            case "back": exitPlayback()
+            case "dpad_left": if playlistStore.hasPrevious { handleJump(to: playlistStore.currentIndex - 1) }
+            case "dpad_right": handleNext()
+            case "dpad_center":
+                NotificationCenter.default.post(name: WebSocketServer.controlCommand, object: nil, userInfo: ["command": "toggle"])
+            default: break
+            }
+            return
+        }
         if !stillWatching.isPrompting, !isPreBuffering, engineChrome.handleFailureKey(key) { return }
         let engine = exitGate.liveEngine
         let generation = exitGate.liveGeneration
@@ -351,7 +368,24 @@ struct PlayerView: View {
             if let currentURL = currentRequest.validURL {
                 let currentEngine = effectiveEngine(for: currentRequest)
                 let currentGeneration = mediaGeneration
-                if currentEngine == .mpv {
+                if currentRequest.resolvedMediaKind == .image {
+                    ImagePresentationView(
+                        payload: currentRequest, engine: currentEngine.rawValue,
+                        prompting: stillWatching.isPrompting,
+                        onBroadcast: { frame in
+                            guard isCurrentPlayback(currentEngine, generation: currentGeneration) else { return }
+                            broadcast(frame, for: currentRequest)
+                        },
+                        onNavigate: { delta in
+                            guard isCurrentPlayback(currentEngine, generation: currentGeneration) else { return }
+                            if delta > 0 { handleNext() }
+                            else if playlistStore.hasPrevious { handleJump(to: playlistStore.currentIndex - 1) }
+                        },
+                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } }
+                    )
+                    .focused($isPlayerFocused)
+                    .id("image-\(playlistStore.currentItemID ?? currentRequest.url)-\(currentGeneration)")
+                } else if currentEngine == .mpv {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,

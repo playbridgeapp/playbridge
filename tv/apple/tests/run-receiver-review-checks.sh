@@ -5,6 +5,8 @@ test_dir="$(mktemp -d /tmp/playbridge-tv-review-tests.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
 source_root="$repo_root/tv/apple/PlayBridge TV/PlayBridge TV"
 swiftc -module-cache-path "$test_dir/cache" \
+  "$source_root/Player/ImagePresentationModel.swift" \
+  "$source_root/Player/MediaImageRequest.swift" \
   "$source_root/Player/MediaKind.swift" \
   "$source_root/Data/PlaylistStore.swift" \
   "$source_root/Data/QueueItemIDs.swift" \

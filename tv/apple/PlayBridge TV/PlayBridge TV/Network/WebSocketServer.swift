@@ -492,7 +492,13 @@ class WebSocketServer: ObservableObject {
                 self.removeConnection(connection)
                 return
             }
-            if let content, let jsonString = String(data: content, encoding: .utf8) {
+            if let content, metadata?.opcode == .binary {
+                if self.connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: self.pairingCredentials),
+                   let pointer = ImagePointer(packet: content) {
+                    self.handleImagePointer(pointer)
+                }
+            } else if let content, metadata?.opcode == .text,
+                      let jsonString = String(data: content, encoding: .utf8) {
                 self.handleMessage(jsonString, data: content, from: connection)
             }
             self.receiveMessages(from: connection)
@@ -820,6 +826,13 @@ class WebSocketServer: ObservableObject {
     /// Posted when a client (re)connects; the active player re-broadcasts status + tracks.
     static let resyncRequest = Notification.Name("PlayBridgeResync")
     /// Absolute app volume. userInfo["level"] is a finite number in [0, 1].
+    static let imagePointer = Notification.Name("PlayBridgeImagePointer")
+
+    private func handleImagePointer(_ pointer: ImagePointer) {
+        guard (playlistStore?.currentItem ?? currentPlayRequest)?.resolvedMediaKind == .image else { return }
+        NotificationCenter.default.post(name: Self.imagePointer, object: pointer)
+    }
+
     static let appVolumeCommand = Notification.Name("PlayBridgeAppVolume")
 
     /// Broadcast the current queue as `playlist_status`, matching the Android receiver's
@@ -999,6 +1012,12 @@ class WebSocketServer: ObservableObject {
             DispatchQueue.main.async {
                 self.broadcastPlaylistStatus(to: connection)
                 self.completeCommand(requestID, ok: true, to: connection)
+            }
+            return
+        }
+        if action == "mouse" {
+            if let fields = payload as? [String: Any], let pointer = ImagePointer(json: fields) {
+                handleImagePointer(pointer)
             }
             return
         }

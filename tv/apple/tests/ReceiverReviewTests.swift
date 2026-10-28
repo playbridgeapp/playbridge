@@ -302,6 +302,7 @@ struct ReceiverReviewTests {
         assert(ExternalSubtitleCues(data: Data("not captions".utf8)) == nil)
         print("PASS: WebVTT/SRT timing, overlap, seek positions and plain-text rendering")
 
+        runImagePresentationTests()
         runMediaContractTests()
         runRemoteNavigationTests()
         runTransportChromeTests()
@@ -816,7 +817,7 @@ private func runPlayerSettingsTests() {
         // Verified non-presence of unhandled operation categories
         assert(engineCaps["pointer"] == nil, "Apple TV player must not declare pointer")
         assert(engineCaps["text"] == nil, "Apple TV player must not declare text")
-        assert(engineCaps["imageTransforms"] == nil, "Apple TV player must not declare imageTransforms")
+        assert(engineCaps["imageTransforms"] as? [String] == ["pan", "scroll", "zoom", "rotate", "anchor", "reset"])
         assert(engineCaps["browser"] == nil, "Apple TV player must not declare browser")
     }
 
@@ -850,7 +851,7 @@ private func runPlayerSettingsTests() {
     assert(authResponse["players"] as? [String] == ["avplayer", "mpv"])
     assert(authResponse["features"] as? [String] == TvCapabilities.defaultFeatures)
     assert(authResponse["browsers"] == nil, "Browsers must not be added to Apple TV auth")
-    assert(authResponse["mediaKinds"] == nil, "mediaKinds must not be added to Apple TV auth")
+    assert(authResponse["mediaKinds"] as? [String] == TvCapabilities.mediaKinds)
     assert(authResponse["screenMirrorWebRtc"] == nil, "screenMirrorWebRtc must not be added to Apple TV auth")
 
     assert(credentialBundle["token"] as? String == token)
@@ -858,7 +859,7 @@ private func runPlayerSettingsTests() {
     assert(credentialBundle["players"] as? [String] == ["avplayer", "mpv"])
     assert(credentialBundle["features"] as? [String] == TvCapabilities.defaultFeatures)
     assert(credentialBundle["browsers"] == nil)
-    assert(credentialBundle["mediaKinds"] == nil)
+    assert(credentialBundle["mediaKinds"] as? [String] == TvCapabilities.mediaKinds)
     assert(credentialBundle["screenMirrorWebRtc"] == nil)
 
     // 6. Byte identity of existing fields when capabilities is stripped
@@ -2156,4 +2157,111 @@ private func runMediaContractTests() {
     assert(TvCapabilities.defaultFeatures.contains("receiver_capabilities_v1"))
     assert(TvCapabilities.defaultFeatures.contains("player_home_v1"))
     print("PASS: media resolver, media-kind reports, sender IDs/validation and per-socket numeric capabilities snapshot")
+}
+
+private func runImagePresentationTests() {
+    var timer = ImagePresentationTimer(durationMs: 1000)
+    timer.start(now: 0)
+    assert(timer.isPlaying && !timer.isShown && timer.durationMs == 1000)
+    assert(!timer.tick(now: 2) && timer.positionMs == 0)
+    timer.shown(now: 2)
+    assert(!timer.tick(now: 2.25) && timer.positionMs == 250)
+    timer.setPlaying(false, now: 2.5)
+    assert(timer.positionMs == 500 && !timer.isPlaying)
+    assert(!timer.tick(now: 100) && timer.positionMs == 500)
+    timer.setPlaying(true, now: 100)
+    assert(!timer.tick(now: 100.25) && timer.positionMs == 750)
+    assert(timer.tick(now: 100.5) && timer.positionMs == 1000 && !timer.isPlaying)
+    assert(!timer.tick(now: 101), "Advance is emitted once")
+    assert(!timer.setPlaying(true, now: 102) && !timer.isPlaying)
+    for duration: Int64? in [nil, 0, -1, Int64.min] {
+        var untimed = ImagePresentationTimer(durationMs: duration)
+        untimed.start(now: 0)
+        untimed.shown(now: 1)
+        untimed.setPlaying(true, now: 2)
+        assert(!untimed.tick(now: 1000) && !untimed.isPlaying)
+        assert(untimed.positionMs == 0 && untimed.durationMs == 0)
+        assert(untimed.status["state"] as? String == "paused")
+    }
+    assert(ImagePresentationTimer(durationMs: Int64.max).durationMs == 86_400_000)
+    var fallback = ImagePresentationTimer(durationMs: 1000)
+    fallback.start(now: 0)
+    fallback.setPlaying(false, now: 1)
+    assert(!fallback.tick(now: ImagePresentationTimer.loadTimeout) && fallback.isShown)
+    assert(!fallback.tick(now: 100) && fallback.positionMs == 0)
+    fallback.setPlaying(true, now: 100)
+    assert(fallback.tick(now: 101))
+    var pausedLoad = ImagePresentationTimer(durationMs: 1000)
+    pausedLoad.start(now: 0)
+    pausedLoad.setPlaying(false, now: 1)
+    pausedLoad.shown(now: 2)
+    assert(!pausedLoad.tick(now: 20) && pausedLoad.positionMs == 0)
+    pausedLoad.setPlaying(true, now: 20)
+    pausedLoad.shown(now: 20.5) // duplicate image load cannot reset the timer
+    assert(pausedLoad.tick(now: 21))
+    var atCommand = ImagePresentationTimer(durationMs: 1000)
+    atCommand.start(now: 0)
+    atCommand.shown(now: 0)
+    assert(atCommand.setPlaying(false, now: 1), "A command at EOF must still advance")
+    let settings = PlayerPlaybackReport.imageSettings(engine: "mpv")
+    assert(PlayerPlaybackReport.isValidSnapshot(settings))
+    for key in ["speedAvailable", "scalingAvailable", "subtitleOffsetAvailable", "isSeekable", "isLive", "engineAvailable", "loopAvailable"] {
+        assert(settings[key] as? Bool == false)
+    }
+    func packet(_ type: UInt8, _ dx: Float, _ dy: Float) -> Data {
+        var bytes: [UInt8] = [type]
+        for value in [dx, dy] {
+            let bits = value.bitPattern
+            for shift in [24, 16, 8, 0] { bytes.append(UInt8((bits >> shift) & 255)) }
+        }
+        return Data(bytes)
+    }
+    for (index, event) in ImagePointer.events.enumerated() {
+        assert(ImagePointer(packet: packet(UInt8(index), 1.25, -2.5)) == ImagePointer(event: event, dx: 1.25, dy: -2.5))
+    }
+    assert(ImagePointer(packet: packet(9, 0, 0)) == nil)
+    assert(ImagePointer(packet: packet(0, .infinity, 0)) == nil)
+    assert(ImagePointer(packet: packet(0, 0, .nan)) == nil)
+    assert(ImagePointer(packet: Data(repeating: 0, count: 8)) == nil)
+    assert(ImagePointer(packet: Data(repeating: 0, count: 10)) == nil)
+    assert(ImagePointer(json: ["event": "reset"]) == ImagePointer(event: "reset", dx: 0, dy: 0))
+    assert(ImagePointer(json: ["event": "zoom", "dx": 1.5, "dy": 0])?.dx == 1.5)
+    assert(ImagePointer(json: ["event": "zoom", "dx": true, "dy": 0]) == nil)
+    assert(ImagePointer(json: ["event": "zoom", "dx": Double.infinity, "dy": 0]) == nil)
+    var transform = ImageTransform()
+    func apply(_ event: String, _ x: Double, _ y: Double = 0) {
+        transform.apply(ImagePointer(event: event, dx: x, dy: y)!, width: 1000, height: 500)
+    }
+    apply("move", 100, 100)
+    assert(transform.x == 0 && transform.y == 0)
+    apply("zoom", 2)
+    apply("move", 99999, -99999)
+    assert(transform.scale == 2 && transform.x == 500 && transform.y == -250)
+    apply("reset", 0)
+    apply("transform_anchor", 1, 0.5)
+    apply("zoom", 2)
+    assert(transform.x == -500 && transform.y == 0)
+    apply("rotate", 90)
+    assert(abs(transform.x - 500) < 0.001 && abs(transform.y + 1000) < 0.001)
+    apply("transform_anchor", -1, -1)
+    let x = transform.x, y = transform.y
+    apply("rotate", 400)
+    assert(transform.x == x && transform.y == y && transform.rotation == 180)
+    for _ in 0..<10 { apply("zoom", 99) }
+    assert(transform.scale == 8)
+    for _ in 0..<10 { apply("zoom", 0.01) }
+    assert(transform.scale == 1 && transform.x == 0 && transform.y == 0)
+    apply("reset", 0)
+    assert(transform.rotation == 0)
+    let source = URL(string: "https://example.com/image.jpg")!
+    let other = URL(string: "https://other.example/image.jpg")!
+    let fields = ["X-Image-Context": "synthetic"]
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields)?.value(forHTTPHeaderField: "X-Image-Context") == "synthetic")
+    assert(MediaImageRequest.request(url: other, headerOrigin: source, headers: fields)?.allHTTPHeaderFields?.isEmpty != false)
+    assert(MediaImageRequest.request(url: URL(string: "http://example.com/image.jpg")!, headerOrigin: source, headers: fields)?.value(forHTTPHeaderField: "X-Image-Context") == nil)
+    assert(MediaImageRequest.request(url: URL(string: "file:///image.jpg")!, headerOrigin: source, headers: [:]) == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, detectedBy: "page_cast") == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, detectedBy: "linked_page", allowedPrivateOrigins: ["https://example.com"]) == nil)
+    assert(MediaImageRequest.request(url: source, headerOrigin: source, headers: fields, allowedPrivateOrigins: ["https://example.com/path"]) == nil)
+    print("PASS: image timer load/pause/resume/EOF/fallback/clamp, settings, JSON/binary pointers, transforms and origin-scoped image requests")
 }
