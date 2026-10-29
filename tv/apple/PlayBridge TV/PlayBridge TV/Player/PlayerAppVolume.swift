@@ -7,6 +7,17 @@ enum PlayerAppVolume {
     static let scope = "app"
     static let step = 0.05
     static let defaultLevel = 1.0
+    static let storedLevelKey = "playerAppVolumeLevel"
+
+    /// The last app level, so the next cast starts where the user left it.
+    /// Mute is not kept: a new cast never starts silent.
+    static func storedLevel(in defaults: UserDefaults = .standard) -> Double {
+        finiteUnit(defaults.object(forKey: storedLevelKey)) ?? defaultLevel
+    }
+
+    static func storeLevel(_ level: Double, in defaults: UserDefaults = .standard) {
+        defaults.set(clamp(level), forKey: storedLevelKey)
+    }
 
     /// Keep wire values on the 0.001 grid so repeated ±0.05 steps stay exact.
     static func clamp(_ level: Double) -> Double {

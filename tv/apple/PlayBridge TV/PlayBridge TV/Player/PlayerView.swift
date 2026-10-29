@@ -45,11 +45,13 @@ struct PlayerView: View {
     @State private var exitGate = PlayerRemoteExitGate()
     @State private var tuning = PlayerTuning()
     @State private var settingsReporter = PlayerSettingsReporter(engine: PlaybackEngine.defaultEngine.rawValue, generation: 0)
-    /// App volume for this playback session. A new player screen starts at full
-    /// level, unmuted. Engine switches and playlist moves keep the stored level.
-    @State private var appVolume = PlayerAppVolumeController(engine: PlaybackEngine.defaultEngine.rawValue, generation: 0)
+    /// App volume for this playback session. A new player screen starts at the
+    /// last stored level, unmuted. Engine switches and playlist moves keep it.
+    @State private var appVolume = PlayerAppVolumeController(
+        engine: PlaybackEngine.defaultEngine.rawValue, generation: 0,
+        level: PlayerAppVolume.storedLevel())
     @State private var appVolumeBanner: String?
-    @State private var appVolumeShownLevel = PlayerAppVolume.defaultLevel
+    @State private var appVolumeShownLevel = PlayerAppVolume.storedLevel()
     @State private var appVolumeBannerID = 0
     @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
@@ -133,6 +135,7 @@ struct PlayerView: View {
     private func publishAppVolume(_ frame: [String: Any]?) {
         guard let frame, server.currentPlayRequest != nil else { return }
         server.broadcast(frame)
+        PlayerAppVolume.storeLevel(appVolume.level)
         appVolumeShownLevel = appVolume.level
         appVolumeBanner = PlayerAppVolume.indicatorText(level: appVolume.level, muted: appVolume.muted)
         appVolumeBannerID &+= 1

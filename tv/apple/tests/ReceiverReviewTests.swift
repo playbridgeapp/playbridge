@@ -895,6 +895,19 @@ private func runPlayerSettingsTests() {
 }
 
 private func runAppVolumeTests() {
+    let volumeDefaults = UserDefaults(suiteName: "ReceiverReviewTests.appVolume")!
+    volumeDefaults.removePersistentDomain(forName: "ReceiverReviewTests.appVolume")
+    assert(PlayerAppVolume.storedLevel(in: volumeDefaults) == 1, "No stored level starts at full")
+    PlayerAppVolume.storeLevel(0.35, in: volumeDefaults)
+    assert(PlayerAppVolume.storedLevel(in: volumeDefaults) == 0.35, "The last level carries to the next cast")
+    PlayerAppVolume.storeLevel(0, in: volumeDefaults)
+    assert(PlayerAppVolume.storedLevel(in: volumeDefaults) == 0, "A stored zero level is kept")
+    volumeDefaults.set(42, forKey: PlayerAppVolume.storedLevelKey)
+    assert(PlayerAppVolume.storedLevel(in: volumeDefaults) == 1, "An out-of-range stored value falls back to full")
+    volumeDefaults.set("loud", forKey: PlayerAppVolume.storedLevelKey)
+    assert(PlayerAppVolume.storedLevel(in: volumeDefaults) == 1, "A non-number stored value falls back to full")
+    volumeDefaults.removePersistentDomain(forName: "ReceiverReviewTests.appVolume")
+
     assert(PlayerAppVolume.step == 0.05)
     assert(PlayerAppVolume.scope == "app")
     assert(PlayerAppVolume.absoluteLevel(scope: "app", level: 0.35) == 0.35)
