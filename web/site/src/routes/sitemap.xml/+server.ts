@@ -2,7 +2,7 @@ import { SITE } from '$lib/data/site';
 
 export const prerender = true;
 
-const ROUTES = ['/', '/senders', '/receivers', '/privacy', '/security'];
+const ROUTES = ['/', '/senders', '/receivers', '/privacy', '/security', '/support'];
 
 export const GET = async () => {
   const lastmod = new Date().toISOString().slice(0, 10);

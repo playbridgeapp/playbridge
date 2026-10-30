@@ -38,7 +38,7 @@
       <li>On launch, the app asks playbridge.app whether a newer version exists (see <a href="#updates">Update checks</a>).</li>
       <li>The older built-in library, which is deprecated and will be removed, looks up title details from public metadata services while you browse it. Those services receive the titles and IDs you look up.</li>
       <li>Optional services you set up yourself, with your own API key or account, receive the requests you make through them. Nothing is sent to them until you set them up.</li>
-      <li><strong>Bridged apps</strong> are websites that open in the in-app browser and can cast through PlayBridge. The app adds one, streams.playbridge.app, on first launch, and you can remove it. Each bridged app handles data under its own policy.</li>
+      <li><strong>Bridged apps</strong> are websites that open in the in-app browser and can cast through PlayBridge. You can add and remove bridged apps. Each bridged app handles data under its own policy.</li>
       <li>If you turn on automatic backup, the app uploads its export file to the S3-compatible storage you configure.</li>
       <li>Subtitle language detection uses Google ML Kit's on-device language ID. The text is not uploaded. Google says ML Kit may send performance and usage metrics to Google.</li>
       <li>When you cast to a Google Cast device, that device loads PlayBridge's receiver page from cast.playbridge.app along with Google's Cast framework.</li>
