@@ -5,9 +5,9 @@ The **sender** in the PlayBridge suite. An Android phone app (`com.playbridge.se
 ## What it does
 
 - Built-in web browser (GeckoView) with automatic media detection
-- Library & discovery via Stremio-style addons and TMDB / OMDB / TVDB metadata
-- Debrid integration — Real-Debrid, AllDebrid, Premiumize, TorBox
 - Casts to the receiver and drives playback remotely (play/pause/seek/queue, now-playing sync)
+- Phone files, IPTV playlists, custom collections and downloads
+- User-added bridged apps
 - In-app local playback (`PlayerActivity`)
 
 ## Tech

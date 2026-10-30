@@ -98,7 +98,7 @@ internal fun externalScreenMirrorMedia(
  *    or, when none is selected, the connected native receiver.
  *  - Owns external-target lifecycles so a cast survives Activity/ViewModel death.
  *  - Starts/stops [CastSessionService] (foreground service) while a session is live, so
- *    the WebSocket session, [com.playbridge.sender.connection.TvQueueCoordinator] episode
+ *    the WebSocket session and user-supplied playlist
  *    top-ups, and the DLNA local proxy all survive screen-off and app backgrounding.
  *  - Idle background stand-down (default): after a grace period with nothing casting,
  *    soft-close the native socket and drop the Connected FGS to save battery unless the
@@ -341,11 +341,6 @@ class CastSessionManager(
         val at = android.os.SystemClock.uptimeMillis()
         _remoteExternalPlayback.update { it.copy(status = status, loadGeneration = generation, sequence = it.sequence + 1L, atMs = at) }
     }
-
-    /** Library identity of what's loaded on an external target (null = untracked content). */
-    private val _externalNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
-    val externalNowPlayingMeta: StateFlow<playbridge.VisualMetadata?> =
-        _externalNowPlayingMeta.asStateFlow()
 
     private var externalStatusJob: Job? = null
     private var externalProxyLease: AutoCloseable? = null
@@ -1141,7 +1136,6 @@ class CastSessionManager(
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
-        _externalNowPlayingMeta.value = null
         _lastEffectiveStreamRoute.value = null
         _preferredStreamRoute.value = StreamRouteMode.VIA_PHONE
         releaseNativeLink("switched to another device")
@@ -1230,7 +1224,6 @@ class CastSessionManager(
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
-        _externalNowPlayingMeta.value = null
         _lastEffectiveStreamRoute.value = null
         if (_route.value is Route.External) {
             _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
@@ -1316,7 +1309,6 @@ class CastSessionManager(
         _externalMediaTitle.value = media.title ?: "Casting media"
         _externalMediaLoaded.value = true
         setActiveStreamRoute(route)
-        _externalNowPlayingMeta.value = media.visualMetadata
         externalLoadJob?.cancel()
         val generation = ++externalLoadGeneration
         castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
@@ -1418,7 +1410,6 @@ class CastSessionManager(
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalMediaTitle.value = null
-        _externalNowPlayingMeta.value = null
     }
 
     fun play() = controlExternal("play") { it.play() }
@@ -1462,7 +1453,6 @@ class CastSessionManager(
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
-        _externalNowPlayingMeta.value = null
         publishExternalStatus(PlaybackStatus(PlaybackState.STOPPED))
     }
 
@@ -1509,11 +1499,10 @@ class CastSessionManager(
      * locally — it drives the session FGS and the NowPlayingBar.
      *
      * Also clears the now-playing identity: callers of this entry point (phone files)
-     * have no library identity, and a stale tmdbId would let the progress tracker
-     * attribute this content to the previously played title.
+     * clear stale receiver snapshots before starting the next item.
      */
     fun notifyNativePlaybackStarted() {
-        connectionCoordinator.startLocalPlaybackSession(null, null, null)
+        connectionCoordinator.startLocalPlaybackSession()
     }
 
     /**
@@ -1756,7 +1745,6 @@ class CastSessionManager(
             _externalMediaLoaded.value = false
             _phonePathActive.value = false
             _externalMediaTitle.value = null
-            _externalNowPlayingMeta.value = null
             publishExternalStatus(PlaybackStatus(
                 PlaybackState.STOPPED,
                 loadEpoch = externalLoadGeneration,
@@ -1766,11 +1754,6 @@ class CastSessionManager(
 
     /** Best-effort stop of phone-side series queues (native + external). Lazy Koin to avoid cycles. */
     private fun stopEpisodeQueues() {
-        runCatchingLogged(TAG, "TvQueueCoordinator.stop failed") {
-            org.koin.core.context.GlobalContext.get()
-                .get<com.playbridge.sender.connection.TvQueueCoordinator>()
-                .stop()
-        }
         runCatchingLogged(TAG, "ExternalQueueCoordinator.stop failed") {
             org.koin.core.context.GlobalContext.get()
                 .get<com.playbridge.sender.connection.ExternalQueueCoordinator>()

@@ -16,6 +16,7 @@ object CollectionSource {
     const val MANUAL = "manual"
     const val IPTV = "iptv"
     const val PHONE_FILE = "phone_file"
+    // Retained only as the source tag of existing saved collection items.
     const val DEBRID = "debrid"
     const val BROWSER = "browser"
     const val HISTORY = "history"
@@ -23,7 +24,7 @@ object CollectionSource {
 
 /**
  * A user-curated, ordered playlist of concrete playable items ([CollectionItemEntity]).
- * Distinct from the TMDB watchlist (Library) and from IPTV sources — items here store
+ * Independent of IPTV sources — items here store
  * everything needed to play directly. See COLLECTIONS_PLAN.md.
  */
 @Entity(tableName = "collections")

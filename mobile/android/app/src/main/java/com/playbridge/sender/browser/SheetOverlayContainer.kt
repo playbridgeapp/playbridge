@@ -25,11 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.playbridge.sender.data.settings.MediaDetectionSettings
 import com.playbridge.sender.cast.CastSheet
 import com.playbridge.sender.cast.DetectedVideo
-import com.playbridge.sender.data.debrid.DebridRepository
-import com.playbridge.sender.data.debrid.DebridUnrestrictedLink
-import com.playbridge.sender.library.MagnetParsingSheet
 import playbridge.PlayPayload
-import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,13 +104,8 @@ fun SheetOverlayContainer(
     onContentClick: (PlayPayload) -> Unit = {},
     onQueueContent: (PlayPayload) -> Unit = {},
 
-    // Magnet Parsing Sheet States
-    interceptedMagnet: String?,
-    interceptedTorrentBytes: ByteArray?,
-    onDismissMagnet: () -> Unit,
-    onPlayMagnetLinks: (List<DebridUnrestrictedLink>) -> Unit
+
 ) {
-    val debridRepository: DebridRepository = koinInject()
     var showMediaDetectionSheet by remember { mutableStateOf(false) }
     var showBrowserSettings by remember { mutableStateOf(false) }
     var showContentBlocking by remember { mutableStateOf(false) }
@@ -284,39 +275,5 @@ fun SheetOverlayContainer(
             }
         }
 
-        // 4. Magnet Parsing Sheet
-        if (interceptedMagnet != null || interceptedTorrentBytes != null) {
-            val context = LocalContext.current
-            var provider by remember(interceptedMagnet, interceptedTorrentBytes) {
-                mutableStateOf<com.playbridge.sender.data.debrid.DebridProvider?>(null)
-            }
-            var hasCheckedProvider by remember(interceptedMagnet, interceptedTorrentBytes) {
-                mutableStateOf(false)
-            }
-
-            LaunchedEffect(interceptedMagnet, interceptedTorrentBytes) {
-                val active = debridRepository.getActiveProvider()
-                provider = active
-                hasCheckedProvider = true
-                if (active == null) {
-                    Toast.makeText(
-                        context,
-                        "No Debrid provider configured. Configure it in Settings.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    onDismissMagnet()
-                }
-            }
-
-            if (hasCheckedProvider && provider != null) {
-                MagnetParsingSheet(
-                    magnetUri = interceptedMagnet,
-                    torrentBytes = interceptedTorrentBytes,
-                    provider = provider!!,
-                    onDismiss = onDismissMagnet,
-                    onPlayLinks = onPlayMagnetLinks
-                )
-            }
-        }
     }
 }

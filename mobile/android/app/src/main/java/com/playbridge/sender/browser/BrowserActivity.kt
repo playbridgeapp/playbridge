@@ -1,6 +1,5 @@
 package com.playbridge.sender.browser
 import androidx.core.content.edit
-import com.playbridge.sender.library.*
 import com.playbridge.sender.cast.*
 import com.playbridge.sender.ui.TvDeviceGuard
 import com.playbridge.sender.ui.WrongDeviceDialog
@@ -13,68 +12,39 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import android.Manifest
-import android.content.pm.PackageManager
 import android.content.pm.ActivityInfo
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.foundation.background
-import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material3.ripple
 import androidx.compose.runtime.*
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import android.content.Intent
-import android.net.Uri
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
@@ -82,9 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
@@ -92,51 +60,32 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.engine.gecko.GeckoEngineView
-import mozilla.components.browser.engine.gecko.GeckoEngineSession
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import mozilla.components.concept.engine.EngineSession
-import mozilla.components.concept.fetch.Response
 import mozilla.components.browser.state.store.BrowserStore
-import mozilla.components.browser.state.state.BrowserState
-import mozilla.components.browser.state.action.TabListAction
-import mozilla.components.browser.state.action.ContentAction
-import mozilla.components.browser.state.state.TabSessionState
-import mozilla.components.browser.state.state.ContentState
 import java.util.UUID
-import mozilla.components.lib.state.Store
 
-import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
-import com.playbridge.sender.history.BookmarksScreen
-import com.playbridge.sender.history.CastHistoryScreen
-import com.playbridge.sender.history.HistoryScreen
-import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.downloads.DownloadConfirmDialog
 import com.playbridge.sender.downloads.DownloadUtils
-import com.playbridge.sender.downloads.DownloadsScreen
 import com.playbridge.sender.downloads.notifications.DownloadNotificationOpen
 import com.playbridge.sender.downloads.notifications.DownloadNotifications
 import com.playbridge.sender.downloads.notifications.openCompletedDownload
 import com.playbridge.sender.downloads.PendingDownload
 import com.playbridge.sender.downloads.PendingPopup
 import com.playbridge.sender.model.TvDevice
-import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import com.playbridge.sender.ui.theme.AppTheme
 import com.playbridge.sender.ui.theme.ThemeController
 import mozilla.components.lib.state.ext.flow
-import com.playbridge.sender.data.history.DatabaseProvider
-import com.playbridge.sender.data.history.HistoryEntity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.zIndex
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
@@ -144,13 +93,10 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
-import com.playbridge.sender.data.history.TabEntity
-import com.playbridge.sender.data.history.HistoryDatabase
 import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.data.settings.SettingsRepository
-import com.playbridge.sender.library.LibraryViewModel
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
@@ -239,7 +185,6 @@ class BrowserActivity : ComponentActivity() {
             )
 
     // Activity's public override is inherited through androidx.core.ComponentActivity,
-    // whose legacy implementation is marked library-only. The required fallback is super.
     @android.annotation.SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
         dispatchRemoteVolumeKey(event) || super.dispatchKeyEvent(event)
@@ -260,7 +205,6 @@ class BrowserActivity : ComponentActivity() {
         PagePlaybackCoordinator(this, connectionViewModel, linkedPageCastCoordinator, lifecycleScope)
     }
     private val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator by inject()
-    private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
     private val historyDao: com.playbridge.sender.data.history.HistoryDao by inject()
     private val searchHistoryDao: com.playbridge.sender.data.history.SearchHistoryDao by inject()
@@ -285,20 +229,7 @@ class BrowserActivity : ComponentActivity() {
      */
     private fun startExternalPlaylist(items: List<PlayPayload>, startIndex: Int = 0) {
         if (items.isEmpty()) return
-        externalQueueCoordinator.start(
-            com.playbridge.sender.connection.TvEpisodeQueuePlan(
-                streamType = "playlist",
-                forcedSource = null,
-                bingeGroup = null,
-                startIndex = startIndex.coerceIn(items.indices),
-                items = items.map { payload ->
-                    com.playbridge.sender.connection.TvQueueEpisode(
-                        streamId = "",
-                        template = payload,
-                    )
-                },
-            )
-        )
+        externalQueueCoordinator.start(items, startIndex)
     }
 
     /**
@@ -681,7 +612,6 @@ class BrowserActivity : ComponentActivity() {
         // Install the bundled video detector extension
         Components.installBundledExtension()
 
-        val libraryViewModel: LibraryViewModel by viewModel()
         val settingsRepository: SettingsRepository by inject()
 
         // Restore tabs
@@ -693,31 +623,7 @@ class BrowserActivity : ComponentActivity() {
         // One-time legacy SharedPreferences migration block
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val legacyPrefs = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-            if (legacyPrefs.getBoolean("needs_datastore_migration", true)) {
-                settingsRepository.setAutoSwitchToRemote(legacyPrefs.getBoolean("auto_switch_to_remote", true))
-                settingsRepository.setMaxAliveTabs(legacyPrefs.getInt("max_alive_tabs", 5))
-                
-                val audioLang = legacyPrefs.getString("preferred_audio_language", null) 
-                    ?: legacyPrefs.getString("preferred_audio_lang", "") ?: ""
-                settingsRepository.setPreferredAudioLang(audioLang)
-                
-                val subLang = legacyPrefs.getString("preferred_subtitle_language", null)
-                    ?: legacyPrefs.getString("preferred_subtitle_lang", "") ?: ""
-                settingsRepository.setPreferredSubtitleLang(subLang)
-                
-                settingsRepository.setDefaultVideoQuality(legacyPrefs.getString("default_video_quality", "Auto") ?: "Auto")
-                
-                val maxBitrateStr = legacyPrefs.getString("auto_stream_max_mbps", null)
-                val maxBitrateDouble = maxBitrateStr?.toDoubleOrNull() ?: legacyPrefs.getInt("max_bitrate_cap_mbps", 0).toDouble()
-                settingsRepository.setMaxBitrateCapMbps(maxBitrateDouble)
-                
-                settingsRepository.setTvPlayerMode(legacyPrefs.getString("tv_player_mode", "tv") ?: "tv")
-                settingsRepository.setDetectVideos(legacyPrefs.getBoolean("detect_videos", true))
-                settingsRepository.setBlockPopups(legacyPrefs.getBoolean("block_popups", true))
-                
-                legacyPrefs.edit { putBoolean("needs_datastore_migration", false) }
-                Log.d("BrowserActivity", "Migrated legacy SharedPreferences to Jetpack DataStore successfully.")
-            }
+            settingsRepository.migrateLegacyPreferences(legacyPrefs)
         }
 
         browserViewModel.restoreTabs(tabManager, Components.store, freshLaunch = savedInstanceState == null && !mediaNotificationLaunch) {
@@ -727,7 +633,7 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             // rememberSaveable + Screen.Saver: survives Activity recreation (memory-pressure
             // destroy while the in-app player / another Activity is in front), so Back
-            // returns to the exact screen — e.g. a library detail page — instead of
+            // returns to the exact screen — e.g. a collection detail page — instead of
             // resetting to the launch Dashboard.
             var currentScreen by androidx.compose.runtime.saveable.rememberSaveable(
                 stateSaver = Screen.Saver
@@ -739,17 +645,7 @@ class BrowserActivity : ComponentActivity() {
             // Remember the main return destination without using it as the launch
             // screen. Dashboard close and Settings still return to the previous area.
             var lastMainScreen by remember {
-                val sp = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                mutableStateOf(
-                    if (currentScreen != Screen.Dashboard) currentScreen
-                    else when (sp.getString("last_main_screen", "browser")) {
-                        "library" -> Screen.Library
-                        "debrid" ->
-                            if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) Screen.DebridLibrary
-                            else Screen.Library
-                        else -> Screen.Browser
-                    }
-                )
+                mutableStateOf(currentScreen.takeUnless { it == Screen.Dashboard } ?: Screen.Browser)
             }
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
@@ -757,10 +653,6 @@ class BrowserActivity : ComponentActivity() {
                 mutableStateOf(currentScreen.takeUnless { it == Screen.Remote } ?: Screen.Browser)
             }
             var remoteOriginBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
-            var pluginManagerReturnTabId by rememberSaveable { mutableStateOf<String?>(null) }
-            LaunchedEffect(currentScreen) {
-                if (currentScreen != Screen.AddonSettings) pluginManagerReturnTabId = null
-            }
             // The place the Dashboard was opened from, so its close (X) returns there. Null on a
             // fresh launch, where X opens Browser. Screens opened from the Dashboard itself
             // (Settings, Phone Files, …) don't replace it when they return to the Dashboard.
@@ -1034,13 +926,6 @@ class BrowserActivity : ComponentActivity() {
             SideEffect {
                 Components.setBridgedApps(installedBridgedApps)
                 Components.activeBridgedAppTabId = activeBridgedAppTabId
-                Components.onNativePluginManagerRequested = { appTabId ->
-                    if (currentScreen == Screen.Browser && isBridgedAppMode && selectedTabId == appTabId) {
-                        pluginManagerReturnTabId = appTabId
-                        currentScreen = Screen.AddonSettings
-                        true
-                    } else false
-                }
                 Components.onBridgedAppExternalNavigation = { appTabId, url ->
                     if (activeBridgedAppTabId == appTabId && store.state.selectedTabId == appTabId &&
                         installedBridgedApps.any { it.tabId == appTabId }) {
@@ -1055,7 +940,6 @@ class BrowserActivity : ComponentActivity() {
                 onDispose {
                     Components.activeBridgedAppTabId = null
                     Components.onBridgedAppExternalNavigation = null
-                    Components.onNativePluginManagerRequested = null
                 }
             }
             LaunchedEffect(currentOrigin, selectedTabId, currentScreen) {
@@ -1112,13 +996,9 @@ class BrowserActivity : ComponentActivity() {
 
             // Persist the main return destination, not the fresh-launch screen.
             LaunchedEffect(currentScreen) {
-                if (currentScreen is Screen.Browser || currentScreen is Screen.Library || currentScreen is Screen.DebridLibrary || currentScreen is Screen.LibraryDetail) {
+                if (currentScreen is Screen.Browser) {
                     lastMainScreen = currentScreen
-                    prefs.edit { putString("last_main_screen", when (currentScreen) {
-                        Screen.Library -> "library"
-                        Screen.DebridLibrary -> "debrid"
-                        else -> "browser"
-                    }) }
+
                 }
             }
 
@@ -1866,13 +1746,7 @@ class BrowserActivity : ComponentActivity() {
             // Back press handling
             var backPressedTime by remember { mutableLongStateOf(0L) }
 
-            // Magnet parsing state
-            var interceptedMagnet by remember { mutableStateOf<String?>(null) }
-            var interceptedTorrentBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-            // Stremio addon install state (set when a stremio:// link is clicked in the browser)
-            var pendingStremioAddon by remember { mutableStateOf<String?>(null) }
-            var isInstallingStremioAddon by remember { mutableStateOf(false) }
 
             // Video detection state — per-tab
             var showVideoSheet by remember { mutableStateOf(false) }
@@ -1981,7 +1855,7 @@ class BrowserActivity : ComponentActivity() {
                     // Give a small buffer for the connection to fully stabilize
                     delay(300)
 
-                    // 1. Check Library Content (highest priority)
+                    // 1. Check explicitly selected media (highest priority)
                     val content = pendingContentPayload
                     if (content != null && videoCount == 0) {
                         val cmd = createSingleVideoCommandJson(
@@ -2000,12 +1874,8 @@ class BrowserActivity : ComponentActivity() {
                         )
                         linkedPageCastCoordinator.supersedeIfActive()
                         if (connectionViewModel.webSocketClient.send(cmd)) {
-                            // Library content — record identity for the progress tracker.
-                            connectionCoordinator.startLocalPlaybackSession(
-                                tmdbId = content.visual_metadata?.tmdb_id?.toIntOrNull(),
-                                season = content.visual_metadata?.season,
-                                episodeStart = content.visual_metadata?.episode,
-                            )
+                            // Clear the previous receiver playback snapshot.
+                            connectionCoordinator.startLocalPlaybackSession()
                             if (autoSwitchToRemote) {
                                 connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                 currentScreen = Screen.Remote
@@ -2029,9 +1899,7 @@ class BrowserActivity : ComponentActivity() {
                                 payload = playbridge.PlaylistPayload(items = video.playlistPayload)
                             )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
-                                // Browser content has no library identity — clear it so the
-                                // progress tracker can't attribute it to the previous title.
-                                connectionCoordinator.startLocalPlaybackSession(null, null, null)
+                                connectionCoordinator.startLocalPlaybackSession()
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                     currentScreen = Screen.Remote
@@ -2056,7 +1924,7 @@ class BrowserActivity : ComponentActivity() {
                                 )
                             )
                             if (connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")) {
-                                connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
+                                connectionCoordinator.startLocalPlaybackSession() // browser content
                                 session?.let { tabManager.pauseMedia(it) }
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -2359,15 +2227,6 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 },
-                onMagnetDetected = { uri ->
-                    interceptedMagnet = uri
-                },
-                onStremioAddonDetected = { uri ->
-                    pendingStremioAddon = uri
-                },
-                onTorrentDownloaded = { bytes ->
-                    interceptedTorrentBytes = bytes
-                },
                 onFullScreenChange = { fullScreen, isPortrait ->
                     isFullscreenVideoPortrait = isPortrait
                     isFullscreen = fullScreen
@@ -2456,10 +2315,6 @@ class BrowserActivity : ComponentActivity() {
                                         },
                                         onNavigate = { url ->
                                             session?.loadUrl(url)
-                                            isEditing = false
-                                        },
-                                        onMagnetDetected = { magnet ->
-                                            interceptedMagnet = magnet
                                             isEditing = false
                                         },
                                         isTvConnected = activeExternalDevice != null ||
@@ -2597,10 +2452,6 @@ class BrowserActivity : ComponentActivity() {
                             Screen.Remote -> {}
                             Screen.Downloads -> {}
                             Screen.Settings -> {}
-                            Screen.Library -> {}
-                            is Screen.LibraryDetail -> {}
-                            Screen.AddonSettings -> {}
-                            Screen.DebridLibrary -> {}
                             Screen.Dashboard -> {}
                             Screen.ScreenMirror -> {}
                             Screen.PhoneFiles -> {}
@@ -2732,26 +2583,6 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = target
                         },
-                        addonSettingsFromBridgedApp = pluginManagerReturnTabId != null,
-                        onAddonSettingsBack = {
-                            val appTab = pluginManagerReturnTabId
-                            pluginManagerReturnTabId = null
-                            if (appTab == null) {
-                                currentScreen = Screen.Library
-                            } else {
-                                val target = resolveRemoteReturnTarget(
-                                    origin = Screen.Browser,
-                                    bridgedAppTabId = appTab,
-                                    apps = bridgedAppStore.apps.value,
-                                    tabUrls = store.state.tabs.associate { it.id to it.content.url },
-                                )
-                                activeBridgedAppTabId = target.bridgedAppTabId
-                                Components.activeBridgedAppTabId = target.bridgedAppTabId
-                                if (target.bridgedAppTabId != null) tabManager.selectTab(target.bridgedAppTabId, store)
-                                else if (store.state.selectedTabId in bridgedAppTabIds) selectNormalBrowserTab()
-                                currentScreen = target.screen
-                            }
-                        },
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
                         onRemoteBack = {
@@ -2793,7 +2624,6 @@ class BrowserActivity : ComponentActivity() {
                         },
                         innerPadding = innerPadding,
                         session = session,
-                        onMagnetDetected = { interceptedMagnet = it },
                         sessions = tabManager.sessions,
                         tabManager = tabManager,
                         store = store,
@@ -2872,7 +2702,7 @@ class BrowserActivity : ComponentActivity() {
                         onFullExit = {
                             // Hard exit: stop binge queues + WS + FGS notif, remove from
                             // recents, then kill the process. finishAndRemoveTask alone can
-                            // leave the Application (and TvQueueCoordinator) alive — users
+                            // leave the Application alive — users
                             // still saw the cast notif and next-episode queue_add after Exit.
                             // TV is not sent Stop; only the phone-side session dies.
                             connectionViewModel.castSessionManager.shutdownForAppExit(
@@ -3127,7 +2957,7 @@ class BrowserActivity : ComponentActivity() {
                              }
                              is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
                          }
-                         // A bundle (e.g. "Play All" from the debrid screen) carries its real items in
+                         // A media bundle carries its real items in
                          // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
                          // not as a single video (otherwise the TV tries to play the sentinel URL).
                          val cmd = if (video.playlistPayload != null) {
@@ -3177,8 +3007,7 @@ class BrowserActivity : ComponentActivity() {
                              else -> false
                          }
                          if (sent) {
-                             // Cast-sheet content is browser-detected — no library identity.
-                             connectionCoordinator.startLocalPlaybackSession(null, null, null)
+                             connectionCoordinator.startLocalPlaybackSession()
                              remoteCastSourceTabId = selectedTabId.takeIf { video.playlistPayload == null }
                              remoteCastTitle = if (video.playlistPayload == null) {
                                  video.title ?: selectedTab?.content?.title ?: "Video from browser"
@@ -3358,40 +3187,7 @@ class BrowserActivity : ComponentActivity() {
                             forcePlaylistSheet = null
                         }
                     },
-                    // Magnet Parsing Sheet States
-                    interceptedMagnet = interceptedMagnet,
-                    interceptedTorrentBytes = interceptedTorrentBytes,
-                    onDismissMagnet = {
-                        interceptedMagnet = null
-                        interceptedTorrentBytes = null
-                    },
-                    onPlayMagnetLinks = { links ->
-                        val videos = links.map { link ->
-                            playbridge.PlayPayload(
-                                url = link.downloadUrl,
-                                title = link.filename,
-                                player_mode = tvPlayerMode.takeIf { it != "tv" },
-                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                max_bitrate_cap_mbps = maxBitrateCapMbps
-                            )
-                        }
-                        val detectedVideo = DetectedVideo(
-                            url = if (links.size == 1) links.first().downloadUrl else "playlist://magnet",
-                            tabId = -1,
-                            timestamp = System.currentTimeMillis(),
-                            isPlayable = true,
-                            detectedBy = "magnet_playlist",
-                            playlistPayload = if (links.size > 1) videos else null
-                        )
-                        scope.launch {
-                            forcePlaylistSheet = detectedVideo
-                            showVideoSheet = true
-                        }
-                        interceptedMagnet = null
-                        interceptedTorrentBytes = null
-                    }
+
                 )
 
                 // Popup Blocked Toast (auto-dismiss, multi-popup count, gesture handling, animations)
@@ -3542,54 +3338,6 @@ class BrowserActivity : ComponentActivity() {
                     }
                  )
 
-                pendingStremioAddon?.let { addonUri ->
-                    // Convert stremio:// to https:// for a readable host, then derive a label.
-                    val httpsUrl = addonUri.replaceFirst("stremio://", "https://")
-                    val host = runCatching { java.net.URI(httpsUrl).host }.getOrNull() ?: httpsUrl
-                    AlertDialog(
-                        onDismissRequest = { if (!isInstallingStremioAddon) pendingStremioAddon = null },
-                        title = { Text("Install Stremio addon?") },
-                        text = {
-                            Column {
-                                Text(host, style = MaterialTheme.typography.titleSmall)
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    httpsUrl,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 3,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(
-                                enabled = !isInstallingStremioAddon,
-                                onClick = {
-                                    isInstallingStremioAddon = true
-                                    scope.launch {
-                                        val result = runCatching { addonRepository.installAddon(addonUri) }.getOrNull()
-                                        isInstallingStremioAddon = false
-                                        pendingStremioAddon = null
-                                        Toast.makeText(
-                                            this@BrowserActivity,
-                                            if (result != null) "Installed: ${result.name}" else "Failed to install addon",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            ) {
-                                Text(if (isInstallingStremioAddon) "Installing…" else "Install")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                enabled = !isInstallingStremioAddon,
-                                onClick = { pendingStremioAddon = null }
-                            ) { Text("Cancel") }
-                        }
-                    )
-                }
 
                 if (showBrowserConnectDialog) PlayOnSheet(
                     onDismiss = { showBrowserConnectDialog = false },

@@ -7,7 +7,6 @@ import com.playbridge.sender.data.settings.SettingsRepository
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -25,8 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
-import com.playbridge.sender.data.history.DatabaseProvider
-import com.playbridge.sender.data.library.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,50 +37,18 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     val preferredResolution by settingsRepository.defaultVideoQuality.collectAsState(initial = "Auto")
     var resolutionExpanded by remember { mutableStateOf(false) }
 
-    var autoSelectEnabled by remember {
-        mutableStateOf(browserPrefs.getBoolean("auto_select_enabled", false))
-    }
-
-    val addonDao = remember {
-        DatabaseProvider.getDatabase(context).addonDao()
-    }
-    val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
-    val streamAddons = remember(installedAddons) {
-        installedAddons.filter { it.isEnabled && it.supportsResource("stream") && it.isFeatureEnabled("stream") }
-    }
-
-    var autoAddon by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_addon", "") ?: "")
-    }
-    var addonExpanded by remember { mutableStateOf(false) }
-
-    var autoSourceTypes by remember {
-        mutableStateOf(SourceTypeFilter.parseCsv(browserPrefs.getString("auto_stream_source_types", "")))
-    }
-
     // --- Language Preferences ---
     val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsState(initial = "")
     var audioExpanded by remember { mutableStateOf(false) }
 
     val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
     var subExpanded by remember { mutableStateOf(false) }
-    val sendSubtitlesToTv by settingsRepository.sendSubtitlesToTv.collectAsState(initial = true)
     val hideEmptyCastSheetTabs by settingsRepository.hideEmptyCastSheetTabs.collectAsState(initial = true)
 
-    var minSizeText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_min_gb", "") ?: "")
-    }
-    var maxSizeText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_max_gb", "") ?: "")
-    }
-    var minBitrateText by remember {
-        mutableStateOf(browserPrefs.getString("auto_stream_min_mbps", "") ?: "")
-    }
-
+    val queueWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
     val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
     var maxBitrateText by remember { mutableStateOf("") }
 
-    val tvPrefetchWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
     
     LaunchedEffect(maxBitrateCapMbps) {
         maxBitrateText = if (maxBitrateCapMbps > 0.0) maxBitrateCapMbps.toString() else ""
@@ -135,7 +100,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     value = SubtitlePreferences.videoQualities.find { it.second == preferredResolution }?.first ?: "Auto",
                     onValueChange = {},
                     label = { Text("Preferred Resolution") },
-                    supportingText = { Text("Used for both auto-selection and player track defaults.") },
+                    supportingText = { Text("Default video track quality when casting.") },
                     trailingIcon = {
                         IconButton(onClick = { resolutionExpanded = !resolutionExpanded }) {
                             Icon(
@@ -169,214 +134,32 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                 }
             }
 
-            // Auto-Select Switch
-            ListItem(
-                headlineContent = { Text("Auto-Select Matching Stream") },
-                supportingContent = { Text("Automatically launch the first stream matching your Preferred Resolution.") },
-                trailingContent = {
-                    Switch(
-                        checked = autoSelectEnabled,
-                        onCheckedChange = { checked ->
-                            autoSelectEnabled = checked
-                            browserPrefs.edit { putBoolean("auto_select_enabled", checked) }
-                        }
-                    )
+            OutlinedTextField(
+                value = maxBitrateText,
+                onValueChange = { raw ->
+                    if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                        maxBitrateText = raw
+                        scope.launch { settingsRepository.setMaxBitrateCapMbps(raw.toDoubleOrNull() ?: 0.0) }
+                    }
                 },
-                modifier = Modifier.clickable {
-                    autoSelectEnabled = !autoSelectEnabled
-                    browserPrefs.edit { putBoolean("auto_select_enabled", autoSelectEnabled) }
-                }
+                label = { Text("Maximum video bitrate (Mbps)") },
+                supportingText = { Text("Leave empty for no limit.") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
 
-            // Bitrate Constraints
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedTextField(
-                    value = minBitrateText,
-                    onValueChange = { raw ->
-                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                            minBitrateText = raw
-                            browserPrefs.edit { putString("auto_stream_min_mbps", raw.trim()) }
-                        }
-                    },
-                    label = { Text("Min Bitrate") },
-                    placeholder = { Text("Mbps") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-                OutlinedTextField(
-                    value = maxBitrateText,
-                    onValueChange = { raw ->
-                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                            maxBitrateText = raw
-                            scope.launch {
-                                val doubleValue = raw.toDoubleOrNull() ?: 0.0
-                                settingsRepository.setMaxBitrateCapMbps(doubleValue)
-                            }
-                            browserPrefs.edit { putString("auto_stream_max_mbps", raw.trim()) }
-                        }
-                    },
-                    label = { Text("Max Bitrate") },
-                    placeholder = { Text("Mbps") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-            }
-            Text(
-                "Filter streams by estimated bitrate. Leave empty for no limit.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            // Size Constraints
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedTextField(
-                    value = minSizeText,
-                    onValueChange = { raw ->
-                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                            minSizeText = raw
-                            browserPrefs.edit { putString("auto_stream_min_gb", raw.trim()) }
-                        }
-                    },
-                    label = { Text("Min Size") },
-                    placeholder = { Text("GB") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-                OutlinedTextField(
-                    value = maxSizeText,
-                    onValueChange = { raw ->
-                        if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
-                            maxSizeText = raw
-                            browserPrefs.edit { putString("auto_stream_max_gb", raw.trim()) }
-                        }
-                    },
-                    label = { Text("Max Size") },
-                    placeholder = { Text("GB") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-            }
-            Text(
-                "Filter streams by file size. Leave empty for no limit.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            // Preferred Addon
-            if (streamAddons.isNotEmpty()) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        readOnly = true,
-                        value = if (autoAddon.isEmpty()) "Any addon" else autoAddon,
-                        onValueChange = {},
-                        label = { Text("Preferred Addon") },
-                        supportingText = { Text("Try streams from this addon first.") },
-                        trailingIcon = {
-                            IconButton(onClick = { addonExpanded = !addonExpanded }) {
-                                Icon(
-                                    if (addonExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                    contentDescription = null
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.matchParentSize().clickable { addonExpanded = !addonExpanded })
-                    DropdownMenu(
-                        expanded = addonExpanded,
-                        onDismissRequest = { addonExpanded = false },
-                        modifier = Modifier.fillMaxWidth(0.9f)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Any addon") },
-                            onClick = {
-                                autoAddon = ""
-                                browserPrefs.edit { putString("auto_stream_addon", "") }
-                                addonExpanded = false
-                            }
-                        )
-                        streamAddons.forEach { addon ->
-                            DropdownMenuItem(
-                                text = { Text(addon.name) },
-                                onClick = {
-                                    autoAddon = addon.name
-                                    browserPrefs.edit { putString("auto_stream_addon", addon.name) }
-                                    addonExpanded = false
-                                }
-                            )
-                        }
-                    }
+            Text("Website queue", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Items requested ahead", modifier = Modifier.weight(1f))
+                IconButton(onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(queueWindow - 1) } }, enabled = queueWindow > 1) {
+                    Icon(Icons.Default.Remove, contentDescription = "Fewer items")
+                }
+                Text("$queueWindow")
+                IconButton(onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(queueWindow + 1) } }, enabled = queueWindow < 10) {
+                    Icon(Icons.Default.Add, contentDescription = "More items")
                 }
             }
-
-            // Source Types
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Preferred Source Types",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    "Prefer streams matching these release types (e.g. Remux, Bluray).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) {
-                    items(SourceTypeFilter.ORDERED) { type ->
-                        FilterChip(
-                            selected = type in autoSourceTypes,
-                            onClick = {
-                                autoSourceTypes = if (type in autoSourceTypes) {
-                                    autoSourceTypes - type
-                                } else {
-                                    autoSourceTypes + type
-                                }
-                                browserPrefs.edit { putString("auto_stream_source_types", SourceTypeFilter.toCsv(autoSourceTypes)) }
-                            },
-                            label = { Text(type.label) }
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // TV episode prefetch window
-            Text("TV Auto-Advance", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                    Text("Episodes queued ahead", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "For series without a play-endpoint addon, how many upcoming episodes the phone resolves and queues on the TV. Higher values keep playing longer if the phone disconnects, but links may expire before they're reached. The phone must stay connected to the TV.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(tvPrefetchWindow - 1) } },
-                        enabled = tvPrefetchWindow > 1
-                    ) { Icon(Icons.Default.Remove, contentDescription = "Fewer") }
-                    Text("$tvPrefetchWindow", style = MaterialTheme.typography.titleMedium, modifier = Modifier.widthIn(min = 20.dp))
-                    IconButton(
-                        onClick = { scope.launch { settingsRepository.setTvPrefetchWindow(tvPrefetchWindow + 1) } },
-                        enabled = tvPrefetchWindow < 10
-                    ) { Icon(Icons.Default.Add, contentDescription = "More") }
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             Text("Audio & Subtitles", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
 
@@ -461,21 +244,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            ListItem(
-                headlineContent = { Text("Send Subtitles to TV") },
-                supportingContent = { Text("Fetch and send addon subtitles automatically when casting from the library") },
-                trailingContent = {
-                    Switch(
-                        checked = sendSubtitlesToTv,
-                        onCheckedChange = { checked ->
-                            scope.launch { settingsRepository.setSendSubtitlesToTv(checked) }
-                        }
-                    )
-                },
-                modifier = Modifier.clickable {
-                    scope.launch { settingsRepository.setSendSubtitlesToTv(!sendSubtitlesToTv) }
-                }
-            )
+
         }
     }
 }

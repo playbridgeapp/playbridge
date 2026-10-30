@@ -17,10 +17,6 @@ sealed class Screen {
     object Bookmarks : Screen()
     object Home : Screen()
     object Remote : Screen()
-    object Library : Screen()
-    object DebridLibrary : Screen()
-    object AddonSettings : Screen()
-    data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
     object Dashboard : Screen()
     object ScreenMirror : Screen()
     object PhoneFiles : Screen()
@@ -31,8 +27,8 @@ sealed class Screen {
 
     /** Heavy destinations that keep large view/image trees alive — transitions use fade only. */
     fun isHeavyScreen(): Boolean = when (this) {
-        Browser, Library, DebridLibrary -> true
-        is LibraryDetail, is IptvDetail -> true
+        Browser -> true
+        is IptvDetail -> true
         else -> false
     }
 
@@ -41,7 +37,7 @@ sealed class Screen {
          * Saver so the current screen survives Activity recreation (e.g. the shell being
          * destroyed for memory while the in-app player sits in front of it — without this,
          * Back from the player landed on the default Browser screen instead of where the
-         * user actually was, like a library detail page).
+         * user actually was, like a media detail page).
          */
         val Saver: androidx.compose.runtime.saveable.Saver<Screen, String> =
             androidx.compose.runtime.saveable.Saver(
@@ -57,15 +53,11 @@ sealed class Screen {
                         Bookmarks -> "bookmarks"
                         Home -> "home"
                         Remote -> "remote"
-                        Library -> "library"
-                        DebridLibrary -> "debridlibrary"
-                        AddonSettings -> "addonsettings"
                         Dashboard -> "dashboard"
                         ScreenMirror -> "screenmirror"
                         PhoneFiles -> "phonefiles"
                         Iptv -> "iptv"
                         Collections -> "collections"
-                        is LibraryDetail -> "librarydetail|${screen.id}|${screen.type}|${screen.source ?: ""}"
                         is IptvDetail -> "iptvdetail|${screen.playlistId}"
                         is CollectionDetail -> "collectiondetail|${screen.collectionId}"
                     }
@@ -84,27 +76,16 @@ sealed class Screen {
                         "bookmarks" -> Bookmarks
                         "home" -> Home
                         "remote" -> Remote
-                        "library" -> Library
-                        "debridlibrary" ->
-                            if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) DebridLibrary else Library
-                        "addonsettings" -> AddonSettings
                         "dashboard" -> Dashboard
                         "screenmirror" -> ScreenMirror
                         "phonefiles" -> PhoneFiles
                         "iptv" -> Iptv
                         "collections" -> Collections
-                        "librarydetail" -> parts.getOrNull(1)?.let { id ->
-                            LibraryDetail(
-                                id = id,
-                                type = parts.getOrNull(2) ?: "movie",
-                                source = parts.getOrNull(3)?.takeIf { it.isNotEmpty() },
-                            )
-                        } ?: Browser
                         "iptvdetail" -> parts.getOrNull(1)?.toLongOrNull()
                             ?.let { IptvDetail(it) } ?: Browser
                         "collectiondetail" -> parts.getOrNull(1)?.toLongOrNull()
                             ?.let { CollectionDetail(it) } ?: Browser
-                        else -> Browser
+                        else -> Dashboard
                     }
                 },
             )

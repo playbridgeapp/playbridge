@@ -22,12 +22,12 @@ import playbridge.SubtitleResource
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RemoteViewModelTest {
-    private class Fixture(val scope: TestScope, features: Set<String> = emptySet(), initial: RemoteReceiverSnapshot = testSnapshot(), profile: RemoteProfile = RemoteProfile.AndroidTv, preferenceStore: RemotePresentationPreferenceStore? = null, progressSource: RemoteQueueProgressSource? = null) {
+    private class Fixture(val scope: TestScope, features: Set<String> = emptySet(), initial: RemoteReceiverSnapshot = testSnapshot(), profile: RemoteProfile = RemoteProfile.AndroidTv, preferenceStore: RemotePresentationPreferenceStore? = null) {
         val transport = FakeNativeRemoteTransport(initial)
         val target = MutableStateFlow<RemoteNativeTarget?>(RemoteNativeTarget(testConfiguration(profile, features), "connection-1"))
         val registry = RemoteControllerRegistry(target, transport, scope.backgroundScope)
         var now = 10L
-        val vm = RemoteViewModel(registry, RemoteInputRouter(), { now }, scope.backgroundScope, preferenceStore, progressSource)
+        val vm = RemoteViewModel(registry, RemoteInputRouter(), { now }, scope.backgroundScope, preferenceStore)
         val effects = mutableListOf<RemoteEffect>()
         init { scope.backgroundScope.launch(UnconfinedTestDispatcher(scope.testScheduler)) { vm.effects.collect { effects += it } } }
         fun tick(position: Long = 10_000L, playing: Boolean = true, fresh: Boolean = true, title: String? = "Episode", generation: Long = 0L) {
@@ -332,35 +332,6 @@ class RemoteViewModelTest {
         assertFalse(store.value.buttonPad)
         assertTrue(f.transport.commands.isEmpty())
         assertTrue(recreated.transport.commands.isEmpty())
-    }
-    @Test fun libraryProgressFlowsIntoStateAndSurvivesTicksButClearsOnQueueReplacement() = runTest {
-        val updates = MutableStateFlow<Map<String, RemoteQueueProgress>>(emptyMap())
-        val requests = mutableListOf<Set<RemoteProgressKey>>()
-        val source = RemoteQueueProgressSource { keys ->
-            requests += keys
-            if (keys.isEmpty()) kotlinx.coroutines.flow.flowOf(emptyMap()) else updates
-        }
-        val raw = testSnapshot()
-        val identified = raw.state.queue!!.items.mapIndexed { index, item -> item.copy(tmdbId = "100", season = 1, episode = index + 1) }
-        val initial = raw.copy(state = raw.state.copy(queue = raw.state.queue.copy(items = identified)))
-        val f = Fixture(this, initial = initial, progressSource = source); runCurrent()
-        val resume = com.playbridge.sender.data.library.PlaybackResumeEntity("tmdb:100:1:2", 100, "tv", 1, 2, positionMs = 50_000, durationMs = 100_000)
-        updates.value = mapOf(resume.contentKey to RemoteQueueProgress(resume = resume)); runCurrent()
-        assertEquals(resume, f.vm.state.value.queueProgress[resume.contentKey]?.resume)
-        val requestCount = requests.size
-        f.tick(position = 11_000); runCurrent()
-        assertEquals(requestCount, requests.size)
-        assertEquals(resume, f.vm.state.value.queueProgress[resume.contentKey]?.resume)
-        val changed = f.transport.snapshot.value
-        f.transport.snapshot.value = changed.copy(state = changed.state.copy(queue = changed.state.queue!!.copy(items = listOf(identified.first().copy(tmdbId = "200")))))
-        runCurrent()
-        assertTrue(f.vm.state.value.queueProgress.isEmpty())
-        updates.value = mapOf(resume.contentKey to RemoteQueueProgress(resume = resume)); runCurrent()
-        assertTrue(f.vm.state.value.queueProgress.isEmpty())
-        f.target.value = null; runCurrent()
-        assertTrue(f.vm.state.value.queueProgress.isEmpty())
-        assertEquals(emptySet<RemoteProgressKey>(), requests.last())
-        assertTrue(f.transport.commands.isEmpty())
     }
 
     @Test fun settingsUpdatesReachOpenRemotesWithoutResettingSessionInputModes() = runTest {

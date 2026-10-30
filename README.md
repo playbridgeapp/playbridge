@@ -97,7 +97,7 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 
 ### 3. Choose your Sender
 
-- 📱 **Android Phone App**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
+- 📱 **Android Phone App**: Browse video sites in the built-in ad-blocked browser, load IPTV playlists, or stream local phone files.
 - 📱 **iPhone / iPad App**: Browse video sites in the built-in ad-blocked browser, load your own M3U playlists, or cast local phone files.
 - 🖥️ **Desktop App (Receiver & Sender)**: Plays incoming casts from phone and extension senders. Also acts as a sender to cast local video files (with drag-and-drop) or stream URLs to TVs.
 - 🧩 **Browser Extension (Firefox & Chrome)**: Detects streams in active browser tabs and casts them to your TV via the Desktop app.
@@ -114,9 +114,9 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 
 **Browse & cast from your phone**
 
-| Console hub | Library & discovery | Library detail screen | Built-in browser |
-|:---:|:---:|:---:|:---:|
-| <img src="docs/screenshots/phone-hub.jpg" alt="Console hub — connected to the TV" width="170"> | <img src="docs/screenshots/phone-library.jpg" alt="Library and discovery" width="170"> | <img src="docs/screenshots/phone-library-details.jpg" alt="Library detail screen" width="170"> | <img src="docs/screenshots/phone-browser.jpg" alt="Built-in browser with cast" width="170"> |
+| Console hub | Built-in browser |
+|:---:|:---:|
+| <img src="docs/screenshots/phone-hub.jpg" alt="Console hub — connected to the TV" width="170"> | <img src="docs/screenshots/phone-browser.jpg" alt="Built-in browser with cast" width="170"> |
 
 **Your phone is the remote**
 
@@ -163,9 +163,8 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 ## Features
 
 - **Browse & detect**: a full phone browser (GeckoView, with built-in ad-blocking) that detects videos on the page — direct files, HLS, DASH, and MSE/blob players — and casts them with one tap.
-- **Library & discovery**: a Stremio-style library with catalogs, add-ons (including sandboxed JavaScript scrapers), a watchlist, and Collections; pick an episode and send it straight to the TV.
 - **Cast anywhere**: native receivers for Android TV / Fire TV, Apple TV, and desktop — or cast to any DLNA/UPnP renderer without installing anything on it.
-- **Binge-ready**: episode queue with lazy auto-advance, watch-progress tracking, and resume ("Resume · 23:14") that actually seeks the TV to where you left off.
+- **Playlists**: queue detected browser media and local phone files for playback on a receiver.
 - **Phone as remote**: touchpad, D-pad, keyboard, and transport controls, context-aware for the browser and player.
 - **Local files & IPTV**: cast videos from your phone's storage to any receiver, and load M3U/IPTV playlists.
 - **Downloads**: save streams to your phone with a WorkManager-backed queue, on-the-fly HLS→MP4 transmuxing, and publishing to your gallery.
@@ -184,12 +183,10 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Stream quality selection | ✓ | ✓ | Via the browser extension | HLS quality selection |
 | Subtitle detection and attachment | ✓ | ✓ | — | Detection only; attachment is not relayed to Desktop yet |
 | Local file casting | ✓ | ✓ | ✓, including drag-and-drop and multi-file playlists | — |
-| Library, discovery, and add-ons | ✓ | — | — | — |
-| Debrid integrations | ✓ in supported builds | — | — | — |
 | IPTV and custom collections | ✓ | ✓ | — | — |
 | Downloads | ✓ | — | — | — |
 | Ad blocking | uBlock Origin | WebKit content blocker with EasyList and custom rules | — | — |
-| Queue support | ✓, including episode auto-advance | ✓ | Multi-file playlists | Single detected item |
+| Queue support | ✓, including website and local-file playlists | ✓ | Multi-file playlists | Single detected item |
 | Remote controls | Full remote: transport, seek, volume, D-pad, touchpad, keyboard, and track selection | Transport, seek, D-pad, touchpad, and track selection | Transport, seek, and playlist navigation | Use Desktop or a phone remote |
 | Play on the sender device | ✓, native phone player | ✓, native phone player | ✓ | Plays through Desktop when no receiver is selected |
 | Companion app required | No | No | No | PlayBridge Desktop |
@@ -219,7 +216,7 @@ Media and codec support ultimately depends on the selected playback engine, oper
 
 PlayBridge is a monorepo; each component has its own documentation:
 
-1. **[Phone App](mobile/)** (`mobile/`) — The sender: browser, library, video detection, remote. [Changelog](mobile/android/CHANGELOG.md)
+1. **[Phone App](mobile/)** (`mobile/`) — The sender: browser, local files, video detection, remote. [Changelog](mobile/android/CHANGELOG.md)
 2. **[TV Apps](tv/)** (`tv/`) — Receivers for Android TV (player + browser APKs) and Apple TV. [Changelog](tv/android/CHANGELOG.md) · [tvOS changelog](tv/apple/CHANGELOG.md)
 3. **[Desktop App](desktop/)** (`desktop/`) — A Flutter desktop receiver that plays casts via libmpv. [Changelog](desktop/CHANGELOG.md)
 4. **[Browser Extension](extension/)** (`extension/`) — A Firefox and Chromium extension that casts media from desktop browser tabs.
@@ -306,10 +303,7 @@ AI is a development aid, not a substitute for engineering judgment. All contribu
 
 PlayBridge was inspired by — and learned from — these excellent open-source projects. Huge thanks to their authors and communities:
 
-- **[Stremio](https://github.com/Stremio/stremio-web)**
 - **[Swiftfin](https://github.com/jellyfin/Swiftfin)** and **[Streamyfin](https://github.com/streamyfin/streamyfin)**
-- **[NuvioTV](https://github.com/NuvioMedia/NuvioTV)**
-- **[AIOStreams](https://github.com/Viren070/AIOStreams)**
 - **[VLC for iOS/tvOS](https://github.com/videolan/vlc-ios)**
 - **[mpvEx](https://github.com/marlboro-advance/mpvEx)**, **[mpvNova](https://github.com/Laskco/mpvNova)**, and **[Player](https://github.com/moneytoo/Player)**
 

@@ -253,7 +253,7 @@ the PlayBridge control channel.
 ### 8.2 Origin-bound credential forwarding
 
 Credential-bearing headers include at least `Authorization`, `Cookie`,
-`Proxy-Authorization`, API/debrid tokens, and any application-designated secret
+`Proxy-Authorization`, API tokens, and any application-designated secret
 header.
 
 The receiver MUST bind such headers to the original origin: scheme, normalized

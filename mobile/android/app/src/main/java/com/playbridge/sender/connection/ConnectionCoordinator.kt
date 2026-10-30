@@ -8,8 +8,8 @@ import com.playbridge.sender.cast.TvTimeline
 import com.playbridge.sender.cast.parseTvTimeline
 import com.playbridge.sender.cast.remote.RemoteObservation
 import android.os.SystemClock
-import com.playbridge.sender.library.PlaylistEpisode
-import com.playbridge.sender.library.PlaylistUiState
+import com.playbridge.sender.connection.ReceiverQueueItem
+import com.playbridge.sender.connection.ReceiverQueueState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -80,7 +80,7 @@ class ConnectionCoordinator internal constructor(
 
     // TV Playback & Playlist States synced from WebSocket
     val tvActiveContext = MutableStateFlow("idle")
-    val tvPlaylistState = MutableStateFlow<PlaylistUiState?>(null)
+    val tvPlaylistState = MutableStateFlow<ReceiverQueueState?>(null)
     val tvPlayback = MutableStateFlow<TvPlaybackStatus?>(null)
     private val playbackFailures = ReceiverPlaybackFailures()
     internal val playbackFailure = playbackFailures.notice
@@ -103,10 +103,6 @@ class ConnectionCoordinator internal constructor(
     // ones are saved on the TV (for the management UI).
     val tvUserAgentState = MutableStateFlow(TvUserAgentState())
 
-    // TMDb Sync & Now Playing Metadata states
-    val nowPlayingTvId = MutableStateFlow<Int?>(null)
-    val nowPlayingSeason = MutableStateFlow<Int?>(null)
-    val nowPlayingEpisodeStart = MutableStateFlow(1)
 
     /**
      * Player snapshots that arrived while the TV was not in the player (the paused
@@ -150,7 +146,7 @@ class ConnectionCoordinator internal constructor(
                                     for (i in 0 until itemsJson.length()) {
                                         val o = itemsJson.optJSONObject(i) ?: continue
                                         add(
-                                            PlaylistEpisode(
+                                            ReceiverQueueItem(
                                                 index = o.optInt("index", i),
                                                 title = o.optString("title", "Item ${i + 1}"),
                                                 season = o.optInt("season", -1).takeIf { it >= 0 },
@@ -167,7 +163,7 @@ class ConnectionCoordinator internal constructor(
                                     }
                                 }
                             }
-                            val playlist = PlaylistUiState(
+                            val playlist = ReceiverQueueState(
                                 currentIndex = json.optInt("currentIndex", 0),
                                 totalCount = json.optInt("totalCount", 0),
                                 items = episodes,
@@ -407,18 +403,8 @@ class ConnectionCoordinator internal constructor(
         }
     }
 
-    /**
-     * Begin a locally-initiated playback session: record the library identity (nulls
-     * for unidentified content like browser videos/phone files), clear the playback
-     * snapshots left over from the previous session — the TV pushes fresh status and
-     * playlist_status within a second, but the progress tracker must never pair the
-     * NEW identity with the OLD position (it would instantly "watch" the new item) —
-     * and flip the context to "player".
-     */
-    fun startLocalPlaybackSession(tmdbId: Int?, season: Int?, episodeStart: Int?) {
-        nowPlayingTvId.value = tmdbId
-        nowPlayingSeason.value = season
-        nowPlayingEpisodeStart.value = episodeStart ?: 1
+    /** Clear stale receiver snapshots before a locally initiated cast. */
+    fun startLocalPlaybackSession() {
         clearPlaybackSnapshots()
         // The paused player behind the browser must not become this new session.
         heldPlayerSnapshots = HeldPlayerSnapshots()
@@ -508,9 +494,6 @@ class ConnectionCoordinator internal constructor(
                 browserFullscreen = null,
             )
         }
-        nowPlayingTvId.value = null
-        nowPlayingSeason.value = null
-        nowPlayingEpisodeStart.value = 1
         logd("TV player snapshots cleared")
     }
 
@@ -528,7 +511,7 @@ class ConnectionCoordinator internal constructor(
         active == "browser" || active == "browser_external"
 
     private data class HeldPlayerSnapshots(
-        var playlist: PlaylistUiState? = null,
+        var playlist: ReceiverQueueState? = null,
         var playback: TvPlaybackStatus? = null,
         var videoTracks: List<MediaTrack>? = null,
         var audioTracks: List<MediaTrack>? = null,

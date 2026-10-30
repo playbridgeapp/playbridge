@@ -1,7 +1,5 @@
 package com.playbridge.sender.settings
 
-import com.playbridge.sender.library.DebridSettingsScreen
-import com.playbridge.sender.library.LibrarySettingsScreen
 import com.playbridge.sender.cast.proxy.StreamProxySettingsScreen
 import com.playbridge.sender.browser.PopupBlockerSettingsScreen
 import com.playbridge.sender.browser.PageCastConsentSettingsScreen
@@ -27,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Palette
@@ -35,7 +32,6 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -63,8 +59,6 @@ import androidx.compose.ui.unit.dp
 private sealed class SettingsSection {
     data object Hub : SettingsSection()
     data object Appearance : SettingsSection()
-    data object Library : SettingsSection()
-    data object Debrid : SettingsSection()
     data object Proxy : SettingsSection()
     data object Streaming : SettingsSection()
     data object TV : SettingsSection()
@@ -101,8 +95,6 @@ fun SettingsScreen(
         SettingsSection.Hub -> SettingsHubContent(
             onBack = onBack,
             onAppearance = { section = SettingsSection.Appearance },
-            onLibrary = { section = SettingsSection.Library },
-            onDebrid = { section = SettingsSection.Debrid },
             onProxy = { section = SettingsSection.Proxy },
             onStreaming = { section = SettingsSection.Streaming },
             onTV = { section = SettingsSection.TV },
@@ -120,12 +112,6 @@ fun SettingsScreen(
         )
         SettingsSection.PageCastConsent -> PageCastConsentSettingsScreen(
             onBack = { section = SettingsSection.Hub },
-        )
-        SettingsSection.Library -> LibrarySettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.Debrid -> DebridSettingsScreen(
-            onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Proxy -> StreamProxySettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -152,8 +138,6 @@ fun SettingsScreen(
 private fun SettingsHubContent(
     onBack: () -> Unit,
     onAppearance: () -> Unit,
-    onLibrary: () -> Unit,
-    onDebrid: () -> Unit,
     onProxy: () -> Unit,
     onStreaming: () -> Unit,
     onTV: () -> Unit,
@@ -232,20 +216,11 @@ private fun SettingsHubContent(
                         )
                     )
 
-                    add(SettingsHubRow.Header("Library (legacy)"))
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.VideoLibrary,
-                            title = "Library (legacy)",
-                            subtitle = "Metadata API keys and display options",
-                            onClick = onLibrary,
-                        )
-                    )
                     add(
                         SettingsHubRow.Item(
                             icon = Icons.Default.Tune,
                             title = "Streaming Preferences",
-                            subtitle = "Audio, subtitles, and auto-select quality",
+                            subtitle = "Audio, subtitles, and player quality",
                             onClick = onStreaming,
                         )
                     )
@@ -267,16 +242,6 @@ private fun SettingsHubContent(
                             onClick = onProxy,
                         )
                     )
-                    if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) {
-                        add(
-                            SettingsHubRow.Item(
-                                icon = Icons.Default.Cloud,
-                                title = "Debrid",
-                                subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
-                                onClick = onDebrid,
-                            )
-                        )
-                    }
                 }
             }
 

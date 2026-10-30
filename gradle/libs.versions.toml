@@ -48,13 +48,10 @@ tvFoundation = "1.0.0-alpha12"
 tvMaterial = "1.0.1"
 wire = "5.1.0"
 koin = "3.5.6"
-quickjs = "1.0.15"
 materialKolor = "5.0.0-alpha07"
-jsoup = "1.18.1"
 mlkitLanguageId = "17.0.6"
 
 [libraries]
-jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 mlkit-language-id = { module = "com.google.mlkit:language-id", version.ref = "mlkitLanguageId" }
 androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts" }
@@ -174,8 +171,6 @@ ktor-server-websockets = { group = "io.ktor", name = "ktor-server-websockets", v
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
 koin-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koin" }
 
-# QuickJS — sandboxed JS engine for Nuvio scraper plugins
-quickjs-kt = { module = "io.github.dokar3:quickjs-kt", version.ref = "quickjs" }
 
 # MaterialKolor — seeds a full Material 3 ColorScheme from a single key colour
 # (used to re-tint the theme from poster/backdrop art). Phone-only.

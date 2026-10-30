@@ -82,7 +82,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -127,17 +126,11 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.R
-import com.playbridge.sender.cast.QualityFilter
-import com.playbridge.sender.cast.SourceTypeFilter
-import com.playbridge.sender.cast.StreamSelector
 import com.playbridge.sender.cast.openInExternalPlayer
-import com.playbridge.sender.data.library.AddonRepository
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.koin.android.ext.android.inject
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -209,7 +202,7 @@ data class SubtitleTrack(
  * (auto-detected by [DefaultMediaSourceFactory]), forwards request headers for
  * stream URLs that need them, and attaches any sidecar subtitle tracks.
  *
- * Used by the library "Watch on Phone" action and the cast sheet's
+ * Used for local phone playback and the cast sheet's
  * "Play on phone" menu item — neither casts to the TV.
  */
 class PlayerActivity : ComponentActivity() {
@@ -223,11 +216,7 @@ class PlayerActivity : ComponentActivity() {
      */
     private val backgroundModeState = mutableStateOf(false)
     private val isInPipModeState = mutableStateOf(false)
-    private val addonRepository: AddonRepository by inject()
-    private val progressTracker: com.playbridge.sender.connection.PlaybackProgressTracker by inject()
 
-    /** True when this playback carries TMDB identity, so onDestroy flushes a final resume. */
-    private var tracksProgress = false
 
     /** Follow the video's aspect for orientation until the user rotates manually. */
     private var autoOrientationEnabled = true
@@ -346,8 +335,6 @@ class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val lazyStreamIds = intent.getStringArrayListExtra(EXTRA_LAZY_STREAM_IDS)
-        val isLazy = !lazyStreamIds.isNullOrEmpty()
         val playlistUrls = intent.getStringArrayListExtra(EXTRA_PLAYLIST_URLS)
         val isPlaylist = !playlistUrls.isNullOrEmpty()
 
@@ -389,15 +376,7 @@ class PlayerActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        // ── Watch-progress identity (only library-launched playback carries it) ──
-        val tmdbId = intent.getIntExtra(EXTRA_TMDB_ID, 0)
-        val mediaType = intent.getStringExtra(EXTRA_MEDIA_TYPE) ?: "movie"
-        val singleSeason = intent.getIntExtra(EXTRA_SEASON, -1).takeIf { it > 0 }
-        val singleEpisode = intent.getIntExtra(EXTRA_EPISODE, -1).takeIf { it > 0 }
-        val plSeasons = intent.getIntArrayExtra(EXTRA_PLAYLIST_SEASONS)
-        val plEpisodes = intent.getIntArrayExtra(EXTRA_PLAYLIST_EPISODES)
         val startPositionMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L)
-        tracksProgress = tmdbId > 0
 
         Log.i(
             PB_PLAYER,
@@ -436,36 +415,11 @@ class PlayerActivity : ComponentActivity() {
         })
 
         val initialTitle: String?
-        var episodeController: LazyEpisodeController? = null
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
         if (pageSessionId != null) {
             attachedPageSessionId = pageSessionId
             if (!PagePlayerSession.attach(pageSessionId, this, exo) { finish() }) { finish(); return }
             initialTitle = title
-        } else if (isLazy) {
-            // Series auto-play without a Hub/play-endpoint addon: only the first episode's
-            // stream URL is known. We play it immediately and resolve each subsequent episode
-            // on demand (see [LazyEpisodeController]) so the player still advances on its own.
-            val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
-            val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
-                .coerceIn(0, lazyStreamIds!!.lastIndex.coerceAtLeast(0))
-            exo.setMediaItem(buildMediaItem(url!!, contentType, titles.getOrNull(startIndex), subtitles), startPositionMs)
-            val ctrl = LazyEpisodeController(
-                player = exo,
-                context = applicationContext,
-                scope = lifecycleScope,
-                repo = addonRepository,
-                streamType = intent.getStringExtra(EXTRA_LAZY_STREAM_TYPE) ?: "series",
-                forcedSource = intent.getStringExtra(EXTRA_FORCED_SOURCE),
-                bingeGroup = intent.getStringExtra(EXTRA_BINGE_GROUP),
-                streamIds = lazyStreamIds,
-                titles = titles,
-                startIndex = startIndex,
-                prefs = AutoPickPrefs.fromContext(this)
-            )
-            ctrl.prefetch(startIndex + 1)
-            episodeController = ctrl
-            initialTitle = titles.getOrNull(startIndex)
         } else if (isPlaylist) {
             // Series auto-play: load every episode so ExoPlayer advances on its own.
             val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
@@ -482,43 +436,6 @@ class PlayerActivity : ComponentActivity() {
         }
         // prepare() is deferred until PlayerView attaches (see ensurePrepared).
 
-        // ── Report playback to the watch-progress tracker (library content only) ──
-        // The in-app player is a third transport; it pushes ticks here exactly like the
-        // TV/DLNA legs feed the tracker via flows. Identity per playlist slot comes from
-        // the season/episode arrays the library screen supplied.
-        if (tracksProgress) {
-            val controller = episodeController
-            lifecycleScope.launch {
-                while (true) {
-                    val idx = controller?.currentIndex?.intValue ?: exo.currentMediaItemIndex
-                    val season = plSeasons?.getOrNull(idx)?.takeIf { it > 0 } ?: singleSeason
-                    val episode = plEpisodes?.getOrNull(idx)?.takeIf { it > 0 } ?: singleEpisode
-                    val dur = exo.duration
-                    // Lazy mode: currentIndex flips as soon as goTo() is called, but the
-                    // player keeps holding the PREVIOUS episode until its stream resolves
-                    // (or fails). Reporting during that window would pair the new episode's
-                    // identity with the old episode's position — a bogus resume point.
-                    val identityStale = controller != null &&
-                        (controller.isLoading.value || controller.errorMessage.value != null)
-                    if (dur > 0 && !identityStale) {
-                        progressTracker.reportInAppProgress(
-                            com.playbridge.sender.connection.InAppContent(
-                                tmdbId = tmdbId,
-                                mediaType = mediaType,
-                                season = season,
-                                episode = episode,
-                                title = exo.currentMediaItem?.mediaMetadata?.title?.toString(),
-                            ),
-                            positionMs = exo.currentPosition,
-                            durationMs = dur,
-                            isPlaying = exo.isPlaying,
-                        )
-                    }
-                    delay(PROGRESS_REPORT_INTERVAL_MS)
-                }
-            }
-        }
-
         setContent {
             PlayBridgeTheme {
                 val waitingForWebsiteQueue by PagePlayerSession.waitingForNext.collectAsState()
@@ -528,7 +445,6 @@ class PlayerActivity : ComponentActivity() {
                     title = initialTitle,
                     externalHeaders = headers,
                     externalContentType = contentType,
-                    episodeController = episodeController,
                     websiteQueue = pageSessionId != null,
                     waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
                     onClose = { finish() },
@@ -588,7 +504,6 @@ class PlayerActivity : ComponentActivity() {
         // Flush a final resume point and clear the in-app leg (the polling loop is already
         // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
         // activity handles orientation config changes itself.
-        if (tracksProgress) progressTracker.reportInAppStopped()
         attachedPageSessionId?.let(PagePlayerSession::close)
         player?.release()
         player = null
@@ -607,22 +522,9 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_PLAYLIST_URLS = "playlist_urls"
         const val EXTRA_PLAYLIST_TITLES = "playlist_titles"
         const val EXTRA_START_INDEX = "start_index"
-        const val EXTRA_LAZY_STREAM_IDS = "lazy_stream_ids"
-        const val EXTRA_LAZY_STREAM_TYPE = "lazy_stream_type"
-        const val EXTRA_FORCED_SOURCE = "forced_source"
-        const val EXTRA_BINGE_GROUP = "binge_group"
 
-        // Watch-progress identity (set only by library-launched playback).
-        const val EXTRA_TMDB_ID = "tmdb_id"
-        const val EXTRA_MEDIA_TYPE = "media_type"
-        const val EXTRA_SEASON = "season"
-        const val EXTRA_EPISODE = "episode"
-        const val EXTRA_PLAYLIST_SEASONS = "playlist_seasons"
-        const val EXTRA_PLAYLIST_EPISODES = "playlist_episodes"
         const val EXTRA_START_POSITION_MS = "start_position_ms"
 
-        /** How often the in-app player reports position to the progress tracker. */
-        private const val PROGRESS_REPORT_INTERVAL_MS = 5_000L
 
         private const val DEFAULT_UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -707,10 +609,6 @@ object PlayerLauncher {
         headers: Map<String, String>? = null,
         subtitles: List<SubtitleTrack> = emptyList(),
         // Watch-progress identity (movies / single episodes). Omit for untracked playback.
-        tmdbId: Int = 0,
-        mediaType: String? = null,
-        season: Int? = null,
-        episode: Int? = null,
         startPositionMs: Long = 0L,
     ) {
         val intent = Intent(context, PlayerActivity::class.java).apply {
@@ -724,12 +622,6 @@ object PlayerLauncher {
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
             }
             if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
-            if (tmdbId > 0) {
-                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
-                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, mediaType ?: "movie")
-                if (season != null) putExtra(PlayerActivity.EXTRA_SEASON, season)
-                if (episode != null) putExtra(PlayerActivity.EXTRA_EPISODE, episode)
-            }
         }
         context.startActivity(intent)
     }
@@ -744,9 +636,6 @@ object PlayerLauncher {
         titles: List<String>,
         startIndex: Int,
         // Watch-progress identity (series). seasons/episodes are parallel to urls.
-        tmdbId: Int = 0,
-        seasons: List<Int> = emptyList(),
-        episodes: List<Int> = emptyList(),
         startPositionMs: Long = 0L,
     ) {
         if (urls.isEmpty()) return
@@ -754,188 +643,13 @@ object PlayerLauncher {
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_URLS, ArrayList(urls))
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
             putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
-            if (tmdbId > 0) {
-                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
-                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, "tv")
-                if (seasons.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_SEASONS, seasons.toIntArray())
-                if (episodes.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_EPISODES, episodes.toIntArray())
-                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
-            }
         }
         context.startActivity(intent)
     }
 
-    /**
-     * Launches [PlayerActivity] for a series when there is no Hub/play-endpoint addon to
-     * build a deterministic playlist from. Only [firstUrl] (the already-resolved start
-     * episode) is supplied; [streamIds] identify the remaining episodes, which the player
-     * resolves on demand as it advances. See [LazyEpisodeController].
-     */
-    fun startLazyEpisodes(
-        context: Context,
-        firstUrl: String,
-        streamIds: List<String>,
-        titles: List<String>,
-        streamType: String,
-        startIndex: Int,
-        forcedSource: String? = null,
-        bingeGroup: String? = null,
-        // Request headers for the already-resolved [firstUrl] (e.g. Nuvio scraper streams
-        // needing Referer/User-Agent). Lazily-resolved later episodes carry their own.
-        firstHeaders: Map<String, String>? = null,
-        // Watch-progress identity (series). seasons/episodes are parallel to streamIds.
-        tmdbId: Int = 0,
-        seasons: List<Int> = emptyList(),
-        episodes: List<Int> = emptyList(),
-        startPositionMs: Long = 0L,
-    ) {
-        if (firstUrl.isBlank()) return
-        // Single episode (or missing list): no point in lazy mode.
-        if (streamIds.size <= 1) {
-            start(
-                context, firstUrl, titles.getOrNull(startIndex),
-                headers = firstHeaders,
-                tmdbId = tmdbId, mediaType = if (tmdbId > 0) "tv" else null,
-                season = seasons.getOrNull(startIndex), episode = episodes.getOrNull(startIndex),
-                startPositionMs = startPositionMs,
-            )
-            return
-        }
-        val intent = Intent(context, PlayerActivity::class.java).apply {
-            putExtra(PlayerActivity.EXTRA_URL, firstUrl)
-            if (!firstHeaders.isNullOrEmpty()) putExtra(PlayerActivity.EXTRA_HEADERS, HashMap(firstHeaders))
-            putExtra(PlayerActivity.EXTRA_TITLE, titles.getOrNull(startIndex))
-            putStringArrayListExtra(PlayerActivity.EXTRA_LAZY_STREAM_IDS, ArrayList(streamIds))
-            putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
-            putExtra(PlayerActivity.EXTRA_LAZY_STREAM_TYPE, streamType)
-            putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
-            if (!forcedSource.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_FORCED_SOURCE, forcedSource)
-            if (!bingeGroup.isNullOrBlank()) putExtra(PlayerActivity.EXTRA_BINGE_GROUP, bingeGroup)
-            if (tmdbId > 0) {
-                putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
-                putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, "tv")
-                if (seasons.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_SEASONS, seasons.toIntArray())
-                if (episodes.isNotEmpty()) putExtra(PlayerActivity.EXTRA_PLAYLIST_EPISODES, episodes.toIntArray())
-                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
-            }
-        }
-        context.startActivity(intent)
-    }
+
 }
 
-/**
- * Auto-pick preferences mirrored from `browser_prefs` — the same keys the library detail
- * screen uses when it auto-selects a stream. Read once when the player launches.
- */
-data class AutoPickPrefs(
-    val qualityKey: String,
-    val maxMbps: Double?,
-    val addonKey: String,
-    val sourceTypes: Set<SourceTypeFilter>
-) {
-    companion object {
-        fun fromContext(context: Context): AutoPickPrefs {
-            val bp = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-            // Mid-playback we can't surface the manual picker, so fall back to "Auto"
-            // (quality-agnostic, bitrate-ranked) when auto-select is off.
-            val quality =
-                if (bp.getBoolean("auto_select_enabled", false))
-                    bp.getString("default_video_quality", "Auto") ?: "Auto"
-                else "Auto"
-            return AutoPickPrefs(
-                qualityKey = quality,
-                maxMbps = bp.getString("auto_stream_max_mbps", "")?.toDoubleOrNull(),
-                addonKey = bp.getString("auto_stream_addon", "") ?: "",
-                sourceTypes = SourceTypeFilter.parseCsv(bp.getString("auto_stream_source_types", ""))
-            )
-        }
-    }
-}
-
-/**
- * Drives lazy, on-demand episode playback for series without a Hub/play-endpoint addon.
- *
- * The player holds a single media item at a time; [goTo] resolves the requested episode's
- * best stream (via [AddonRepository] + [StreamSelector]) and swaps it in. Auto-advance,
- * the next/previous controls and the episode sheet all route through [goTo]. [prefetch]
- * warms the stream cache for an upcoming episode so the swap is near-instant.
- */
-class LazyEpisodeController(
-    private val player: ExoPlayer,
-    private val context: Context,
-    private val scope: CoroutineScope,
-    private val repo: AddonRepository,
-    private val streamType: String,
-    private val forcedSource: String?,
-    private val bingeGroup: String?,
-    val streamIds: List<String>,
-    val titles: List<String>,
-    startIndex: Int,
-    private val prefs: AutoPickPrefs
-) {
-    val currentIndex = mutableIntStateOf(startIndex)
-    val isLoading = mutableStateOf(false)
-    val errorMessage = mutableStateOf<String?>(null)
-
-    val count: Int get() = streamIds.size
-
-    private var loadJob: Job? = null
-
-    /** Resolve [index]'s best stream, swap it into the player, and start playback. */
-    fun goTo(index: Int) {
-        if (index < 0 || index >= streamIds.size) return
-        loadJob?.cancel()
-        currentIndex.intValue = index
-        errorMessage.value = null
-        isLoading.value = true
-        loadJob = scope.launch {
-            val resolved = resolveBest(index)
-            val streamUrl = resolved?.stream?.url
-            isLoading.value = false
-            if (streamUrl == null) {
-                errorMessage.value = "No stream found for ${titles.getOrNull(index) ?: "this episode"}."
-                return@launch
-            }
-            val mediaItem = PlayerActivity.buildMediaItem(streamUrl, null, titles.getOrNull(index), emptyList())
-            val headers = resolved.stream.headers
-            // Scraper streams may need per-episode Referer/User-Agent. The player's shared
-            // data source only carries the first episode's headers, so rebuild the media
-            // source with this episode's headers when it has any.
-            if (headers.isEmpty()) {
-                player.setMediaItem(mediaItem)
-            } else {
-                player.setMediaSource(PlayerActivity.buildHeaderMediaSource(context, mediaItem, headers))
-            }
-            player.prepare()
-            player.playWhenReady = true
-            prefetch(index + 1)
-        }
-    }
-
-    /** Resolve an upcoming episode in the background to warm the stream cache. */
-    fun prefetch(index: Int) {
-        if (index < 0 || index >= streamIds.size) return
-        scope.launch { runCatching { resolveBest(index) } }
-    }
-
-    private suspend fun resolveBest(index: Int): com.playbridge.sender.data.library.ResolvedStream? {
-        val streams = repo.resolveStreamsOnce(streamType, streamIds[index], forcedSource)
-        // Prefer the same release the user started with (Stremio bingeGroup) so audio/video,
-        // source and quality stay consistent across episodes; fall back to the usual auto-pick.
-        return StreamSelector.matchBingeGroup(streams, bingeGroup)
-            ?: StreamSelector.selectBest(
-                streams = streams,
-                preferredQuality = QualityFilter.fromKey(prefs.qualityKey) ?: QualityFilter.ALL,
-                maxMbps = prefs.maxMbps,
-                runtimeMinutes = 45,
-                preferredAddon = prefs.addonKey.takeIf { it.isNotEmpty() },
-                preferredSourceTypes = prefs.sourceTypes
-            )
-            ?: streams.firstOrNull()
-    }
-}
-
-/** Which vertical/horizontal drag the user is currently performing. */
 private enum class DragMode { NONE, SEEK, VOLUME, BRIGHTNESS }
 
 /** Which track type the selection sheet is showing. */
@@ -950,7 +664,6 @@ private fun PlayerScreen(
     title: String?,
     externalHeaders: Map<String, String>,
     externalContentType: String?,
-    episodeController: LazyEpisodeController? = null,
     onClose: () -> Unit,
     onEnded: () -> Unit,
     websiteQueue: Boolean = false,
@@ -1038,38 +751,23 @@ private fun PlayerScreen(
 
     // Website queues start with one item and grow as Streams supplies episodes.
     // Follow timeline changes rather than retaining the initial single-item list.
-    val isLazy = episodeController != null
     fun readQueueTitles() = (0 until player.mediaItemCount).map {
         player.getMediaItemAt(it).mediaMetadata.title?.toString() ?: "Episode ${it + 1}"
     }
     var nativeEpisodeTitles by remember(player) { mutableStateOf(readQueueTitles()) }
-    val episodeTitles = episodeController?.titles ?: nativeEpisodeTitles
+    val episodeTitles = nativeEpisodeTitles
     val isPlaylist = websiteQueue || episodeTitles.size > 1
     var nativeIndex by remember { mutableIntStateOf(player.currentMediaItemIndex) }
-    val currentIndex = if (isLazy) episodeController!!.currentIndex.intValue else nativeIndex
+    val currentIndex = nativeIndex
     var showEpisodes by remember { mutableStateOf(false) }
 
     /** Navigate to an episode: lazy resolve-and-swap, or a native timeline seek. */
     fun goToEpisode(index: Int) {
         if (index < 0 || index >= episodeTitles.size) return
         errorMessage = null
-        if (isLazy) {
-            episodeController!!.goTo(index)
-        } else {
-            player.seekTo(index, 0L)
-            player.play()
-        }
+        player.seekTo(index, 0L)
+        player.play()
     }
-
-    // Surface lazy-resolution failures ("No stream found…") in the existing error overlay.
-    val controllerError = episodeController?.errorMessage?.value
-    LaunchedEffect(controllerError) {
-        if (controllerError != null) errorMessage = controllerError
-    }
-
-    // While the next episode's stream is being resolved there is no player state change,
-    // so fold the controller's loading flag into the buffering indicator.
-    val isResolvingEpisode = episodeController?.isLoading?.value == true
 
     // Gesture HUD state
     var dragMode by remember { mutableStateOf(DragMode.NONE) }
@@ -1144,12 +842,7 @@ private fun PlayerScreen(
                 // End of the current item. In lazy mode advance to (and resolve) the next
                 // episode; otherwise this is the end of all content, so exit.
                 if (state == Player.STATE_ENDED) {
-                    val ctrl = episodeController
-                    if (ctrl != null && ctrl.currentIndex.intValue < ctrl.count - 1) {
-                        ctrl.goTo(ctrl.currentIndex.intValue + 1)
-                    } else {
-                        onEnded()
-                    }
+                    onEnded()
                 }
             }
             override fun onPlayerError(error: PlaybackException) {
@@ -1407,7 +1100,7 @@ private fun PlayerScreen(
 
             // Buffering spinner — hide once a frame has painted even if ExoPlayer
             // still reports BUFFERING (local content:// edge case).
-            if (((isBuffering || isResolvingEpisode) && !hasRenderedFrame || waitingForWebsiteQueue) &&
+            if ((isBuffering && !hasRenderedFrame || waitingForWebsiteQueue) &&
                 dragMode == DragMode.NONE &&
                 errorMessage == null
             ) {
@@ -1538,7 +1231,7 @@ private fun PlayerScreen(
                             }
                             Button(onClick = {
                                 errorMessage = null
-                                if (isLazy) goToEpisode(currentIndex) else player.prepare()
+                                player.prepare()
                             }) { Text("Retry") }
                         }
                     }

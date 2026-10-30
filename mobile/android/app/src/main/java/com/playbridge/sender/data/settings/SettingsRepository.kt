@@ -1,10 +1,10 @@
 package com.playbridge.sender.data.settings
 
-import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import com.playbridge.sender.browser.CustomUserAgent
 import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -29,23 +29,18 @@ class SettingsRepository(
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
         val MEDIA_DETECTION = stringPreferencesKey("media_detection")
-        val TRACK_WATCH_PROGRESS = booleanPreferencesKey("track_watch_progress")
-        val AUTO_ADD_TO_WATCHING = booleanPreferencesKey("auto_add_to_watching")
         val BLOCK_POPUPS = booleanPreferencesKey("block_popups")
         val POPUP_WHITELIST = stringSetPreferencesKey("popup_whitelist")
         val POPUP_BLACKLIST = stringSetPreferencesKey("popup_blacklist")
         val IPTV_SORT = stringPreferencesKey("iptv_sort")           // "ADDED_DATE" | "NAME"
         val IPTV_SORT_ASCENDING = booleanPreferencesKey("iptv_sort_ascending")
         val IPTV_ACTIVE_FIRST = booleanPreferencesKey("iptv_active_first")
-        val SEND_SUBTITLES_TO_TV = booleanPreferencesKey("send_subtitles_to_tv")
         val HIDE_EMPTY_CAST_SHEET_TABS = booleanPreferencesKey("hide_empty_cast_sheet_tabs")
         val LOGS_EXCLUDE_FILTERS = stringSetPreferencesKey("logs_exclude_filters")
         /** A built-in [com.playbridge.sender.browser.UserAgentPresets] preset id, or a "custom:&lt;id&gt;" selection. */
         val USER_AGENT_PRESET = stringPreferencesKey("user_agent_preset")
         /** JSON array of saved {id, name, value} custom user agents the person has added. */
         val CUSTOM_USER_AGENTS = stringPreferencesKey("custom_user_agents")
-        /** Master switch for Nuvio local JS scrapers. Default OFF — they run third-party code. */
-        val ENABLE_LOCAL_SCRAPERS = booleanPreferencesKey("enable_local_scrapers")
         /**
          * Keep an idle native TV WebSocket (and Connected FGS) while PlayBridge is
          * backgrounded. Default OFF — soft-stand-down after a grace period saves battery.
@@ -68,10 +63,6 @@ class SettingsRepository(
     val mediaDetectionSettings: Flow<MediaDetectionSettings> = dataStore.data.catch { handleException(it) }.map { prefs ->
         MediaDetectionSettings.decode(prefs[Keys.MEDIA_DETECTION]).copy(enabled = prefs[Keys.DETECT_VIDEOS] ?: true)
     }
-    /** Automatically update watchlist progress / watched state from TV playback. */
-    val trackWatchProgress: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.TRACK_WATCH_PROGRESS] ?: true }
-    /** When auto-tracking, add untracked shows/movies to the watchlist as Watching. */
-    val autoAddToWatching: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.AUTO_ADD_TO_WATCHING] ?: true }
     val blockPopups: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.BLOCK_POPUPS] ?: true }
     val popupWhitelist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_WHITELIST] ?: emptySet() }
     val popupBlacklist: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.POPUP_BLACKLIST] ?: emptySet() }
@@ -80,14 +71,11 @@ class SettingsRepository(
     val iptvSortAscending: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_SORT_ASCENDING] ?: false }
     /** When exploring a playlist, float probe-confirmed live channels to the top. */
     val iptvActiveFirst: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_ACTIVE_FIRST] ?: true }
-    val sendSubtitlesToTv: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.SEND_SUBTITLES_TO_TV] ?: true }
     val hideEmptyCastSheetTabs: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.HIDE_EMPTY_CAST_SHEET_TABS] ?: true }
     val logsExcludeFilters: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.LOGS_EXCLUDE_FILTERS] ?: emptySet() }
     val userAgentPreset: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.USER_AGENT_PRESET] ?: "default" }
     val customUserAgents: Flow<List<CustomUserAgent>> = dataStore.data.catch { handleException(it) }
         .map { decodeCustomUserAgents(it[Keys.CUSTOM_USER_AGENTS] ?: "[]") }
-    /** Whether Nuvio local JS scrapers may run. Default false (opt-in; runs third-party code). */
-    val enableLocalScrapers: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.ENABLE_LOCAL_SCRAPERS] ?: false }
     /**
      * Keep idle TV link + Connected notification while the app is backgrounded.
      * Default false — approach B stand-down (close socket after grace when not casting).
@@ -109,17 +97,13 @@ class SettingsRepository(
         it[Keys.DETECT_VIDEOS] = value.enabled
         it[Keys.MEDIA_DETECTION] = MediaDetectionSettings.json.encodeToString(value)
     }
-    suspend fun setTrackWatchProgress(value: Boolean) = write { it[Keys.TRACK_WATCH_PROGRESS] = value }
-    suspend fun setAutoAddToWatching(value: Boolean) = write { it[Keys.AUTO_ADD_TO_WATCHING] = value }
     suspend fun setBlockPopups(value: Boolean) = write { it[Keys.BLOCK_POPUPS] = value }
     suspend fun setIptvSort(value: String) = write { it[Keys.IPTV_SORT] = value }
     suspend fun setIptvSortAscending(value: Boolean) = write { it[Keys.IPTV_SORT_ASCENDING] = value }
     suspend fun setIptvActiveFirst(value: Boolean) = write { it[Keys.IPTV_ACTIVE_FIRST] = value }
-    suspend fun setSendSubtitlesToTv(value: Boolean) = write { it[Keys.SEND_SUBTITLES_TO_TV] = value }
     suspend fun setHideEmptyCastSheetTabs(value: Boolean) = write { it[Keys.HIDE_EMPTY_CAST_SHEET_TABS] = value }
     suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
     suspend fun setUserAgentPreset(value: String) = write { it[Keys.USER_AGENT_PRESET] = value }
-    suspend fun setEnableLocalScrapers(value: Boolean) = write { it[Keys.ENABLE_LOCAL_SCRAPERS] = value }
     suspend fun setKeepTvConnectionInBackground(value: Boolean) =
         write { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] = value }
 
@@ -218,4 +202,27 @@ class SettingsRepository(
         }
         throw throwable
     }
+    suspend fun migrateLegacyPreferences(prefs: android.content.SharedPreferences) = legacyMigrationMutex.withLock {
+        if (!prefs.getBoolean("needs_datastore_migration", true)) return@withLock
+        dataStore.edit { values ->
+            values[Keys.AUTO_SWITCH_TO_REMOTE] = prefs.getBoolean("auto_switch_to_remote", true)
+            values[Keys.MAX_ALIVE_TABS] = prefs.getInt("max_alive_tabs", 5)
+            values[Keys.PREFERRED_AUDIO_LANG] = prefs.getString("preferred_audio_language", null)
+                ?: prefs.getString("preferred_audio_lang", "").orEmpty()
+            values[Keys.PREFERRED_SUBTITLE_LANG] = prefs.getString("preferred_subtitle_language", null)
+                ?: prefs.getString("preferred_subtitle_lang", "").orEmpty()
+            values[Keys.DEFAULT_VIDEO_QUALITY] = prefs.getString("default_video_quality", "Auto") ?: "Auto"
+            values[Keys.MAX_BITRATE_CAP_MBPS] = prefs.getString("auto_stream_max_mbps", null)?.toDoubleOrNull()
+                ?: prefs.getInt("max_bitrate_cap_mbps", 0).toDouble()
+            values[Keys.TV_PLAYER_MODE] = prefs.getString("tv_player_mode", "tv") ?: "tv"
+            values[Keys.DETECT_VIDEOS] = prefs.getBoolean("detect_videos", true)
+            values[Keys.BLOCK_POPUPS] = prefs.getBoolean("block_popups", true)
+        }
+        check(prefs.edit().putBoolean("needs_datastore_migration", false).commit())
+    }
+
+    private companion object {
+        val legacyMigrationMutex = kotlinx.coroutines.sync.Mutex()
+    }
+
 }

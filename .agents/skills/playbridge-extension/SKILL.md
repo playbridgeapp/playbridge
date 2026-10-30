@@ -15,7 +15,7 @@ description: Work on the PlayBridge browser extension. Use for TypeScript, WebEx
 - Load `playbridge-desktop-proxy` when native messaging, Desktop discovery, reconnection, or proxy routing changes.
 - Load `playbridge-protocol` when message envelopes, payloads, pairing, or authentication change.
 - Load `playbridge-android` when Kotlin `VideoDetector` / cast consumption of `playlistBody` / `audioUrl` changes.
-- The GeckoView page API lives in `src/geckoview/page-bridge.ts`, `page-cast.ts`, `plugin-bridge.ts` and `background.ts`. Read root `docs/bridged-apps.md` for `play()`, destination selection, linked queues and native plugin capabilities; coordinate contract changes with the Android host and Apple page API. Companion apps live in the separate `bridged-apps` repo.
+- The GeckoView page API lives in `src/geckoview/page-bridge.ts`, `page-cast.ts` and `background.ts`. Read root `docs/bridged-apps.md` for `play()`, destination selection, and linked queues; coordinate contract changes with the Android host and Apple page API. Companion apps live in the separate `bridged-apps` repo.
 
 ## Work safely
 

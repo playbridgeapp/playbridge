@@ -86,7 +86,6 @@ object Components {
     var onLinkedNativePortDisconnected: (() -> Unit)? = null
     var onLinkedDevicePickerDismissed: (() -> Unit)? = null
     var onLinkedDevicePicked: ((com.playbridge.sender.model.TvDevice) -> Unit)? = null
-    var onNativePluginManagerRequested: ((tabId: String) -> Boolean)? = null
     private val pageCastCallbackGate = OwnedCallbackGate()
     private val pageNavigationGenerations = java.util.concurrent.ConcurrentHashMap<Int, Long>()
     internal val playbackDevicePicker = PendingUiRequest()
@@ -137,13 +136,6 @@ object Components {
         linkedDevicePicker.request()
     }
 
-    /**
-     * Hooks for the engine-level [requestInterceptor] (set by SessionObserverSetup).
-     * Magnet/Stremio links are intercepted for ALL tabs at the engine level —
-     * previously this only worked on the selected tab via a delegate proxy.
-     */
-    @Volatile var onMagnetDetected: ((String) -> Unit)? = null
-    @Volatile var onStremioAddonDetected: ((String) -> Unit)? = null
     @Volatile var bridgedAppOriginsByTabId: Map<String, String> = emptyMap()
         set(value) {
             if (field == value) return
@@ -190,16 +182,6 @@ object Components {
         if (changed) publishDetectionPolicy()
     }
 
-    internal fun nativePluginAppOrigin(tabId: String): String? =
-        bridgedAppOriginsByTabId[tabId]?.takeIf { it in installedBridgedAppOrigins }
-
-    internal fun nativePluginDocumentUrl(tabId: String, session: org.mozilla.geckoview.GeckoSession): String? {
-        val tab = store.state.tabs.firstOrNull { it.id == tabId } ?: return null
-        val engineSession = tab.engineState.engineSession ?: return null
-        if (tabManager.getGeckoSession(engineSession) !== session) return null
-        return tab.content.url
-    }
-
     private fun detectionPolicy(tabId: String? = null): JSONObject = JSONObject().apply {
         put("type", "detection_policy")
         put("revision", detectionPolicyRevision.get())
@@ -212,7 +194,6 @@ object Components {
     private fun publishDetectionPolicy() {
         detectionPolicyRevision.incrementAndGet()
         Handler(Looper.getMainLooper()).post {
-            NativePluginBridge.invalidateUnauthorized()
             VideoDetector.filterDetections(::detectionAllowed, mediaDetectionSettings::allows)
             detectionPolicyPorts.toMap().forEach { (port, tabId) ->
                 runCatching { port.postMessage(detectionPolicy(tabId)) }
@@ -224,7 +205,6 @@ object Components {
     fun bindDetectionPolicy(tabId: String, engineSession: EngineSession) {
         val extension = videoDetectorExtension ?: return
         val session = tabManager.getGeckoSession(engineSession) ?: return
-        NativePluginBridge.bind(session, extension, tabId)
         session.webExtensionController.setMessageDelegate(
             extension,
             object : GeckoWebExtension.MessageDelegate {
@@ -246,7 +226,7 @@ object Components {
 
     /**
      * Engine-level request interceptor (Fenix-style): serves friendly error
-     * pages on load failures and intercepts magnet:/stremio: scheme links.
+     * pages on load failures for unsupported navigation.
      * Replaces the old per-session NavigationDelegate reflection proxy.
      */
     private val requestInterceptor = object : mozilla.components.concept.engine.request.RequestInterceptor {
@@ -260,16 +240,6 @@ object Components {
             isDirectNavigation: Boolean,
             isSubframeRequest: Boolean,
         ): mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse? {
-            if (uri.startsWith("magnet:?")) {
-                Log.d(TAG, "Intercepted magnet link")
-                Handler(Looper.getMainLooper()).post { onMagnetDetected?.invoke(uri) }
-                return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
-            }
-            if (uri.startsWith("stremio://")) {
-                Log.d(TAG, "Intercepted Stremio addon link")
-                Handler(Looper.getMainLooper()).post { onStremioAddonDetected?.invoke(uri) }
-                return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
-            }
             if (!isSubframeRequest) {
                 val tab = store.state.tabs.firstOrNull { it.engineState.engineSession === engineSession }
                 // Warm the origin cache without changing the current document policy.
@@ -396,7 +366,7 @@ object Components {
             preferredColorScheme = mozilla.components.concept.engine.mediaquery.PreferredColorScheme.System,
             // Background tab playback is a core PlayBridge feature.
             suspendMediaWhenInactive = false,
-            // Error pages + magnet:/stremio: scheme handling for all tabs.
+            // Error pages for all tabs.
             requestInterceptor = requestInterceptor,
         )
         GeckoEngine(appContext, defaultSettings = defaultSettings, runtime = runtime)
@@ -528,7 +498,7 @@ object Components {
                 }
                 .diskCache {
                     DiskCache.Builder()
-                        .directory(appContext.cacheDir.resolve("tmdb_image_cache"))
+                        .directory(appContext.cacheDir.resolve("browser_image_cache"))
                         .maxSizeBytes(150L * 1024 * 1024) // 150 MB
                         .build()
                 }

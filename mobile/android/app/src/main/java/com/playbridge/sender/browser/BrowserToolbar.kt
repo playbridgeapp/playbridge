@@ -1,6 +1,5 @@
 package com.playbridge.sender.browser
 
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -15,7 +14,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -44,7 +41,6 @@ import com.playbridge.sender.R
 import com.playbridge.sender.cast.DetectedMediaKind
 import com.playbridge.sender.cast.mediaCategoryAccent
 import com.playbridge.sender.cast.mediaCategoryContentColor
-import androidx.compose.foundation.Image
 
 /**
  * Browser toolbar with navigation controls, URL bar, and menu.
@@ -57,7 +53,6 @@ fun BrowserToolbar(
     onUrlChange: (String) -> Unit,
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
-    onMagnetDetected: (String) -> Unit = {},
     isTvConnected: Boolean,
     onTvClick: () -> Unit,
     onRemoteClick: () -> Unit,
@@ -233,13 +228,7 @@ fun BrowserToolbar(
                     keyboardActions = KeyboardActions(
                         onGo = {
                             val raw = textFieldValue.text.trim()
-                            // A magnet link typed/pasted into the URL bar is handled like a
-                            // clicked magnet link (GeckoView can't load magnet: anyway).
-                            if (raw.startsWith("magnet:", ignoreCase = true)) {
-                                onMagnetDetected(raw)
-                            } else {
-                                onNavigate(normalizeUrl(textFieldValue.text))
-                            }
+                            onNavigate(normalizeUrl(textFieldValue.text))
                             onEditingChange(false)
                             keyboardController?.hide()
                             focusManager.clearFocus()

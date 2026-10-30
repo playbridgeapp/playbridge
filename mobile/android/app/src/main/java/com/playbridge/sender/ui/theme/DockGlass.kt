@@ -5,7 +5,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 
-/** Nuvio-inspired charcoal glass shared by the browser shortcut and cast picker. */
+/** Charcoal glass shared by the browser shortcut and cast picker. */
 internal object DockGlass {
     val tint = Color(0xFF1C1C1E)
     val foreground = Color.White.copy(alpha = 0.9f)

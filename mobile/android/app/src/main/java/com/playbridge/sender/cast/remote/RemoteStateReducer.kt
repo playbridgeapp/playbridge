@@ -44,7 +44,6 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
         val preferred = if (browserBecameActive) RemoteInputMode.Context else old.preferences.modesByContext[incoming.context] ?: RemoteInputMode.Context
         val preferences = if (browserBecameActive) old.preferences.copy(modesByContext = old.preferences.modesByContext + (RemoteContext.Browser to RemoteInputMode.Context)) else old.preferences
         val inputMode = if (identityChanged || browserBecameActive) preferred else old.inputMode
-        val progressKeys = incoming.queue.progressKeys().map(RemoteProgressKey::contentKey).toSet()
         baseCapabilities = incoming.capabilities
         // Up next stays open as the queue moves to another item on the same connection.
         val keepsQueue = old.sheet == RemoteSheet.Queue && incoming.sessionId == old.sessionId && incoming.connection.ready
@@ -54,7 +53,6 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
             sheet = if (reset && !keepsQueue || old.sheet == RemoteSheet.BrowserMore && inputMode != old.inputMode) null else old.sheet,
             pending = if (reset) RemotePendingState() else old.pending,
             notice = if (reset) null else old.notice,
-            queueProgress = old.queueProgress.filterKeys { it in progressKeys },
         )
         return displayWithKeyboardRoute(old)
     }
@@ -100,11 +98,6 @@ internal class RemoteStateReducer(private val clock: () -> Long) {
     }
     fun restorePreferences(preferences: RemotePreferences): RemoteUiState {
         state = state.copy(preferences = preferences)
-        return state
-    }
-    fun queueProgress(progress: Map<String, RemoteQueueProgress>): RemoteUiState {
-        val keys = state.queue.progressKeys().map(RemoteProgressKey::contentKey).toSet()
-        state = state.copy(queueProgress = progress.filterKeys { it in keys })
         return state
     }
     fun applyChannel(channel: TvRemoteChannelState?): RemoteUiState {

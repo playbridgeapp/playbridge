@@ -108,7 +108,7 @@ The root `shared/` directory has no standalone Gradle wrapper. Validate shared c
 - Debug-only, non-persisted logs may include full URLs and all request/response header
   names and values for troubleshooting. This exception applies only to debug builds
   and output that is not retained or exposed through diagnostics endpoints.
-- Release logs and persisted logs require extra caution: never record Debrid tokens,
+- Release logs and persisted logs require extra caution: never record tokens,
   signing or pairing credentials, authenticated stream URLs, sensitive header values,
   or other secrets. Redact URLs and header values before persistence.
 
@@ -183,6 +183,12 @@ subtitles or document authority must check both hosts and their page scripts.
 Companion Streams and Jellyfin clients live in the separate `bridged-apps` repo;
 load that repo's guide/skill when changing those clients. The public `web/site/`
 project does not own companion app UI.
+
+### Android sender scope
+
+The phone has no built-in content catalog or provider-script resolver. Preserve browser casting,
+phone files, IPTV, collections and user-added bridged apps. Upgrade cleanup and backup import must
+keep retired content settings out while preserving these features and receiver credentials.
 
 ### Shared dependency versions
 

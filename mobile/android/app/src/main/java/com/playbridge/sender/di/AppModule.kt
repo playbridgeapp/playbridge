@@ -5,13 +5,8 @@ import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.connection.ConnectionCoordinator
-import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.history.HistoryDatabase
-import com.playbridge.sender.data.library.AddonRepository
-import com.playbridge.sender.data.library.StremioSubtitleService
-import com.playbridge.sender.data.library.TmdbRepository
-import com.playbridge.sender.library.LibraryViewModel
 import okhttp3.OkHttpClient
 import org.koin.android.ext.koin.androidApplication
 import org.koin.android.ext.koin.androidContext
@@ -23,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
@@ -33,10 +27,8 @@ import com.playbridge.sender.data.settings.SettingsRepository
 
 val appModule = module {
     // 1. OkHttpClient Global Singleton.
-    // Perf: raised per-host parallelism so TMDB/addon/IPTV fan-out doesn't queue on
-    // the 5-req/host default and stall Home refresh. Timeouts stay generous (15s):
-    // this client also serves downloads, IPTV M3U fetches, and debrid — a short
-    // global read timeout would fail slow streams, not just catalogs.
+    // Raised per-host parallelism keeps IPTV and download requests from queuing on
+    // the 5-req/host default. Generous timeouts (15s) allow slow streams and M3U fetches.
     single {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -57,10 +49,7 @@ val appModule = module {
     }
     single { get<HistoryDatabase>().historyDao() }
     single { get<HistoryDatabase>().bookmarkDao() }
-    single { get<HistoryDatabase>().addonDao() }
-    single { get<HistoryDatabase>().watchlistDao() }
     single { get<HistoryDatabase>().searchHistoryDao() }
-    single { get<HistoryDatabase>().playbackResumeDao() }
     single { get<HistoryDatabase>().commandHistoryDao() }
     single { get<HistoryDatabase>().tabDao() }
     single { get<HistoryDatabase>().iptvPlaylistDao() }
@@ -68,48 +57,8 @@ val appModule = module {
     single { get<HistoryDatabase>().collectionDao() }
     single { get<HistoryDatabase>().collectionItemDao() }
     single { get<HistoryDatabase>().downloadDao() }
-    single { get<HistoryDatabase>().nuvioScraperDao() }
 
     // 3. Core Repositories & Services
-    single {
-        AddonRepository(
-            addonDao = get(),
-            cacheDir = androidContext().cacheDir,
-            client = get()
-        )
-    }
-    // Nuvio scraper-plugin support: sandboxed JS engine + repository.
-    single<com.playbridge.sender.data.nuvio.NuvioScraperEngine> {
-        com.playbridge.sender.data.nuvio.createNuvioScraperEngine()
-    }
-    single {
-        val settingsRepository: SettingsRepository = get()
-        com.playbridge.sender.data.nuvio.NuvioRepository(
-            addonDao = get(),
-            scraperDao = get(),
-            engine = get(),
-            filesDir = androidContext().filesDir,
-            masterEnabled = { settingsRepository.enableLocalScrapers.first() },
-        )
-    }
-    single {
-        TmdbRepository(
-            context = androidContext(),
-            client = get()
-        )
-    }
-    single {
-        StremioSubtitleService(
-            addonRepository = get(),
-            client = get()
-        )
-    }
-    single {
-        DebridRepository(
-            context = androidContext(),
-            client = get()
-        )
-    }
     single {
         com.playbridge.sender.data.iptv.IptvRepository(
             context = androidContext(),
@@ -191,19 +140,6 @@ val appModule = module {
         )
     }
 
-    // 5b. TvQueueCoordinator — lazy episode queueing for series without a play-endpoint addon
-    single {
-        com.playbridge.sender.connection.TvQueueCoordinator(
-            context = androidContext(),
-            webSocketClient = get(),
-            addonRepository = get(),
-            connectionCoordinator = get(),
-            settingsRepository = get(),
-            subtitleService = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        )
-    }
-
     // 5b'. PhoneQueueCoordinator — phone file lists of any length as a moving TV queue window.
     single {
         com.playbridge.sender.cast.PhoneQueueCoordinator(
@@ -215,11 +151,9 @@ val appModule = module {
         )
     }
 
-    // 5c. ExternalQueueCoordinator — phone-driven episode auto-advance for third-party receivers
+    // 5c. ExternalQueueCoordinator — supplied playlists for third-party receivers
     single {
         com.playbridge.sender.connection.ExternalQueueCoordinator(
-            context = androidContext(),
-            addonRepository = get(),
             castSessionManager = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         )
@@ -232,27 +166,8 @@ val appModule = module {
             connectionCoordinator = get(),
             connectionStore = get(),
             settingsRepository = get(),
-            tvQueueCoordinator = get(),
             externalQueueCoordinator = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
-        )
-    }
-
-    // 5d. PlaybackProgressTracker — auto-updates watchlist progress from TV playback.
-    //     Eager: it has no UI injector (only PlayerActivity injects it), so lazy
-    //     registration would leave TV/DLNA progress tracking dead on direct casts.
-    //     Single-threaded scope: the three transport legs (native/DLNA/in-app) share
-    //     non-thread-safe session state (markedKeys/ensuredKeys, threshold arming);
-    //     serializing the scope makes their interleaving safe.
-    single(createdAtStart = true) {
-        com.playbridge.sender.connection.PlaybackProgressTracker(
-            watchlistDao = get(),
-            resumeDao = get(),
-            tmdb = get(),
-            settingsRepository = get(),
-            connectionCoordinator = get(),
-            castSessionManager = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
         )
     }
 
@@ -334,14 +249,12 @@ val appModule = module {
             get(), get(), get(), get(), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
         )
     }
-    single<com.playbridge.sender.cast.remote.RemoteQueueProgressSource> { com.playbridge.sender.cast.remote.LibraryRemoteQueueProgressSource(get(), get()) }
     single<com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore> { com.playbridge.sender.cast.remote.RemotePresentationPreferences(androidContext()) }
     viewModel {
         com.playbridge.sender.cast.remote.RemoteViewModel(
             get(),
             get(),
             presentationPreferences = get(),
-            queueProgressSource = get(),
             tvRemote = get(),
         )
     }
@@ -362,15 +275,6 @@ val appModule = module {
             discoveryRepository = get(),
             networkStatusRepository = get(),
             remoteTVDirectory = get(),
-        )
-    }
-
-    viewModel {
-        LibraryViewModel(
-            application = androidApplication(),
-            tmdb = get(),
-            database = get(),
-            addonRepository = get()
         )
     }
 

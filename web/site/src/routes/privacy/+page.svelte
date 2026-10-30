@@ -29,15 +29,13 @@
     </ul>
 
     <h3 id="android">Android phone (sender)</h3>
-    <p><strong>On the phone.</strong> Browsing history, bookmarks, open tabs, downloads, cast history, watch progress and resume positions, settings, saved receivers, and any API keys or account details you enter for optional features or backups. Receiver tokens are encrypted with a key held in the Android Keystore. Clear history from the History screen and remove receivers from the Connection screen. Android's own backup can include this app data, depending on your device settings.</p>
+    <p><strong>On the phone.</strong> Browsing history, bookmarks, open tabs, downloads, cast history, settings, saved receivers, and credentials you enter for proxies or backups. Receiver tokens are encrypted with a key held in the Android Keystore. Clear history from the History screen and remove receivers from the Connection screen. Android's own backup can include this app data, depending on your device settings.</p>
     <p><strong>What leaves the phone.</strong></p>
     <ul>
       <li>Websites you open in the built-in GeckoView browser. Searches typed in the address bar go to Google Search.</li>
       <li>Tab icons come from Google's favicon service, which receives the domain of the site in each tab.</li>
       <li>If you install uBlock Origin during setup or from Extensions, it downloads from addons.mozilla.org and the app checks for updates once a day. uBlock Origin downloads its own filter lists.</li>
       <li>On launch, the app asks playbridge.app whether a newer version exists (see <a href="#updates">Update checks</a>).</li>
-      <li>The older built-in library, which is deprecated and will be removed, looks up title details from public metadata services while you browse it. Those services receive the titles and IDs you look up.</li>
-      <li>Optional services you set up yourself, with your own API key or account, receive the requests you make through them. Nothing is sent to them until you set them up.</li>
       <li><strong>Bridged apps</strong> are websites that open in the in-app browser and can cast through PlayBridge. You can add and remove bridged apps. Each bridged app handles data under its own policy.</li>
       <li>If you turn on automatic backup, the app uploads its export file to the S3-compatible storage you configure.</li>
       <li>Subtitle language detection uses Google ML Kit's on-device language ID. The text is not uploaded. Google says ML Kit may send performance and usage metrics to Google.</li>

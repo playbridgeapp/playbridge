@@ -25,10 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
-import com.playbridge.sender.data.debrid.DebridRepository
-import com.playbridge.sender.data.history.BookmarkEntity
-import com.playbridge.sender.data.history.DatabaseProvider
-import com.playbridge.sender.data.library.AddonRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -47,20 +43,15 @@ import mozilla.components.browser.state.state.TabSessionState
 fun ImportExportSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-    val tmdbPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
+    val proxyPrefs = remember { context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
 
-    val addonDao = remember { DatabaseProvider.getDatabase(context).addonDao() }
-    val addonRepository = remember { AddonRepository(addonDao) }
 
     var isImporting by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAction by remember { mutableStateOf<String?>(null) }
-    var exportDebrid by remember { mutableStateOf(true) }
-    var exportTmdb by remember { mutableStateOf(true) }
     var exportTvDefaults by remember { mutableStateOf(true) }
     var exportUiPrefs by remember { mutableStateOf(true) }
-    var exportAddons by remember { mutableStateOf(true) }
     var exportTabs by remember { mutableStateOf(true) }
     var exportBookmarks by remember { mutableStateOf(true) }
     var pendingExportJson by remember { mutableStateOf("") }
@@ -601,18 +592,9 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 Column {
                     Text("Select which settings to export:")
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = exportDebrid, onCheckedChange = { exportDebrid = it })
-                        Text("Debrid Credentials")
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = exportTmdb, onCheckedChange = { exportTmdb = it })
-                        Text("TMDB Credentials")
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = exportAddons, onCheckedChange = { exportAddons = it })
-                        Text("Stremio Addons")
-                    }
+
+
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportTvDefaults, onCheckedChange = { exportTvDefaults = it })
                         Text("TV Player / Browser Defaults")

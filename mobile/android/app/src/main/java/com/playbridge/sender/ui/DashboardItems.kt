@@ -5,14 +5,12 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.playbridge.sender.FlavorConfig
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
 
@@ -51,8 +49,6 @@ internal data class DashboardTileStates(
     val mirror: MirrorTileState = MirrorTileState.Ready,
     val iptvPlaylists: Int? = null,
     val collections: Int? = null,
-    val debridLinked: Boolean? = null,
-    val debridProvider: String? = null,
     val castHistoryEmpty: Boolean? = null,
     val lastCastTitle: String? = null,
 )
@@ -61,7 +57,6 @@ internal data class DashboardTileStates(
 internal fun dashboardItems(
     states: DashboardTileStates = DashboardTileStates(),
     bridgedApps: List<BridgedApp> = emptyList(),
-    debridSupported: Boolean = FlavorConfig.DEBRID_SUPPORTED,
 ): List<DashboardItem> {
     val builtInItems = listOf(
         DashboardItem(
@@ -107,17 +102,6 @@ internal fun dashboardItems(
             gradientColors = listOf(Color(0xFF7B0D45), Color(0xFF9C1155)),
         ),
         DashboardItem(
-            icon = Icons.Default.Cloud,
-            title = "Debrid",
-            subtitle = when {
-                states.debridProvider != null -> states.debridProvider
-                states.debridLinked == false -> "Link an account"
-                else -> "Cloud files"
-            },
-            screen = Screen.DebridLibrary,
-            gradientColors = listOf(Color(0xFF1B5E20), Color(0xFF2E7D32)),
-        ),
-        DashboardItem(
             icon = Icons.Default.History,
             title = "Cast history",
             subtitle = when {
@@ -128,10 +112,7 @@ internal fun dashboardItems(
             screen = Screen.CastHistory,
             gradientColors = listOf(Color(0xFF4E342E), Color(0xFF6D4C41)),
         ),
-    ).filter {
-        // Debrid is FOSS-only; the Play flavor hides the tile entirely.
-        debridSupported || it.screen != Screen.DebridLibrary
-    }
+    )
 
     return builtInItems + if (bridgedApps.isEmpty()) {
         listOf(DashboardItem(
@@ -175,7 +156,6 @@ internal data class DashboardItem(
         Screen.Browser -> DashboardTileOrder.BROWSER_ID
         Screen.ScreenMirror -> "screen-mirror"
         Screen.PhoneFiles -> "phone-files"
-        Screen.DebridLibrary -> "debrid"
         Screen.Iptv -> "iptv"
         Screen.Collections -> "collections"
         Screen.CastHistory -> "cast-history"

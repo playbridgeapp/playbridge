@@ -8,7 +8,6 @@ import com.playbridge.sender.cast.remote.ready
 import com.playbridge.sender.cast.remote.ui.UserScriptsSheet
 import com.playbridge.sender.cast.remote.ui.TvUserAgentSheet
 
-import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.core.net.toUri
@@ -23,8 +22,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.items
@@ -58,8 +55,6 @@ import com.playbridge.sender.data.history.BookmarkDao
 import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.HistoryDao
 import com.playbridge.sender.data.history.HistoryEntity
-import com.playbridge.sender.data.library.AddonRepository
-import com.playbridge.sender.data.library.InstalledAddonEntity
 import com.playbridge.sender.downloads.DownloadsScreen
 import com.playbridge.sender.history.BookmarksScreen
 import com.playbridge.sender.history.CastHistoryScreen
@@ -72,26 +67,15 @@ import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.rememberDashboardTileStates
 import com.playbridge.sender.cast.mirror.ScreenMirrorScreen
-import com.playbridge.shared.protocol.createPlaylistCommandJson
-import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import mozilla.components.browser.engine.gecko.GeckoEngineView
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.EngineSession
-import playbridge.PlaylistPayload
-import playbridge.PlayPayload
 import com.playbridge.sender.cast.*
-import com.playbridge.sender.library.*
-import com.playbridge.sender.ui.theme.DynamicColorTheme
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
-import com.playbridge.sender.data.library.AddonDao
 import com.playbridge.sender.data.settings.SettingsRepository
 import kotlin.math.roundToInt
 
@@ -105,8 +89,6 @@ fun AppNavHost(
     onLastMainScreenChange: (Screen) -> Unit,
     // Restores the source screen and, when applicable, its bridged app session.
     onRemoteBack: () -> Unit,
-    onAddonSettingsBack: () -> Unit = { onScreenChange(Screen.Library) },
-    addonSettingsFromBridgedApp: Boolean = false,
     // Where Back from the Dashboard returns — the screen it was opened from.
     onDashboardClose: () -> Unit = { },
     /** The Dashboard was opened from another screen, so Back returns there. */
@@ -167,7 +149,6 @@ fun AppNavHost(
     onUrlBarTappedChange: (Boolean) -> Unit,
     urlPanelClipboard: ClipboardSuggestion?,
     onUrlPanelClipboardChange: (ClipboardSuggestion?) -> Unit,
-    onMagnetDetected: (String) -> Unit = {},
     contextMenuUrl: String?,
     onContextMenuUrlChange: (String?) -> Unit,
     suggestions: List<HistoryEntity>,
@@ -186,7 +167,6 @@ fun AppNavHost(
 ) {
     // 1. Inject ViewModels & Singletons
     val connectionViewModel: ConnectionViewModel = koinViewModel()
-    val libraryViewModel: LibraryViewModel = koinViewModel()
     val appContext = LocalContext.current
     // Process-wide cast notices (proxy fallback, browser playback failure) as Toasts so
     // they surface even when the Devices snackbar host is not visible.
@@ -203,14 +183,8 @@ fun AppNavHost(
         { addToCollectionDrafts = listOf(it) }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val playbackFailure by connectionCoordinator.playbackFailure.collectAsStateWithLifecycle()
-    val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
-    val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()
     val bookmarkDao: BookmarkDao = koinInject()
-    val addonRepository: AddonRepository = koinInject()
-    val debridRepository: com.playbridge.sender.data.debrid.DebridRepository = koinInject()
-    val subtitleService: com.playbridge.sender.data.library.StremioSubtitleService = koinInject()
-    val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
     val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
     val phoneQueueCoordinator: com.playbridge.sender.cast.PhoneQueueCoordinator = koinInject()
@@ -249,7 +223,6 @@ fun AppNavHost(
     // Authoritative routing intent — reactive so screens follow device-picker changes live.
     val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsStateWithLifecycle()
     val allHistory by historyDao.getAll().collectAsStateWithLifecycle(initialValue = emptyList())
-    val installedAddons by addonDao.getAll().collectAsStateWithLifecycle(initialValue = emptyList())
 
     val context = LocalContext.current
 
@@ -350,20 +323,11 @@ fun AppNavHost(
     val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsStateWithLifecycle(initialValue = true)
     val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsStateWithLifecycle(initialValue = "tv")
     val selectedTab = store.state.tabs.find { it.id == store.state.selectedTabId }
-    // Persistent UI-scoped scroll states for the Library screen inside AppNavHost
-    val libraryMainListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    val libraryDiscoveredMoviesListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    val libraryDiscoveredTvShowsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    val libraryDiscoverGridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
-    val librarySearchResultsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    val libraryCatalogRowScrollStates = remember { mutableStateMapOf<String, LazyListState>() }
 
     // State to determine if search focus should be requested
     var shouldFocusSearch by remember { mutableStateOf(false) }
 
-    // Poster dominant color reported by the library detail screen — themes the
     // NowPlayingBar to match while that screen is up.
-    var libraryDetailAccent by remember { mutableStateOf<androidx.compose.ui.graphics.Color?>(null) }
 
     // Phone Files UI state, hoisted here so the user's tab/search/sort/folder/scroll survive
     // leaving and returning to the screen (AnimatedContent disposes the screen content).
@@ -452,10 +416,10 @@ fun AppNavHost(
             } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
                 slideInVertically { height -> -height } + fadeIn() togetherWith
                         slideOutVertically { height -> height } + fadeOut()
-            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote || targetState == Screen.AddonSettings || targetState is Screen.LibraryDetail) && (initialState == Screen.Browser || initialState == Screen.Library || initialState == Screen.DebridLibrary)) {
+            } else if ((targetState == Screen.Downloads || targetState == Screen.Extensions || targetState == Screen.Settings || targetState == Screen.Bookmarks || targetState == Screen.Remote) && (initialState == Screen.Browser)) {
                 androidx.compose.animation.slideInHorizontally { width -> width } + fadeIn() togetherWith
                         androidx.compose.animation.slideOutHorizontally { width -> -width } + fadeOut()
-            } else if ((targetState == Screen.Browser || targetState == Screen.Library || targetState == Screen.DebridLibrary) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote || initialState == Screen.AddonSettings || initialState is Screen.LibraryDetail)) {
+            } else if ((targetState == Screen.Browser) && (initialState == Screen.Downloads || initialState == Screen.Extensions || initialState == Screen.Settings || initialState == Screen.Bookmarks || initialState == Screen.Remote)) {
                 androidx.compose.animation.slideInHorizontally { width -> -width } + fadeIn() togetherWith
                         androidx.compose.animation.slideOutHorizontally { width -> width } + fadeOut()
             } else {
@@ -722,17 +686,14 @@ fun AppNavHost(
                                                 val headline = when (urlPanelClipboard) {
                                                     is ClipboardSuggestion.Link -> "Link you copied"
                                                     is ClipboardSuggestion.Text -> "Text you copied"
-                                                    is ClipboardSuggestion.Magnet -> "Magnet link you copied"
                                                 }
                                                 val displayText = when (urlPanelClipboard) {
                                                     is ClipboardSuggestion.Link -> urlPanelClipboard.url
                                                     is ClipboardSuggestion.Text -> urlPanelClipboard.query
-                                                    is ClipboardSuggestion.Magnet -> urlPanelClipboard.uri
                                                 }
                                                 val leadingIcon = when (urlPanelClipboard) {
                                                     is ClipboardSuggestion.Link -> Icons.Default.Link
                                                     is ClipboardSuggestion.Text -> Icons.Default.Search
-                                                    is ClipboardSuggestion.Magnet -> Icons.Default.Link
                                                 }
                                                 val trailingIcon = when (urlPanelClipboard) {
                                                     is ClipboardSuggestion.Text -> Icons.Default.Search
@@ -740,7 +701,6 @@ fun AppNavHost(
                                                 }
                                                 val trailingDescription = when (urlPanelClipboard) {
                                                     is ClipboardSuggestion.Text -> "Search"
-                                                    is ClipboardSuggestion.Magnet -> "Open magnet link"
                                                     is ClipboardSuggestion.Link -> "Open link"
                                                 }
                                                 val handleSuggestionClick = {
@@ -750,9 +710,6 @@ fun AppNavHost(
                                                         }
                                                         is ClipboardSuggestion.Text -> {
                                                             session?.loadUrl(searchUrl(urlPanelClipboard.query))
-                                                        }
-                                                        is ClipboardSuggestion.Magnet -> {
-                                                            onMagnetDetected(urlPanelClipboard.uri)
                                                         }
                                                     }
                                                     onIsEditingChange(false)
@@ -1081,487 +1038,6 @@ fun AppNavHost(
                         bookmarkDao = bookmarkDao
                     )
                 }
-                Screen.Library -> {
-                    val selectedTabVal by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
-                    BackHandler {
-                        if (selectedTabVal != 0) {
-                            libraryViewModel.setSelectedTab(0)
-                        } else {
-                            onScreenChange(Screen.Dashboard)
-                        }
-                    }
-                    LibraryScreen(
-                        viewModel = libraryViewModel,
-                        addonRepository = addonRepository,
-                        installedAddons = installedAddons,
-                        onOpenUrl = { url ->
-                            session?.loadUrl(url)
-                            onScreenChange(Screen.Browser)
-                        },
-                        tvName = tvDevice?.name,
-                        onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onRemoteClick = if (
-                            activeExternalDevice != null || remoteTV?.paired == true ||
-                            (castRoute is CastSessionManager.Route.NativeTv &&
-                                connectionState is WebSocketClient.ConnectionState.Connected)
-                        ) {
-                            {
-                                if (activeExternalDevice == null) {
-                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                }
-                                onScreenChange(Screen.Remote)
-                            }
-                        } else null,
-                        onMovieClick = { movieId -> onScreenChange(Screen.LibraryDetail(movieId.toString(), "movie")) },
-                        onTvShowClick = { tvId -> onScreenChange(Screen.LibraryDetail(tvId.toString(), "tv")) },
-                        onAddonItemClick = { id, type, source -> onScreenChange(Screen.LibraryDetail(id, type, source)) },
-                        mainListState = libraryMainListState,
-                        discoveredMoviesListState = libraryDiscoveredMoviesListState,
-                        discoveredTvShowsListState = libraryDiscoveredTvShowsListState,
-                        discoverGridState = libraryDiscoverGridState,
-                        searchResultsListState = librarySearchResultsListState,
-                        catalogRowScrollStates = libraryCatalogRowScrollStates,
-                        shouldFocusSearch = shouldFocusSearch,
-                        onSearchFocused = { shouldFocusSearch = false },
-                        onStartSearch = { shouldFocusSearch = true }
-                    )
-                }
-                is Screen.LibraryDetail -> {
-                    val screen = targetScreen as Screen.LibraryDetail
-                    BackHandler { onScreenChange(Screen.Library) }
-                    val screenNumericId = screen.id.toIntOrNull()
-                    // Re-tint the whole detail screen from the poster's dominant
-                    // colour (reported below via onDominantColorChange).
-                    DynamicColorTheme(seedColor = libraryDetailAccent) {
-                    LibraryDetailScreen(
-                        id = screen.id,
-                        type = screen.type,
-                        forcedSource = screen.source,
-                        addonRepository = addonRepository,
-                        viewModel = libraryViewModel,
-                        tvName = activeExternalDevice?.name
-                            ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
-                        isTvConnected = activeExternalDevice != null || remoteTV?.paired == true ||
-                            (castRoute is CastSessionManager.Route.NativeTv &&
-                                connectionState is WebSocketClient.ConnectionState.Connected),
-                        routeTargetsTv = routeTargetsTv,
-                        onSetWatchRoute = { toTv ->
-                            if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
-                        },
-                        onDominantColorChange = { libraryDetailAccent = it },
-                        onPlayTrailer = { trailerUrl ->
-                            onCastSheetInitialModeChange("browse")
-                            onCastSheetBrowseOverrideChange(trailerUrl)
-                            onShowVideoSheetChange(true)
-                        },
-                        onPlayPayloadToTv = onPlayPayload@{ payload ->
-                            // A single (non-series) cast replaces the TV queue with one item, so any
-                            // binge plan still held by the episode coordinators is now stale. Tear it
-                            // down explicitly — otherwise the old plan keeps `queue_add`-ing the
-                            // previous series onto this new video (context never goes "idle" on a
-                            // back-to-back cast, so the coordinators won't self-clear).
-                            tvQueueCoordinator.stop()
-                            externalQueueCoordinator.stop()
-                            if (castRoute is CastSessionManager.Route.ThisDevice) {
-                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
-                                return@onPlayPayload
-                            }
-                            // A third-party receiver is active — use its protocol target, not WS.
-                            // Receiver-specific unsupported metadata is ignored by the target.
-                            activeExternalDevice?.let { external ->
-                                connectionViewModel.castToSelectedExternal(
-                                    MediaItem(
-                                        url = payload.url,
-                                        headers = payload.headers,
-                                        title = payload.title,
-                                        startPositionMs = payload.start_position_ms ?: 0L,
-                                        visualMetadata = payload.visual_metadata,
-                                    )
-                                )
-                                Toast.makeText(context, "Casting to ${external.name}", Toast.LENGTH_SHORT).show()
-                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
-                                return@onPlayPayload
-                            }
-                            scope.launch {
-                                // Fetch addon subtitles (preferred language) in parallel with the
-                                // connection setup so they can be bundled into the play command without
-                                // delaying it.
-                                val subsDeferred = async {
-                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
-                                    if (!sendSubtitles) return@async emptyList<String>()
-                                    subtitleService.getAllSubtitleUrls(
-                                        payload.visual_metadata?.imdb_id,
-                                        payload.visual_metadata?.season,
-                                        payload.visual_metadata?.episode,
-                                        preferredSubLang,
-                                        videoRelease = subtitleService.filenameFromUrl(payload.url)
-                                    )
-                                }
-
-                                // Ensure connected before sending
-                                val device = tvDevice
-                                if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
-                                    connectionViewModel.connect(device)
-                                    withTimeoutOrNull(8000) {
-                                        connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
-                                    }
-                                }
-
-                                if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    subsDeferred.cancel()
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
-                                    return@launch
-                                }
-
-                                val addonSubs = runCatching { subsDeferred.await() }.getOrDefault(emptyList())
-                                val cmd = createSingleVideoCommandJson(
-                                    payload.copy(
-                                        subtitles = (payload.subtitles + addonSubs).distinct(),
-                                        player_mode = tvPlayerMode.takeIf { it != "tv" },
-                                        preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                        preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                        default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                        max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                    )
-                                )
-                                linkedPageCastCoordinator.supersedeIfActive()
-                                if (connectionViewModel.webSocketClient.send(cmd)) {
-                                    // Record identity (movies too; season stays null) and clear the
-                                    // previous session's stale playback snapshots in one step.
-                                    connectionCoordinator.startLocalPlaybackSession(
-                                        tmdbId = payload.visual_metadata?.tmdb_id?.toIntOrNull(),
-                                        season = payload.visual_metadata?.season,
-                                        episodeStart = payload.visual_metadata?.episode,
-                                    )
-                                    if (autoSwitchToRemote) {
-                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                        onScreenChange(Screen.Remote)
-                                    }
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show() }
-                                }
-                            }
-                        },
-                        onStartTvEpisodeQueue = onStartQueue@{ current, plan ->
-                            if (castRoute is CastSessionManager.Route.ThisDevice) {
-                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
-                                return@onStartQueue
-                            }
-                            // External protocols use phone-driven episode advance: the coordinator
-                            // watches status and resolves/loads the next episode on the same target.
-                            activeExternalDevice?.let { external ->
-                                externalQueueCoordinator.start(plan)
-                                Toast.makeText(
-                                    context,
-                                    "Casting to ${external.name} — episodes will auto-advance",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
-                                return@onStartQueue
-                            }
-                            scope.launch {
-                                // Fetch the start episode's subtitles in parallel with connecting.
-                                val startSubsDeferred = async {
-                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
-                                    if (!sendSubtitles) return@async emptyList<String>()
-                                    subtitleService.getAllSubtitleUrls(
-                                        current.visual_metadata?.imdb_id,
-                                        current.visual_metadata?.season,
-                                        current.visual_metadata?.episode,
-                                        preferredSubLang,
-                                        videoRelease = subtitleService.filenameFromUrl(current.url)
-                                    )
-                                }
-                                // Ensure connected before sending
-                                val device = tvDevice
-                                if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
-                                    connectionViewModel.connect(device)
-                                    withTimeoutOrNull(8000) {
-                                        connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
-                                    }
-                                }
-                                if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    startSubsDeferred.cancel()
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
-                                    return@launch
-                                }
-
-                                // Decorate with the same playback prefs used for single sends.
-                                fun decorate(p: PlayPayload) = p.copy(
-                                    player_mode = tvPlayerMode.takeIf { it != "tv" },
-                                    preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                    preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                    default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                    max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                )
-
-                                val startSubs = runCatching { startSubsDeferred.await() }.getOrDefault(emptyList())
-                                val currentCmd = decorate(current).copy(
-                                    subtitles = (current.subtitles + startSubs).distinct()
-                                )
-
-                                // Send the current episode as a one-item playlist, then let the
-                                // coordinator resolve & queue_add the rest (it appends after this).
-                                linkedPageCastCoordinator.supersedeIfActive()
-                                if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(currentCmd))) {
-                                    connectionCoordinator.startLocalPlaybackSession(
-                                        tmdbId = current.visual_metadata?.tmdb_id?.toIntOrNull(),
-                                        season = current.visual_metadata?.season,
-                                        episodeStart = current.visual_metadata?.episode,
-                                    )
-
-                                    tvQueueCoordinator.start(
-                                        plan.copy(items = plan.items.map { it.copy(template = decorate(it.template)) })
-                                    )
-
-                                    if (autoSwitchToRemote) {
-                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                        onScreenChange(Screen.Remote)
-                                    }
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show() }
-                                }
-                            }
-                        },
-                        onPlayStream = { url, title ->
-                            val mainVideo = DetectedVideo(
-                                url = url,
-                                title = title,
-                                tabId = -1,
-                                timestamp = System.currentTimeMillis(),
-                                isPlayable = true,
-                                detectedBy = "library"
-                            )
-                            scope.launch {
-                                onForcedVideosChange(listOf(mainVideo))
-                                onShowVideoSheetChange(true)
-                            }
-                        },
-                        onSendStreamToTv = onSendStream@{ url, title, headers, contentType ->
-                            if (castRoute is CastSessionManager.Route.ThisDevice) {
-                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
-                                return@onSendStream
-                            }
-                            activeExternalDevice?.let { external ->
-                                connectionViewModel.castToSelectedExternal(
-                                    MediaItem(
-                                        url = url,
-                                        headers = headers ?: emptyMap(),
-                                        // contentType here is the play-payload kind ("movie"/"series");
-                                        // only forward real MIME types to the proxy.
-                                        mimeType = contentType?.takeIf { it.contains('/') },
-                                        title = title,
-                                    )
-                                )
-                                Toast.makeText(context, "Casting to ${external.name}", Toast.LENGTH_SHORT).show()
-                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
-                                return@onSendStream
-                            }
-                            // Proxied sends carry no metadata here — clear identity now
-                            // (synchronously: for series the caller immediately re-sets it
-                            // via onNowPlayingStarted) so movies can't inherit a stale one.
-                            connectionCoordinator.nowPlayingTvId.value = null
-                            connectionCoordinator.nowPlayingSeason.value = null
-                            connectionCoordinator.clearPlaybackSnapshots()
-                            scope.launch {
-                                // Ensure connected before sending
-                                val device = tvDevice
-                                if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
-                                    connectionViewModel.connect(device)
-                                    withTimeoutOrNull(8000) {
-                                        connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
-                                    }
-                                }
-
-                                if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
-                                    return@launch
-                                }
-
-                                val cmd = createSingleVideoCommandJson(
-                                    PlayPayload(
-                                        url = url,
-                                        title = title,
-                                        headers = headers ?: emptyMap(),
-                                        content_type = contentType,
-                                        detected_by = "library",
-                                        player_mode = tvPlayerMode.takeIf { it != "tv" },
-                                        preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                        preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                        default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                        max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                    )
-                                )
-                                linkedPageCastCoordinator.supersedeIfActive()
-                                if (connectionViewModel.webSocketClient.send(cmd)) {
-                                    connectionCoordinator.tvActiveContext.value = "player"
-                                    if (autoSwitchToRemote) {
-                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                        onScreenChange(Screen.Remote)
-                                    }
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Sent to TV", Toast.LENGTH_SHORT).show() }
-                                }
-                            }
-                        },
-                        onPlayPlaylistToTv = onPlayPlaylist@{ playlist ->
-                            // A full Hub playlist replaces the TV queue, so any lazy binge plan
-                            // still held by the episode coordinators is now stale — tear it down
-                            // the same way single-item cast does. Without this, an earlier no-Hub
-                            // series session keeps `queue_add`-ing onto the Hub list (often the
-                            // same S/E at a different stream URL, which used to show as duplicates).
-                            tvQueueCoordinator.stop()
-                            externalQueueCoordinator.stop()
-                            if (castRoute is CastSessionManager.Route.ThisDevice) {
-                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
-                                return@onPlayPlaylist
-                            }
-                            // External protocols use the phone-driven advancer (items already carry
-                            // resolved/Hub URLs).
-                            activeExternalDevice?.let { external ->
-                                if (playlist.items.isEmpty()) return@onPlayPlaylist
-                                externalQueueCoordinator.start(
-                                    com.playbridge.sender.connection.TvEpisodeQueuePlan(
-                                        streamType = "series",
-                                        forcedSource = null,
-                                        bingeGroup = null,
-                                        startIndex = playlist.start_index.coerceIn(0, playlist.items.lastIndex),
-                                        items = playlist.items.map {
-                                            com.playbridge.sender.connection.TvQueueEpisode(streamId = "", template = it)
-                                        }
-                                    )
-                                )
-                                Toast.makeText(
-                                    context,
-                                    "Casting to ${external.name} — episodes will auto-advance",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                if (autoSwitchToRemote) onScreenChange(Screen.Remote)
-                                return@onPlayPlaylist
-                            }
-                            scope.launch {
-                                // Fetch the start episode's subtitles in parallel with connecting.
-                                val startItem = playlist.items.getOrNull(playlist.start_index)
-                                val startVm = startItem?.visual_metadata
-                                val startSubsDeferred = async {
-                                    val sendSubtitles = runCatching { settingsRepository.sendSubtitlesToTv.first() }.getOrDefault(true)
-                                    if (!sendSubtitles) return@async emptyList<String>()
-                                    subtitleService.getAllSubtitleUrls(
-                                        startVm?.imdb_id, startVm?.season, startVm?.episode, preferredSubLang,
-                                        videoRelease = subtitleService.filenameFromUrl(startItem?.url)
-                                    )
-                                }
-                                // Ensure connected before sending
-                                val device = tvDevice
-                                if (device != null && connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Connecting to TV...", Toast.LENGTH_SHORT).show() }
-                                    connectionViewModel.connect(device)
-                                    withTimeoutOrNull(8000) {
-                                        connectionViewModel.connectionState.first { it is WebSocketClient.ConnectionState.Connected }
-                                    }
-                                }
-
-                                if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                                    startSubsDeferred.cancel()
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Could not connect to TV", Toast.LENGTH_SHORT).show() }
-                                    return@launch
-                                }
-
-                                // Bundle the start episode's subtitles into its item; subsequent Hub
-                                // episodes get theirs as they advance (handled by the queue coordinator
-                                // for no-Hub series; Hub playlists rely on the remote's Search Subtitles).
-                                val startSubs = runCatching { startSubsDeferred.await() }.getOrDefault(emptyList())
-                                val playerMode = tvPlayerMode.takeIf { it != "tv" }
-                                val itemsWithPrefs = playlist.items.mapIndexed { idx, it ->
-                                    it.copy(
-                                        subtitles = if (idx == playlist.start_index) (it.subtitles + startSubs).distinct() else it.subtitles,
-                                        player_mode = playerMode,
-                                        preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                        preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                        default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                        max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                    )
-                                }
-                                val finalPlaylist = playlist.copy(items = itemsWithPrefs)
-                                linkedPageCastCoordinator.supersedeIfActive()
-                                if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
-                                    connectionCoordinator.startLocalPlaybackSession(
-                                        tmdbId = screenNumericId,
-                                        // No fabricated fallback: a metadata-less start item must
-                                        // stay unidentified rather than be attributed to season 1.
-                                        season = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season,
-                                        episodeStart = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.episode,
-                                    )
-                                    if (autoSwitchToRemote) {
-                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                        onScreenChange(Screen.Remote)
-                                    }
-                                    withContext(Dispatchers.Main) { Toast.makeText(context, "Playlist sent to TV", Toast.LENGTH_SHORT).show() }
-                                }
-                            }
-                        },
-                        onQueueAdd = onQueueAdd@{ item ->
-                            if (castRoute !is CastSessionManager.Route.NativeTv) {
-                                Toast.makeText(
-                                    context,
-                                    "Queue editing is only available with PlayBridge receivers",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                                return@onQueueAdd
-                            }
-                            val playerMode = tvPlayerMode.takeIf { it != "tv" }
-                            val itemWithPrefs = item.copy(
-                                player_mode = playerMode,
-                                preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                max_bitrate_cap_mbps = maxBitrateCapMbps,
-                            )
-                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(itemWithPrefs))
-                        },
-                        onNowPlayingStarted = { tmdbId, season, startEp ->
-                            connectionCoordinator.nowPlayingTvId.value = tmdbId
-                            connectionCoordinator.nowPlayingSeason.value = season
-                            connectionCoordinator.nowPlayingEpisodeStart.value = startEp
-                        },
-                        onBack = { onScreenChange(Screen.Library) },
-                        onShare = { title, imdbId ->
-                            val shareText = if (imdbId != null && imdbId.startsWith("tt")) {
-                                "Check out $title on IMDb: https://www.imdb.com/title/$imdbId/"
-                            } else {
-                                "Check out $title on PlayBridge"
-                            }
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, shareText)
-                            }
-                            context.startActivity(Intent.createChooser(intent, "Share $title"))
-                        }
-                    )
-                    }
-                }
-                Screen.AddonSettings -> {
-                    BackHandler {
-                        onAddonSettingsBack()
-                        libraryViewModel.setSelectedTab(0)
-                    }
-                    AddonSettingsScreen(
-                        addonRepository = addonRepository,
-                        installedAddons = installedAddons,
-                        onBack = {
-                            onAddonSettingsBack()
-                            libraryViewModel.setSelectedTab(0)
-                        },
-                        showBack = addonSettingsFromBridgedApp,
-                        onOpenUrl = { url ->
-                            tabManager.createTab(url, store)
-                            onScreenChange(Screen.Browser)
-                        },
-                        onRefreshCatalogs = { libraryViewModel.refreshCatalogsNow() },
-                        onClearCatalogCache = { libraryViewModel.clearCatalogCache() },
-                        onCatalogsChanged = { libraryViewModel.refreshCatalogsNow() }
-                    )
-                }
                 Screen.Dashboard -> {
                     // Back returns to the screen the Dashboard was opened from, like the tile
                     // marked OPEN. With nowhere to return to, the Dashboard is "home": Back
@@ -1600,8 +1076,6 @@ fun AppNavHost(
                         nativeConnected = connectionState is WebSocketClient.ConnectionState.Connected,
                         iptvPlaylists = iptvViewModel.playlists.collectAsStateWithLifecycle().value.size,
                         collections = collectionsViewModel.collections.collectAsStateWithLifecycle().value.size,
-                        // Read once per Dashboard visit; the provider only changes in Debrid settings.
-                        debridProvider = remember { debridRepository.getConfiguredProviders().firstOrNull() },
                     )
                     DashboardScreen(
                         tileStates = tileStates,
@@ -1621,7 +1095,7 @@ fun AppNavHost(
                         onRemote = { onScreenChange(Screen.Remote) },
                         onUseThisPhone = { connectionViewModel.selectThisDevice() },
                         onSettings = {
-                            // So Settings back lands on Dashboard (not Browser/Library).
+                            // So Settings back lands on Dashboard (not Browser).
                             onLastMainScreenChange(Screen.Dashboard)
                             onScreenChange(Screen.Settings)
                         },
@@ -1652,30 +1126,6 @@ fun AppNavHost(
                                 )
                             }
                         },
-                    )
-                }
-                Screen.DebridLibrary -> {
-                    BackHandler { onScreenChange(Screen.Dashboard) }
-                    DebridLibraryScreen(
-                        onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onCopyUrl = { linkUrl ->
-                            clipboardManager.setText(AnnotatedString(linkUrl))
-                            Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
-                        },
-                        onShowCastSheet = { video ->
-                            onForcedVideosChange(listOf(video))
-                            onShowVideoSheetChange(true)
-                        },
-                        onAddToCollection = { title, url ->
-                            onAddToCollection(
-                                com.playbridge.sender.data.collection.CollectionItemDraft(
-                                    title = title,
-                                    url = url,
-                                    kind = com.playbridge.sender.data.collection.CollectionItemKind.WEB,
-                                    sourceTag = com.playbridge.sender.data.collection.CollectionSource.DEBRID,
-                                )
-                            )
-                        }
                     )
                 }
                 Screen.Iptv -> {
@@ -1727,19 +1177,14 @@ fun AppNavHost(
             // affordance; hidden on Remote (redundant) and full-bleed screens.
             // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
             // (the device picker lives there already).
-            // Hide on Library Addons tab so the bar doesn't overlay addon management.
-            val libSelectedTab by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
-            val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
-            val showNowPlayingBar = (targetScreen == Screen.Library ||
+            val showNowPlayingBar = (
                 // Phone Files' select mode puts its own action bar where the mini player sits.
                 (targetScreen == Screen.PhoneFiles && !phoneFilesUiState.selecting) ||
                 targetScreen == Screen.Downloads ||
-                targetScreen == Screen.DebridLibrary ||
-                targetScreen is Screen.LibraryDetail ||
                 targetScreen == Screen.Iptv ||
                 targetScreen is Screen.IptvDetail ||
                 targetScreen == Screen.Collections ||
-                targetScreen is Screen.CollectionDetail) && !libraryAddonsTab
+                targetScreen is Screen.CollectionDetail)
             if (showNowPlayingBar) {
                 NowPlayingBarHost(
                     connectionViewModel = connectionViewModel,
@@ -1748,7 +1193,7 @@ fun AppNavHost(
                     tvDevice = tvDevice,
                     activeExternalDevice = activeExternalDevice,
                     castRoute = castRoute,
-                    accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
+                    accentColor = null,
                     showDevicePicker = { showDevicePicker = true },
                     onOpenRemote = {
                         onScreenChange(Screen.Remote)
@@ -1759,12 +1204,9 @@ fun AppNavHost(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        // Clear the system navigation bar, plus the Library's bottom
-                        // NavigationBar (80dp content height) on the Library screen.
                         .padding(
                             bottom = WindowInsets.navigationBars.asPaddingValues()
-                                .calculateBottomPadding() +
-                                if (targetScreen == Screen.Library) 80.dp else 0.dp
+                                .calculateBottomPadding()
                         )
                 )
             }

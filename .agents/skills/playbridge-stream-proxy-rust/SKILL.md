@@ -1,6 +1,6 @@
 ---
 name: playbridge-stream-proxy-rust
-description: Work on the PlayBridge Rust stream proxy server. Use for stream proxying, HLS rewriting, AES-256 MediaFlow encryption/decryption, debrid link resolution, Tokio/Axum web server logic, Docker packaging, or changes under stream-proxy-rust/.
+description: Work on the PlayBridge Rust stream proxy server. Use for stream proxying, HLS rewriting, AES-256 MediaFlow encryption/decryption, Tokio/Axum web server logic, Docker packaging, or changes under stream-proxy-rust/.
 ---
 
 # PlayBridge Rust Stream Proxy
@@ -8,7 +8,7 @@ description: Work on the PlayBridge Rust stream proxy server. Use for stream pro
 ## Establish ownership
 
 - Treat `stream-proxy-rust/` as a high-performance standalone Rust proxy service.
-- Keep proxy routing, HTTP streaming, HLS rewriting, debrid link resolution, and MediaFlow AES-256 encryption within `stream-proxy-rust/`.
+- Keep proxy routing, HTTP streaming, HLS rewriting, and MediaFlow AES-256 encryption within `stream-proxy-rust/`.
 - Coordinate changes that affect Desktop proxy integration with the `playbridge-desktop-proxy` owner.
 - Coordinate embedded sender-services or proxy-upstream ABI changes with `playbridge-rust-core`; include `playbridge-android` when JNI upstream callbacks or the phone proxy are affected.
 - Load `playbridge-protocol` for any cross-platform wire payload or message contract changes.
@@ -16,7 +16,7 @@ description: Work on the PlayBridge Rust stream proxy server. Use for stream pro
 ## Work safely
 
 1. Follow the root `AGENTS.md` rules and preserve unrelated working-tree edits.
-2. Never log Debrid tokens, authentication credentials, private keys, or full authenticated stream URLs.
+2. Never log tokens, authentication credentials, private keys, or full authenticated stream URLs.
 3. Preserve HTTP header forwarding and HLS manifest rewriting without leaking user session tokens in logs or errors.
 4. Ensure non-blocking async IO using Tokio and Axum for high-concurrency stream forwarding.
 5. Preserve the Android host-callback ownership contract: native code requests upstream data, the JVM performs the authenticated origin request, and handles/strings are closed or freed exactly once.

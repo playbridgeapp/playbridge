@@ -14,7 +14,7 @@ import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.QueueCommandResult
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.connection.ReceiverProtocolState
-import com.playbridge.sender.library.PlaylistUiState
+import com.playbridge.sender.connection.ReceiverQueueState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -43,7 +43,7 @@ class WebSocketNativeRemoteTransport(
         val wireContext = values[1] as String
         val context = remoteContextFromWire(wireContext)
         val playback = values[2] as TvPlaybackStatus?
-        val queue = values[3] as PlaylistUiState?
+        val queue = values[3] as ReceiverQueueState?
         val settings = values[7] as TvPlayerSettings
         val observation = values[8] as RemoteObservation
         val mirror = values[9] as ScreenMirrorCoordinator.State

@@ -7,18 +7,13 @@ import com.playbridge.sender.settings.ExportedBookmark
 import com.playbridge.sender.settings.ExportedCollection
 import com.playbridge.sender.settings.ExportedCollectionItem
 import com.playbridge.sender.settings.ExportedIptvPlaylist
-import com.playbridge.sender.settings.ExportedResume
 import com.playbridge.sender.settings.ExportedSettings
 import com.playbridge.sender.settings.ExportedTab
-import com.playbridge.sender.settings.ExportedWatchlist
 import com.playbridge.sender.data.collection.CollectionEntity
 import com.playbridge.sender.data.collection.CollectionItemEntity
 import com.playbridge.sender.data.iptv.IptvPlaylistEntity
-import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.DatabaseProvider
-import com.playbridge.sender.data.library.AddonRepository
-import com.playbridge.sender.data.library.WatchlistEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
@@ -33,47 +28,14 @@ object BackupUtils {
     suspend fun createExportJson(context: Context): String = withContext(Dispatchers.IO) {
         val settingsRepository = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.data.settings.SettingsRepository>()
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        val tmdbPrefs = context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
+        val proxyPrefs = context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
         val database = DatabaseProvider.getDatabase(context)
-        val addonDao = database.addonDao()
 
-        val addons = addonDao.getAllSync()
         val currentBookmarks = database.bookmarkDao().getAllSync().map { 
             ExportedBookmark(url = it.url, title = it.title) 
         }
         val currentTabs = database.tabDao().getAll().map { 
             ExportedTab(id = it.id, url = it.url, title = it.title, parentId = it.parentId) 
-        }
-        val currentWatchlist = database.watchlistDao().getAllSync().map {
-            ExportedWatchlist(
-                tmdbId = it.tmdbId,
-                mediaType = it.mediaType,
-                title = it.title,
-                posterUrl = it.posterUrl,
-                year = it.year,
-                rating = it.rating,
-                addedAt = it.addedAt,
-                status = it.status,
-                userRating = it.userRating,
-                seasonProgress = it.seasonProgress,
-                episodeProgress = it.episodeProgress,
-                notes = it.notes,
-                startedAt = it.startedAt,
-                completedAt = it.completedAt,
-            )
-        }
-        val currentResume = database.playbackResumeDao().getAllSync().map {
-            ExportedResume(
-                contentKey = it.contentKey,
-                tmdbId = it.tmdbId,
-                mediaType = it.mediaType,
-                season = it.season,
-                episode = it.episode,
-                title = it.title,
-                positionMs = it.positionMs,
-                durationMs = it.durationMs,
-                updatedAt = it.updatedAt,
-            )
         }
         // IPTV playlist sources (channels are a cache; re-parsed after import/refresh).
         val currentIptvPlaylists = database.iptvPlaylistDao().observeAll().first().map {
@@ -115,45 +77,32 @@ object BackupUtils {
             tvPrefetchWindow = settingsRepository.tvPrefetchWindow.first(),
             detectVideos = settingsRepository.detectVideos.first(),
             mediaDetection = settingsRepository.mediaDetectionSettings.first(),
-            trackWatchProgress = settingsRepository.trackWatchProgress.first(),
-            autoAddToWatching = settingsRepository.autoAddToWatching.first(),
             blockPopups = settingsRepository.blockPopups.first(),
             popupWhitelist = settingsRepository.popupWhitelist.first().toList(),
             popupBlacklist = settingsRepository.popupBlacklist.first().toList(),
             iptvSort = settingsRepository.iptvSort.first(),
             iptvSortAscending = settingsRepository.iptvSortAscending.first(),
             iptvActiveFirst = settingsRepository.iptvActiveFirst.first(),
-            sendSubtitlesToTv = settingsRepository.sendSubtitlesToTv.first(),
             hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
         )
 
         val exported = ExportedSettings(
-            debridProvider = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_PROVIDER, DebridRepository.PROVIDER_NONE),
-            debridApiKey = tmdbPrefs.getString(DebridRepository.KEY_DEBRID_API_KEY, ""),
-            debridApiKeys = DebridRepository.ALL_PROVIDERS.associateWith {
-                tmdbPrefs.getString(DebridRepository.apiKeyPrefName(it), "") ?: ""
-            }.filterValues { it.isNotBlank() },
-            tmdbApiKey = tmdbPrefs.getString("tmdb_api_key", ""),
-            omdbApiKey = tmdbPrefs.getString("omdb_api_key", ""),
             tvPlayerMode = settingsRepository.tvPlayerMode.first(),
             tvBrowserMode = prefs.getString("tv_browser_mode", "tv"),
-            addonUrls = addons.map { it.manifestUrl },
             tabs = currentTabs,
             bookmarks = currentBookmarks,
-            watchlist = currentWatchlist,
-            resume = currentResume,
             iptvPlaylists = currentIptvPlaylists,
             collections = currentCollections,
             appSettings = appSettings,
-            streamProxyRemoteUrl = tmdbPrefs.getString(
+            streamProxyRemoteUrl = proxyPrefs.getString(
                 com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_URL,
                 "",
             ),
-            streamProxyRemotePassword = tmdbPrefs.getString(
+            streamProxyRemotePassword = proxyPrefs.getString(
                 com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_PASSWORD,
                 "",
             ),
-            streamRouteDefault = tmdbPrefs.getString(
+            streamRouteDefault = proxyPrefs.getString(
                 com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_DEFAULT_ROUTE,
                 com.playbridge.sender.cast.proxy.StreamRouteMode.DIRECT.prefsValue,
             ),
@@ -165,12 +114,11 @@ object BackupUtils {
     suspend fun importFromJson(context: Context, jsonString: String): ImportResult = withContext(Dispatchers.IO) {
         try {
             val settingsRepository = org.koin.core.context.GlobalContext.get().get<com.playbridge.sender.data.settings.SettingsRepository>()
-            val imported = Json { ignoreUnknownKeys = true }.decodeFromString<ExportedSettings>(jsonString)
+            val imported = com.playbridge.sender.settings.SettingsBackupCodec.decode(jsonString)
             
             val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-            val tmdbPrefs = context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
+            val proxyPrefs = context.getSharedPreferences("browser_settings", Context.MODE_PRIVATE)
             val database = DatabaseProvider.getDatabase(context)
-            val addonRepository = AddonRepository(database.addonDao())
 
             prefs.edit().apply {
                 if (imported.tvBrowserMode != null) putString("tv_browser_mode", imported.tvBrowserMode)
@@ -181,14 +129,7 @@ object BackupUtils {
                 settingsRepository.setTvPlayerMode(imported.tvPlayerMode)
             }
 
-            tmdbPrefs.edit().apply {
-                if (imported.tmdbApiKey != null) putString("tmdb_api_key", imported.tmdbApiKey)
-                if (imported.omdbApiKey != null) putString("omdb_api_key", imported.omdbApiKey)
-                if (imported.debridProvider != null) putString(DebridRepository.KEY_DEBRID_PROVIDER, imported.debridProvider)
-                if (imported.debridApiKey != null) putString(DebridRepository.KEY_DEBRID_API_KEY, imported.debridApiKey)
-                imported.debridApiKeys?.forEach { (provider, key) ->
-                    putString(DebridRepository.apiKeyPrefName(provider), key)
-                }
+            proxyPrefs.edit().apply {
                 val remoteUrl = imported.streamProxyRemoteUrl ?: imported.mediaflowProxyUrl
                 val remotePassword =
                     imported.streamProxyRemotePassword ?: imported.mediaflowProxyPassword
@@ -224,65 +165,20 @@ object BackupUtils {
                 s.tvPrefetchWindow?.let { settingsRepository.setTvPrefetchWindow(it) }
                 s.mediaDetection?.let { settingsRepository.setMediaDetectionSettings(it) }
                 s.detectVideos?.let { settingsRepository.setDetectVideos(it) }
-                s.trackWatchProgress?.let { settingsRepository.setTrackWatchProgress(it) }
-                s.autoAddToWatching?.let { settingsRepository.setAutoAddToWatching(it) }
                 s.blockPopups?.let { settingsRepository.setBlockPopups(it) }
                 s.popupWhitelist?.let { settingsRepository.savePopupWhitelist(it.toSet()) }
                 s.popupBlacklist?.let { settingsRepository.savePopupBlacklist(it.toSet()) }
                 s.iptvSort?.let { settingsRepository.setIptvSort(it) }
                 s.iptvSortAscending?.let { settingsRepository.setIptvSortAscending(it) }
                 s.iptvActiveFirst?.let { settingsRepository.setIptvActiveFirst(it) }
-                s.sendSubtitlesToTv?.let { settingsRepository.setSendSubtitlesToTv(it) }
                 s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
             }
 
-            imported.addonUrls.forEach { url -> addonRepository.installAddon(url) }
 
             if (imported.bookmarks != null) {
                 val bookmarkDao = database.bookmarkDao()
                 imported.bookmarks.forEach { bookmark ->
                     bookmarkDao.insert(BookmarkEntity(url = bookmark.url, title = bookmark.title))
-                }
-            }
-
-            if (imported.watchlist != null) {
-                val watchlistDao = database.watchlistDao()
-                imported.watchlist.forEach { item ->
-                    // Defaults mirror WatchlistEntity so older backups (without tracking
-                    // fields) import to a sane PLAN_TO_WATCH / unrated state.
-                    watchlistDao.insert(WatchlistEntity(
-                        tmdbId = item.tmdbId,
-                        mediaType = item.mediaType,
-                        title = item.title,
-                        posterUrl = item.posterUrl,
-                        year = item.year,
-                        rating = item.rating,
-                        addedAt = item.addedAt,
-                        status = item.status ?: com.playbridge.sender.data.library.WatchlistStatus.PLAN_TO_WATCH.value,
-                        userRating = item.userRating,
-                        seasonProgress = item.seasonProgress,
-                        episodeProgress = item.episodeProgress,
-                        notes = item.notes,
-                        startedAt = item.startedAt,
-                        completedAt = item.completedAt,
-                    ))
-                }
-            }
-
-            if (imported.resume != null) {
-                val resumeDao = database.playbackResumeDao()
-                imported.resume.forEach { item ->
-                    resumeDao.upsert(com.playbridge.sender.data.library.PlaybackResumeEntity(
-                        contentKey = item.contentKey,
-                        tmdbId = item.tmdbId,
-                        mediaType = item.mediaType,
-                        season = item.season,
-                        episode = item.episode,
-                        title = item.title,
-                        positionMs = item.positionMs,
-                        durationMs = item.durationMs,
-                        updatedAt = item.updatedAt,
-                    ))
                 }
             }
 

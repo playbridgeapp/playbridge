@@ -11,7 +11,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -23,7 +22,6 @@ class RemoteViewModel(
     clock: () -> Long = ::remoteMonotonicTime,
     scope: CoroutineScope? = null,
     private val presentationPreferences: RemotePresentationPreferenceStore? = null,
-    private val queueProgressSource: RemoteQueueProgressSource? = null,
     private val tvRemote: TvRemoteChannel? = null,
 ) : ViewModel() {
     private val scope = scope ?: viewModelScope
@@ -62,16 +60,6 @@ class RemoteViewModel(
             this.scope.launch {
                 channel.state.collect { snapshot ->
                     mutableState.value = reducer.applyChannel(snapshot)
-                }
-            }
-        }
-        queueProgressSource?.let { source ->
-            this.scope.launch {
-                state.map { it.queue.progressKeys() }.distinctUntilChanged().collectLatest { keys ->
-                    mutableState.value = reducer.queueProgress(emptyMap())
-                    source.observe(keys).collect { progress ->
-                        mutableState.value = reducer.queueProgress(progress)
-                    }
                 }
             }
         }

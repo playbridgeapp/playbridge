@@ -2,7 +2,6 @@ package com.playbridge.sender.browser
 
 sealed interface ClipboardSuggestion {
     data class Link(val url: String) : ClipboardSuggestion
-    data class Magnet(val uri: String) : ClipboardSuggestion
     data class Text(val query: String) : ClipboardSuggestion
 }
 
@@ -56,12 +55,6 @@ object ClipboardClassifier {
             return null
         }
 
-        // Magnet links
-        if (collapsed.startsWith("magnet:", ignoreCase = true)) {
-            val uri = stripTrailingPunctuation(collapsed)
-            return if (uri.length > "magnet:".length) ClipboardSuggestion.Magnet(uri) else null
-        }
-
         // Single-token link candidate (no spaces allowed)
         if (!collapsed.contains(' ')) {
             val candidate = stripTrailingPunctuation(collapsed)
@@ -70,6 +63,7 @@ object ClipboardClassifier {
                 if (linkUrl != null) {
                     return ClipboardSuggestion.Link(linkUrl)
                 }
+                if (Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE).containsMatchIn(candidate)) return null
             }
         }
 

@@ -20,7 +20,7 @@ class BackupTrigger(private val context: Context, private val scope: CoroutineSc
     fun start() {
         Log.d(TAG, "Starting BackupTrigger")
         val db = DatabaseProvider.getDatabase(context)
-        val tables = arrayOf("history", "bookmarks", "tabs", "installed_addons", "watchlist")
+        val tables = arrayOf("history", "bookmarks", "tabs", "iptv_playlists", "collections", "collection_items")
         
         try {
             db.invalidationTracker.addObserver(object : InvalidationTracker.Observer(tables) {
