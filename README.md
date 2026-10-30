@@ -97,7 +97,8 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 
 ### 3. Choose your Sender
 
-- 📱 **Phone App (Android / iOS)**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
+- 📱 **Android Phone App**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
+- 📱 **iPhone / iPad App**: Browse video sites in the built-in ad-blocked browser, load your own M3U playlists, or cast local phone files.
 - 🖥️ **Desktop App (Receiver & Sender)**: Plays incoming casts from phone and extension senders. Also acts as a sender to cast local video files (with drag-and-drop) or stream URLs to TVs.
 - 🧩 **Browser Extension (Firefox & Chrome)**: Detects streams in active browser tabs and casts them to your TV via the Desktop app.
 - 💻 **Rust CLI (`playbridge`)**: Use a full-screen terminal dashboard to discover receivers, cast local files or URLs, host a browser receiver, or receive casts through `mpv`:
@@ -183,8 +184,8 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Stream quality selection | ✓ | ✓ | Via the browser extension | HLS quality selection |
 | Subtitle detection and attachment | ✓ | ✓ | — | Detection only; attachment is not relayed to Desktop yet |
 | Local file casting | ✓ | ✓ | ✓, including drag-and-drop and multi-file playlists | — |
-| Library, discovery, and add-ons | ✓ | — (intentionally omitted for App Store approval) | — | — |
-| Debrid integrations | ✓ in supported builds | — (intentionally omitted for App Store approval) | — | — |
+| Library, discovery, and add-ons | ✓ | — | — | — |
+| Debrid integrations | ✓ in supported builds | — | — | — |
 | IPTV and custom collections | ✓ | ✓ | — | — |
 | Downloads | ✓ | — | — | — |
 | Ad blocking | uBlock Origin | WebKit content blocker with EasyList and custom rules | — | — |
@@ -194,8 +195,6 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Companion app required | No | No | No | PlayBridge Desktop |
 
 Browser detection depends on what each browser exposes. Protected streams may require captured request headers, and some MSE / blob players cannot be replayed outside their original page.
-
-iPhone / iPad intentionally omits the open Library / add-on ecosystem (third-party Stremio add-ons, JS scrapers) and Debrid integrations — they trigger App Store Guideline 5.2.3. Use the browser, IPTV, collections, and local files instead.
 
 ## Receiver feature matrix
 
