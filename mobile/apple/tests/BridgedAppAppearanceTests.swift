@@ -4,10 +4,14 @@ private actor IconProbe {
     var urls: [URL] = []
     let response: Data?
     let goodPath: String
-    init(response: Data?, goodPath: String = "/favicon.ico") { self.response = response; self.goodPath = goodPath }
-    func fetch(_ url: URL) -> Data? {
+    let unreachable: Bool
+    init(response: Data?, goodPath: String = "/favicon.ico", unreachable: Bool = false) {
+        self.response = response; self.goodPath = goodPath; self.unreachable = unreachable
+    }
+    func fetch(_ url: URL) -> BridgedAppIconFetch {
         urls.append(url)
-        return url.path == goodPath ? response : nil
+        if unreachable { return .unreachable }
+        return url.path == goodPath ? response.map { .data($0) } ?? .missing : .missing
     }
 }
 
@@ -122,6 +126,15 @@ func checkBridgedAppAppearance() async {
     let negativeCached = await negativeRelaunch.load(declared)
     precondition(negativeCached == nil)
     await negative.remove(origin)
+    let offline = IconProbe(response: nil, unreachable: true)
+    let offlineCache = BridgedAppIconCache(directory: directory, fetch: { await offline.fetch($0) })
+    let offlineImage = await offlineCache.load(declared)
+    precondition(offlineImage == nil && (try? FileManager.default.contentsOfDirectory(atPath: directory.path))?.isEmpty != false,
+                 "A transient failure must not persist a miss")
+    let retry = IconProbe(response: png)
+    let retried = await BridgedAppIconCache(directory: directory, fetch: { await retry.fetch($0) }).load(declared)
+    precondition(retried != nil, "The next load retries after a transient failure")
+    await offlineCache.remove(origin)
     let preferred = IconProbe(response: png, goodPath: "/icon.png")
     let preferredCache = BridgedAppIconCache(directory: directory, fetch: { await preferred.fetch($0) })
     let preferredImage = await preferredCache.load(declared)
@@ -130,7 +143,7 @@ func checkBridgedAppAppearance() async {
     await preferredCache.remove(origin)
     let delayed = BridgedAppIconCache(directory: directory, fetch: { _ in
         try? await Task.sleep(nanoseconds: 100_000_000)
-        return png
+        return .data(png)
     })
     let pending = Task { await delayed.load(declared) }
     try? await Task.sleep(nanoseconds: 20_000_000)

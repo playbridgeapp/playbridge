@@ -2,18 +2,27 @@ import Foundation
 import CryptoKit
 import ImageIO
 
-/// Bounded, same-origin installation artwork. Both successes and failures survive launches.
+/// One artwork lookup. Only definite answers are remembered across launches.
+enum BridgedAppIconFetch: Sendable {
+    case data(Data)
+    /// The site answered, but there is no usable image (non-200, too large or undecodable).
+    case missing
+    /// Offline, timed out or a server error: try again on a later load.
+    case unreachable
+}
+
+/// Bounded, same-origin installation artwork. Images and definite misses survive launches.
 actor BridgedAppIconCache {
     static let shared = BridgedAppIconCache()
     private let directory: URL
-    private let fetch: @Sendable (URL) async -> Data?
-    private var pending: [String: Task<Data?, Never>] = [:]
+    private let fetch: @Sendable (URL) async -> BridgedAppIconFetch
+    private var pending: [String: Task<(Data?, Bool), Never>] = [:]
     private var sources: [URL: String] = [:]
     private var generations: [URL: Int] = [:]
 
     init(directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
          .appendingPathComponent("bridged-app-icons"),
-         fetch: @escaping @Sendable (URL) async -> Data? = { await BridgedAppIconCache.download($0) }) {
+         fetch: @escaping @Sendable (URL) async -> BridgedAppIconFetch = { await BridgedAppIconCache.download($0) }) {
         self.directory = directory
         self.fetch = fetch
     }
@@ -37,19 +46,26 @@ actor BridgedAppIconCache {
         sources[app.origin] = source
         let generation = generations[app.origin, default: 0]
         let key = app.origin.absoluteString + "\n" + source + "\n\(generation)"
-        if let task = pending[key] { return await task.value }
+        if let task = pending[key] { return await task.value.0 }
         let fetch = self.fetch
-        let task = Task<Data?, Never> {
+        let task = Task<(Data?, Bool), Never> {
+            var unreachable = false
             for url in BridgedAppAppearance.iconCandidates(app) {
-                guard !Task.isCancelled else { return nil }
-                if let data = await fetch(url), let png = Self.thumbnail(data) { return png }
+                guard !Task.isCancelled else { return (nil, true) }
+                switch await fetch(url) {
+                case .data(let data): if let png = Self.thumbnail(data) { return (png, false) }
+                case .missing: break
+                case .unreachable: unreachable = true
+                }
             }
-            return nil
+            return (nil, unreachable)
         }
         pending[key] = task
-        let data = await task.value
+        let (data, unreachable) = await task.value
         pending[key] = nil
         guard generations[app.origin, default: 0] == generation, sources[app.origin] == source else { return nil }
+        // A transient failure keeps the monogram for now without recording a permanent miss.
+        if data == nil && unreachable { return nil }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if let data { try data.write(to: image, options: .atomic) }
@@ -86,7 +102,7 @@ actor BridgedAppIconCache {
         return output as Data
     }
 
-    private static func download(_ url: URL) async -> Data? {
+    private static func download(_ url: URL) async -> BridgedAppIconFetch {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 2
         configuration.timeoutIntervalForResource = 2
@@ -97,15 +113,16 @@ actor BridgedAppIconCache {
         request.setValue("image/*", forHTTPHeaderField: "Accept")
         do {
             let (bytes, response) = try await session.bytes(for: request)
-            guard let response = response as? HTTPURLResponse, response.statusCode == 200,
-                  response.expectedContentLength <= 262144 else { return nil }
+            guard let response = response as? HTTPURLResponse else { return .unreachable }
+            if response.statusCode == 429 || response.statusCode >= 500 { return .unreachable }
+            guard response.statusCode == 200, response.expectedContentLength <= 262144 else { return .missing }
             var data = Data()
             for try await byte in bytes {
-                if data.count == 262144 { return nil }
+                if data.count == 262144 { return .missing }
                 data.append(byte)
             }
-            return data
-        } catch { return nil }
+            return .data(data)
+        } catch { return .unreachable }
     }
 }
 

@@ -15,8 +15,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** Installation artwork survives launches, including a failed lookup, without third-party services. */
+/** Installation artwork survives launches, including a definite miss, without third-party services. */
 internal object BridgedAppIconCache {
+    /** Offline, timed out or a server error: try again on a later load instead of remembering a miss. */
+    private class Unreachable : Exception()
+
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val memory = LruCache<String, Bitmap>(64)
     private val generations = mutableMapOf<String, Int>()
@@ -34,7 +37,17 @@ internal object BridgedAppIconCache {
             val marker = file(context, app.origin, "source")
             val source = "v1:${app.iconUrl.orEmpty()}"
             if (marker.exists() && marker.readText() == source) return@withLock cached(context, app)
-            val bitmap = BridgedAppAppearance.selectIcon(app, ::fetch)
+            var unreachable = false
+            val bitmap = BridgedAppAppearance.selectIcon(app) { url ->
+                try {
+                    fetch(url)
+                } catch (_: Unreachable) {
+                    unreachable = true
+                    null
+                }
+            }
+            // A transient failure keeps the monogram for now without recording a permanent miss.
+            if (bitmap == null && unreachable) return@withLock null
             synchronized(generations) {
                 // A removed installation must not leave a late download behind.
                 if ((generations[app.origin] ?: 0) == generation) {
@@ -70,24 +83,37 @@ internal object BridgedAppIconCache {
         }.getOrNull()
     }
 
-    private fun fetch(url: String): Bitmap? = runCatching {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        try {
+    /** Returns null for a definite miss; throws [Unreachable] when the lookup should be retried. */
+    private fun fetch(url: String): Bitmap? {
+        val connection = runCatching { URL(url).openConnection() as HttpURLConnection }.getOrNull() ?: return null
+        return try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 4000
             connection.readTimeout = 4000
             connection.setRequestProperty("Accept", "image/*")
-            if (connection.responseCode != 200 || connection.contentLengthLong > 262144) return null
-            val bytes = connection.inputStream.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(4096)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (output.size() + count > 262144) return null
-                    output.write(buffer, 0, count)
+            val status = try {
+                connection.responseCode
+            } catch (_: java.net.UnknownServiceException) {
+                return null // Cleartext not permitted for this origin: retrying won't help.
+            } catch (_: java.io.IOException) {
+                throw Unreachable()
+            }
+            if (status == 429 || status >= 500) throw Unreachable()
+            if (status != 200 || connection.contentLengthLong > 262144) return null
+            val bytes = try {
+                connection.inputStream.use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(4096)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (output.size() + count > 262144) return null
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
                 }
-                output.toByteArray()
+            } catch (_: java.io.IOException) {
+                throw Unreachable()
             }
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -103,5 +129,5 @@ internal object BridgedAppIconCache {
         } finally {
             connection.disconnect()
         }
-    }.getOrNull()
+    }
 }
