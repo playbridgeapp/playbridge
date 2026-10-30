@@ -149,6 +149,10 @@ final class PageCastCoordinator: ObservableObject {
               let requestID = message["requestId"] as? String, !requestID.isEmpty, requestID.utf8.count <= 128,
               let token = message["documentToken"] as? String, !token.isEmpty, token.utf8.count <= 128 else { return }
         let request = Request(source: source, message: message, origin: origin)
+        guard !BrowserCastingPolicy.blocks(URL(string: origin)) else {
+            reply(request, error: "not_allowed")
+            return
+        }
         guard JSONSerialization.isValidJSONObject(message),
               let data = try? JSONSerialization.data(withJSONObject: message), data.count <= 66 * 1024 else {
             reply(request, error: "resource_limit"); return

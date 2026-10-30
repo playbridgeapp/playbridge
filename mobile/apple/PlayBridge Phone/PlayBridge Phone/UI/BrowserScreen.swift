@@ -25,8 +25,12 @@ struct BrowserScreen: View {
         .onAppear {
             store.browserVisible = true
             // User-initiated link context-menu casts. Website API requests use PageCastCoordinator.
-            store.onPageCast = { payload, origin in
+            store.onPageCast = { [weak store] payload, origin in
                 guard let url = payload["url"] as? String, !url.isEmpty else { return }
+                guard BrowserCastingPolicy.allows(pageURL: URL(string: origin), mediaURL: URL(string: url)) else {
+                    store?.activeTab?.showBrowserMessage(BrowserCastingPolicy.message)
+                    return
+                }
                 let v = DetectedVideo(url: url, contentType: payload["contentType"] as? String,
                                       detectedBy: "page_bridge",
                                       originUrl: origin,
@@ -281,9 +285,12 @@ private struct ActiveTabView: View {
     }
 
     private var playButton: some View {
-        let count = tab.detector.videos.count
-        let enabled = count > 0 || vm.isConnected
-        return Button { showDetected = true } label: {
+        let count = tab.isCastingBlocked ? 0 : tab.detector.videos.count
+        let enabled = tab.isCastingBlocked || count > 0 || vm.isConnected
+        return Button {
+            if tab.isCastingBlocked { tab.showBrowserMessage(BrowserCastingPolicy.message) }
+            else { showDetected = true }
+        } label: {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "play.fill")
                     .font(.system(size: 22))

@@ -105,14 +105,24 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     let detector = VideoDetector()
     private var mediaDetectionSettings = BrowserMediaDetectionSettings.load()
     private var isDeclaredBridgedSite = false
+    private var detectionPageURL: URL?
+    var isCastingBlocked: Bool { BrowserCastingPolicy.blocks(loadedWebView?.url ?? detectionPageURL) }
+
+    func allowsCasting(_ mediaURL: String) -> Bool {
+        BrowserCastingPolicy.allows(pageURL: loadedWebView?.url ?? detectionPageURL, mediaURL: URL(string: mediaURL))
+    }
+
     private var detectionFrames: [WKFrameInfo] = []
     var detectionEnabled: Bool {
-        mediaDetectionSettings.enabled &&
+        !BrowserCastingPolicy.blocks(detectionPageURL ?? loadedWebView?.url) && mediaDetectionSettings.enabled &&
             (mediaDetectionSettings.detectInBridgedSites || (!isBridgedApp && !isDeclaredBridgedSite))
     }
 
     func acceptsDetection(_ body: [String: Any]) -> Bool {
-        detectionEnabled && mediaDetectionSettings.allows(body["mediaKind"] as? String ?? "video")
+        detectionEnabled && !isCastingBlocked &&
+            BrowserCastingPolicy.allows(pageURL: URL(string: body["originUrl"] as? String ?? ""),
+                                        mediaURL: URL(string: body["url"] as? String ?? "")) &&
+            mediaDetectionSettings.allows(body["mediaKind"] as? String ?? "video")
     }
 
     func configureMediaDetection(_ settings: BrowserMediaDetectionSettings) {
@@ -146,7 +156,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     private func updateDetectionPolicy(declared: Bool) {
-        guard isDeclaredBridgedSite != declared else { return }
         isDeclaredBridgedSite = declared
         installUserScripts()
         applyDetectionToLoadedFrames()
@@ -844,6 +853,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             hasCommittedPage = true
             committedPageURL = url
         }
+        detectionPageURL = webView.url
+        applyDetectionToLoadedFrames()
         // New main-frame document — reset detections for this tab.
         detector.clear()
         navigationFailure = nil
@@ -994,6 +1005,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
         if action.targetFrame?.isMainFrame == true {
             requestedAddress = url.absoluteString
+            detectionPageURL = url
+            if BrowserCastingPolicy.blocks(url) { detector.clear() }
             detectionNavigationID = UUID()
             let navigationID = detectionNavigationID
             let isBridged = isBridgedApp
@@ -1041,6 +1054,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                 decisionHandler(.allow)
                 return
             }
+            detectionPageURL = url
+            if BrowserCastingPolicy.blocks(url) { detector.clear() }
             let navigationID = detectionNavigationID
             let isBridged = isBridgedApp
             let adblockOn = ContentBlocker.isEnabled
@@ -1136,6 +1151,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             guard let url else { return UIMenu(children: actions) }
             let cast = UIAction(title: "Cast to TV", image: UIImage(systemName: "play.tv")) { _ in
                 guard self.isActive(), BrowserSitePolicy.origin(url) != nil else { return }
+                guard self.allowsCasting(url.absoluteString) else {
+                    self.showBrowserMessage(BrowserCastingPolicy.message)
+                    return
+                }
                 self.onPageCast?(["url": url.absoluteString], self.webView.url?.absoluteString ?? self.urlString)
             }
             let newTab = UIAction(title: "Open in New Tab", image: UIImage(systemName: "plus.square.on.square")) { _ in

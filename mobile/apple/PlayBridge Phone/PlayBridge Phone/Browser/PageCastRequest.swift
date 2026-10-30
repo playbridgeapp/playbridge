@@ -62,6 +62,7 @@ struct PageCastRequest {
         var ids = Set<String>()
         return try values.map { source in
             guard let url = source["url"] as? String, validateURL(url) else { throw PageCastError(code: "invalid_request") }
+            guard !BrowserCastingPolicy.blocks(URL(string: url)) else { throw PageCastError(code: "not_allowed") }
             var item: [String: Any] = ["url": url, "detectedBy": linked ? "linked_page" : "page_cast"]
             if linked {
                 guard let id = source["id"] as? String, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

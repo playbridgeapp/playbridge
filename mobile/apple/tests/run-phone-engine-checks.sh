@@ -5,6 +5,7 @@ test_dir="$(mktemp -d /tmp/playbridge-phone-engine.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
 phone="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$test_dir/cache" \
+  "$phone/Browser/BrowserCastingPolicy.swift" \
   "$phone/Models/Models.swift" "$phone/Browser/PageCastRequest.swift" \
   "$phone/Network/StreamRouteService.swift" \
   "$phone/Network/PhonePlayerPreferences.swift" "$phone/Network/PhonePlaybackEngine.swift" "$phone/Network/PlaybackSession.swift" \

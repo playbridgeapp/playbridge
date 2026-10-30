@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#if PB_DEVELOPER_TOOLS
 import Foundation
 
 /// The JSON and cURL views of a detected video, image, audio or subtitle item, for the
@@ -48,3 +49,4 @@ enum DetectedMediaExport {
         Date(timeIntervalSince1970: Double(milliseconds) / 1_000).ISO8601Format()
     }
 }
+#endif

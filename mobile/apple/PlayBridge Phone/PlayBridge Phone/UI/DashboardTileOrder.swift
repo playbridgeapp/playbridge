@@ -5,7 +5,6 @@ enum DashboardTileOrder {
     static let browserID = "browser"
     /// Kept from the old "Bridged Apps" placeholder so saved orders still place it.
     static let addWebAppID = "bridged-apps"
-    static let streamsOrigin = "https://streams.playbridge.app"
     /// Browser is how videos are found and web apps are added, so it can't be hidden.
     static let alwaysShown: Set<String> = [browserID]
 

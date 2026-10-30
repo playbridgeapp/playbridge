@@ -1,8 +1,6 @@
-const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '../PlayBridge Phone/PlayBridge Phone/Browser/DetectionScript.swift'), 'utf8').split('#"""')[1].split('"""#')[0];
+const { source } = require('./DetectionScriptSource.js');
 function fixture(mainFrame = true, options = {}) {
   const messages = [], listeners = {};
   const location = { href: 'https://example.test/list', hostname: 'example.test' };

@@ -641,6 +641,17 @@ private final class FakeTransport: PageCastTransport {
     }
 
     @MainActor static func main() async {
+        for host in BrowserCastingPolicy.blockedHosts {
+            let restricted = Fixture(approved: true)
+            restricted.page.pageCastOrigin = "https://player.\(host):8443"
+            restricted.permissions.approve(restricted.page.pageCastOrigin!)
+            for operation in ["destination", "choose_destination", "cast", "open", "play"] {
+                let id = restricted.send(operation, payload: ["url": "https://media.example/movie.mp4"])
+                _ = await restricted.response(id, error: "not_allowed")
+                precondition(restricted.coordinator.presentation == nil && restricted.transport.sends.isEmpty)
+            }
+        }
+
         // Demand is deterministic regardless of the developer's configured preference.
         let previous = UserDefaults.standard.object(forKey: "website_cast_prefetch")
         UserDefaults.standard.set(3, forKey: "website_cast_prefetch")

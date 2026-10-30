@@ -68,6 +68,15 @@ struct VideoDetectorEnrichmentTests {
 
     @MainActor
     static func main() async {
+        let restrictedProbe = Probe()
+        let restrictedDetector = restrictedProbe.detector()
+        for host in BrowserCastingPolicy.blockedHosts {
+            restrictedDetector.ingest(["url": "https://media.\(host)/movie.m3u8", "originUrl": "https://site.example"])
+            restrictedDetector.ingest(["url": "https://media.example/movie.m3u8", "originUrl": "https://\(host)/watch"])
+        }
+        await Task.yield()
+        precondition(restrictedDetector.videos.isEmpty && restrictedProbe.started.isEmpty,
+                     "Restricted pages and media must never start native enrichment")
         let url = "https://example.test/first.m3u8"
         let probe = Probe()
         let detector = probe.detector()

@@ -1,5 +1,21 @@
 # iPhone standalone fixture checks
 
+Casting restrictions (macOS host and Node; no simulator or phone):
+
+```sh
+bash mobile/apple/tests/run-casting-policy-checks.sh
+```
+
+Checks the shared host list, exact/subdomain and look-alike boundaries, case/ports,
+page/media decisions, and the compiled detector script's disabled lifecycle.
+Restricted pages still use ordinary WebKit playback; ad-block exemptions are separate.
+
+
+For compilation without simulator installation or launch, use
+`bash mobile/apple/tests/run-media-library-checks.sh --build-only`.
+`run-browser-model-checks.sh` checks both Release and developer compilation,
+including redacted exports and absence of developer-only symbols/strings in Release.
+
 Browser rule readiness (macOS host only; no simulator or phone):
 
 ```sh
@@ -201,6 +217,7 @@ with injected loaders and platform stubs:
 swiftc -module-cache-path /tmp/playbridge-swift-module-cache \
   'mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/StreamDebugTrace.swift' \
   'mobile/apple/PlayBridge Phone/PlayBridge Phone/Models/DetectedVideo.swift' \
+  'mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/BrowserCastingPolicy.swift' \
   'mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/VideoDetector.swift' \
   mobile/apple/tests/VideoDetectorEnrichmentTests.swift \
   -o /tmp/playbridge-enrichment-tests
