@@ -13,7 +13,7 @@ import playbridge.PlayPayload
  * Full capability set; status is pushed by the TV (relayed through
  * [ConnectionCoordinator.tvPlayback]) rather than polled.
  *
- * Note: the rich library/browser send paths (subtitle bundling, playback-pref
+ * Note: the rich browser send paths (subtitle bundling, playback-pref
  * decoration, playlists) still build their own PlayPayloads — [load] is the plain
  * transport-agnostic entry point used by [CastSessionManager] and generic callers.
  */

@@ -20,11 +20,11 @@ class RemoteSheetsGatingTest {
         val rows = subtitleRows(tracks)
         assertEquals(listOf("2", "sub_en_1", "sub_es", "external_1"), rows.map { it.track.id })
         assertEquals(
-            listOf(SubtitleOrigin.BuiltIn to 1, SubtitleOrigin.AddOn to 2, SubtitleOrigin.Added to 1),
+            listOf(SubtitleOrigin.BuiltIn to 1, SubtitleOrigin.Added to 3),
             subtitleOriginFilters(rows),
         )
-        assertEquals(listOf("sub_en_1", "sub_es"), filterSubtitleRows(rows, SubtitleOrigin.AddOn, null, "").map { it.track.id })
-        assertEquals(listOf("sub_es"), filterSubtitleRows(rows, SubtitleOrigin.AddOn, "Spanish", "").map { it.track.id })
+        assertEquals(listOf("sub_en_1", "sub_es", "external_1"), filterSubtitleRows(rows, SubtitleOrigin.Added, null, "").map { it.track.id })
+        assertEquals(listOf("sub_es"), filterSubtitleRows(rows, SubtitleOrigin.Added, "Spanish", "").map { it.track.id })
         assertEquals(listOf("external_1"), filterSubtitleRows(rows, null, null, "movie").map { it.track.id })
     }
 
@@ -68,15 +68,15 @@ class RemoteSheetsGatingTest {
     }
 
     @Test
-    fun repeatedLabelsAreNumberedAndStremioLinksCountAsAddOns() {
+    fun repeatedLabelsAreNumberedForExternalLinks() {
         val tracks = listOf(
             MediaTrack(id = "off", name = "Off", selected = false),
-            MediaTrack(id = "https://subs5.strem.io/en/download/1001", name = "1001", selected = false, type = "external_sub"),
-            MediaTrack(id = "https://subs5.strem.io/en/download/1002", name = "1002", selected = true, type = "external_sub"),
+            MediaTrack(id = "https://subs5.video.example/en/download/1001", name = "1001", selected = false, type = "external_sub"),
+            MediaTrack(id = "https://subs5.video.example/en/download/1002", name = "1002", selected = true, type = "external_sub"),
         )
-        assertEquals("English · strem.io 1", subtitleOptionLabel(tracks[1], tracks))
-        assertEquals("English · strem.io 2", subtitleOptionLabel(tracks[2], tracks))
-        assertEquals(SubtitleOrigin.AddOn, subtitleOrigin(tracks[1]))
+        assertEquals("English · video.example 1", subtitleOptionLabel(tracks[1], tracks))
+        assertEquals("English · video.example 2", subtitleOptionLabel(tracks[2], tracks))
+        assertEquals(SubtitleOrigin.Added, subtitleOrigin(tracks[1]))
         assertEquals("example.co.uk", shortHost("subs.example.co.uk"))
         assertEquals("English · OpenSubtitles v3", readableSubtitleName("eng · OpenSubtitles v3"))
         assertEquals("Spanish • Forced", readableSubtitleName("Spanish • Forced"))

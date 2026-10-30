@@ -226,7 +226,7 @@ fun PlayBridgeTheme(
 /**
  * Nested theme that re-seeds the whole Material 3 [ColorScheme] from a single
  * key colour (e.g. a poster/backdrop's dominant colour) via MaterialKolor, then
- * crossfades to it. Wrap any subtree — library detail, now-playing bar — that
+ * crossfades to it. Wrap any subtree — media detail, now-playing bar — that
  * should tint itself to the current artwork. A null [seedColor] leaves the
  * inherited (app) theme untouched.
  */

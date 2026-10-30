@@ -25,7 +25,6 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import mozilla.components.browser.state.action.EngineAction
 import mozilla.components.browser.state.state.TabSessionState
 import mozilla.components.browser.state.store.BrowserStore
@@ -53,7 +52,6 @@ import java.security.cert.X509Certificate
  *
  * - NavigationDelegate.onNewSession  → [EngineSession.Observer.onWindowRequest]
  * - NavigationDelegate.onLoadError   → engine-level RequestInterceptor ([Components])
- * - NavigationDelegate.onLoadRequest (magnet/stremio) → RequestInterceptor
  * - ContentDelegate.onContextMenu    → [EngineSession.Observer.onLongPress]
  * - ContentDelegate.onFullScreen     → onFullScreenChange / onMediaFullscreenChanged
  *   (the portrait check now uses media element dimensions instead of the old
@@ -81,9 +79,6 @@ fun SessionObserverSetup(
     siteSecurityInfo: MutableState<SiteSecurityInfo?>,
     pendingPopup: MutableState<PendingPopup?>,
     onXpiDetected: (String) -> Unit,
-    onMagnetDetected: (String) -> Unit,
-    onStremioAddonDetected: (String) -> Unit,
-    onTorrentDownloaded: (ByteArray) -> Unit,
     onFullScreenChange: (Boolean, Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -114,18 +109,7 @@ fun SessionObserverSetup(
         )
     }
 
-    // Magnet/Stremio links are intercepted at the engine level (RequestInterceptor
-    // in Components) so they work in every tab; wire its callbacks here.
-    val magnetHandler = rememberUpdatedState(onMagnetDetected)
-    val stremioHandler = rememberUpdatedState(onStremioAddonDetected)
-    DisposableEffect(Unit) {
-        Components.onMagnetDetected = { uri -> magnetHandler.value(uri) }
-        Components.onStremioAddonDetected = { uri -> stremioHandler.value(uri) }
-        onDispose {
-            Components.onMagnetDetected = null
-            Components.onStremioAddonDetected = null
-        }
-    }
+
 
     // Apply the user agent when the session changes (tab switch) — no reload,
     // since the page isn't loaded with the new identity yet anyway. A literal
@@ -376,19 +360,6 @@ fun SessionObserverSetup(
                 if (com.playbridge.sender.browser.isExtensionDownload(url, contentType, fileName)) {
                     Log.d(TAG, "Extension download requires native approval")
                     onXpiDetected(url)
-                } else if (url.endsWith(".torrent") || contentType == "application/x-bittorrent") {
-                    Log.d(TAG, ".torrent file detected: ${redactUrlForLog(url)}")
-                    scope.launch(Dispatchers.IO) {
-                        try {
-                            // Simple URL connection to download the small .torrent file into memory
-                            val bytes = java.net.URL(url).readBytes()
-                            withContext(Dispatchers.Main) {
-                                onTorrentDownloaded(bytes)
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to download .torrent file", e)
-                        }
-                    }
                 } else {
                     // Stash GeckoView's already-fetched stream (it carries the browser session,
                     // unlike our own re-fetch) so the engine can consume it directly for

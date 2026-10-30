@@ -6,7 +6,7 @@ import com.playbridge.sender.connection.LocalCastItem
 import com.playbridge.sender.connection.LocalCastPackager
 import com.playbridge.sender.connection.QueueCommandResult
 import com.playbridge.sender.connection.WebSocketClient
-import com.playbridge.sender.library.PlaylistUiState
+import com.playbridge.sender.connection.ReceiverQueueState
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createQueueAddCommandJson
 import java.util.UUID
@@ -90,7 +90,7 @@ class PhoneQueueCoordinator(
     /** Ids the TV has confirmed it holds (or held). */
     private val sent = HashSet<String>()
     private var playbackId: String? = null
-    private var latest: PlaylistUiState? = null
+    private var latest: ReceiverQueueState? = null
     /** A phone edit is waiting to be sent: the phone's order wins over the TV's this round. */
     private var dirty = false
     /** Skip TV reports older than our last confirmed change. */
@@ -337,7 +337,7 @@ class PhoneQueueCoordinator(
         }
     }
 
-    private suspend fun onStatus(status: PlaylistUiState?) {
+    private suspend fun onStatus(status: ReceiverQueueState?) {
         if (status == null) return
         val changed = mutex.withLock {
             if (entries.isEmpty()) return

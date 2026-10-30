@@ -49,7 +49,7 @@ import androidx.compose.ui.unit.dp
  *    tapping opens Play on.
  *
  * A thin progress line runs along the bottom while media is loaded. [accentColor] (the
- * library detail poster) replaces the container colour when given. A phone list's [listTint]
+ * media detail poster) replaces the container colour when given. A phone list's [listTint]
  * colours the bar like Up next's current card: the artwork's light tint fills as it plays.
  */
 @Composable

@@ -170,7 +170,7 @@ fun CastSheet(
     }
 
     // If we have content metadata but no browser-detected videos, default to playing it
-    // (the video URL comes from the contentPayload/library resource).
+    // (the video URL comes from the contentPayload media resource).
     LaunchedEffect(contentPayload, hasDetectedMedia) {
         if (contentPayload != null && !hasDetectedMedia) {
             castAction = "play"
@@ -489,7 +489,7 @@ fun CastSheet(
                 // Resolve quality / HLS filtering, then package through the selected stream route.
                 fun dispatch(queue: Boolean) {
                     if (packaging) return
-                    // Library / contentPayload path: same policy + packaging as detected media.
+                    // Selected-media path: same policy + packaging as detected media.
                     if (contentPayload != null && selectedVideo == null) {
                         packaging = true
                         scope.launch {
@@ -1182,7 +1182,7 @@ fun CastSheet(
                                                 shape = MaterialTheme.shapes.small
                                             ) {
                                                 Text(
-                                                    text = "Library Content",
+                                                    text = "Selected media",
                                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.primary,

@@ -79,7 +79,7 @@ internal enum class SubtitlePage(val label: String) { Tracks("Tracks"), Adjust("
 
 /** Where a subtitle track came from; the Tracks page filters by it. */
 internal enum class SubtitleOrigin(val filter: String, val tag: String) {
-    BuiltIn("Built-in", "built-in"), AddOn("Add-ons", "add-on"), Added("Added", "added"),
+    BuiltIn("Built-in", "built-in"), Added("Added", "added"),
 }
 
 internal enum class SubtitleAddSource(val label: String) { Detected("Found on page"), File("Phone file"), Link("Link") }
@@ -93,9 +93,6 @@ internal fun subtitleOrigin(track: MediaTrack): SubtitleOrigin {
     val external = track.type == "external_sub" || track.id.startsWith("external_") || track.id.contains("://")
     return when {
         !external -> SubtitleOrigin.BuiltIn
-        track.name.contains("OpenSubtitles #") -> SubtitleOrigin.AddOn
-        // Stremio's subtitle add-ons serve from *.strem.io.
-        runCatching { java.net.URI(track.id.substringBefore('#')).host }.getOrNull()?.let { it == "strem.io" || it.endsWith(".strem.io") } == true -> SubtitleOrigin.AddOn
         else -> SubtitleOrigin.Added
     }
 }

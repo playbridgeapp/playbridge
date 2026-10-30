@@ -67,7 +67,7 @@ object PhoneExoPlayerFactory {
         val dataSourceFactory: DataSource.Factory =
             DefaultDataSource.Factory(context, httpFactory)
 
-        // Same memory-aware caps as TV ExoPlayerEngine — enough for hub/debrid progressive
+        // Same memory-aware caps as TV ExoPlayerEngine — enough for progressive
         // streams without the old fixed 300s / 128MB phone settings (heap pressure).
         val bufCfg = AndroidBufferConfig.compute(context)
         val loadControl = DefaultLoadControl.Builder()

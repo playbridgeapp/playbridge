@@ -43,8 +43,8 @@ internal fun googleCastPickerConnectionComplete(phase: SessionPhase): Boolean =
     phase == SessionPhase.CONNECTED || phase == SessionPhase.PLAYING
 
 /**
- * The shared device/destination chip used by the Library top bar, the Library detail destination
- * row, and the Cast sheet. Replaces the three hand-rolled `ChipDropdown` selectors: instead of a
+ * The shared device/destination chip used by the sender destination controls
+ * and the Cast sheet. Replaces the three hand-rolled `ChipDropdown` selectors: instead of a
  * dropdown it opens [PlayOnSheet] on tap.
  *
  * Presentation-only and self-contained — it reads the active [ConnectionViewModel] for its label

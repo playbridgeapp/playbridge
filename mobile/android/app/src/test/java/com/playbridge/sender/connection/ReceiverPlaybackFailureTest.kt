@@ -27,7 +27,7 @@ class ReceiverPlaybackFailureTest {
         assertEquals("idle", coordinator.tvActiveContext.value)
         assertNull(coordinator.tvPlayback.value)
         assertEquals("Couldn't load the video (HTTP 403)", coordinator.playbackFailure.value?.message)
-        coordinator.startLocalPlaybackSession(null, null, null)
+        coordinator.startLocalPlaybackSession()
         assertNull(coordinator.playbackFailure.value)
     }
 

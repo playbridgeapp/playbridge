@@ -5,7 +5,6 @@ import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.ExternalQueueCoordinator
-import com.playbridge.sender.connection.TvQueueCoordinator
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
@@ -166,7 +165,6 @@ class LinkedPageCastCoordinator(
     private val connectionCoordinator: ConnectionCoordinator,
     private val connectionStore: ConnectionStore,
     private val settingsRepository: SettingsRepository,
-    private val tvQueueCoordinator: TvQueueCoordinator,
     private val externalQueueCoordinator: ExternalQueueCoordinator,
     private val scope: CoroutineScope,
 ) {
@@ -317,7 +315,6 @@ class LinkedPageCastCoordinator(
                     return@withLock
                 }
                 active?.let { old -> event(old, "ended", JSONObject().put("reason", "superseded")) }
-                tvQueueCoordinator.stop()
                 externalQueueCoordinator.stop()
                 val binding = request.linkedSessionBinding()
                 val next = Active(

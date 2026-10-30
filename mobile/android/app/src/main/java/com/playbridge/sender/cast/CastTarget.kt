@@ -107,7 +107,7 @@ data class MediaItem(
     val durationMs: Long = 0L,
     /** Resume point — start playback here (native: EXTRA_START_POSITION; DLNA: Seek after load). */
     val startPositionMs: Long = 0L,
-    /** Library identity (tmdb/imdb/season/episode) for watch-progress tracking; null = untracked. */
+    /** Optional sender-supplied metadata passed to the receiver. */
     val visualMetadata: playbridge.VisualMetadata? = null,
     /**
      * Explicit packaging route chosen by the cast sheet / policy. When set, targets must not

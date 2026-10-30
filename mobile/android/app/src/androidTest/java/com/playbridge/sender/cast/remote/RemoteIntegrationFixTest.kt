@@ -11,7 +11,6 @@ import androidx.compose.ui.test.performClick
 import com.playbridge.sender.cast.remote.ui.RemoteQueueRow
 import com.playbridge.sender.cast.remote.ui.RemoteQueueSheet
 import com.playbridge.sender.cast.remote.ui.RemoteScreen
-import com.playbridge.sender.data.library.PlaybackResumeEntity
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import org.junit.Assert.assertEquals
@@ -47,9 +46,8 @@ class RemoteIntegrationFixTest {
         compose.onNodeWithContentDescription("Switch to swipe pad").performClick()
         compose.onNodeWithTag("remote.gesturePad").assertIsDisplayed()
     }
-    @Test fun storedWatchedBadgeAppearsInBothUpNextAndAllSheet() {
-        val resume = PlaybackResumeEntity("tmdb:100:1:2", 100, "tv", 1, 2, positionMs = 900, durationMs = 1000)
-        val state = state().copy(queueProgress = mapOf(resume.contentKey to RemoteQueueProgress(resume)))
+    @Test fun liveCurrentItemProgressAppearsInBothUpNextAndAllSheet() {
+        val state = state().let { it.copy(playback = it.playback?.copy(displayedPositionMs = 900, durationMs = 1000)) }
         val sheet = mutableStateOf(false)
         compose.setContent { MaterialTheme {
             if (sheet.value) RemoteQueueSheet(state, {}) else RemoteQueueRow(state, false, {})

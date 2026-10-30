@@ -5,16 +5,11 @@ import com.playbridge.sender.cast.TvPlaybackStatus
 import com.playbridge.sender.cast.TvPlayerSettings
 import com.playbridge.sender.cast.resolveRemoteTimeline
 import com.playbridge.sender.connection.ConnectionCoordinator
-import com.playbridge.sender.connection.PlaybackProgressTracker
-import com.playbridge.sender.data.library.PlaybackResumeDao
-import com.playbridge.sender.data.library.PlaybackResumeEntity
-import com.playbridge.sender.data.library.WatchlistDao
-import com.playbridge.sender.library.PlaylistEpisode
-import com.playbridge.sender.library.PlaylistUiState
+import com.playbridge.sender.connection.ReceiverQueueItem
+import com.playbridge.sender.connection.ReceiverQueueState
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
@@ -30,7 +25,7 @@ class RemoteBrowserLeavePlayerTest {
         val messages = MutableSharedFlow<String>(extraBufferCapacity = 16)
         val coordinator = ConnectionCoordinator(messages, null, backgroundScope) { 0L }
         runCurrent()
-        coordinator.startLocalPlaybackSession(42, 1, 2)
+        coordinator.startLocalPlaybackSession()
         emit(
             messages,
             playlist("Old Movie"),
@@ -41,7 +36,6 @@ class RemoteBrowserLeavePlayerTest {
         runCurrent()
         assertEquals("Old Movie", coordinator.tvPlayback.value?.title)
         assertEquals(2, coordinator.tvPlaylistState.value?.items?.size)
-        assertEquals(42, coordinator.nowPlayingTvId.value)
         assertEquals(listOf("a1"), coordinator.tvAudioTracks.value.map(MediaTrack::id))
         assertTrue(coordinator.tvPlayerSettings.value.isLive)
         assertTrue(coordinator.remoteObservation.value.settingsReported)
@@ -49,16 +43,12 @@ class RemoteBrowserLeavePlayerTest {
         emit(messages, context("player"))
         runCurrent()
         assertEquals("Old Movie", coordinator.tvPlayback.value?.title)
-        assertEquals(42, coordinator.nowPlayingTvId.value)
 
         emit(messages, context("browser"))
         runCurrent()
         assertEquals("browser", coordinator.tvActiveContext.value)
         assertNull(coordinator.tvPlayback.value)
         assertNull(coordinator.tvPlaylistState.value)
-        assertNull(coordinator.nowPlayingTvId.value)
-        assertNull(coordinator.nowPlayingSeason.value)
-        assertEquals(1, coordinator.nowPlayingEpisodeStart.value)
         assertTrue(coordinator.tvVideoTracks.value.isEmpty())
         assertTrue(coordinator.tvAudioTracks.value.isEmpty())
         assertTrue(coordinator.tvSubtitleTracks.value.isEmpty())
@@ -145,52 +135,15 @@ class RemoteBrowserLeavePlayerTest {
     @Test fun startLocalPlaybackSessionReplacesIdentityAndDropsTheOldPosition() = runTest {
         val coordinator = ConnectionCoordinator(MutableSharedFlow(extraBufferCapacity = 1), null, backgroundScope) { 0L }
         coordinator.tvActiveContext.value = "player"
-        coordinator.nowPlayingTvId.value = 7
         coordinator.tvPlayback.value = TvPlaybackStatus("playing", 500_000, 600_000, "Old")
-        coordinator.tvPlaylistState.value = PlaylistUiState(items = listOf(PlaylistEpisode(0, "Old")))
-        coordinator.startLocalPlaybackSession(99, 2, 4)
+        coordinator.tvPlaylistState.value = ReceiverQueueState(items = listOf(ReceiverQueueItem(0, "Old")))
+        coordinator.startLocalPlaybackSession()
         assertEquals("player", coordinator.tvActiveContext.value)
-        assertEquals(99, coordinator.nowPlayingTvId.value)
-        assertEquals(2, coordinator.nowPlayingSeason.value)
-        assertEquals(4, coordinator.nowPlayingEpisodeStart.value)
         assertNull(coordinator.tvPlayback.value)
         assertNull(coordinator.tvPlaylistState.value)
     }
 
-    @Test fun playerPastNinetyPercentDeletesTheResumePoint() = runTest {
-        val harness = tracker(backgroundScope)
-        harness.arm()
-        runCurrent()
-        assertTrue(harness.daos.upserts.isNotEmpty())
-        assertTrue(harness.daos.deletedKeys.isEmpty())
-        harness.coordinator.tvPlayback.value = TvPlaybackStatus("playing", (DURATION_MS * 95) / 100, DURATION_MS, "Old Movie")
-        runCurrent()
-        assertEquals(listOf("tmdb:42:1:2"), harness.daos.deletedKeys)
-    }
 
-    @Test fun browserContextDoesNotMarkThePreviousEpisodeWatched() = runTest {
-        val harness = tracker(backgroundScope)
-        harness.arm()
-        runCurrent()
-        assertTrue(harness.daos.upserts.isNotEmpty())
-        val saved = harness.daos.upserts.size
-        // The old episode is still identified. Crossing 90% after the surface leaves the
-        // player must not delete its resume. This fails if only "idle" resets the session.
-        harness.coordinator.tvActiveContext.value = "browser"
-        harness.coordinator.tvPlayback.value = TvPlaybackStatus("playing", (DURATION_MS * 95) / 100, DURATION_MS, "Old Movie")
-        runCurrent()
-        assertTrue(harness.daos.deletedKeys.isEmpty())
-        assertTrue(harness.daos.progressUpdates.isEmpty())
-        assertEquals(saved, harness.daos.upserts.size)
-
-        harness.coordinator.tvActiveContext.value = "player"
-        check(harness.messages.tryEmit(context("browser")))
-        runCurrent()
-        assertTrue(harness.daos.deletedKeys.isEmpty())
-        assertNull(harness.coordinator.tvPlayback.value)
-        assertNull(harness.coordinator.nowPlayingTvId.value)
-        assertNull(harness.coordinator.tvPlaylistState.value)
-    }
 
     @Test fun browserHeadingUsesThePageTitleOrTheUrlHostAndDropsTheEpisodeLine() {
         assertNull(RemoteTitlePolicy.browserHeading(null))
@@ -286,7 +239,6 @@ class RemoteBrowserLeavePlayerTest {
         assertTrue(layout.wave)
         assertTrue(layout.info)
         assertFalse(layout.showQueue)
-        assertNull(coordinator.nowPlayingTvId.value)
     }
 
     @Test fun browserExternalAlsoHoldsPlayerStatus() = runTest {
@@ -340,18 +292,14 @@ class RemoteBrowserLeavePlayerTest {
         )
         runCurrent()
         assertNull(coordinator.tvPlayback.value)
-        coordinator.startLocalPlaybackSession(99, 3, 1)
+        coordinator.startLocalPlaybackSession()
         assertEquals("player", coordinator.tvActiveContext.value)
-        assertEquals(99, coordinator.nowPlayingTvId.value)
-        assertEquals(3, coordinator.nowPlayingSeason.value)
-        assertEquals(1, coordinator.nowPlayingEpisodeStart.value)
         assertNull(coordinator.tvPlayback.value)
         assertNull(coordinator.tvPlaylistState.value)
         emit(messages, context("player"))
         runCurrent()
         assertNull(coordinator.tvPlayback.value)
         assertNull(coordinator.tvPlaylistState.value)
-        assertEquals(99, coordinator.nowPlayingTvId.value)
         emit(messages, status("playing", 1_000, 50_000, "New Title"))
         runCurrent()
         assertEquals("New Title", coordinator.tvPlayback.value?.title)
@@ -361,114 +309,6 @@ class RemoteBrowserLeavePlayerTest {
         assertNull(coordinator.tvPlaylistState.value)
     }
 
-    @Test fun backgroundPlayerStatusDoesNotMarkWatchedAndRestoreDoesNotEither() = runTest {
-        val harness = tracker(backgroundScope)
-        harness.arm()
-        runCurrent()
-        val saved = harness.daos.upserts.size
-        assertTrue(saved > 0)
-        check(harness.messages.tryEmit(context("browser")))
-        runCurrent()
-        assertNull(harness.coordinator.nowPlayingTvId.value)
-        assertNull(harness.coordinator.tvPlayback.value)
-        emit(
-            harness.messages,
-            playlist("Old Movie"),
-            playerStatus("playing", (DURATION_MS * 95) / 100, DURATION_MS, "Old Movie"),
-        )
-        runCurrent()
-        assertNull(harness.coordinator.tvPlayback.value)
-        assertNull(harness.coordinator.tvPlaylistState.value)
-        assertTrue(harness.daos.deletedKeys.isEmpty())
-        assertEquals(saved, harness.daos.upserts.size)
-        assertTrue(harness.daos.progressUpdates.isEmpty())
-
-        check(harness.messages.tryEmit(context("player")))
-        runCurrent()
-        assertEquals((DURATION_MS * 95) / 100, harness.coordinator.tvPlayback.value?.positionMs)
-        assertEquals("Old Movie", harness.coordinator.tvPlaylistState.value?.items?.first()?.title)
-        assertNull(harness.coordinator.nowPlayingTvId.value)
-        assertTrue(harness.daos.deletedKeys.isEmpty())
-        assertEquals(saved, harness.daos.upserts.size)
-        assertTrue(harness.daos.progressUpdates.isEmpty())
-    }
-
-    private fun tracker(scope: kotlinx.coroutines.CoroutineScope): Harness {
-        val messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
-        val coordinator = ConnectionCoordinator(messages, null, scope) { 0L }
-        val daos = RecordingDaos()
-        PlaybackProgressTracker(
-            watchlistDao = daos.watchlist,
-            resumeDao = daos.resume,
-            tmdb = null,
-            enabledSource = MutableStateFlow(true),
-            autoAddSource = MutableStateFlow(false),
-            connectionCoordinator = coordinator,
-            externalStatus = MutableStateFlow(null),
-            externalNowPlayingMeta = MutableStateFlow(null),
-            externalTargetActive = MutableStateFlow(false),
-            scope = scope,
-        )
-        return Harness(messages, coordinator, daos)
-    }
-
-    private class Harness(
-        val messages: MutableSharedFlow<String>,
-        val coordinator: ConnectionCoordinator,
-        val daos: RecordingDaos,
-    ) {
-        fun arm() {
-            coordinator.tvActiveContext.value = "player"
-            coordinator.nowPlayingTvId.value = 42
-            coordinator.nowPlayingSeason.value = 1
-            coordinator.nowPlayingEpisodeStart.value = 2
-            coordinator.tvPlaylistState.value = PlaylistUiState(
-                currentIndex = 0,
-                playbackId = "pb",
-                items = listOf(PlaylistEpisode(0, "Old Movie", season = 1, episode = 2, itemId = "ep", tmdbId = "42")),
-            )
-            coordinator.tvPlayback.value = TvPlaybackStatus("playing", 60_000, DURATION_MS, "Old Movie")
-        }
-    }
-
-    private class RecordingDaos {
-        val upserts = mutableListOf<PlaybackResumeEntity>()
-        val deletedKeys = mutableListOf<String>()
-        val progressUpdates = mutableListOf<String>()
-        val resume: PlaybackResumeDao = dao(PlaybackResumeDao::class.java) { proxy, method, args ->
-            when (method) {
-                "toString" -> "PlaybackResumeDao"
-                "hashCode" -> System.identityHashCode(proxy)
-                "equals" -> proxy === args?.getOrNull(0)
-                "prune", "deleteEpisodesUpTo" -> Unit
-                "upsert" -> {
-                    upserts += args!![0] as PlaybackResumeEntity
-                    Unit
-                }
-                "deleteByKey" -> {
-                    deletedKeys += args!![0] as String
-                    Unit
-                }
-                "getByKey" -> null
-                "getAllSync" -> emptyList<PlaybackResumeEntity>()
-                else -> error("Unexpected resume DAO call $method")
-            }
-        }
-        val watchlist: WatchlistDao = dao(WatchlistDao::class.java) { proxy, method, args ->
-            when (method) {
-                "toString" -> "WatchlistDao"
-                "hashCode" -> System.identityHashCode(proxy)
-                "equals" -> proxy === args?.getOrNull(0)
-                "getByIdSync" -> null
-                "updateProgress" -> {
-                    progressUpdates += "updateProgress"
-                    Unit
-                }
-                "updateStatus", "insert" -> Unit
-                else -> error("Unexpected watchlist DAO call $method")
-            }
-        }
-    }
 
     private fun presented(coordinator: ConnectionCoordinator): RemoteUiState {
         val wire = coordinator.tvActiveContext.value

@@ -120,7 +120,6 @@ data class RemoteUiState(
     val context: RemoteContext = RemoteContext.Unknown,
     val capabilities: RemoteCapabilities = RemoteCapabilities(),
     val playback: RemotePlayback? = null, val queue: RemoteQueueState? = null,
-    val queueProgress: Map<String, RemoteQueueProgress> = emptyMap(),
     val tracks: RemoteTracks = RemoteTracks(), val settings: RemotePlayerSettings = RemotePlayerSettings(),
     val browser: RemoteBrowserState? = null, val mirror: RemoteMirrorState? = null,
     val inputMode: RemoteInputMode = RemoteInputMode.Context,

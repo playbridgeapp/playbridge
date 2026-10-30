@@ -5,7 +5,7 @@ package com.playbridge.sender.downloads
  *
  * The legacy downloader (system DownloadManager + Media3 offline + HLS export) was retired
  * in favour of the WorkManager engine in `downloads/engine/`. Only [formatFileSize] survives
- * because the cast sheet and magnet sheet still use it for display.
+ * because the cast sheet still use it for display.
  */
 object DownloadUtils {
 

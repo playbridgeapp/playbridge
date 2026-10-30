@@ -12,7 +12,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
@@ -112,7 +111,7 @@ class RemoteRouteTest {
         val endpoint = EndpointKey(CastProtocol.PLAYBRIDGE, "fixture")
         val targets = MutableStateFlow<RemoteNativeTarget?>(RemoteNativeTarget(NativeRemoteConfiguration(RemoteReceiver(endpoint, "Fixture TV", RemoteProfile.AndroidTv), listOf("exo"))))
         val vm = RemoteViewModel(RemoteControllerRegistry(targets, transport, scope), RemoteInputRouter(), scope = scope)
-        compose.setContent { MaterialTheme { RemoteRoute({}, Unit, { emptyList() }, vm) } }
+        compose.setContent { MaterialTheme { RemoteRoute({}, Unit, { emptyList() }, viewModel = vm) } }
         compose.onNodeWithText("Context").assertDoesNotExist()
         compose.onNodeWithTag("remote.input").assertDoesNotExist()
         compose.onNodeWithText("Touchpad").assertDoesNotExist()
@@ -165,7 +164,7 @@ class RemoteRouteTest {
         val targets = MutableStateFlow<RemoteTarget?>(external.target)
         val vm = RemoteViewModel(RemoteControllerRegistry(targets, Transport(), scope, external), RemoteInputRouter(), scope = scope)
         val effects = mutableListOf<RemoteEffect>()
-        compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, vm) } }
+        compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, viewModel = vm) } }
         compose.onNodeWithText("Casting to External TV").assertIsDisplayed()
         compose.onNodeWithText("Google Cast").assertIsDisplayed()
         compose.onNodeWithText("Context").assertDoesNotExist()
@@ -197,7 +196,7 @@ class RemoteRouteTest {
         val targets = MutableStateFlow<RemoteTarget?>(external.target)
         val vm = RemoteViewModel(RemoteControllerRegistry(targets, native, scope, external), RemoteInputRouter(), scope = scope)
         val effects = mutableListOf<RemoteEffect>()
-        compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, vm) } }
+        compose.setContent { MaterialTheme { RemoteRoute(effects::add, Unit, { emptyList() }, viewModel = vm) } }
         compose.onNodeWithText("Roku").assertIsDisplayed()
         // Roku idle is whole-device, so the pad fills INPUT instead of the empty sentence.
         compose.runOnIdle { vm.dispatch(RemoteAction.SetButtonPad(true)) }

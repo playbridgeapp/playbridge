@@ -121,12 +121,12 @@ data class DetectedVideo(
     /** Policy reason code for logs/UI (never a raw authenticated URL). */
     val streamRouteReason: String? = null,
     /**
-     * Optional library identity carried when packaging contentPayload through DetectedVideo
+     * Optional sender metadata carried when packaging contentPayload through DetectedVideo
      * so external casts retain watch-progress metadata without a global arm slot.
      */
     @kotlinx.serialization.Transient
     val visualMetadata: playbridge.VisualMetadata? = null,
-    /** Resume point for library contentPayload casts packaged through DetectedVideo. */
+    /** Resume point for contentPayload casts packaged through DetectedVideo. */
     val startPositionMs: Long = 0L,
 ) {
     val isSubtitle: Boolean

@@ -61,7 +61,7 @@ class ConnectionCoordinatorIdleStatusTest {
         var now = 0L
         val coordinator = ConnectionCoordinator(messages, null, backgroundScope) { now }
         runCurrent()
-        coordinator.startLocalPlaybackSession(null, null, null)
+        coordinator.startLocalPlaybackSession()
         assertEquals("player", coordinator.tvActiveContext.value)
 
         messages.emit(status("playing"))
@@ -82,7 +82,7 @@ class ConnectionCoordinatorIdleStatusTest {
         val messages = MutableSharedFlow<String>(extraBufferCapacity = 16)
         val coordinator = ConnectionCoordinator(messages, null, backgroundScope) { 0L }
         runCurrent()
-        coordinator.startLocalPlaybackSession(null, null, null)
+        coordinator.startLocalPlaybackSession()
         messages.emit(status("playing"))
         messages.emit("""{"type":"context","active":"idle"}""")
         runCurrent()
