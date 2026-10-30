@@ -247,6 +247,12 @@ final class BridgedAppUITests: XCTestCase {
             selectAll.tap()
             field.typeText(value)
         }
+        let teal = app.buttons["Teal tile color"]
+        app.swipeUp()
+        XCTAssertTrue(teal.waitForExistence(timeout: 5))
+        teal.tap()
+        XCTAssertTrue(teal.isSelected)
+        app.swipeDown()
         replace(name, with: "Edited Fixture")
         replace(home, with: "https://other.example/")
         XCTAssertFalse(app.buttons["Save"].isEnabled, "Cross-origin edit was accepted")
@@ -260,11 +266,19 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Web app details"].waitForExistence(timeout: 5))
         XCTAssertEqual(name.value as? String, "Edited Fixture")
         XCTAssertEqual(home.value as? String, base + "/detection")
+        app.swipeUp()
+        XCTAssertTrue(teal.isSelected, "Saved tile color did not survive relaunch")
+        let plum = app.buttons["Plum tile color"]
+        plum.tap()
+        XCTAssertTrue(plum.isSelected)
+        app.swipeDown()
         replace(name, with: "Unsaved edit")
         app.buttons["Cancel"].tap()
         tile.press(forDuration: 1.2)
         XCTAssertTrue(app.navigationBars["Web app details"].waitForExistence(timeout: 5))
         XCTAssertEqual(name.value as? String, "Edited Fixture", "Cancel saved the draft")
+        app.swipeUp()
+        XCTAssertTrue(teal.isSelected, "Cancel saved the tile color draft")
         let remove = app.buttons["Remove"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
         remove.tap()

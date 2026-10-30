@@ -110,6 +110,7 @@ struct MenuSheet: View {
             let app = await BridgedAppDeclarationCache.shared.discover(url)
             guard !Task.isCancelled, pageURL.flatMap(BridgedAppDeclaration.origin(of:)) == app?.origin else { return }
             availableBridgedApp = app
+            if let app { store.bridgedApps.refreshDeclaration(app) }
         }
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
         .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height((installableApp == nil ? 560 : 608) + (shareableURL == nil ? 0 : 112)), .large]).presentationDragIndicator(.visible)

@@ -146,10 +146,11 @@ object Components {
     private val detectionPolicyPorts = mutableMapOf<GeckoWebExtension.Port, String>()
     private val detectionPolicyRevision = java.util.concurrent.atomic.AtomicLong()
     private val detectionTabOrigins = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Volatile var onBridgedAppDeclaration: ((BridgedApp) -> Unit)? = null
     private val declaredBridgedApps by lazy {
         BridgedAppDeclarationCache(
             scope = applicationScope,
-            probe = { BridgedAppStore.discover(it) != null },
+            probe = { BridgedAppStore.discover(it)?.also { app -> onBridgedAppDeclaration?.invoke(app) } != null },
             onChanged = { publishDetectionPolicy() },
         )
     }

@@ -5,13 +5,29 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
     let name: String
     let startURL: URL
     let iconURL: URL?
+    var tileColorID: String? = nil
+    var themeColor: String? = nil
+    /// Assigned once at install from the colors other apps aren't using; shown when `tileColorID` is unset.
+    var autoColorID: String? = nil
     var id: URL { origin }
 
-    /// Home edits cannot transfer an installed app’s identity or grants to another origin.
+    enum CodingKeys: String, CodingKey {
+        case origin, name, startURL, iconURL, themeColor
+        case tileColorID = "tileColorId"
+        case autoColorID = "autoColorId"
+    }
+
     func editing(name: String, homeURL: String) -> BridgedApp? {
+        editing(name: name, homeURL: homeURL, tileColorID: tileColorID)
+    }
+
+    /// Home edits cannot transfer an installed app’s identity or grants to another origin.
+    func editing(name: String, homeURL: String, tileColorID: String?) -> BridgedApp? {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: homeURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        let edited = BridgedApp(origin: origin, name: name, startURL: url, iconURL: iconURL)
+        let edited = BridgedApp(origin: origin, name: name, startURL: url, iconURL: iconURL,
+                                tileColorID: BridgedAppAppearance.paletteID(tileColorID),
+                                themeColor: themeColor, autoColorID: autoColorID)
         return edited.isValid ? edited : nil
     }
 
@@ -20,6 +36,19 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
         BridgedAppDeclaration.origin(of: startURL) == origin &&
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 60 &&
         (iconURL.map { BridgedAppDeclaration.origin(of: $0) == origin } ?? true)
+    }
+}
+
+extension BridgedApp {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(origin: try values.decode(URL.self, forKey: .origin),
+                  name: try values.decode(String.self, forKey: .name),
+                  startURL: try values.decode(URL.self, forKey: .startURL),
+                  iconURL: try values.decodeIfPresent(URL.self, forKey: .iconURL),
+                  tileColorID: BridgedAppAppearance.paletteID(try? values.decode(String.self, forKey: .tileColorID)),
+                  themeColor: BridgedAppAppearance.themeColor(try? values.decode(String.self, forKey: .themeColor)),
+                  autoColorID: BridgedAppAppearance.paletteID(try? values.decode(String.self, forKey: .autoColorID)))
     }
 }
 
@@ -72,7 +101,8 @@ enum BridgedAppDeclaration {
         }
         return BridgedApp(origin: origin,
                          name: String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60)),
-                         startURL: start, iconURL: icon)
+                         startURL: start, iconURL: icon,
+                         themeColor: BridgedAppAppearance.themeColor(json["theme_color"] as? String))
     }
 
     static func fetch(_ origin: URL) async -> BridgedApp? {
@@ -108,6 +138,7 @@ private final class NoManifestRedirects: NSObject, URLSessionTaskDelegate {
 
 actor BridgedAppDeclarationCache {
     static let shared = BridgedAppDeclarationCache()
+    static let didRefresh = Notification.Name("BridgedAppDeclarationCache.didRefresh")
     private struct Entry { let app: BridgedApp?; let expires: TimeInterval }
     private var entries: [URL: Entry] = [:]
     private var pending: [URL: Task<BridgedApp?, Never>] = [:]
@@ -140,6 +171,9 @@ actor BridgedAppDeclarationCache {
         let app = await task.value
         entries[origin] = Entry(app: app, expires: now() + lifetime)
         pending[origin] = nil
+        if let app {
+            await MainActor.run { NotificationCenter.default.post(name: Self.didRefresh, object: app) }
+        }
         return app
     }
 }

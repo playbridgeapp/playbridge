@@ -133,6 +133,7 @@ enum ContentBlocker {
         return AdblockSnapshot.shared.matches(url: url.absoluteString, source: source?.absoluteString ?? url.absoluteString, type: "document", method: method)
     }
     static let elementPickerJS = try! String(contentsOf: Bundle.main.url(forResource: "element-picker", withExtension: "js")!, encoding: .utf8)
+    static func cachedRulesForStartup() async -> [WKContentRuleList] { [] }
     static func bootstrapRules() async -> [WKContentRuleList] { [] }
     static func compileAll() async -> [WKContentRuleList] { [] }
     static func forceCompileAll() async throws -> [WKContentRuleList] { [] }

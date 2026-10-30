@@ -1,6 +1,8 @@
 package com.playbridge.sender.ui
 
 import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.graphics.Color
+import com.playbridge.sender.browser.BridgedAppAppearance
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
 import org.junit.Assert.assertEquals
@@ -108,7 +110,7 @@ class DashboardItemsTest {
     }
 
     @Test
-    fun `installed apps replace the Add web app placeholder with matching neutral colours`() {
+    fun `installed apps replace the Add web app placeholder with their resolved gradients`() {
         val placeholder = dashboardItems().single { it.isAddPlaceholder }
         assertEquals(Screen.Browser, placeholder.screen)
         assertEquals(DashboardTileOrder.ADD_WEB_APP_ID, placeholder.id)
@@ -118,7 +120,11 @@ class DashboardItemsTest {
         assertEquals(apps.map { "app:${it.origin}" }, items.filter { it.app != null }.map { it.id })
         assertEquals(items.size, items.map { it.id }.distinct().size)
         val (video, other) = items.filter { it.app != null }
-        assertEquals(video.gradientColors, other.gradientColors)
+        for ((app, tile) in apps.zip(listOf(video, other))) {
+            val (dark, light) = BridgedAppAppearance.gradient(app)
+            assertEquals(listOf(Color(0xFF000000 or dark.toLong()), Color(0xFF000000 or light.toLong())), tile.gradientColors)
+            assertFalse(dashboardItems().any { it.gradientColors == tile.gradientColors })
+        }
         assertTrue(items.any { it.id == "browser" && it.screen == Screen.Browser && it.app == null })
     }
 

@@ -63,7 +63,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import com.playbridge.sender.browser.BridgedApp
 
 internal data class DashboardReorderTile(
     val id: String,
@@ -71,7 +71,7 @@ internal data class DashboardReorderTile(
     /** The tile's own icon and gradient, so the list reads like the Dashboard. */
     val icon: ImageVector = Icons.Default.Apps,
     val gradient: List<Color> = emptyList(),
-    val iconUrl: String? = null,
+    val app: BridgedApp? = null,
     val subtitle: String? = null,
 )
 
@@ -274,8 +274,8 @@ internal fun DashboardReorderDialog(
                                     ),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                if (tile.iconUrl != null) {
-                                    AsyncImage(model = tile.iconUrl, contentDescription = null, modifier = Modifier.fillMaxSize())
+                                if (tile.app != null) {
+                                    BridgedAppIcon(tile.app, modifier = Modifier.fillMaxSize())
                                 } else {
                                     Icon(
                                         tile.icon, contentDescription = null, modifier = Modifier.size(18.dp),
