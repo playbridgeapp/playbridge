@@ -27,7 +27,6 @@ internal fun rememberDashboardTileStates(
     nativeConnected: Boolean,
     iptvPlaylists: Int,
     collections: Int,
-    debridProvider: String?,
     webSocketClient: WebSocketClient = koinInject(),
     castDiagnostics: CastAttemptDiagnostics = koinInject(),
     replayStore: CastReplayStore = koinInject(),
@@ -73,8 +72,6 @@ internal fun rememberDashboardTileStates(
         ),
         iptvPlaylists = iptvPlaylists,
         collections = collections,
-        debridLinked = debridProvider != null,
-        debridProvider = debridProvider,
         castHistoryEmpty = commandHistory?.let { it.isEmpty() && attempts.isEmpty() },
         lastCastTitle = lastCastTitle,
     )

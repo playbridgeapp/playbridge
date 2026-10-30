@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Destination selection and phone playback use the same native state as Library. */
+/** Destination selection and phone playback use the same native destination state. */
 class PagePlaybackCoordinator(
     private val context: Context,
     private val connection: ConnectionViewModel,

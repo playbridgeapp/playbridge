@@ -29,7 +29,7 @@ fun normalizeUrl(input: String): String {
         trimmed.startsWith("about:", ignoreCase = true) ||
         Regex("^[a-z][a-z0-9+.-]*://", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
     ) return trimmed
-    if (listOf("file:", "data:", "blob:", "mailto:", "tel:", "magnet:").any { trimmed.startsWith(it, ignoreCase = true) }) return trimmed
+    if (listOf("file:", "data:", "blob:", "mailto:", "tel:").any { trimmed.startsWith(it, ignoreCase = true) }) return trimmed
     if (trimmed.any(Char::isWhitespace)) return searchUrl(trimmed)
     val authority = trimmed.lowercase(Locale.ROOT).takeWhile { it !in "/?#" }
     if (authority.startsWith("[") && authority.contains("]")) {
@@ -52,6 +52,7 @@ fun normalizeUrl(input: String): String {
         host.endsWith(".lan") || (hasPort && !host.contains("."))
     return when {
         local || ipv4 -> "http://$trimmed"
+        !hasPort && Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE).containsMatchIn(trimmed) -> trimmed
         hasPort || trimmed.contains(".") -> "https://$trimmed"
         else -> searchUrl(trimmed)
     }

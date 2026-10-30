@@ -105,17 +105,10 @@ class ClipboardClassifierTest {
     }
 
     @Test
-    fun `classify recognizes magnet links`() {
-        val magnet = "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335de7ece74fed&dn=test"
-        assertEquals(
-            ClipboardSuggestion.Magnet(magnet),
-            ClipboardClassifier.classify(magnet)
-        )
-        val upperMagnet = "MAGNET:?xt=urn:btih:test"
-        assertEquals(
-            ClipboardSuggestion.Magnet(upperMagnet),
-            ClipboardClassifier.classify(upperMagnet)
-        )
+    fun `unsupported schemes have no clipboard suggestion`() {
+        for (uri in listOf("magnet:?xt=urn:btih:synthetic", "MAGNET:fixture", "stremio://fixture", "unhandled:fixture")) {
+            assertEquals(null, ClipboardClassifier.classify(uri))
+        }
     }
 
     @Test
@@ -164,10 +157,7 @@ class ClipboardClassifierTest {
             ClipboardSuggestion.Link("https://192.168.1.1:8080"),
             ClipboardClassifier.classify("192.168.1.1:8080,")
         )
-        assertEquals(
-            ClipboardSuggestion.Magnet("magnet:?xt=urn:btih:123"),
-            ClipboardClassifier.classify("magnet:?xt=urn:btih:123.")
-        )
+        assertEquals(null, ClipboardClassifier.classify("magnet:?xt=urn:btih:synthetic."))
     }
 
     @Test

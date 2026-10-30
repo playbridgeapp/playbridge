@@ -15,16 +15,15 @@ class DashboardItemsTest {
         Screen.ScreenMirror to "screen-mirror",
         Screen.Iptv to "iptv",
         Screen.Collections to "collections",
-        Screen.DebridLibrary to "debrid",
         Screen.CastHistory to "cast-history",
     )
 
     @Test
     fun `every production built-in constructs with its stable ID in both flavors`() {
-        for (debridSupported in listOf(false, true)) {
-            val items = dashboardItems(debridSupported = debridSupported)
+        run {
+            val items = dashboardItems()
             val builtIns = items.filterNot { it.isAddPlaceholder }
-            val expected = builtInIds.filterKeys { debridSupported || it != Screen.DebridLibrary }
+            val expected = builtInIds
             assertEquals(expected, builtIns.associate { it.screen to it.id })
             assertEquals(expected.size + 1, items.size)
             assertEquals(items.size, items.map { it.id }.distinct().size)
@@ -33,26 +32,25 @@ class DashboardItemsTest {
 
     @Test
     fun `Library, Play on and Remote are no longer tiles`() {
-        val ids = dashboardItems(debridSupported = true).map { it.id }
-        for (removed in listOf("library", "connection", "remote")) assertFalse(removed in ids)
-        assertFalse(dashboardItems().any { it.screen == Screen.Remote || it.screen == Screen.Library })
+        val ids = dashboardItems().map { it.id }
+        for (removed in listOf("library", "debrid", "connection", "remote")) assertFalse(removed in ids)
+        assertFalse(dashboardItems().any { it.screen == Screen.Remote })
     }
 
     @Test
     fun `every tile has its own colour`() {
-        val gradients = dashboardItems(debridSupported = true).filterNot { it.isAddPlaceholder }.map { it.gradientColors }
+        val gradients = dashboardItems().filterNot { it.isAddPlaceholder }.map { it.gradientColors }
         assertEquals(gradients.size, gradients.distinct().size)
         assertTrue(dashboardItems().single { it.isAddPlaceholder }.gradientColors.isEmpty())
     }
 
     @Test
     fun `unknown state shows the neutral in-use subtitles`() {
-        val subtitles = dashboardItems(debridSupported = true).associate { it.id to it.subtitle }
+        val subtitles = dashboardItems().associate { it.id to it.subtitle }
         assertEquals("Videos, music, photos", subtitles["phone-files"])
         assertEquals("Show this phone", subtitles["screen-mirror"])
         assertEquals("Live channels", subtitles["iptv"])
         assertEquals("Your playlists", subtitles["collections"])
-        assertEquals("Cloud files", subtitles["debrid"])
         assertEquals("Recent casts", subtitles["cast-history"])
     }
 
@@ -60,14 +58,13 @@ class DashboardItemsTest {
     fun `not set up subtitles tell people what to do first`() {
         val states = DashboardTileStates(
             mediaAccess = false, mirror = MirrorTileState.NeedsTv, iptvPlaylists = 0, collections = 0,
-            debridLinked = false, castHistoryEmpty = true,
+            castHistoryEmpty = true,
         )
-        val subtitles = dashboardItems(states, debridSupported = true).associate { it.id to it.subtitle }
+        val subtitles = dashboardItems(states).associate { it.id to it.subtitle }
         assertEquals("Allow access", subtitles["phone-files"])
         assertEquals("Pick a TV first", subtitles["screen-mirror"])
         assertEquals("Add a playlist", subtitles["iptv"])
         assertEquals("Create your first", subtitles["collections"])
-        assertEquals("Link an account", subtitles["debrid"])
         assertEquals("Nothing yet", subtitles["cast-history"])
     }
 
@@ -75,12 +72,11 @@ class DashboardItemsTest {
     fun `in use subtitles carry counts, the provider and the last cast`() {
         val states = DashboardTileStates(
             mediaAccess = true, iptvPlaylists = 3, collections = 1,
-            debridLinked = true, debridProvider = "Real-Debrid", castHistoryEmpty = false, lastCastTitle = "Big Buck Bunny",
+            castHistoryEmpty = false, lastCastTitle = "Big Buck Bunny",
         )
-        val subtitles = dashboardItems(states, debridSupported = true).associate { it.id to it.subtitle }
+        val subtitles = dashboardItems(states).associate { it.id to it.subtitle }
         assertEquals("3 playlists", subtitles["iptv"])
         assertEquals("1 collection", subtitles["collections"])
-        assertEquals("Real-Debrid", subtitles["debrid"])
         assertEquals("Last: Big Buck Bunny", subtitles["cast-history"])
     }
 
@@ -128,8 +124,8 @@ class DashboardItemsTest {
 
     @Test
     fun `saved orders drop removed tiles and keep the user's order`() {
-        for (debridSupported in listOf(false, true)) {
-            val available = dashboardItems(debridSupported = debridSupported).map { it.id }
+        run {
+            val available = dashboardItems().map { it.id }
             val oldOrder = listOf("remote", "library") + available.reversed() + "connection"
             val reconciled = DashboardTileOrder.reconcile(oldOrder, available)
             assertEquals(available.reversed(), reconciled)
@@ -139,7 +135,7 @@ class DashboardItemsTest {
 
     @Test
     fun `Browser can't be hidden but every other tile can`() {
-        val order = dashboardItems(debridSupported = true).map { it.id }
+        val order = dashboardItems().map { it.id }
         val visible = DashboardTileOrder.visible(order, order.toSet())
         assertEquals(listOf("browser"), visible)
         assertEquals(order.filterNot { it == "iptv" }, DashboardTileOrder.visible(order, setOf("iptv", "unknown")))

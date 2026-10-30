@@ -77,7 +77,7 @@ internal fun PlayBridgeEdgeShortcut(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var visible by remember(fullscreen) { mutableStateOf(!fullscreen) }
-    // Nuvio's dock keeps the same charcoal glass and pale foreground in both themes.
+    // The dock keeps the same charcoal glass and pale foreground in both themes.
     val glassForeground = DockGlass.foreground
     val glassIcon = DockGlass.mutedForeground
     val handleShape = RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)

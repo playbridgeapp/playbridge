@@ -58,7 +58,7 @@ class RemoteReturnTargetTest {
 
     @Test
     fun `native screen return preserves its detail destination`() {
-        val detail = Screen.LibraryDetail("123", "series", "addon")
+        val detail = Screen.CollectionDetail(123)
         assertEquals(
             RemoteReturnTarget(detail),
             resolveRemoteReturnTarget(detail, "app-tab", listOf(app), tabs),
@@ -75,7 +75,7 @@ class RemoteReturnTargetTest {
 
     @Test
     fun `dashboard close returns to main places but not to screens opened from it`() {
-        listOf(Screen.Browser, Screen.Library, Screen.DebridLibrary, Screen.LibraryDetail("tt1", "movie"))
+        listOf(Screen.Browser)
             .forEach { assertEquals(true, isDashboardReturnPlace(it)) }
         listOf(Screen.Settings, Screen.PhoneFiles, Screen.Remote, Screen.Dashboard)
             .forEach { assertEquals(false, isDashboardReturnPlace(it)) }

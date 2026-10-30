@@ -21,7 +21,7 @@ import mozilla.components.feature.addons.Addon
  * Dialog showing available addons from AMO for installation.
  */
 @Composable
-fun AddonInstallDialog(
+fun ExtensionInstallDialog(
     availableAddons: List<Addon>,
     onInstall: (Addon) -> Unit,
     onDismiss: () -> Unit
