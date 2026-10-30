@@ -287,7 +287,7 @@ test("progressWebhook rejection anywhere: envelope, payload, or items", () => {
   );
 });
 
-test("Desktop page bridge script defaults: playback 0, nativePlugins 0, localPlaybackOrientation absent", (t) => {
+test("Desktop page bridge defaults to no playback and omits retired plugin capabilities", (t) => {
   let sequence = 0;
   const world = pageWorld({ crypto: { randomUUID: () => `test-${++sequence}` } });
   t.after(world.close);
@@ -297,7 +297,7 @@ test("Desktop page bridge script defaults: playback 0, nativePlugins 0, localPla
 
   // Capabilities
   assert.equal(world.window.playbridge.capabilities.playback, 0, "desktop playback must default to 0");
-  assert.equal(world.window.playbridge.capabilities.nativePlugins, 0, "desktop nativePlugins must be 0");
+  assert.equal(world.window.playbridge.capabilities.nativePlugins, undefined, "retired plugin capability must be absent");
   assert.equal(world.window.playbridge.capabilities.localPlaybackOrientation, undefined, "localPlaybackOrientation must be absent");
   assert.equal(world.window.playbridge.capabilities.linkedCast, 1);
 });
@@ -701,7 +701,7 @@ test("Desktop page bridge accepts ONLY playback (0/1) and linkedCast from capabi
   assert.ok(channel);
   assert.equal(world.window.playbridge.capabilities.playback, 0);
   assert.equal(world.window.playbridge.capabilities.linkedCast, 1);
-  assert.equal(world.window.playbridge.capabilities.nativePlugins, 0);
+  assert.equal(world.window.playbridge.capabilities.nativePlugins, undefined);
   assert.equal(world.window.playbridge.capabilities.localPlaybackOrientation, undefined);
 
   // Send capabilities message with playback, linkedCast, and unauthorized keys
@@ -720,7 +720,7 @@ test("Desktop page bridge accepts ONLY playback (0/1) and linkedCast from capabi
   await delivered(() => world.window.playbridge.capabilities.playback === 1);
   assert.equal(world.window.playbridge.capabilities.playback, 1);
   assert.equal(world.window.playbridge.capabilities.linkedCast, 0);
-  assert.equal(world.window.playbridge.capabilities.nativePlugins, 0, "nativePlugins must not be updated by capabilities message");
+  assert.equal(world.window.playbridge.capabilities.nativePlugins, undefined, "retired plugin capability must not be restored by a capabilities message");
   assert.equal(world.window.playbridge.capabilities.localPlaybackOrientation, undefined, "localPlaybackOrientation must not be set");
   assert.equal((world.window.playbridge.capabilities as any).unauthorizedKey, undefined);
 

@@ -154,8 +154,7 @@ export function initDesktopPageBridge(bootEventName: string): void {
     linkedCast: 1,
     explicitHeaders: 1,
     privateNetworkOriginPermission: 1,
-    playback: 0,
-    nativePlugins: 0
+    playback: 0
   });
   win.playbridge.getPlaybackDestination = function() { return request('destination', null, {}); };
   win.playbridge.choosePlaybackDestination = function(options: any) { return request('choose_destination', null, options || {}); };
