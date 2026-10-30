@@ -49,6 +49,13 @@ class PlayBridgeApplication : Application() {
         // cold start isn't blocked on DB verification / cacheDir scans.
         applicationScope.launch(Dispatchers.IO) {
             runCatching {
+                com.playbridge.sender.data.settings.RetiredContentCleanup.run(
+                    this@PlayBridgeApplication,
+                    org.koin.core.context.GlobalContext.get().get(),
+                )
+            }.onFailure { Log.w(TAG, "Retired content cleanup will retry on next start") }
+
+            runCatching {
                 com.playbridge.sender.data.history.DatabaseProvider.getDatabase(this@PlayBridgeApplication)
             }
             runCatching {
