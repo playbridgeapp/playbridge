@@ -1,9 +1,13 @@
 package com.playbridge.sender.browser
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -18,54 +22,72 @@ data class BridgedApp(
     val startUrl: String,
     val iconUrl: String?,
     val tabId: String? = null,
+    val tileColorId: String? = null,
+    val themeColor: String? = null,
 ) {
-    fun editing(name: String, homeUrl: String): BridgedApp? {
+    fun editing(name: String, homeUrl: String, tileColorId: String? = this.tileColorId): BridgedApp? {
         val trimmedName = name.trim()
         val trimmedUrl = homeUrl.trim()
         if (trimmedName.isEmpty() || trimmedName.length > 60 ||
             BridgedAppStore.originFor(trimmedUrl) != origin) return null
-        return copy(name = trimmedName, startUrl = trimmedUrl)
+        return copy(name = trimmedName, startUrl = trimmedUrl, tileColorId = BridgedAppAppearance.paletteId(tileColorId))
     }
 }
 
 /** The installed list is local to this PlayBridge installation; cast grants remain separate. */
 class BridgedAppStore(context: Context) {
+    private val appContext = context.applicationContext
+    private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val iconJobs = mutableMapOf<String, Job>()
     private val prefs = context.applicationContext.getSharedPreferences("bridged_apps", Context.MODE_PRIVATE)
     private val mutableApps = MutableStateFlow(read())
     val apps: StateFlow<List<BridgedApp>> = mutableApps
 
-    fun install(app: BridgedApp) = update { existing ->
-        existing.filterNot { it.origin == app.origin } + app.copy(tabId = existing.find { it.origin == app.origin }?.tabId)
+    fun install(app: BridgedApp) {
+        iconJobs.remove(app.origin)?.cancel()
+        iconJobs[app.origin] = iconScope.launch { runCatching { BridgedAppIconCache.load(appContext, app) } }
+        update { existing ->
+            existing.filterNot { it.origin == app.origin } + app.copy(
+                tabId = existing.find { it.origin == app.origin }?.tabId,
+                tileColorId = existing.find { it.origin == app.origin }?.tileColorId ?: app.tileColorId,
+            )
+        }
     }
 
-    fun edit(origin: String, name: String, homeUrl: String): Boolean {
-        val edited = mutableApps.value.find { it.origin == origin }?.editing(name, homeUrl) ?: return false
+    fun edit(
+        origin: String,
+        name: String,
+        homeUrl: String,
+        tileColorId: String? = mutableApps.value.find { it.origin == origin }?.tileColorId,
+    ): Boolean {
+        val edited = mutableApps.value.find { it.origin == origin }?.editing(name, homeUrl, tileColorId) ?: return false
         update { apps -> apps.map { if (it.origin == origin) edited else it } }
         return true
     }
 
-    fun remove(origin: String) = update { it.filterNot { app -> app.origin == origin } }
+    fun remove(origin: String) {
+        iconJobs.remove(origin)?.cancel()
+        update { it.filterNot { app -> app.origin == origin } }
+        BridgedAppIconCache.remove(appContext, origin)
+    }
+
+    fun refreshDeclaration(declaration: BridgedApp) = update { apps ->
+        apps.map { if (it.origin == declaration.origin) it.copy(
+            iconUrl = declaration.iconUrl, themeColor = declaration.themeColor,
+        ) else it }
+    }
 
     fun setTab(origin: String, tabId: String?) = update { apps ->
         apps.map { if (it.origin == origin) it.copy(tabId = tabId) else it }
     }
 
     private fun write(apps: List<BridgedApp>) {
-        prefs.edit().putString("installed", JSONArray().apply {
-            apps.forEach { app ->
-                put(JSONObject().apply {
-                    put("origin", app.origin)
-                    put("name", app.name)
-                    put("startUrl", app.startUrl)
-                    put("iconUrl", app.iconUrl)
-                    put("tabId", app.tabId)
-                })
-            }
-        }.toString()).apply()
+        prefs.edit().putString("installed", encodeInstalled(apps)).apply()
     }
 
     private fun update(transform: (List<BridgedApp>) -> List<BridgedApp>) {
         val next = transform(mutableApps.value)
+        if (next == mutableApps.value) return
         write(next)
         mutableApps.value = next
     }
@@ -75,6 +97,20 @@ class BridgedAppStore(context: Context) {
     }.getOrDefault(emptyList())
 
     companion object {
+        internal fun encodeInstalled(apps: List<BridgedApp>): String = JSONArray().apply {
+            apps.forEach { app ->
+                put(JSONObject().apply {
+                    put("origin", app.origin)
+                    put("name", app.name)
+                    put("startUrl", app.startUrl)
+                    put("iconUrl", app.iconUrl)
+                    put("tabId", app.tabId)
+                    put("tileColorId", BridgedAppAppearance.paletteId(app.tileColorId))
+                    put("themeColor", BridgedAppAppearance.themeColor(app.themeColor))
+                })
+            }
+        }.toString()
+
         internal fun decodeInstalled(value: String): List<BridgedApp> = runCatching {
             val array = JSONArray(value)
             (0 until array.length()).mapNotNull { index ->
@@ -83,8 +119,10 @@ class BridgedAppStore(context: Context) {
                 val startUrl = item.optString("startUrl")
                 if (originFor(startUrl) != origin) return@mapNotNull null
                 BridgedApp(origin, item.optString("name"), startUrl,
-                    item.optString("iconUrl").takeIf { it.isNotBlank() && it != "null" },
-                    item.optString("tabId").takeIf { it.isNotBlank() && it != "null" })
+                    item.optString("iconUrl").takeIf { originFor(it) == origin },
+                    item.optString("tabId").takeIf { it.isNotBlank() && it != "null" },
+                    BridgedAppAppearance.paletteId(item.optString("tileColorId")),
+                    BridgedAppAppearance.themeColor(item.optString("themeColor")))
             }
         }.getOrDefault(emptyList())
 
@@ -130,7 +168,8 @@ class BridgedAppStore(context: Context) {
             val iconUrl = json.optString("icon_url").takeIf { it.isNotBlank() }
                 ?.let { runCatching { URL(URL("$origin/"), it).toString() }.getOrNull() }
                 ?.takeIf { originFor(it) == origin }
-            return BridgedApp(origin, name, startUrl, iconUrl)
+            return BridgedApp(origin, name, startUrl, iconUrl,
+                themeColor = BridgedAppAppearance.themeColor(json.opt("theme_color") as? String))
         }
 
         /** A fixed same-origin document is an explicit opt-in; the injected JS API is on every page. */

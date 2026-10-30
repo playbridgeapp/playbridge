@@ -82,7 +82,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.drawscope.Stroke
-import coil.compose.AsyncImage
 import com.playbridge.sender.R
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
@@ -112,7 +111,7 @@ internal fun DashboardScreen(
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
-    onEditBridgedApp: (BridgedApp, String, String) -> Boolean = { _, _, _ -> false },
+    onEditBridgedApp: (BridgedApp, String, String, String?) -> Boolean = { _, _, _, _ -> false },
     ublockSetupStatus: UblockSetupStatus = UblockSetupStatus.CHECKING,
     onCheckUblock: () -> Unit = {},
     onInstallUblock: () -> Unit = {},
@@ -218,7 +217,7 @@ internal fun DashboardScreen(
                 tiles = orderedItems.map {
                     DashboardReorderTile(
                         id = it.id, title = it.title, icon = it.icon, gradient = it.gradientColors,
-                        iconUrl = it.app?.iconUrl, subtitle = if (it.app != null) "Web app" else null,
+                        app = it.app, subtitle = if (it.app != null) "Web app" else null,
                     )
                 },
                 hidden = hidden,
@@ -282,7 +281,7 @@ internal fun DashboardScreen(
         bridgedApps.firstOrNull { it.origin == appToInspectOrigin }?.let { app ->
             BridgedAppInfoDialog(
                 app = app,
-                onSave = { name, homeUrl -> onEditBridgedApp(app, name, homeUrl) },
+                onSave = { name, homeUrl, color -> onEditBridgedApp(app, name, homeUrl, color) },
                 onRemove = { onRemoveBridgedApp(app); appToInspectOrigin = null },
                 onDismiss = { appToInspectOrigin = null },
             )
@@ -598,9 +597,9 @@ private fun DashboardCard(
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                val iconUrl = item.app?.iconUrl
-                if (iconUrl != null) {
-                    AsyncImage(model = iconUrl, contentDescription = null, modifier = Modifier.fillMaxSize())
+                val app = item.app
+                if (app != null) {
+                    BridgedAppIcon(app, modifier = Modifier.fillMaxSize())
                 } else {
                     Icon(item.icon, contentDescription = null, tint = textColor, modifier = Modifier.size(22.dp))
                 }

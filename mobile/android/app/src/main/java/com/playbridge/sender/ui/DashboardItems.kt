@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.playbridge.sender.browser.BridgedAppAppearance
 import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
 
@@ -130,7 +131,9 @@ internal fun dashboardItems(
                 title = app.name,
                 subtitle = "Web app",
                 screen = Screen.Browser,
-                gradientColors = listOf(Color(0xFF263238), Color(0xFF37474F)),
+                gradientColors = BridgedAppAppearance.gradient(app).let { (dark, light) ->
+                    listOf(Color(0xFF000000 or dark.toLong()), Color(0xFF000000 or light.toLong()))
+                },
                 id = "app:${app.origin}",
                 app = app,
             )

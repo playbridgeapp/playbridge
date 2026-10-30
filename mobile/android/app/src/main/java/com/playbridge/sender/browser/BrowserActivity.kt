@@ -925,6 +925,9 @@ class BrowserActivity : ComponentActivity() {
             }
             SideEffect {
                 Components.setBridgedApps(installedBridgedApps)
+                Components.onBridgedAppDeclaration = { declaration ->
+                    scope.launch { bridgedAppStore.refreshDeclaration(declaration) }
+                }
                 Components.activeBridgedAppTabId = activeBridgedAppTabId
                 Components.onBridgedAppExternalNavigation = { appTabId, url ->
                     if (activeBridgedAppTabId == appTabId && store.state.selectedTabId == appTabId &&
@@ -940,12 +943,13 @@ class BrowserActivity : ComponentActivity() {
                 onDispose {
                     Components.activeBridgedAppTabId = null
                     Components.onBridgedAppExternalNavigation = null
+                    Components.onBridgedAppDeclaration = null
                 }
             }
             LaunchedEffect(currentOrigin, selectedTabId, currentScreen) {
                 availableBridgedApp = if (currentScreen == Screen.Browser && currentOrigin != null &&
                     selectedTabId != activeBridgedAppTabId) {
-                    BridgedAppStore.discover(currentUrl)
+                    BridgedAppStore.discover(currentUrl)?.also(bridgedAppStore::refreshDeclaration)
                 } else null
             }
             LaunchedEffect(currentUrl, activeBridgedAppTabId) {
@@ -2673,8 +2677,8 @@ class BrowserActivity : ComponentActivity() {
                             showFindBar = false
                             currentScreen = Screen.Browser
                         },
-                        onEditBridgedApp = { app, name, homeUrl ->
-                            val saved = bridgedAppStore.edit(app.origin, name, homeUrl)
+                        onEditBridgedApp = { app, name, homeUrl, color ->
+                            val saved = bridgedAppStore.edit(app.origin, name, homeUrl, color)
                             if (saved) {
                                 val apps = bridgedAppStore.apps.value
                                 val tab = store.state.tabs.firstOrNull { it.id == app.tabId }

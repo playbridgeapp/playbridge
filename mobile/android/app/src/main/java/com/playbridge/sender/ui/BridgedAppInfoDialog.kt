@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -44,7 +43,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.playbridge.sender.browser.BridgedAppAppearance
 import com.playbridge.sender.browser.BridgedApp
 
 /** Web app details: rename, change the home page or remove an installed web app. */
@@ -52,13 +58,14 @@ import com.playbridge.sender.browser.BridgedApp
 @Composable
 internal fun BridgedAppInfoDialog(
     app: BridgedApp,
-    onSave: (String, String) -> Boolean,
+    onSave: (String, String, String?) -> Boolean,
     onRemove: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     // Drafts survive Activity recreation; edits keep the app's origin, icon, tab and tile slot.
     var name by rememberSaveable(app.origin) { mutableStateOf(app.name) }
     var homeUrl by rememberSaveable(app.origin) { mutableStateOf(app.startUrl) }
+    var colorId by rememberSaveable(app.origin) { mutableStateOf(BridgedAppAppearance.paletteId(app.tileColorId)) }
     var confirmRemove by rememberSaveable(app.origin) { mutableStateOf(false) }
     var saveFailed by rememberSaveable(app.origin) { mutableStateOf(false) }
     val valid = app.editing(name, homeUrl) != null
@@ -93,14 +100,12 @@ internal fun BridgedAppInfoDialog(
                     modifier = Modifier
                         .size(52.dp)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                        .background(Brush.linearGradient(BridgedAppAppearance.gradient(app.copy(tileColorId = colorId)).let { (dark, light) ->
+                            listOf(Color(0xFF000000 or dark.toLong()), Color(0xFF000000 or light.toLong()))
+                        })),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (app.iconUrl != null) {
-                        AsyncImage(model = app.iconUrl, contentDescription = null, modifier = Modifier.fillMaxSize())
-                    } else {
-                        Icon(Icons.Default.Apps, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    BridgedAppIcon(app, Modifier.fillMaxSize().padding(6.dp))
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -128,6 +133,14 @@ internal fun BridgedAppInfoDialog(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth().testTag("bridged-app-home-url"),
             )
+            Text("Tile color", style = MaterialTheme.typography.titleSmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val automatic = BridgedAppAppearance.gradient(app.copy(tileColorId = null))
+                TileColorSwatch("Automatic", automatic, colorId == null) { colorId = null }
+                BridgedAppAppearance.palette.forEach { color ->
+                    TileColorSwatch(color.name, color.dark to color.light, colorId == color.id) { colorId = color.id }
+                }
+            }
             if (!valid || saveFailed) {
                 Text(
                     if (saveFailed) "This app could not be saved. It may have been removed."
@@ -136,6 +149,7 @@ internal fun BridgedAppInfoDialog(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { confirmRemove = true },
@@ -148,10 +162,29 @@ internal fun BridgedAppInfoDialog(
                 }
                 Button(
                     enabled = valid,
-                    onClick = { if (onSave(name, homeUrl)) onDismiss() else saveFailed = true },
+                    onClick = { if (onSave(name, homeUrl, colorId)) onDismiss() else saveFailed = true },
                     modifier = Modifier.weight(1f).height(48.dp),
                 ) { Text("Save") }
             }
         }
+    }
+}
+
+@Composable
+private fun TileColorSwatch(name: String, stops: Pair<Int, Int>, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .size(width = 76.dp, height = 64.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = "$name tile color" },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(
+                Brush.linearGradient(listOf(Color(0xFF000000 or stops.first.toLong()), Color(0xFF000000 or stops.second.toLong())))
+            ), contentAlignment = Alignment.Center,
+        ) { if (selected) Text("✓", color = Color.White, fontWeight = FontWeight.Bold) }
+        Text(name, style = MaterialTheme.typography.labelSmall)
     }
 }
