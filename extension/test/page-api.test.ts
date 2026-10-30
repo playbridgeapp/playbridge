@@ -116,7 +116,7 @@ test("HMAC destination IDs: per-origin distinct, stable, base64url, and literal 
   assert.equal(typeof storedSecret, "string");
   assert.match(storedSecret, /^[A-Za-z0-9_-]+$/);
 
-  const originA = "https://streams.playbridge.app";
+  const originA = "https://video.example";
   const originB = "https://other-site.com";
   const endpointKey = "playBridge:living-room-tv-uuid";
 
@@ -140,7 +140,7 @@ test("HMAC destination IDs: per-origin distinct, stable, base64url, and literal 
 test("Destination consent gating: pre-consent null id/name, post-consent hmac id/name", async () => {
   const { storage } = memoryStorage();
   const secret = await getOrCreateInstallSecret(storage);
-  const origin = "https://streams.playbridge.app";
+  const origin = "https://video.example";
 
   const tvState: bridge.BridgeState = {
     desktopConnected: true,
@@ -200,7 +200,7 @@ test("Destination consent gating: pre-consent null id/name, post-consent hmac id
 
 test("Website consent persistence, approval, revocation, and private origin grants", async () => {
   const { storage, values } = memoryStorage();
-  const origin = "https://streams.playbridge.app";
+  const origin = "https://video.example";
 
   assert.equal(await isOriginApproved(storage, origin), false);
 
@@ -227,7 +227,7 @@ test("Website consent persistence, approval, revocation, and private origin gran
 test("Destination ID matching and mismatch detection", async () => {
   const { storage } = memoryStorage();
   const secret = await getOrCreateInstallSecret(storage);
-  const origin = "https://streams.playbridge.app";
+  const origin = "https://video.example";
 
   const tvSelection: bridge.DeviceSelection = {
     kind: "tv",
@@ -884,7 +884,7 @@ test("PageCoordinator handles Brave/Chrome missing tab: uses sender.url or docum
     name: "playbridge:page-api",
     sender: {
       frameId: 0,
-      url: "https://streams.playbridge.app/watch",
+      url: "https://video.example/watch",
       documentId: "doc-uuid-1234",
       // Notice: sender.tab is missing (like on Brave)
     },
@@ -1214,32 +1214,32 @@ test("bindPageChannel: when runtime.connect throws or port disconnects, answers 
 });
 
 test("originFromUrl extracts canonical origin from URLs with paths, queries, and hash routes", () => {
-  // Hash route (like streams.playbridge.app/#/movie/tt32261958)
+  // Hash route (like video.example/#/movie/tt32261958)
   assert.equal(
-    originFromUrl("https://streams.playbridge.app/#/movie/tt32261958"),
-    "https://streams.playbridge.app"
+    originFromUrl("https://video.example/#/movie/tt32261958"),
+    "https://video.example"
   );
 
   // Path with query parameters
   assert.equal(
-    originFromUrl("https://streams.playbridge.app/watch?v=123&t=45"),
-    "https://streams.playbridge.app"
+    originFromUrl("https://video.example/watch?v=123&t=45"),
+    "https://video.example"
   );
 
   // Path + query + hash combined
   assert.equal(
-    originFromUrl("https://streams.playbridge.app/player/item?id=abc#t=10s"),
-    "https://streams.playbridge.app"
+    originFromUrl("https://video.example/player/item?id=abc#t=10s"),
+    "https://video.example"
   );
 
   // Bare origin (with or without trailing slash)
   assert.equal(
-    originFromUrl("https://streams.playbridge.app"),
-    "https://streams.playbridge.app"
+    originFromUrl("https://video.example"),
+    "https://video.example"
   );
   assert.equal(
-    originFromUrl("https://streams.playbridge.app/"),
-    "https://streams.playbridge.app"
+    originFromUrl("https://video.example/"),
+    "https://video.example"
   );
 
   // Custom port
@@ -1271,25 +1271,25 @@ test("originFromUrl extracts canonical origin from URLs with paths, queries, and
 
 test("normalizeOrigin stays strict for stored/explicit origin strings and rejects URLs with path, query, or hash", () => {
   assert.equal(
-    normalizeOrigin("https://streams.playbridge.app"),
-    "https://streams.playbridge.app"
+    normalizeOrigin("https://video.example"),
+    "https://video.example"
   );
   assert.equal(
-    normalizeOrigin("https://streams.playbridge.app/"),
-    "https://streams.playbridge.app"
+    normalizeOrigin("https://video.example/"),
+    "https://video.example"
   );
 
   // Strictly rejected when path, query, or hash present
   assert.equal(
-    normalizeOrigin("https://streams.playbridge.app/#/movie/tt32261958"),
+    normalizeOrigin("https://video.example/#/movie/tt32261958"),
     null
   );
   assert.equal(
-    normalizeOrigin("https://streams.playbridge.app/watch"),
+    normalizeOrigin("https://video.example/watch"),
     null
   );
   assert.equal(
-    normalizeOrigin("https://streams.playbridge.app/?query=1"),
+    normalizeOrigin("https://video.example/?query=1"),
     null
   );
 });
@@ -1299,14 +1299,14 @@ test("PageCoordinator handles sender URLs with paths, queries, and hash routes w
   t.after(() => coord.destroy());
   (coord as any).isLinkedPlaybackAvailable = () => true;
 
-  // 1. Hash route URL (e.g. streams.playbridge.app/#/movie/tt32261958)
+  // 1. Hash route URL (e.g. video.example/#/movie/tt32261958)
   let postedHash: any = null;
   const hashListeners: Array<(msg: any) => void> = [];
   const hashPort = {
     name: "playbridge:page-api",
     sender: {
       frameId: 0,
-      url: "https://streams.playbridge.app/#/movie/tt32261958",
+      url: "https://video.example/#/movie/tt32261958",
       documentId: "doc-hash-1",
     },
     postMessage: (m: any) => { postedHash = m; },
