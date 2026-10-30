@@ -288,7 +288,8 @@ private struct ActiveTabView: View {
         let count = tab.isCastingBlocked ? 0 : tab.detector.videos.count
         let enabled = tab.isCastingBlocked || count > 0 || vm.isConnected
         return Button {
-            if tab.isCastingBlocked { tab.showBrowserMessage(BrowserCastingPolicy.message) }
+            // Blocked sites can still be opened in a receiver's own browser; no media is cast.
+            if tab.isCastingBlocked && !vm.supportsBrowser { tab.showBrowserMessage(BrowserCastingPolicy.message) }
             else { showDetected = true }
         } label: {
             ZStack(alignment: .topTrailing) {

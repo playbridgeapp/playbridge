@@ -142,6 +142,11 @@ struct CastSheet: View {
                         }.font(Theme.font(.subheadline)).padding(.horizontal, 16)
                     }
                     if castAction == "browse" { capabilitySelectors }
+                    if tab.isCastingBlocked {
+                        Text("This site doesn't allow casting its videos. You can open the page in the TV's browser.")
+                            .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                            .padding(.horizontal, 16)
+                    }
                     if castAction != "browse" {
                         tabsSection
                         if vm.isAirPlay {
@@ -241,6 +246,7 @@ struct CastSheet: View {
                 selectedTab = tabOrder.first ?? .video
                 if vm.isExternalReceiver { castAction = "play"; attachedSubtitles.removeAll() }
                 if !vm.supportsBrowser && castAction == "browse" { castAction = "play" }
+                if tab.isCastingBlocked && vm.supportsBrowser { castAction = "browse" }
             }
             .onAppear {
                 tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
@@ -255,7 +261,7 @@ struct CastSheet: View {
                 if browseUrl.isEmpty {
                     browseUrl = tab.urlString
                 }
-                if media.isEmpty && vm.supportsBrowser {
+                if (media.isEmpty || tab.isCastingBlocked) && vm.supportsBrowser {
                     castAction = "browse"
                 }
             }
@@ -300,8 +306,10 @@ struct CastSheet: View {
         HStack(spacing: 12) {
             Menu {
                 Picker("Action", selection: $castAction) {
-                    Label("Play", systemImage: "play.fill").tag("play")
-                    if sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
+                    if !tab.isCastingBlocked {
+                        Label("Play", systemImage: "play.fill").tag("play")
+                    }
+                    if !tab.isCastingBlocked && sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
                         Label("Queue", systemImage: "text.badge.plus").tag("queue")
                     }
                     if vm.supportsBrowser {
@@ -801,12 +809,12 @@ struct CastSheet: View {
     }
 
     private func sendAction() {
-        guard !tab.isCastingBlocked else { playbackError = BrowserCastingPolicy.message; return }
         if castAction == "browse" {
             vm.browseTo(url: browseUrl, browserMode: browserMode, desktopMode: tab.isDesktopMode)
             dismiss()
             return
         }
+        guard !tab.isCastingBlocked else { playbackError = BrowserCastingPolicy.message; return }
         guard let video = selectedVideo else { return }
         playbackPreparation?.cancel()
         let attempt = UUID()
