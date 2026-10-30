@@ -48,7 +48,7 @@ remaining risks are:
 **Affected:** Android phone playback, Android TV, Apple TV, desktop playback and
 proxy paths; any shared playback code that applies sender-provided headers.
 
-**Risk:** An `Authorization`, `Cookie`, debrid/API token, or other secret header
+**Risk:** An `Authorization`, `Cookie`, API token, or other secret header
 intended for one origin may be attached to a redirect, HLS/DASH child resource,
 subtitle, artwork request, or proxy rewrite at a different origin. A malicious or
 compromised media endpoint could redirect a receiver to an attacker-controlled

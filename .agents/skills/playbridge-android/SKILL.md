@@ -20,13 +20,13 @@ description: Work across PlayBridge's Android phone, Android TV, and shared Kotl
 2. Run every Gradle command from the project that owns the change.
 3. Preserve TV cleartext stream support and the scoped TLS behavior in `ContentSniffer.kt`.
 4. Keep GeckoView and Media3 versions compatible with both Android roots and `prebuilt/media3/`.
-5. Never log Debrid tokens, pairing credentials, signing material, or authenticated stream URLs.
+5. Never log tokens, pairing credentials, signing material, or authenticated stream URLs.
 6. Preserve Google Cast's physical local-network binding around VPNs, application-ready handshake, fresh-session behavior after receiver exit, and distinction between stopping media and ending the receiver.
 7. For phone media detection / cast-sheet expectations (SPA soft-nav keeps rows, hard load clears, site patterns), see `docs/video-detection.md`. The phone detector is generated from `extension/src/core/` and `extension/src/geckoview/`; change source and run `pnpm build` from `extension/`, then inspect the Kotlin consumer and generated assets together.
 8. For device/emulator control, load `android-adb`. Reuse an authorized target selected by the user; check existing ADB devices and wireless-debugging mDNS before a LAN scan. Use the device's advertised connection port, then the FOSS debug rebuild/install/launch workflow and verify the actual interaction.
 9. For phone `adb logcat` recipes (detection, cast, proxy, TV, downloads), see `mobile/android/docs/logging.md`.
 
-## Website playback and device plugins
+## Website playback
 
 - Read `docs/bridged-apps.md` for installed-app lifecycle, detection opt-out, permissions, and the page API. Keep normal browser tab selection separate from app sessions across process death; preserve the app's identity and return target when opening Dashboard or Remote.
 - Installed apps save a Home URL (initially the manifest’s `start_url`). Fresh process launches and finishing/reopening the Activity start app tabs at that URL without restoring old page history; configuration recreation and Dashboard/Remote switches retain live sessions. `BridgedAppStartup.kt` owns the tab-reset policy. Do not reset ordinary browser tabs or select hidden app tabs during startup cleanup.
@@ -35,8 +35,14 @@ description: Work across PlayBridge's Android phone, Android TV, and shared Kotl
 - Long-press app tiles open Info with name/home editing and confirmed removal. Edits preserve origin, icon, tab identity and tile order; home URLs stay on the installed origin under the existing HTTPS/local-HTTP and no-credentials policy. Update never-loaded tabs after home edits without interrupting live or hibernated pages. Preserve editor selection/drafts across Activity recreation. Removal closes the app session but keeps website data and casting grants; installation management is native UI, not a website API.
 - `PagePlaybackCoordinator.kt` selects local/native/external playback; `PagePlayerSession.kt` and `PlayerActivity.kt` own local progress and lazy queues. The page's `play()` uses the existing device picker and selected destination, including **This device**. Recheck it after asynchronous preparation and reject stale document/session results. Unlink releases website authority while playback continues.
 - A valid bridged-site declaration suppresses automatic detection. **Media detect → Advanced → Detect on bridged sites** is an override, off by default; toggling categories must stop their work, remove existing rows and reject late results.
-- Device Nuvio plugins are opt-in, FOSS-only, and shared by Library and installed Bridged Apps. Keep QuickJS and bundled scraper dependencies in `src/foss/` / `fossImplementation`; `src/play/` advertises no native resolver. Preserve installed-app/top-frame authority, provider code/domain approvals and cancellation. The page may send installed identifiers, never arbitrary code, HTTP fetch commands or account secrets.
 - Coordinate page API changes with `extension/src/geckoview/` and the Apple host; companion Streams UI lives in the separate `bridged-apps` repo.
+
+## Retired content data
+
+The Android sender has no built-in content catalog, provider resolver or provider-script engine.
+Room v25 drops retired content tables; `RetiredContentCleanup` removes their settings and caches
+once at startup on IO. Preserve browser preferences, receiver credentials, downloads, collections,
+IPTV and user-added bridged apps. Older backups ignore retired sections.
 
 ## Verify
 

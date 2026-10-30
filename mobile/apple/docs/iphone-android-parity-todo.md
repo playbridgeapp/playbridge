@@ -48,7 +48,7 @@ All paths below are repository-relative unless prefixed with these aliases:
 | Cast history | Dashboard presents “Coming Soon”; no route in `AppScreen` | Implement dedicated history with privacy rules |
 | Settings | `I/UI/BrowserLibraryScreens.swift`: search engine and data clearing | Add app settings hub, appearance, supported streaming/TV settings and backup |
 | Google Cast | `I/Network/GoogleCastSession.swift`, Apple README: optional adapter | Bonjour discovery, Rust sessions, routing and remote UI implemented; hardware validation pending |
-| Downloads/library/debrid/mirroring | No corresponding routes in current iPhone `AppScreen`; Android has separate feature trees | Separate milestones or explicit deferrals below |
+| Downloads/mirroring | No corresponding routes in current iPhone `AppScreen`; Android has separate feature trees | Separate milestones or explicit deferrals below |
 | Extensions | `I/UI/MenuSheet.swift`: “Coming Soon” entry | Do not promise GeckoView extensions in WKWebView |
 
 ## P0 — Visual baseline and coherent app shell
@@ -183,9 +183,9 @@ References: `A/browser/PopupBlockerSettingsScreen.kt`, `A/settings/ImportExportS
 These are real feature gaps, not excuses to leave the core UI unfinished. Each needs a scoped design and feasibility check before implementation.
 
 - [ ] **PAR-12: Downloads.** Reference `A/downloads/`. Start with supported direct-file downloads, progress/cancel/retry, persistence and Files export; separately scope HLS/offline media. Prove interruption and restart behavior on a physical iPhone before promising background parity.
-- [ ] **PAR-13: Media library/discovery.** Reference `A/library/LibraryScreen.kt`, `LibraryDetailScreen.kt`, `LibrarySettingsScreen.kt` and their data dependencies. Inventory providers, search/detail/source selection and saved state; deliver one complete supported provider path before expanding. Accept when search → details → source → local play/cast is verified with errors and empty states.
+- [x] **PAR-13: Built-in content discovery removed.** It is no longer an Android sender feature or an iOS parity target.
 - [ ] **PAR-14: Google Cast.** Reference `I/Network/GoogleCastSession.swift`, `A/cast/googlecast/` and Apple README. Add discovery, device modeling, routing, readiness/errors and capability-aware remote UI. Preserve ordinary builds without the optional framework. With the framework, verify launch/join + media GET_STATUS, STOP versus receiver exit, fresh sessions after exit and real-device playback. Load Rust/protocol skills and follow native artifact checks.
-- [ ] **PAR-15: Stream routing and debrid.** Reference `A/cast/proxy/`, `A/library/DebridSettingsScreen.kt`, `DebridLibraryScreen.kt`. Record supported direct/local/remote-proxy routes and provider authentication/storage before UI work. Ship only backed routes, verify headers and subtitle propagation, and make dependency on phone lifetime clear. Do not expose provider/settings placeholders.
+- [ ] **PAR-15: Stream routing.** Reference `A/cast/proxy/`. Verify direct, local and remote-proxy routes, request headers, subtitle propagation and phone-lifetime requirements.
 
 ## Proposed intentional differences / deferred scope
 

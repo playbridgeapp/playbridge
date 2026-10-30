@@ -76,7 +76,6 @@ adb logcat -c && adb logcat -v time 'VideoDetector:D' '*:S' | tee /tmp/playbridg
 | On-device player | `PB_PLAYER`, `PlayerActivity` (and related) | Mixed |
 | Media session / playback service | `MediaPlaybackService`, `MediaSessionObserver` | Mixed |
 | Downloads | `playbridge-download`, `DownloadWorker`, `FileStrategy`, `HlsStrategy`, `SegmentDownloader` | Mixed |
-| Library / addons / debrid | `AddonRepository`, `TmdbRepository`, `TorBoxClient`, `NuvioRepository`, `NuvioScraperRunner` | Mixed |
 | Backup | `BackupManager`, `BackupTrigger` | Mixed |
 | Debug HTTP dumps | `PBDebugNetworkRaw` | Yes |
 | App process bootstrap | `PlayBridgeApplication` | Mixed |
@@ -326,17 +325,6 @@ adb logcat -c && adb logcat -v time 'PB_PLAYER:D' 'PB_PLAYER:I' 'PB_PLAYER:W' 'P
 ```bash
 adb logcat -c && adb logcat -v time \
   'playbridge-download:D' 'DownloadWorker:D' 'FileStrategy:D' 'HlsStrategy:D' 'SegmentDownloader:D' \
-  '*:S'
-```
-
----
-
-## Library, addons, debrid, Nuvio
-
-```bash
-adb logcat -c && adb logcat -v time \
-  'AddonRepository:D' 'TmdbRepository:D' 'TorBoxClient:D' \
-  'NuvioRepository:D' 'NuvioScraperRunner:D' \
   '*:S'
 ```
 

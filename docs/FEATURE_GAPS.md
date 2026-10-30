@@ -6,7 +6,7 @@ Audit date: 2026-09-03
 
 This is the code-backed parity matrix for **Android phone vs iOS phone senders** and **all receivers**. It is not the product marketing tables in [`README.md`](../README.md) and not the protocol surface in [`protocol/docs/WSS_FLOW.md`](../protocol/docs/WSS_FLOW.md). When those disagree with this file, trust the code paths listed under Evidence.
 
-Android phone rows describe the **FOSS** flavor unless noted. Play Store builds hide debrid, Nuvio scrapers, and APK self-update.
+Android phone rows describe the **FOSS** flavor unless noted. Play Store builds use the store update flow.
 
 ## Legend
 
@@ -20,7 +20,7 @@ Android phone rows describe the **FOSS** flavor unless noted. Play Store builds 
 
 ## How to use this file
 
-- **iOS porting:** close sender holes against Android FOSS, except rows marked intentionally omitted (e.g. Library/addons for App Store approval).
+- **iOS porting:** close sender holes against Android FOSS.
 - **Receiver parity:** close Apple TV / CLI against Android TV + Desktop.
 - **Do not** duplicate rows into the README matrices unless the product claim should change.
 - When a cell changes, update the mark, the note, and the evidence path in the same edit.
@@ -38,13 +38,11 @@ Android phone rows describe the **FOSS** flavor unless noted. Play Store builds 
 | Phone-hosted browser receiver | Y | — | |
 | GeckoView / WKWebView + HLS/DASH detect | Y | Y | Both drop `blob:` / `data:`; no pure MSE reconstruct. |
 | Quality picker | Y | ~ | iOS DASH tiers are labels; cast still sends the full MPD URL. |
-| Subtitle attach on cast | Y | Y | iOS has no OpenSubtitles / addon search. |
+| Subtitle attach on cast | Y | Y | Selected subtitle resources are supplied by the sender. |
 | Receiver track / speed / boost UI | Y | ~ | iOS parses `tracks` / `player_settings`, never shows or sends them. |
 | Local files | Y | ~ | iOS serves one file at a time. |
 | IPTV (M3U) | Y | Y | No EPG / Xtream on either phone in this audit. |
 | Collections | ~ | ~ | Both cast one item; no collection-as-playlist. |
-| Library / TMDB / Stremio addons | Y | — | Intentionally omitted on iOS for App Store approval (Guideline 5.2.3: open third-party addons + scrapers + debrid resolvers). Not a porting target. |
-| Debrid | Y | — | Intentionally omitted on iOS for App Store approval (Guideline 5.2.3: torrent/magnet resolvers). Not a porting target. Android Play flavor: hidden. |
 | Downloads | Y | — | Android HLS remux is VOD-only; DASH download is a stub kind. |
 | Ad blocking | Y | Y | Android: uBlock AMO. iOS: EasyList/EasyPrivacy WK rules + picker. Phone README still says “curated list only”. |
 | Remote: transport + D-pad + touchpad | Y | Y | iOS seek bar is display-only; no mouse scroll. |

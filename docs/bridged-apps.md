@@ -62,23 +62,7 @@ or item level, even with a null or false value. Linked requests fail with
 session events for page progress. See the [page-API policy](../protocol/page-api/README.md);
 this restriction does not remove trusted-sender WSS webhook support.
 
-## Device plugins on Android FOSS
+## Playback authority
 
-Library and installed Bridged Apps share the device's Nuvio plugin manager and resolver. The resolver is opt-in and initially disabled. The Play flavor does not include the QuickJS plugin runtime; iOS has no native plugin resolver. Library remains accessible during the transition to Streams. Device plugin installation, provider settings and approvals stay on the device and are not imported from a website or its Nuvio cloud profile.
-
-The GeckoView page API extends the existing `window.playbridge` object:
-
-```ts
-playbridge.capabilities.nativePlugins // 1 = supported, 0 = unavailable
-await playbridge.plugins.status() // available, enabled, installed provider identifiers and approval state
-await playbridge.plugins.resolve({
-  repoUrl: 'https://plugins.example/manifest.json',
-  scraperIds: ['example'], tmdbId: '60625', mediaType: 'tv', season: 8, episode: 2
-}) // streams and safe warnings
-await playbridge.plugins.manage() // opens the shared device manager from a user gesture
-playbridge.plugins.cancel() // cancels this document's outstanding resolutions
-```
-
-Only the installed app's top-level document may use the native endpoint. The sender's actual GeckoSession, tab and origin are checked by Android; declaring an app manifest alone does not grant access. Release builds require HTTPS app origins; debug builds also accept local HTTP development origins. Requests contain installed repository and scraper identifiers, never downloaded code, arbitrary HTTP requests, provider settings or credentials. Resolve requests accept at most 32 distinct scraper IDs, and a document may have at most four pending bridge requests. Closing the document or changing its hash route cancels lookups. Native failure, disabled providers and pending approvals must not fall back to executing website plugin code.
-
-Plugin resolution does not remove browser restrictions on playback. A returned stream may still require provider headers, CORS support, a compatible codec, or native casting. The resolver's network client is separate from browser and app authentication, and provider domain access must be approved in device settings.
+Installed bridged apps use the same page casting API and permission model as other websites.
+A website supplies its own playable media URLs and may maintain a linked playlist through the existing queue API.

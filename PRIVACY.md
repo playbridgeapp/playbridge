@@ -39,8 +39,7 @@ beta).
 ## Android phone (sender)
 
 **On the phone.** Browsing history, bookmarks, open tabs, downloads, cast history,
-watch progress and resume positions, settings, saved receivers, and any API keys
-or account details you enter for optional features or backups. Receiver tokens are encrypted with a key
+settings, saved receivers, and credentials you enter for proxies or backups. Receiver tokens are encrypted with a key
 held in the Android Keystore. Clear history from the History screen and remove
 receivers from the Connection screen. Android's own backup can include this app
 data, depending on your device settings.
@@ -56,12 +55,6 @@ data, depending on your device settings.
   downloads its own filter lists.
 - On launch, the app asks playbridge.app whether a newer version exists (see
   [Update checks](#update-checks)).
-- The older built-in library, which is deprecated and will be removed, looks up
-  title details from public metadata services while you browse it. Those
-  services receive the titles and IDs you look up.
-- Optional services you set up yourself, with your own API key or account,
-  receive the requests you make through them. Nothing is sent to them until you
-  set them up.
 - **Bridged apps** are websites that open in the in-app browser and can cast
   through PlayBridge. You can add and remove bridged apps. Each bridged app
   handles data under its own policy.
