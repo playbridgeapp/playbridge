@@ -88,7 +88,7 @@ struct CollectionDetailScreen: View {
         VStack(spacing: 12) {
             Spacer()
             Text("No items yet").font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
-            Text("Add a link here, or use “Add to Collection” from an IPTV channel.")
+            Text("Add a link here, or use “Add to Collection” from a playlist channel.")
                 .font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant).multilineTextAlignment(.center)
             Spacer(); Spacer()
         }

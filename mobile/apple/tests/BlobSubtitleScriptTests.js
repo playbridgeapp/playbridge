@@ -1,10 +1,7 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const vm = require('node:vm');
-const path = require('node:path');
 const { test } = require('node:test');
-const source = fs.readFileSync(path.join(__dirname, '../PlayBridge Phone/PlayBridge Phone/Browser/DetectionScript.swift'), 'utf8')
-  .match(/static let source = #"""\n([\s\S]*?)\n\s*"""#/)[1];
+const { source } = require('./DetectionScriptSource.js');
 const vtt = '\uFEFFWEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n';
 const srt = '1\n00:00:01,000 --> 00:00:02,000\nHello\n';
 const settle = async () => { for (let i = 0; i < 15; i++) await new Promise(resolve => setTimeout(resolve, 0)); };

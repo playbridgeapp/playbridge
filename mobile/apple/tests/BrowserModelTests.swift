@@ -6,7 +6,9 @@ import Foundation
         try BrowserStep3ModelTests.run()
         try BrowserStep4ModelTests.run()
         try NetworkLogCategoryModelTests.run()
+#if PB_DEVELOPER_TOOLS
         try DetectedMediaExportModelTests.run()
+#endif
         try AdblockSiteSettingsModelTests.run()
         let addresses = [
             "localhost:8080": "http://localhost:8080", "localhost/path": "http://localhost/path",

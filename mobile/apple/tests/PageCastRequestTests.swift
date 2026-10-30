@@ -16,6 +16,12 @@ import Foundation
                 rejects(["items": [["id": "episode", "url": media, "progressWebhook": value]]], linked: linked)
             }
         }
+        for host in BrowserCastingPolicy.blockedHosts {
+            do {
+                _ = try PageCastRequest.parse(["url": "https://media.\(host)/movie.mp4"])
+                preconditionFailure("Accepted restricted media host")
+            } catch let error as PageCastError { precondition(error.code == "not_allowed") }
+        }
         let request = try PageCastRequest.parse([
             "items": [["url": media, "title": "Movie", "headers": ["Authorization": "test-token"],
                        "subtitleResources": [["url": "https://media.example/sub.vtt", "headers": ["Origin": "https://example.com"], "language": "en"]],

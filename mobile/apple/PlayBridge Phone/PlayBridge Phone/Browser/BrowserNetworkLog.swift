@@ -104,16 +104,24 @@ final class BrowserNetworkLog: ObservableObject {
 
     /// Redacted by default: bulk exports are what end up pasted publicly.
     var exportText: String { export(redacted: true) }
+#if PB_DEVELOPER_TOOLS
     /// Full URLs, including any tokens in them. Offered separately and labelled as such.
     var fullExportText: String { export(redacted: false) }
+#endif
 
     private func export(redacted: Bool) -> String {
+#if PB_DEVELOPER_TOOLS
         let header = redacted ? "PlayBridge browser network log (URLs redacted; in-memory observations)"
             : "PlayBridge browser network log (full URLs; may contain private tokens)"
         return ([header] + entries.map {
             let page = redacted ? Self.frameLabel($0.page, isSubframe: $0.isSubframe) : $0.page
             return "\($0.date.ISO8601Format()) \($0.method) \($0.kind) \($0.status.map(String.init) ?? $0.state)\n\(redacted ? $0.redactedURL : $0.url)\nPage: \(page) [\($0.isSubframe ? "embedded frame" : "main page")]"
         }).joined(separator: "\n")
+#else
+        return (["PlayBridge browser network log (URLs redacted; in-memory observations)"] + entries.map {
+            "\($0.date.ISO8601Format()) \($0.method) \($0.kind) \($0.status.map(String.init) ?? $0.state)\n\($0.redactedURL)\nPage: \(Self.frameLabel($0.page, isSubframe: $0.isSubframe)) [\($0.isSubframe ? "embedded frame" : "main page")]"
+        }).joined(separator: "\n")
+#endif
     }
 }
 

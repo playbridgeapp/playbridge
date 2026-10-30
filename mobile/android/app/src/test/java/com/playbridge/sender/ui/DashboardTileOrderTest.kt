@@ -7,7 +7,7 @@ class DashboardTileOrderTest {
     private val defaults = listOf("browser", "library", "connection", "screen-mirror", "phone-files", "debrid", "iptv", "collections", "cast-history", "app:https://streams.example")
 
     @Test
-    fun `Streams can be second and Legacy Library third across pages`() {
+    fun `a user-added app can be second across pages`() {
         val order = DashboardTileOrder.move(defaults, defaults.last(), 1)
         assertEquals(listOf("browser", "app:https://streams.example", "library"), order.take(3))
         assertEquals(defaults.toSet(), order.toSet())
@@ -36,85 +36,16 @@ class DashboardTileOrderTest {
     }
 
     @Test
-    fun `new install default order places Browser first, Streams second, and Library legacy third`() {
-        val available = listOf(
-            "browser", "library", "connection", "screen-mirror", "phone-files",
-            "debrid", "iptv", "collections", "cast-history", "app:https://streams.playbridge.app"
-        )
-        val migrated = DashboardTileOrder.migrateOrder(emptyList(), available)
-        assertEquals(
-            listOf(
-                "browser",
-                "app:https://streams.playbridge.app",
-                "library",
-                "connection",
-                "screen-mirror",
-                "phone-files",
-                "debrid",
-                "iptv",
-                "collections",
-                "cast-history",
-            ),
-            migrated
-        )
+    fun `fresh dashboard uses ordinary feature order and no installed apps`() {
+        val available = listOf("browser", "library", "connection", DashboardTileOrder.ADD_WEB_APP_ID)
+        assertEquals(available, DashboardTileOrder.reconcile(emptyList(), available))
     }
 
     @Test
-    fun `existing saved order is migrated to place Streams second and Library legacy third while preserving other tiles order`() {
-        val saved = listOf("browser", "library", "phone-files", "connection", "screen-mirror")
-        val available = listOf(
-            "browser", "library", "connection", "screen-mirror", "phone-files",
-            "debrid", "iptv", "collections", "cast-history", "app:https://streams.playbridge.app"
-        )
-        val migrated = DashboardTileOrder.migrateOrder(saved, available)
-        assertEquals(
-            listOf(
-                "browser",
-                "app:https://streams.playbridge.app",
-                "library",
-                "phone-files",
-                "connection",
-                "screen-mirror",
-                "debrid",
-                "iptv",
-                "collections",
-                "cast-history",
-            ),
-            migrated
-        )
-    }
-
-    @Test
-    fun `existing saved order with Streams already installed moves Streams to position two`() {
-        val saved = listOf("browser", "connection", "app:https://streams.playbridge.app", "library", "debrid")
-        val available = listOf("browser", "library", "connection", "debrid", "app:https://streams.playbridge.app")
-        val migrated = DashboardTileOrder.migrateOrder(saved, available)
-        assertEquals(
-            listOf(
-                "browser",
-                "app:https://streams.playbridge.app",
-                "library",
-                "connection",
-                "debrid",
-            ),
-            migrated
-        )
-    }
-
-    @Test
-    fun `user reorder after migration is preserved on subsequent launches`() {
-        val available = listOf(
-            "browser", "library", "connection", "screen-mirror", "phone-files",
-            "app:https://streams.playbridge.app"
-        )
-        val initialMigrated = DashboardTileOrder.migrateOrder(emptyList(), available)
-        // User moves Streams to the very first position (position 0)
-        val userReordered = DashboardTileOrder.move(initialMigrated, "app:https://streams.playbridge.app", 0)
-        assertEquals(listOf("app:https://streams.playbridge.app", "browser", "library"), userReordered.take(3))
-
-        // Subsequent launch: migration does NOT rerun; reconcile is used directly with saved order
-        val subsequentOrder = DashboardTileOrder.reconcile(userReordered, available)
-        assertEquals(userReordered, subsequentOrder)
-        assertEquals("app:https://streams.playbridge.app", subsequentOrder.first())
+    fun `existing Streams entry keeps its saved position and new apps append`() {
+        val installed = "app:https://" + "streams" + ".playbridge.app"
+        val saved = listOf("phone-files", installed, "browser", "library")
+        val available = listOf("browser", "library", "connection", "phone-files", installed, "app:https://new.example")
+        assertEquals(saved + listOf("connection", "app:https://new.example"), DashboardTileOrder.reconcile(saved, available))
     }
 }

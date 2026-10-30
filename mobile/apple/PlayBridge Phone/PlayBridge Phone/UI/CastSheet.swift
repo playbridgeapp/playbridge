@@ -66,7 +66,7 @@ struct PlayerItem: Identifiable {
 /// Unified Cast Sheet displaying all detected streams with previews, matching/exceeding Android's CastSheet UX.
 struct CastSheet: View {
     @ObservedObject var detector: VideoDetector
-    private var videos: [DetectedVideo] { detector.videos }
+    private var videos: [DetectedVideo] { detector.videos.filter { tab.allowsCasting($0.url) } }
     let tab: BrowserTab
     @ObservedObject var store: BrowserStore
 
@@ -96,8 +96,10 @@ struct CastSheet: View {
     @State private var playbackPreparation: Task<Void, Never>?
     @State private var playbackPreparationID: UUID?
     @State private var playbackError: String?
+#if PB_DEVELOPER_TOOLS
     @State private var detailsItem: DetectedVideo?
     @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
+#endif
 
     private var streams: [DetectedVideo] { videos.filter(\.isVideo) }
     private var audio: [DetectedVideo] { videos.filter(\.isAudio).sorted { $0.timestamp > $1.timestamp } }
@@ -140,6 +142,11 @@ struct CastSheet: View {
                         }.font(Theme.font(.subheadline)).padding(.horizontal, 16)
                     }
                     if castAction == "browse" { capabilitySelectors }
+                    if tab.isCastingBlocked {
+                        Text("This site doesn't allow casting its videos. You can open the page in the TV's browser.")
+                            .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                            .padding(.horizontal, 16)
+                    }
                     if castAction != "browse" {
                         tabsSection
                         if vm.isAirPlay {
@@ -174,10 +181,12 @@ struct CastSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .accessibilityAction(.escape) { dismiss() }
             .playOnLocalSheet(isPresented: $showDestination, page: $playOnPage, picking: $playOnPicking)
+#if PB_DEVELOPER_TOOLS
             .sheet(item: $detailsItem) { item in
                 DetectedMediaDetailsSheet(item: item, headers: exportHeaders(item),
                                           qualities: detector.qualities[item.id] ?? [])
             }
+#endif
             .sheet(isPresented: $showAddSubtitles) {
                 SubtitleSourcePickerView(detector: nil, detected: [], title: "Add subtitles",
                     onDetected: { _ in false },
@@ -237,6 +246,7 @@ struct CastSheet: View {
                 selectedTab = tabOrder.first ?? .video
                 if vm.isExternalReceiver { castAction = "play"; attachedSubtitles.removeAll() }
                 if !vm.supportsBrowser && castAction == "browse" { castAction = "play" }
+                if tab.isCastingBlocked && vm.supportsBrowser { castAction = "browse" }
             }
             .onAppear {
                 tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
@@ -251,7 +261,7 @@ struct CastSheet: View {
                 if browseUrl.isEmpty {
                     browseUrl = tab.urlString
                 }
-                if media.isEmpty && vm.supportsBrowser {
+                if (media.isEmpty || tab.isCastingBlocked) && vm.supportsBrowser {
                     castAction = "browse"
                 }
             }
@@ -296,8 +306,10 @@ struct CastSheet: View {
         HStack(spacing: 12) {
             Menu {
                 Picker("Action", selection: $castAction) {
-                    Label("Play", systemImage: "play.fill").tag("play")
-                    if sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
+                    if !tab.isCastingBlocked {
+                        Label("Play", systemImage: "play.fill").tag("play")
+                    }
+                    if !tab.isCastingBlocked && sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
                         Label("Queue", systemImage: "text.badge.plus").tag("queue")
                     }
                     if vm.supportsBrowser {
@@ -569,7 +581,7 @@ struct CastSheet: View {
                         onCopyUrl: {
                             UIPasteboard.general.string = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
                         },
-                        onShowDetails: developerTools ? { detailsItem = video } : nil,
+                        onShowDetails: detailsAction(video),
                         onCopyDiagnostics: {
 #if DEBUG
                             UIPasteboard.general.setItems([["public.utf8-plain-text": detector.debugReport(for: video)]],
@@ -720,19 +732,31 @@ struct CastSheet: View {
 
     // MARK: - Helper Methods
 
+#if PB_DEVELOPER_TOOLS
     /// The headers PlayBridge sends for the item, used for its JSON and cURL views.
     private func exportHeaders(_ item: DetectedVideo) -> [String: String] {
         item.isSubtitle ? VideoDetector.subtitleHeaders(for: item) : VideoDetector.mediaHeaders(for: item)
     }
+#endif
+
+    private func detailsAction(_ item: DetectedVideo) -> (() -> Void)? {
+#if PB_DEVELOPER_TOOLS
+        developerTools ? { detailsItem = item } : nil
+#else
+        nil
+#endif
+    }
 
     @ViewBuilder private func mediaExportActions(_ item: DetectedVideo) -> some View {
         Button { UIPasteboard.general.string = item.url } label: { Label("Copy URL", systemImage: "link") }
+#if PB_DEVELOPER_TOOLS
         if developerTools {
             Button {
                 UIPasteboard.general.string = DetectedMediaExport.curl(url: item.url, headers: exportHeaders(item))
             } label: { Label("Copy as cURL", systemImage: "terminal") }
             Button { detailsItem = item } label: { Label("View JSON & cURL", systemImage: "curlybraces") }
         }
+#endif
     }
 
     private func selectVideo(_ video: DetectedVideo) {
@@ -753,10 +777,11 @@ struct CastSheet: View {
     }
 
     private func playOnPhone(_ video: DetectedVideo) {
+        let url = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
+        guard tab.allowsCasting(url) else { playbackError = BrowserCastingPolicy.message; return }
         playbackPreparation?.cancel()
         let attempt = UUID()
         playbackPreparationID = attempt
-        let url = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
         let route = streamRoute
         let configuration = proxyConfiguration
         playbackPreparation = Task { @MainActor in
@@ -769,7 +794,7 @@ struct CastSheet: View {
                 }
                 let media = try await prepare()
                 try Task.checkCancellation()
-                guard playbackPreparationID == attempt else { return }
+                guard playbackPreparationID == attempt, tab.allowsCasting(url) else { return }
                 let session = PlaybackSession(media: media, route: route, contentType: video.contentType, prepare: prepare)
                 var presentation = PlayerItem(session: session)
 #if DEBUG
@@ -789,11 +814,13 @@ struct CastSheet: View {
             dismiss()
             return
         }
+        guard !tab.isCastingBlocked else { playbackError = BrowserCastingPolicy.message; return }
         guard let video = selectedVideo else { return }
         playbackPreparation?.cancel()
         let attempt = UUID()
         playbackPreparationID = attempt
         let url = selectedQuality?.url ?? video.url
+        guard tab.allowsCasting(url) else { playbackError = BrowserCastingPolicy.message; return }
         let route = streamRoute
         let configuration = proxyConfiguration
         let subtitleURLs = subtitles.map(\.url).filter { attachedSubtitles.contains($0) && video.isVideo }
@@ -818,7 +845,7 @@ struct CastSheet: View {
                         configuration: configuration))
                 }
                 try Task.checkCancellation()
-                guard playbackPreparationID == attempt, vm.isConnected,
+                guard playbackPreparationID == attempt, tab.allowsCasting(url), vm.isConnected,
                       destination == vm.destinationID else { return }
                 if route == .phone, media.url.host == "127.0.0.1" {
                     throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.")
@@ -1069,12 +1096,14 @@ struct VideoCard: View {
                 Button(action: onCopyUrl) {
                     Label("Copy URL", systemImage: "doc.on.doc")
                 }
+#if PB_DEVELOPER_TOOLS
                 if let onShowDetails {
                     Button(action: onShowDetails) {
                         Label("JSON & cURL", systemImage: "curlybraces")
                     }
                     .accessibilityIdentifier("castItemDetails")
                 }
+#endif
             }
             .font(Theme.font(.caption).weight(.semibold))
             .foregroundColor(Theme.primary)

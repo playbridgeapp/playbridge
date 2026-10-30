@@ -6,6 +6,7 @@ trap 'rm -rf "$test_dir"' EXIT
 phone="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$test_dir/cache" \
   "$phone/Models/Models.swift" \
+  "$phone/Browser/BrowserCastingPolicy.swift" \
   "$phone/Browser/PageCastRequest.swift" \
   "$phone/Browser/PageCastPermissions.swift" \
   "$phone/Browser/PageCastSource.swift" \

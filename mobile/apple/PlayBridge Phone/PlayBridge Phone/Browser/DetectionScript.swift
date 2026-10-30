@@ -13,12 +13,24 @@ enum DetectionScript {
       if (window.__playbridgeSetDetectionOptions) return;
       var stopDetection = null;
       var configured = null;
+      var blockedHosts = \#(BrowserCastingPolicy.hostsJSON);
+      function blockedURL(raw) {
+        try {
+          var host = new URL(raw, location.href).hostname.toLowerCase().replace(/\.+$/, '');
+          return blockedHosts.some(function (domain) { return host === domain || host.endsWith('.' + domain); });
+        } catch (_) { return false; }
+      }
+      function blockedPage() {
+        if (blockedURL(location.href)) return true;
+        try { return blockedURL(window.top.location.href); } catch (_) { return false; }
+      }
       function setOptions(value) {
         var next = {};
         ['enabled', 'videos', 'images', 'audio', 'subtitles', 'domScanning', 'networkDetection',
          'responseScanning', 'navigationRescans', 'visibilityOverrides'].forEach(function (key) {
           next[key] = !value || value[key] !== false;
         });
+        next.enabled = next.enabled && !blockedPage();
         window.__playbridgeDetectionEnabled = next.enabled;
         if (configured && JSON.stringify(configured) === JSON.stringify(next)) return;
         if (stopDetection) { var stop = stopDetection; stopDetection = null; stop(); }
@@ -49,12 +61,6 @@ enum DetectionScript {
           target.addEventListener(type, fn, options);
           cleanups.push(function () { target.removeEventListener(type, fn, options); });
         }
-
-        // Players that break when their visibility state is faked (YouTube) run in
-        // "safe mode": detection (fetch/XHR/DOM) still runs, but the visibility shim is
-        // skipped so the player doesn't error out.
-        var __pb_host = (location.hostname || '').toLowerCase();
-        var __pb_safe = /(^|\.)(youtube\.com|youtube-nocookie\.com|googlevideo\.com|youtu\.be)$/.test(__pb_host);
 
         var SEGMENT = /\.(ts|m4s|fmp4|cmfv|cmfa)(\?|$)/i;
         var MEDIA = /\.(m3u8|mpd|mp4|m4v|mov|mkv|webm|avi|flv|wmv|3gp|mp3|m4a|aac|ogg|oga|opus|wav|flac|weba|vtt|srt)(\?|$)/i;
@@ -96,6 +102,7 @@ enum DetectionScript {
             // Resolve protocol-relative / relative URLs against the document.
             try { url = new URL(url, location.href).href; } catch (e) { return; }
           }
+          if (blockedURL(url)) return;
           var path = url.split('?')[0];
           if (SEGMENT.test(path)) return; // HLS/DASH media segments aren't standalone streams
           var kind = mediaKind || (/text\/vtt|subrip/i.test(contentType || '') || /\.(vtt|srt)$/i.test(path) ? 'subtitle' :
@@ -233,6 +240,7 @@ enum DetectionScript {
           if (!active || !options.subtitles) return;
           try {
             var url = resp.url || fallbackURL;
+            if (blockedURL(url)) return;
             var contentType = (resp.headers && resp.headers.get('content-type')) || '';
             var disposition = (resp.headers && resp.headers.get('content-disposition')) || '';
             var dispositionType = subtitleTypeFromDisposition(disposition);
@@ -285,6 +293,7 @@ enum DetectionScript {
           var wrappedFetch = function (input, init) {
             if (!active) return origFetch.apply(this, arguments);
             var url = (typeof input === 'string') ? input : (input && input.url);
+            if (blockedURL(url)) return origFetch.apply(this, arguments);
             if (looksMedia(url)) report(url, '', 'fetch_url');
             var p = origFetch.apply(this, arguments);
             try {
@@ -313,10 +322,10 @@ enum DetectionScript {
         };
         var origSend = XMLHttpRequest.prototype.send;
         var wrappedSend = function () {
-          if (!active) return origSend.apply(this, arguments);
+          if (!active || blockedURL(this.__pb_url)) return origSend.apply(this, arguments);
           var xhr = this;
           xhr.addEventListener('readystatechange', function () {
-            if (!active) return;
+            if (!active || blockedURL(xhr.responseURL || xhr.__pb_url)) return;
             if (xhr.readyState === 2) {
               try {
                 var ct = xhr.getResponseHeader('content-type');
@@ -327,7 +336,7 @@ enum DetectionScript {
             }
           });
           xhr.addEventListener('loadend', function () {
-            if (!active) return;
+            if (!active || blockedURL(xhr.responseURL || xhr.__pb_url)) return;
             try {
               var ct = xhr.getResponseHeader('content-type') || '';
               var disposition = xhr.getResponseHeader('content-disposition') || '';
@@ -432,8 +441,8 @@ enum DetectionScript {
 
         }
 
-        // ── Background-playback shim (skipped in safe mode) ───────────────────────
-        if (options.visibilityOverrides && !__pb_safe) {
+        // ── Background-playback shim (only when detection is allowed) ───────────────────────
+        if (options.visibilityOverrides) {
           try {
             var previousVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
             var previousHidden = Object.getOwnPropertyDescriptor(document, 'hidden');

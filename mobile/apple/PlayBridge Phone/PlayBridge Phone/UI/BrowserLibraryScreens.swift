@@ -14,7 +14,9 @@ struct BrowserSettingsScreen: View {
     @State private var engine = SearchEngine.current
     @State private var showCastPermissions = false
     @State private var showLicences = false
+#if PB_DEVELOPER_TOOLS
     @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
+#endif
     @State private var autoConnect = PlayOnPreferences.autoConnectEnabled()
 
     var body: some View {
@@ -73,11 +75,13 @@ struct BrowserSettingsScreen: View {
                             .disabled(store.activeTab == nil)
                             Button("Network Logs") { showNetworkLogs = true }
                                 .disabled(store.activeTab == nil)
+#if PB_DEVELOPER_TOOLS
                             Toggle("Developer tools", isOn: $developerTools)
                                 .tint(Theme.primary)
                                 .accessibilityIdentifier("browserDeveloperTools")
                             Text("Adds JSON and Copy as cURL for detected media, and a full, unredacted copy of network logs. These can include cookies and tokens.")
                                 .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+#endif
                         }
                     }
                 }

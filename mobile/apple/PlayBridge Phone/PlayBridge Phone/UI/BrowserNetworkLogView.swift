@@ -7,7 +7,9 @@ struct BrowserNetworkLogView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
     @State private var filter: NetworkLogFilter = .all
+#if PB_DEVELOPER_TOOLS
     @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
+#endif
     @State private var domains = ContentBlocker.userBlockedDomains()
     @State private var selectedDomain = ""
     @State private var removing = false
@@ -156,9 +158,11 @@ struct BrowserNetworkLogView: View {
                     Menu {
                         Button("Reload page") { tab.reload() }.disabled(applying)
                         Button("Copy log (URLs redacted)") { UIPasteboard.general.string = log.exportText }
+#if PB_DEVELOPER_TOOLS
                         if developerTools {
                             Button("Copy full log (may contain private tokens)") { UIPasteboard.general.string = log.fullExportText }
                         }
+#endif
                         Button("Clear log", role: .destructive) { log.clear() }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }

@@ -1,13 +1,10 @@
 // Run with: node --test mobile/apple/tests/DetectionScriptTests.js
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const source = fs.readFileSync(path.join(__dirname, '../PlayBridge Phone/PlayBridge Phone/Browser/DetectionScript.swift'), 'utf8')
-  .match(/static let source = #"""\n([\s\S]*?)\n\s*"""#/)[1];
+const { source, hosts } = require('./DetectionScriptSource.js');
 
-function browser(options = {}) {
+function browser(options = {}, fixture = {}) {
   const window = new EventTarget();
   const document = new EventTarget();
   const messages = [], queries = [], observers = [];
@@ -19,7 +16,7 @@ function browser(options = {}) {
   image.addEventListener = (...args) => { imageListeners++; add(...args); };
   image.removeEventListener = (...args) => { imageListeners--; remove(...args); };
   const elements = [image,
-    { tagName: 'VIDEO', src: 'https://media.test/movie.mp4' },
+    { tagName: 'VIDEO', src: fixture.mediaURL || 'https://media.test/movie.mp4' },
     { tagName: 'AUDIO', src: 'https://media.test/sound.mp3' },
     { tagName: 'TRACK', kind: 'subtitles', src: 'https://media.test/subtitles.vtt' }];
   Object.assign(document, {
@@ -33,7 +30,7 @@ function browser(options = {}) {
   let clones = 0;
   let responseBody = 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello';
   const originalFetch = async () => ({
-    url: 'https://media.test/captions',
+    url: fixture.fetchURL || 'https://media.test/captions',
     headers: { get(name) { return name === 'content-type' ? 'text/plain' : null; } },
     clone() {
       clones++;
@@ -47,9 +44,10 @@ function browser(options = {}) {
   const originalOpen = XHR.prototype.open;
   const originalHistory = { pushState() {}, replaceState() {} };
   const history = { ...originalHistory };
-  const location = { href: 'https://site.test/home', hostname: 'site.test' };
+  const pageURL = new URL(fixture.pageURL || 'https://site.test/home');
+  const location = { href: pageURL.href, hostname: pageURL.hostname };
   Object.assign(window, {
-    top: window, fetch: originalFetch,
+    top: fixture.topURL ? { location: { href: fixture.topURL } } : window, location, fetch: originalFetch,
     __playbridgeDetectionOptions: options,
     webkit: { messageHandlers: { playbridge: { postMessage(message) { messages.push(JSON.parse(JSON.stringify(message))); } } } },
   });
@@ -140,4 +138,36 @@ test('master disable restores hooks and visibility state and asks for policy on 
   assert.equal(b.observers.every(o => o.disconnected), true);
   b.window.dispatchEvent(new Event('pageshow'));
   assert.equal(b.messages.at(-1).type, 'detectionPolicyRequest');
+});
+
+for (const host of hosts) {
+  test(`restricted page ${host} does no detection work and leaves playback APIs intact`, async () => {
+    for (const fixture of [{ pageURL: `https://PLAYER.${host.toUpperCase()}:8443/watch` },
+                           { topURL: `https://${host}/watch` }]) {
+      const page = browser({}, fixture);
+      page.options({ enabled: true });
+      assert.equal(page.window.fetch, page.originalFetch);
+      assert.equal(page.XHR.prototype.open, page.originalOpen);
+      assert.equal(page.history.pushState, page.originalHistory.pushState);
+      assert.equal(page.queries.length, 0);
+      assert.equal(page.observers.length, 0);
+      assert.equal(page.imageListeners, 0);
+      assert.equal(page.messages.filter(m => m.type === 'video').length, 0);
+    }
+  });
+}
+
+test('allowed pages refuse restricted media without cloning its response', async () => {
+  const page = browser({}, { mediaURL: 'https://r1.googlevideo.com/video.mp4', fetchURL: 'https://r1.googlevideo.com/captions' });
+  await page.window.fetch('https://r1.googlevideo.com/captions');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(page.clones, 0);
+  assert.equal(page.messages.filter(m => m.type === 'video' && m.url.includes('googlevideo.com')).length, 0);
+});
+
+test('look-alike page hosts retain normal detection', () => {
+  const page = browser({}, { pageURL: 'https://notyoutube.com/watch' });
+  assert.notEqual(page.window.fetch, page.originalFetch);
+  assert.ok(page.queries.length > 0);
+  assert.ok(page.messages.some(m => m.type === 'video'));
 });

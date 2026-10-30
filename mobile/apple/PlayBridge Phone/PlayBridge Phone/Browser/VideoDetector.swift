@@ -256,6 +256,8 @@ final class VideoDetector: ObservableObject {
 
     /// Ingest one `{type:'video', url, contentType, detectedBy, originUrl, ua}` message.
     func ingest(_ body: [String: Any]) {
+        guard BrowserCastingPolicy.allows(pageURL: URL(string: body["originUrl"] as? String ?? ""),
+                                          mediaURL: URL(string: body["url"] as? String ?? "")) else { return }
         if body["subtitleText"] != nil {
             captureSubtitle(body)
             return

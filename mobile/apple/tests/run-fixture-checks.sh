@@ -17,7 +17,7 @@ compiler=(swiftc -module-cache-path "$build_dir/modules" "$source_root/Browser/S
 "$build_dir/ranking"
 "${compiler[@]}" "$source_root/Models/DetectedVideo.swift" \
   "$source_root/Browser/SubtitlePreview.swift" \
-  "$source_root/Browser/VideoDetector.swift" "$test_root/VideoDetectorEnrichmentTests.swift" \
+  "$source_root/Browser/BrowserCastingPolicy.swift" "$source_root/Browser/VideoDetector.swift" "$test_root/VideoDetectorEnrichmentTests.swift" \
   -o "$build_dir/enrichment"
 "$build_dir/enrichment"
 "${compiler[@]}" "$source_root/Browser/SubtitlePreview.swift" \

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#if PB_DEVELOPER_TOOLS
 import SwiftUI
 
 /// JSON and cURL for one detected item, like Android's "View raw message".
@@ -66,3 +67,4 @@ struct DetectedMediaDetailsSheet: View {
         .buttonStyle(.bordered).tint(Theme.primary)
     }
 }
+#endif

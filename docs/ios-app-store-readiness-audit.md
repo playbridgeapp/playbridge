@@ -23,6 +23,15 @@ The Apple TV app has its own checklist: [`tvos-app-store-readiness-audit.md`](tv
 - **Disk-space API not yet declared.** The statically linked media stack references `fstatfs` (`NSPrivacyAccessedAPICategoryDiskSpace`); the app's own code does not. It is left undeclared because no reason code honestly fits mpv's network-filesystem check. Watch the first upload for `ITMS-91053`.
 - Correction: the phone links the standard LGPL **MPVKit** product. SPM also downloads the `*-GPL` artifacts, but they are not embedded.
 
+## Remediation update — October 29, 2026
+
+- **Multicast entitlement granted.** `PB_MULTICAST_ENTITLEMENT = YES`; SSDP discovery works on device builds.
+- **Developer tools are Debug-only.** The `PB_DEVELOPER_TOOLS` compilation condition is set only in the Debug configuration. Release builds have no Developer tools toggle, no Copy as cURL / JSON & cURL views and no unredacted network-log export, and never read the stored preference. The redacted network log stays in all builds.
+- **No casting from YouTube or paid streaming and music services.** `BrowserCastingPolicy` blocks detection, the cast sheet, link casting and `window.playbridge` requests on YouTube, Netflix, Prime Video, Disney+, Hulu, Max, Apple TV+, Paramount+, Peacock, Spotify and Apple Music (and their media hosts). The pages still play on the phone.
+- **IPTV is "Playlists" on iOS,** with "Play your own M3U playlists" and a rights notice on the empty screen. No playlists are bundled or suggested.
+- **The Streams web app is no longer part of PlayBridge.** iOS and Android no longer special-case `streams.playbridge.app`, Android no longer adds it on first launch, and the privacy policy no longer names it. Bridged apps stay a neutral, user-added feature.
+- **README no longer frames iOS omissions as App Store workarounds.** A neutral support page is at `playbridge.app/support` for the App Store support URL.
+
 ## First-party licence update
 
 PlayBridge's own code is now [MPL-2.0](../LICENSE), and its bundled own-code
@@ -250,13 +259,16 @@ Do not submit the iOS build until all applicable items are complete:
 - [x] Add an in-app privacy policy link.
 - [ ] Deploy the corrected privacy policy and verify the live page.
 - [x] Disable automatic SSDP discovery on devices unless the multicast entitlement is enabled (`PB_MULTICAST_ENTITLEMENT`).
-- [ ] Request the multicast entitlement, then set `PB_MULTICAST_ENTITLEMENT = YES` and test discovery on a device.
+- [x] Request the multicast entitlement, then set `PB_MULTICAST_ENTITLEMENT = YES` and test discovery on a device.
 - [x] Clamp MPVKit's embedded framework `MinimumOSVersion` (100.0) to the deployment target.
 - [ ] Check the first upload for `ITMS-91053` (disk space).
 - [x] Resolve the media-download position (Safari-style downloads; no link or stream download actions).
 - [ ] Answer the Content Rights declaration to match.
 - [ ] Put the background keep-alive and website-bridge explanations in the review notes.
-- [ ] Review the companion bridged apps' content; keep add-on/scraper front ends out of the App Store build, listing and review demo.
+- [x] Remove Streams special treatment from PlayBridge; keep add-on/scraper front ends out of the App Store build, listing and review demo.
+- [x] Compile developer tools (cURL/JSON export, unredacted network log) out of Release builds.
+- [x] Block detection and casting on YouTube and paid streaming/music services.
+- [ ] Deploy the website so `playbridge.app/support` and the updated privacy page are live; use the support page as the App Store Support URL.
 - [ ] Complete App Privacy, age rating, Content Rights, export compliance, and EU trader declarations.
 - [x] Make a Release build fail when Cast Core symbols are absent.
 - [ ] Build Cast Core in the clean release pipeline and verify its symbols in the distribution archive's dSYM.

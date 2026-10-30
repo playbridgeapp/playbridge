@@ -30,8 +30,8 @@ struct IptvDetailScreen: View {
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
                         DashboardNavigationButton()
-                        ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to IPTV")
-                        Text("IPTV").font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface)
+                        ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to Playlists")
+                        Text("Playlists").font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface)
                         Spacer()
                     }
                     Spacer()
@@ -58,7 +58,7 @@ struct IptvDetailScreen: View {
     private func header(_ pl: IptvPlaylist) -> some View {
         HStack(spacing: 12) {
             DashboardNavigationButton()
-            ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to IPTV")
+            ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to Playlists")
             VStack(alignment: .leading, spacing: 2) {
                 Text(pl.name).font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface).lineLimit(1)
                 Text("\(pl.channelCount) channels").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)

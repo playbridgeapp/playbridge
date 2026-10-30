@@ -176,7 +176,7 @@ struct DashboardScreen: View {
             DashboardTile(id: "phone-files", title: "Media Library", subtitle: mediaSubtitle, systemImage: "folder",
                           gradient: [Color(hex: 0x311B92), Color(hex: 0x4527A0)], isOpen: isSource(.phoneFiles),
                           action: { nav.navigate(to: .phoneFiles) }),
-            DashboardTile(id: "iptv", title: "IPTV", subtitle: Self.count(iptv.playlists.count, "playlist", empty: "Add a playlist"),
+            DashboardTile(id: "iptv", title: "Playlists", subtitle: "Play your own M3U playlists",
                           systemImage: "tv.fill",
                           gradient: [Color(hex: 0xA3300B), Color(hex: 0xBF360C)], isOpen: isSource(.iptv),
                           action: { nav.navigate(to: .iptv) }),
@@ -200,9 +200,7 @@ struct DashboardScreen: View {
                 DashboardTile(
                     id: "app:\(app.origin.absoluteString)", title: app.name, subtitle: "Web app",
                     systemImage: "app.connected.to.app.below.fill",
-                    gradient: app.origin.absoluteString.hasPrefix(DashboardTileOrder.streamsOrigin)
-                        ? [Color(hex: 0x004D40), Color(hex: 0x00695C)]
-                        : [Color(hex: 0x263238), Color(hex: 0x37474F)],
+                    gradient: [Color(hex: 0x263238), Color(hex: 0x37474F)],
                     isOpen: store.activeBridgedApp?.origin == app.origin,
                     app: app,
                     action: { if store.openBridgedApp(app) != nil { nav.navigate(to: .browser) } }

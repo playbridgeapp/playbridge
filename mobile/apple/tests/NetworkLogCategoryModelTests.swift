@@ -36,7 +36,9 @@ enum NetworkLogCategoryModelTests {
         precondition(log.entries[0].redactedURL.contains("redacted") && !log.entries[0].isBlocked)
         log.record(url: "https://cdn.test/v.m3u8?token=secret-value", page: "https://a.test/watch?id=1", kind: "XHR", state: "Response")
         precondition(!log.exportText.contains("secret-value") && !log.exportText.contains("id=1"), "Default export must stay redacted")
+#if PB_DEVELOPER_TOOLS
         precondition(log.fullExportText.contains("token=secret-value"), "Full export keeps the URL")
+#endif
         precondition(log.entries[1].isBlocked && log.entries[1].category == .document)
         print("CHECK: network log filter categories (media by extension, CSS-initiated fonts/images, blocked state)")
     }

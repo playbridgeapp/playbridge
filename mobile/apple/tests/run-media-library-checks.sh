@@ -1,5 +1,9 @@
 #!/bin/bash
 set -euo pipefail
+if [[ $# -gt 1 || ($# -eq 1 && "${1:-}" != --build-only) ]]; then
+    echo "Usage: $0 [--build-only]" >&2
+    exit 2
+fi
 repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 test_dir="$(mktemp -d /tmp/playbridge-library-checks.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
@@ -30,6 +34,10 @@ xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.
  "$source_dir/Network/PhonePlayerPreferences.swift" "$source_dir/Network/PhonePlaybackEngine.swift" "$source_dir/Network/PlaybackSession.swift" \
  "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
  "$repo_root/mobile/apple/tests/PhoneMediaLibraryTests.swift" -o "$app/LibraryChecks"
+if [[ "${1:-}" == --build-only ]]; then
+    echo 'Media library fixture compiled; runtime and UI checks were not run.'
+    exit 0
+fi
 codesign --force --sign - "$app" >/dev/null
 xcrun simctl install "$simulator" "$app"
 xcrun simctl launch --console "$simulator" com.playbridge.media-library-checks | tee "$test_dir/result"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#if PB_DEVELOPER_TOOLS
 import Foundation
 
 enum DetectedMediaExportModelTests {
@@ -27,3 +28,4 @@ enum DetectedMediaExportModelTests {
         print("CHECK: cast item JSON and shell-safe cURL export")
     }
 }
+#endif

@@ -139,17 +139,7 @@ internal fun DashboardScreen(
     val availableItems = dashboardItems(tileStates, bridgedApps)
     val availableIds = availableItems.map { it.id }
     val orderedIds = remember(savedOrder, availableIds) {
-        if (!prefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
-            val migrated = DashboardTileOrder.migrateOrder(savedOrder, availableIds)
-            prefs.edit()
-                .putString(ORDER_KEY, writeIds(migrated))
-                .putBoolean("migrated_dashboard_tile_order_v1", true)
-                .apply()
-            savedOrder = migrated
-            migrated
-        } else {
-            DashboardTileOrder.reconcile(savedOrder, availableIds)
-        }
+        DashboardTileOrder.reconcile(savedOrder, availableIds)
     }
     val itemsById = availableItems.associateBy { it.id }
     val orderedItems = orderedIds.mapNotNull { itemsById[it] }
@@ -235,7 +225,7 @@ internal fun DashboardScreen(
                 onReorder = { ids -> saveOrder(DashboardTileOrder.reconcile(ids, availableIds)) },
                 onToggleHidden = ::setHidden,
                 onReset = {
-                    saveOrder(DashboardTileOrder.migrateOrder(emptyList(), availableIds))
+                    saveOrder(DashboardTileOrder.reconcile(emptyList(), availableIds))
                     hidden = emptySet()
                     prefs.edit().remove(HIDDEN_KEY).apply()
                 },

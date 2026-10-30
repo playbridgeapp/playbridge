@@ -11,7 +11,7 @@ Version numbers come from the Xcode projects at the time of writing; use the val
 
 ## 1. Multicast Networking entitlement request (iOS only)
 
-Submit this as soon as the account is active, because approval takes time. Form: <https://developer.apple.com/contact/request/networking-multicast>. Only the iPhone app needs it. The Apple TV app and Bonjour discovery (PlayBridge TV receivers and Google Cast, through `NetServiceBrowser`) do not.
+**Granted in October 2026;** `PB_MULTICAST_ENTITLEMENT` is `YES`. The request text is kept for reference. Form: <https://developer.apple.com/contact/request/networking-multicast>. Only the iPhone app needs it. The Apple TV app and Bonjour discovery (PlayBridge TV receivers and Google Cast, through `NetServiceBrowser`) do not.
 
 After approval, set `PB_MULTICAST_ENTITLEMENT = YES` in `mobile/apple/PlayBridge Phone/MulticastEntitlement.xcconfig` (see [`mobile/apple/docs/dlna.md`](../mobile/apple/docs/dlna.md)).
 
@@ -51,7 +51,11 @@ App Review can't pair a receiver it doesn't have. Before submitting:
 >
 > **Downloads.** Like Safari, the browser downloads a file only when a website serves it as a download, after the user confirms. There is no button to download detected video streams.
 >
-> **Discovery.** [Before the multicast entitlement is granted:] DLNA and Roku devices are added by IP address; automatic discovery is limited to PlayBridge TV, Google Cast and AirPlay. [After it is granted: delete this paragraph.]
+> **Streaming services.** PlayBridge doesn't detect or cast video on YouTube or paid streaming and music services (Netflix, Prime Video, Disney+, Hulu, Max, Apple TV+, Paramount+, Peacock, Spotify, Apple Music). Those sites still open and play normally on the iPhone; the cast button explains that the site doesn't allow casting.
+>
+> **Playlists.** Users can add their own M3U playlists, for example from their own media server (Jellyfin, Plex) or a network TV tuner (HDHomeRun). PlayBridge doesn't provide, suggest or link to any playlists or channels.
+>
+> **Discovery.** PlayBridge TV and Google Cast receivers are found with Bonjour. DLNA, Roku and DIAL devices are found with SSDP while the device picker is open, using the multicast networking entitlement Apple granted for this app.
 
 ### tvOS notes
 
@@ -119,7 +123,7 @@ Limits: subtitle 30 characters, promotional text 170, keywords 100 (comma-separa
 **Keywords:**
 
 ```
-stream,video,player,dlna,upnp,browser,remote,iptv,m3u,receiver,smart,hls,mpv,subtitles,media
+stream,video,player,dlna,upnp,browser,remote,playlist,m3u,receiver,smart,hls,mpv,subtitles,media
 ```
 
 **Description:**
@@ -187,7 +191,7 @@ Needs the PlayBridge iPhone app on the same Wi-Fi network. PlayBridge TV doesn't
 
 ### Both apps
 
-- **Support URL:** `https://github.com/playbridgeapp/playbridge/issues` (or a support page on `https://playbridge.app`)
+- **Support URL:** `https://playbridge.app/support` (a plain support page, so App Review doesn't land on the repository first)
 - **Marketing URL:** `https://playbridge.app`
 - **Copyright:** `2026 [your name]`
 - **Privacy Policy URL:** `https://playbridge.app/privacy`

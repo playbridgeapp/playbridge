@@ -149,10 +149,7 @@ internal fun dashboardItems(
                 title = app.name,
                 subtitle = "Web app",
                 screen = Screen.Browser,
-                gradientColors = if (app.origin == DashboardTileOrder.STREAMS_ORIGIN)
-                    listOf(Color(0xFF004D40), Color(0xFF00695C))
-                else
-                    listOf(Color(0xFF263238), Color(0xFF37474F)),
+                gradientColors = listOf(Color(0xFF263238), Color(0xFF37474F)),
                 id = "app:${app.origin}",
                 app = app,
             )

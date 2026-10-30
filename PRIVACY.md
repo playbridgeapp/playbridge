@@ -63,8 +63,8 @@ data, depending on your device settings.
   receive the requests you make through them. Nothing is sent to them until you
   set them up.
 - **Bridged apps** are websites that open in the in-app browser and can cast
-  through PlayBridge. The app adds one, streams.playbridge.app, on first launch,
-  and you can remove it. Each bridged app handles data under its own policy.
+  through PlayBridge. You can add and remove bridged apps. Each bridged app
+  handles data under its own policy.
 - If you turn on automatic backup, the app uploads its export file to the
   S3-compatible storage you configure.
 - Subtitle language detection uses Google ML Kit's on-device language ID. The text

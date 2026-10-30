@@ -26,6 +26,7 @@
       <div>
         <h4>Community</h4>
         <ul>
+          <li><a href="/support">Support</a></li>
           <li><a href={SITE.github} rel="noopener">GitHub</a></li>
           <li><a href={SITE.discord} rel="noopener">Discord</a></li>
           <li><a href="{SITE.github}/blob/main/CONTRIBUTING.md" rel="noopener">Contribute</a></li>

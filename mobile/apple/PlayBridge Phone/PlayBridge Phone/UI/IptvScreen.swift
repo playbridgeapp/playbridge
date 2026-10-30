@@ -43,8 +43,8 @@ struct IptvScreen: View {
         HStack(spacing: 12) {
             DashboardNavigationButton()
             VStack(alignment: .leading, spacing: 2) {
-                Text("IPTV").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
-                Text("Live channels from your playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)
+                Text("Playlists").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                Text("Play your own M3U playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
             Button { showAdd = true } label: {
@@ -52,6 +52,7 @@ struct IptvScreen: View {
                     .font(Theme.font(size: 18, weight: .semibold))
                     .foregroundColor(Theme.primary)
             }
+            .accessibilityLabel("Add playlist")
         }
     }
 
@@ -60,11 +61,11 @@ struct IptvScreen: View {
             Spacer()
             Image(systemName: "tv").font(Theme.font(size: 44)).foregroundColor(Theme.onSurfaceVariant)
             Text("No playlists yet").font(Theme.font(size: 16, weight: .semibold)).foregroundColor(Theme.onSurface)
-            Text("Add an M3U playlist (URL or file) to browse and cast live channels.")
+            Text("Add an M3U playlist (URL or file) to browse and cast live channels.\nPlayBridge doesn't provide channels. Add playlists you have the rights to.")
                 .font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
                 .multilineTextAlignment(.center).padding(.horizontal, 24)
             Button { showAdd = true } label: {
-                Text("Add IPTV playlist")
+                Text("Add playlist")
                     .font(Theme.font(size: 15, weight: .semibold)).foregroundColor(.white)
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 14).fill(Theme.primary))

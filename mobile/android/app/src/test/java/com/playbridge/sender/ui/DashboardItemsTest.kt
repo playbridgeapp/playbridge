@@ -5,7 +5,6 @@ import com.playbridge.sender.browser.BridgedApp
 import com.playbridge.sender.browser.Screen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -113,17 +112,17 @@ class DashboardItemsTest {
     }
 
     @Test
-    fun `installed apps replace the Add web app placeholder and Streams gets its own colour`() {
+    fun `installed apps replace the Add web app placeholder with matching neutral colours`() {
         val placeholder = dashboardItems().single { it.isAddPlaceholder }
         assertEquals(Screen.Browser, placeholder.screen)
         assertEquals(DashboardTileOrder.ADD_WEB_APP_ID, placeholder.id)
-        val apps = listOf(app(DashboardTileOrder.STREAMS_ORIGIN), app("https://jellyfin.example"))
+        val apps = listOf(app("https://video.example"), app("https://jellyfin.example"))
         val items = dashboardItems(bridgedApps = apps)
         assertFalse(items.any { it.isAddPlaceholder })
         assertEquals(apps.map { "app:${it.origin}" }, items.filter { it.app != null }.map { it.id })
         assertEquals(items.size, items.map { it.id }.distinct().size)
-        val (streams, other) = items.filter { it.app != null }
-        assertNotEquals(streams.gradientColors, other.gradientColors)
+        val (video, other) = items.filter { it.app != null }
+        assertEquals(video.gradientColors, other.gradientColors)
         assertTrue(items.any { it.id == "browser" && it.screen == Screen.Browser && it.app == null })
     }
 
