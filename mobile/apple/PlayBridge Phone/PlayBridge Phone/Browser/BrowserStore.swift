@@ -505,7 +505,12 @@ final class BrowserStore: ObservableObject {
 
     @discardableResult
     func editBridgedApp(_ app: BridgedApp, name: String, homeURL: String) -> Bool {
-        guard bridgedApps.edit(app.origin, name: name, homeURL: homeURL) else { return false }
+        editBridgedApp(app, name: name, homeURL: homeURL, tileColorID: bridgedApps.apps.first { $0.origin == app.origin }?.tileColorID)
+    }
+
+    @discardableResult
+    func editBridgedApp(_ app: BridgedApp, name: String, homeURL: String, tileColorID: String?) -> Bool {
+        guard bridgedApps.edit(app.origin, name: name, homeURL: homeURL, tileColorID: tileColorID) else { return false }
         // Keep loaded sessions intact, but update lazy tabs so first open uses the new home.
         let edited = bridgedApps.apps.first { $0.origin == app.origin }!
         for tab in tabs where tab.bridgedAppOrigin == app.origin && tab.loadedWebView == nil {

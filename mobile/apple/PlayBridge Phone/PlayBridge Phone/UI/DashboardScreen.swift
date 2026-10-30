@@ -200,7 +200,7 @@ struct DashboardScreen: View {
                 DashboardTile(
                     id: "app:\(app.origin.absoluteString)", title: app.name, subtitle: "Web app",
                     systemImage: "app.connected.to.app.below.fill",
-                    gradient: [Color(hex: 0x263238), Color(hex: 0x37474F)],
+                    gradient: BridgedAppAppearance.gradient(app).map { Color(hex: $0) },
                     isOpen: store.activeBridgedApp?.origin == app.origin,
                     app: app,
                     action: { if store.openBridgedApp(app) != nil { nav.navigate(to: .browser) } }
@@ -321,12 +321,8 @@ private struct DashboardTileCard: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(tile.isAddPlaceholder ? Theme.surfaceContainerHigh : Color.white.opacity(0.2))
                             .frame(width: 40, height: 40)
-                        if let iconURL = tile.app?.iconURL {
-                            AsyncImage(url: iconURL) { image in
-                                image.resizable().scaledToFit().frame(width: 32, height: 32)
-                            } placeholder: {
-                                Image(systemName: tile.systemImage).foregroundColor(.white)
-                            }
+                        if let app = tile.app {
+                            BridgedAppIcon(app: app).frame(width: 32, height: 32)
                         } else {
                             Image(systemName: tile.systemImage)
                                 .font(Theme.font(size: 20))
@@ -558,9 +554,13 @@ private struct DashboardCustomizeView: View {
                       ? AnyShapeStyle(LinearGradient(colors: tile.gradient, startPoint: .topLeading, endPoint: .bottomTrailing))
                       : AnyShapeStyle(Theme.surfaceContainerHighest))
                 .frame(width: 32, height: 32)
-            Image(systemName: tile.systemImage)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(tile.gradient.count >= 2 ? .white : Theme.onSurfaceVariant)
+            if let app = tile.app {
+                BridgedAppIcon(app: app).frame(width: 24, height: 24)
+            } else {
+                Image(systemName: tile.systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(tile.gradient.count >= 2 ? .white : Theme.onSurfaceVariant)
+            }
         }
         .accessibilityHidden(true)
     }

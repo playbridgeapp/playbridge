@@ -7,6 +7,7 @@ struct BridgedAppInfoView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var homeURL: String
+    @State private var tileColorID: String?
     @State private var showRemove = false
     @State private var saveFailed = false
 
@@ -14,9 +15,10 @@ struct BridgedAppInfoView: View {
         self.app = app
         _name = State(initialValue: app.name)
         _homeURL = State(initialValue: app.startURL.absoluteString)
+        _tileColorID = State(initialValue: BridgedAppAppearance.paletteID(app.tileColorID))
     }
 
-    private var edited: BridgedApp? { app.editing(name: name, homeURL: homeURL) }
+    private var edited: BridgedApp? { app.editing(name: name, homeURL: homeURL, tileColorID: tileColorID) }
 
     var body: some View {
         NavigationStack {
@@ -37,6 +39,7 @@ struct BridgedAppInfoView: View {
                     Text("Opens here after a fresh launch. Must stay on \(app.origin.absoluteString).")
                         .font(Theme.font(size: 12))
                         .foregroundColor(Theme.onSurfaceVariant)
+                    tileColorPicker
                     if edited == nil || saveFailed {
                         Text(saveFailed ? "This app could not be saved. It may have been removed."
                              : "Enter a name of 1–60 characters and a valid home page on this website.")
@@ -51,7 +54,7 @@ struct BridgedAppInfoView: View {
                                 .overlay(Capsule().stroke(Theme.danger.opacity(0.5), lineWidth: 1))
                         }
                         Button {
-                            if store.editBridgedApp(app, name: name, homeURL: homeURL) { dismiss() }
+                            if store.editBridgedApp(app, name: name, homeURL: homeURL, tileColorID: tileColorID) { dismiss() }
                             else { saveFailed = true }
                         } label: {
                             Text("Save")
@@ -86,17 +89,10 @@ struct BridgedAppInfoView: View {
     private var header: some View {
         HStack(spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainerHighest)
-                if let iconURL = app.iconURL {
-                    AsyncImage(url: iconURL) { image in
-                        image.resizable().scaledToFit()
-                    } placeholder: {
-                        Image(systemName: "app.connected.to.app.below.fill").foregroundColor(Theme.onSurfaceVariant)
-                    }
-                    .frame(width: 40, height: 40)
-                } else {
-                    Image(systemName: "app.connected.to.app.below.fill").foregroundColor(Theme.onSurfaceVariant)
-                }
+                RoundedRectangle(cornerRadius: 14).fill(LinearGradient(
+                    colors: BridgedAppAppearance.gradient(edited ?? app).map { Color(hex: $0) },
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+                BridgedAppIcon(app: app).frame(width: 40, height: 40)
             }
             .frame(width: 52, height: 52)
             .accessibilityHidden(true)
@@ -112,6 +108,43 @@ struct BridgedAppInfoView: View {
                     .textSelection(.enabled)
             }
         }
+    }
+
+    private var automaticGradient: [UInt32] {
+        var automatic = app
+        automatic.tileColorID = nil
+        return BridgedAppAppearance.gradient(automatic)
+    }
+
+    private var tileColorPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tile color").font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 76))], spacing: 8) {
+                colorSwatch("Automatic", stops: automaticGradient, id: nil)
+                ForEach(BridgedAppAppearance.palette, id: \.id) { color in
+                    colorSwatch(color.name, stops: [color.dark, color.light], id: color.id)
+                }
+            }
+        }
+    }
+
+    private func colorSwatch(_ name: String, stops: [UInt32], id: String?) -> some View {
+        Button { tileColorID = id } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8).fill(LinearGradient(
+                        colors: stops.map { Color(hex: $0) }, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    if tileColorID == id { Image(systemName: "checkmark").foregroundColor(.white) }
+                }
+                .frame(width: 32, height: 32)
+                Text(name).font(Theme.font(size: 11)).foregroundColor(Theme.onSurface)
+            }
+            .frame(maxWidth: .infinity, minHeight: 60)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name) tile color")
+        .accessibilityAddTraits(tileColorID == id ? .isSelected : [])
     }
 
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
