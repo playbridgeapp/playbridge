@@ -48,34 +48,21 @@ class BridgedAppStoreTest {
     }
 
     @Test
-    fun `seedStreamsLibrary adds Streams on new install`() {
-        val seeded = BridgedAppStore.seedStreamsLibrary(emptyList(), alreadySeeded = false)
-        assertEquals(1, seeded.size)
-        val app = seeded.first()
-        assertEquals(BridgedAppStore.STREAMS_ORIGIN, app.origin)
-        assertEquals("Library", app.name)
-        assertEquals(BridgedAppStore.STREAMS_START_URL, app.startUrl)
-        assertNull(app.iconUrl)
+    fun `fresh install has no preinstalled apps`() {
+        assertTrue(BridgedAppStore.decodeInstalled("[]").isEmpty())
     }
 
     @Test
-    fun `seedStreamsLibrary preserves existing Streams app configuration`() {
-        val customApp = BridgedApp(
-            origin = BridgedAppStore.STREAMS_ORIGIN,
-            name = "My Custom Streams",
-            startUrl = "https://streams.playbridge.app/watch/123",
-            iconUrl = "https://streams.playbridge.app/icon.png",
-        )
-        val seeded = BridgedAppStore.seedStreamsLibrary(listOf(customApp), alreadySeeded = false)
-        assertEquals(listOf(customApp), seeded)
-        assertEquals("My Custom Streams", seeded.first().name)
-        assertEquals("https://streams.playbridge.app/watch/123", seeded.first().startUrl)
-        assertEquals("https://streams.playbridge.app/icon.png", seeded.first().iconUrl)
-    }
-
-    @Test
-    fun `seedStreamsLibrary does not re-add after removal when already seeded`() {
-        val seeded = BridgedAppStore.seedStreamsLibrary(emptyList(), alreadySeeded = true)
-        assertTrue(seeded.isEmpty())
+    fun `existing saved Streams entry survives unchanged as an ordinary app`() {
+        val origin = "https://" + "streams" + ".playbridge.app"
+        val saved = org.json.JSONArray().put(org.json.JSONObject().apply {
+            put("origin", origin)
+            put("name", "My custom library")
+            put("startUrl", "$origin/watch/123")
+            put("iconUrl", "$origin/icon.png")
+            put("tabId", "saved-app-tab")
+        }).toString()
+        val app = BridgedApp(origin, "My custom library", "$origin/watch/123", "$origin/icon.png", "saved-app-tab")
+        assertEquals(listOf(app), BridgedAppStore.decodeInstalled(saved))
     }
 }
