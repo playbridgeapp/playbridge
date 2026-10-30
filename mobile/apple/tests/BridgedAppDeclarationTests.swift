@@ -1,5 +1,10 @@
 import Foundation
 
+/// Installation also saves an automatic tile color; these checks are about everything else.
+private func plain(_ apps: [BridgedApp]) -> [BridgedApp] {
+    apps.map { app in var app = app; app.autoColorID = nil; return app }
+}
+
 private actor Probe {
     var calls = 0
     func run(_ origin: URL) async -> BridgedApp? {
@@ -61,10 +66,10 @@ private actor Probe {
         let store = BridgedAppStore(defaults: defaults, iconCache: nil)
         store.install(parsed)
         store.install(parsed)
-        precondition(store.apps == [parsed], "Installation must deduplicate by origin")
-        precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == [parsed], "Installation must survive relaunch")
+        precondition(plain(store.apps) == [parsed], "Installation must deduplicate by origin")
+        precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == store.apps, "Installation must survive relaunch")
         store.install(BridgedApp(origin: origin, name: "Bad", startURL: URL(string: "https://other.example/")!, iconURL: nil))
-        precondition(store.apps == [parsed], "Invalid saved apps must be rejected")
+        precondition(plain(store.apps) == [parsed], "Invalid saved apps must be rejected")
         let other = BridgedApp(origin: URL(string: "https://second.example/")!, name: "Second", startURL: URL(string: "https://second.example/")!, iconURL: nil)
         store.install(other)
         precondition(!store.edit(origin, name: " ", homeURL: origin.absoluteString))
@@ -72,18 +77,18 @@ private actor Probe {
         for invalid in ["https://other.example/", "https://user:pass@app.example/", "javascript:alert(1)", "http://app.example/"] {
             precondition(!store.edit(origin, name: "Edited", homeURL: invalid))
         }
-        precondition(store.apps == [parsed, other], "Invalid edits must not mutate installations")
+        precondition(plain(store.apps) == [parsed, other], "Invalid edits must not mutate installations")
         precondition(store.edit(origin, name: " Edited ", homeURL: " https://app.example/home?tab=movies#watch "))
         let edited = store.apps[0]
         precondition(edited.name == "Edited" && edited.startURL.absoluteString == "https://app.example/home?tab=movies#watch")
-        precondition(edited.origin == parsed.origin && edited.iconURL == parsed.iconURL && store.apps[1] == other, "Editing must preserve identity, icon and order")
-        precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == [edited, other], "Edits must survive relaunch")
+        precondition(edited.origin == parsed.origin && edited.iconURL == parsed.iconURL && plain([store.apps[1]]) == [other], "Editing must preserve identity, icon and order")
+        precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == [edited, store.apps[1]], "Edits must survive relaunch")
         precondition(!store.edit(URL(string: "https://missing.example/")!, name: "Missing", homeURL: "https://missing.example/"))
         store.remove(origin)
         store.remove(other.origin)
         precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps.isEmpty, "Removal must persist")
         defaults.set(try! JSONEncoder().encode([parsed, parsed]), forKey: "bridged_apps_v1")
-        precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == [parsed], "Duplicate saved origins must be filtered")
+        precondition(plain(BridgedAppStore(defaults: defaults, iconCache: nil).apps) == [parsed], "Duplicate saved origins must be filtered")
         print("PASS: bridged-app manifest, origin cache, installation persistence and removal")
     }
 }

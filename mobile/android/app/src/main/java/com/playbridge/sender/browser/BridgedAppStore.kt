@@ -24,6 +24,8 @@ data class BridgedApp(
     val tabId: String? = null,
     val tileColorId: String? = null,
     val themeColor: String? = null,
+    /** Assigned once at install from the colors other apps aren't using; shown when [tileColorId] is unset. */
+    val autoColorId: String? = null,
 ) {
     fun editing(name: String, homeUrl: String, tileColorId: String? = this.tileColorId): BridgedApp? {
         val trimmedName = name.trim()
@@ -40,17 +42,21 @@ class BridgedAppStore(context: Context) {
     private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val iconJobs = mutableMapOf<String, Job>()
     private val prefs = context.applicationContext.getSharedPreferences("bridged_apps", Context.MODE_PRIVATE)
-    private val mutableApps = MutableStateFlow(read())
+    private val mutableApps = MutableStateFlow(read().let { saved ->
+        BridgedAppAppearance.withAutomaticColors(saved).also { if (it != saved) write(it) }
+    })
     val apps: StateFlow<List<BridgedApp>> = mutableApps
 
     fun install(app: BridgedApp) {
         iconJobs.remove(app.origin)?.cancel()
         iconJobs[app.origin] = iconScope.launch { runCatching { BridgedAppIconCache.load(appContext, app) } }
         update { existing ->
-            existing.filterNot { it.origin == app.origin } + app.copy(
-                tabId = existing.find { it.origin == app.origin }?.tabId,
-                tileColorId = existing.find { it.origin == app.origin }?.tileColorId ?: app.tileColorId,
-            )
+            val previous = existing.find { it.origin == app.origin }
+            BridgedAppAppearance.withAutomaticColors(existing.filterNot { it.origin == app.origin } + app.copy(
+                tabId = previous?.tabId,
+                tileColorId = previous?.tileColorId ?: app.tileColorId,
+                autoColorId = previous?.autoColorId ?: app.autoColorId,
+            ))
         }
     }
 
@@ -107,6 +113,7 @@ class BridgedAppStore(context: Context) {
                     put("tabId", app.tabId)
                     put("tileColorId", BridgedAppAppearance.paletteId(app.tileColorId))
                     put("themeColor", BridgedAppAppearance.themeColor(app.themeColor))
+                    put("autoColorId", BridgedAppAppearance.paletteId(app.autoColorId))
                 })
             }
         }.toString()
@@ -122,7 +129,8 @@ class BridgedAppStore(context: Context) {
                     item.optString("iconUrl").takeIf { originFor(it) == origin },
                     item.optString("tabId").takeIf { it.isNotBlank() && it != "null" },
                     BridgedAppAppearance.paletteId(item.optString("tileColorId")),
-                    BridgedAppAppearance.themeColor(item.optString("themeColor")))
+                    BridgedAppAppearance.themeColor(item.optString("themeColor")),
+                    BridgedAppAppearance.paletteId(item.optString("autoColorId")))
             }
         }.getOrDefault(emptyList())
 

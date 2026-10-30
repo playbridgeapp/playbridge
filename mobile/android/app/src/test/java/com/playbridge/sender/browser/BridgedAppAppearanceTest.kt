@@ -75,6 +75,36 @@ class BridgedAppAppearanceTest {
     }
 
     @Test
+    fun `automatic colors stay unique, deterministic and stable`() {
+        val ids = BridgedAppAppearance.palette.map { it.id }
+        val apps = (1..10).map { BridgedApp("https://app$it.example", "App $it", "https://app$it.example/", null) }
+        val assigned = BridgedAppAppearance.withAutomaticColors(apps)
+        assertEquals(ids.toSet(), assigned.map { it.autoColorId }.toSet())
+        assertEquals(assigned, BridgedAppAppearance.withAutomaticColors(apps))
+        // The first free color starts at the origin's hash.
+        assertEquals(ids[BridgedAppAppearance.paletteIndex(app.origin)], BridgedAppAppearance.withAutomaticColors(listOf(app))[0].autoColorId)
+        // Saved colors never move when apps are removed, reordered or added.
+        val remaining = assigned.drop(3).reversed()
+        assertEquals(remaining, BridgedAppAppearance.withAutomaticColors(remaining))
+        val added = BridgedAppAppearance.withAutomaticColors(remaining + app).last()
+        assertTrue(added.autoColorId in assigned.take(3).map { it.autoColorId })
+        // Past ten apps, the least-used color is reused.
+        val eleventh = BridgedAppAppearance.withAutomaticColors(assigned + app).last()
+        assertEquals(2, (assigned + eleventh).count { it.autoColorId == eleventh.autoColorId })
+        // A manual choice occupies its color; a site theme color frees the app's automatic one.
+        val manual = apps[0].copy(tileColorId = ids[BridgedAppAppearance.paletteIndex(app.origin)])
+        assertTrue(BridgedAppAppearance.withAutomaticColors(listOf(manual, app))[1].autoColorId != manual.tileColorId)
+        val themed = apps[0].copy(themeColor = "#123456", autoColorId = ids[BridgedAppAppearance.paletteIndex(app.origin)])
+        assertEquals(themed.autoColorId, BridgedAppAppearance.withAutomaticColors(listOf(themed, app))[1].autoColorId)
+        assertEquals(assigned[0], BridgedAppStore.decodeInstalled(BridgedAppStore.encodeInstalled(assigned.take(1)))[0])
+        val saved = assigned[0].autoColorId!!
+        val picked = assigned[0].editing("Renamed", assigned[0].startUrl, "teal")!!
+        assertEquals(saved, picked.autoColorId)
+        assertEquals(BridgedAppAppearance.palette.first { it.id == saved }.let { it.dark to it.light },
+            BridgedAppAppearance.gradient(picked.copy(tileColorId = null)))
+    }
+
+    @Test
     fun `round trip edits and cancelled drafts preserve color and old JSON stays automatic`() {
         val colored = app.copy(tileColorId = "teal", themeColor = "#ABC", tabId = "session")
         assertEquals(listOf(colored), BridgedAppStore.decodeInstalled(BridgedAppStore.encodeInstalled(listOf(colored))))

@@ -62,10 +62,39 @@ internal object BridgedAppAppearance {
         return scale(lifted, 0.76) to lifted
     }
 
+    /**
+     * Picks the least-used palette color among [taken], starting from the origin's hash so the
+     * choice is deterministic. Installed apps stay distinct until the palette runs out.
+     */
+    fun assignAutomatic(origin: String, taken: List<String>): String {
+        val start = paletteIndex(origin)
+        val counts = palette.map { color -> taken.count { it == color.id } }
+        val fewest = counts.min()
+        return palette.indices.map { (start + it) % palette.size }.first { counts[it] == fewest }.let { palette[it].id }
+    }
+
+    /** The palette color a tile shows, or null when it shows its site's theme color. */
+    private fun shownPaletteId(app: BridgedApp): String? =
+        paletteId(app.tileColorId) ?: if (parseTheme(app.themeColor) != null) null else paletteId(app.autoColorId)
+
+    /**
+     * Gives every app without one a saved automatic color, in list order. Saved choices never
+     * change, so reordering, adding or removing apps doesn't recolor existing tiles.
+     */
+    fun withAutomaticColors(apps: List<BridgedApp>): List<BridgedApp> {
+        val result = apps.toMutableList()
+        result.indices.filter { paletteId(result[it].autoColorId) == null }.forEach { index ->
+            val taken = result.filterIndexed { other, _ -> other != index }.mapNotNull(::shownPaletteId)
+            result[index] = result[index].copy(autoColorId = assignAutomatic(result[index].origin, taken))
+        }
+        return result
+    }
+
     fun gradient(app: BridgedApp): Pair<Int, Int> {
         palette.find { it.id == app.tileColorId }?.let { return it.dark to it.light }
         parseTheme(app.themeColor)?.let { return themeGradient(it) }
-        return palette[paletteIndex(app.origin)].let { it.dark to it.light }
+        val automatic = palette.find { it.id == app.autoColorId } ?: palette[paletteIndex(app.origin)]
+        return automatic.dark to automatic.light
     }
 
     fun iconCandidates(app: BridgedApp): List<String> =

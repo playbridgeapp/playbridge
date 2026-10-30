@@ -15,7 +15,9 @@ final class BridgedAppStore: ObservableObject {
         self.defaults = defaults
         let saved = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode([BridgedApp].self, from: $0) } ?? []
         var origins = Set<URL>()
-        apps = saved.filter { $0.isValid && origins.insert($0.origin).inserted }
+        let valid = saved.filter { $0.isValid && origins.insert($0.origin).inserted }
+        apps = BridgedAppAppearance.withAutomaticColors(valid)
+        if apps != valid { save() }
         declarationSubscription = NotificationCenter.default.publisher(for: BridgedAppDeclarationCache.didRefresh)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] note in
@@ -26,8 +28,11 @@ final class BridgedAppStore: ObservableObject {
     func install(_ app: BridgedApp) {
         guard app.isValid else { return }
         var app = app
-        if let previous = apps.first(where: { $0.origin == app.origin }) { app.tileColorID = previous.tileColorID }
-        apps = apps.filter { $0.origin != app.origin } + [app]
+        if let previous = apps.first(where: { $0.origin == app.origin }) {
+            app.tileColorID = previous.tileColorID
+            app.autoColorID = previous.autoColorID
+        }
+        apps = BridgedAppAppearance.withAutomaticColors(apps.filter { $0.origin != app.origin } + [app])
         iconTasks.removeValue(forKey: app.origin)?.cancel()
         if let iconCache { iconTasks[app.origin] = Task { _ = await iconCache.load(app) } }
         save()
@@ -58,7 +63,8 @@ final class BridgedAppStore: ObservableObject {
         guard let index = apps.firstIndex(where: { $0.origin == declaration.origin }) else { return }
         let refreshed = BridgedApp(origin: apps[index].origin, name: apps[index].name,
                                 startURL: apps[index].startURL, iconURL: declaration.iconURL,
-                                tileColorID: apps[index].tileColorID, themeColor: declaration.themeColor)
+                                tileColorID: apps[index].tileColorID, themeColor: declaration.themeColor,
+                                autoColorID: apps[index].autoColorID)
         guard apps[index] != refreshed else { return }
         apps[index] = refreshed
         save()

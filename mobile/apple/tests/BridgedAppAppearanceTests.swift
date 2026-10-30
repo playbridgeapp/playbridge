@@ -70,7 +70,9 @@ func checkBridgedAppAppearance() async {
     defer { defaults.removePersistentDomain(forName: suite) }
     let store = BridgedAppStore(defaults: defaults, iconCache: nil)
     store.install(themed)
-    precondition(BridgedAppStore(defaults: defaults, iconCache: nil).apps == [themed])
+    let reloaded = BridgedAppStore(defaults: defaults, iconCache: nil).apps
+    precondition(reloaded.count == 1 && reloaded[0].autoColorID != nil, "Install saves an automatic color")
+    precondition(reloaded.map { app -> BridgedApp in var app = app; app.autoColorID = nil; return app } == [themed])
     precondition(store.edit(origin, name: "Edited", homeURL: "https://app.example/home"))
     precondition(store.apps[0].tileColorID == "teal" && store.apps[0].themeColor == "#abc")
     let beforeDraft = defaults.data(forKey: "bridged_apps_v1")
@@ -150,5 +152,32 @@ func checkBridgedAppAppearance() async {
     await delayed.remove(origin)
     _ = await pending.value
     precondition((try! FileManager.default.contentsOfDirectory(atPath: directory.path)).isEmpty, "Removing an app must fence late downloads")
+    let ids = BridgedAppAppearance.palette.map(\.id)
+    let ten = (1...10).map { BridgedApp(origin: URL(string: "https://app\($0).example/")!, name: "App \($0)",
+                                         startURL: URL(string: "https://app\($0).example/")!, iconURL: nil) }
+    let assigned = BridgedAppAppearance.withAutomaticColors(ten)
+    precondition(Set(assigned.compactMap(\.autoColorID)) == Set(ids), "Ten apps get ten different colors")
+    precondition(assigned == BridgedAppAppearance.withAutomaticColors(ten), "Assignment is deterministic")
+    let solo = BridgedApp(origin: origin, name: "Solo", startURL: origin, iconURL: nil)
+    precondition(BridgedAppAppearance.withAutomaticColors([solo])[0].autoColorID == ids[BridgedAppAppearance.paletteIndex(origin)])
+    let remaining = Array(assigned.dropFirst(3).reversed())
+    precondition(BridgedAppAppearance.withAutomaticColors(remaining) == remaining, "Saved colors never move")
+    let added = BridgedAppAppearance.withAutomaticColors(remaining + [solo]).last!
+    precondition(assigned.prefix(3).map(\.autoColorID).contains(added.autoColorID), "A new app takes a free color")
+    let eleventh = BridgedAppAppearance.withAutomaticColors(assigned + [solo]).last!
+    precondition((assigned + [eleventh]).filter { $0.autoColorID == eleventh.autoColorID }.count == 2)
+    var manual = ten[0]; manual.tileColorID = ids[BridgedAppAppearance.paletteIndex(origin)]
+    precondition(BridgedAppAppearance.withAutomaticColors([manual, solo])[1].autoColorID != manual.tileColorID)
+    var siteColored = ten[0]; siteColored.themeColor = "#123456"; siteColored.autoColorID = manual.tileColorID
+    precondition(BridgedAppAppearance.withAutomaticColors([siteColored, solo])[1].autoColorID == siteColored.autoColorID)
+    let roundTrip = try! JSONDecoder().decode([BridgedApp].self, from: JSONEncoder().encode([assigned[0]]))
+    precondition(roundTrip == [assigned[0]])
+    let picked = assigned[0].editing(name: "Renamed", homeURL: assigned[0].startURL.absoluteString, tileColorID: "teal")!
+    precondition(picked.autoColorID == assigned[0].autoColorID, "A manual pick keeps the automatic color for later")
+    let colorDefaults = UserDefaults(suiteName: "auto-colors-\(UUID().uuidString)")!
+    colorDefaults.set(try! JSONEncoder().encode(ten), forKey: "bridged_apps_v1")
+    let upgraded = BridgedAppStore(defaults: colorDefaults, iconCache: nil).apps
+    precondition(Set(upgraded.compactMap(\.autoColorID)).count == 10, "Upgrades assign unique colors once")
+    precondition(BridgedAppStore(defaults: colorDefaults, iconCache: nil).apps == upgraded, "Upgrade assignment is saved")
     print("PASS: matching palette/hash, parsing/contrast, precedence, color persistence/drafts and origin-safe persistent icon fallbacks")
 }

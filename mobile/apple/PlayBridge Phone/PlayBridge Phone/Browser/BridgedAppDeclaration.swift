@@ -7,11 +7,14 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
     let iconURL: URL?
     var tileColorID: String? = nil
     var themeColor: String? = nil
+    /// Assigned once at install from the colors other apps aren't using; shown when `tileColorID` is unset.
+    var autoColorID: String? = nil
     var id: URL { origin }
 
     enum CodingKeys: String, CodingKey {
         case origin, name, startURL, iconURL, themeColor
         case tileColorID = "tileColorId"
+        case autoColorID = "autoColorId"
     }
 
     func editing(name: String, homeURL: String) -> BridgedApp? {
@@ -24,7 +27,7 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
         guard let url = URL(string: homeURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
         let edited = BridgedApp(origin: origin, name: name, startURL: url, iconURL: iconURL,
                                 tileColorID: BridgedAppAppearance.paletteID(tileColorID),
-                                themeColor: themeColor)
+                                themeColor: themeColor, autoColorID: autoColorID)
         return edited.isValid ? edited : nil
     }
 
@@ -44,7 +47,8 @@ extension BridgedApp {
                   startURL: try values.decode(URL.self, forKey: .startURL),
                   iconURL: try values.decodeIfPresent(URL.self, forKey: .iconURL),
                   tileColorID: BridgedAppAppearance.paletteID(try? values.decode(String.self, forKey: .tileColorID)),
-                  themeColor: BridgedAppAppearance.themeColor(try? values.decode(String.self, forKey: .themeColor)))
+                  themeColor: BridgedAppAppearance.themeColor(try? values.decode(String.self, forKey: .themeColor)),
+                  autoColorID: BridgedAppAppearance.paletteID(try? values.decode(String.self, forKey: .autoColorID)))
     }
 }
 

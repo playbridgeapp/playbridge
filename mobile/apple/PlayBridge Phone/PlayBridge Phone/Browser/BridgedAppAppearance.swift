@@ -65,10 +65,36 @@ enum BridgedAppAppearance {
         return [scale(light, 0.76), light]
     }
 
+    /// Picks the least-used palette color among `taken`, starting from the origin's hash so the
+    /// choice is deterministic. Installed apps stay distinct until the palette runs out.
+    static func assignAutomatic(_ origin: URL, taken: [String]) -> String {
+        let start = paletteIndex(origin)
+        let counts = palette.map { color in taken.filter { $0 == color.id }.count }
+        let fewest = counts.min() ?? 0
+        let index = palette.indices.map { (start + $0) % palette.count }.first { counts[$0] == fewest } ?? start
+        return palette[index].id
+    }
+
+    /// The palette color a tile shows, or nil when it shows its site's theme color.
+    private static func shownPaletteID(_ app: BridgedApp) -> String? {
+        paletteID(app.tileColorID) ?? (parseTheme(app.themeColor) != nil ? nil : paletteID(app.autoColorID))
+    }
+
+    /// Gives every app without one a saved automatic color, in list order. Saved choices never
+    /// change, so reordering, adding or removing apps doesn't recolor existing tiles.
+    static func withAutomaticColors(_ apps: [BridgedApp]) -> [BridgedApp] {
+        var result = apps
+        for index in result.indices where paletteID(result[index].autoColorID) == nil {
+            let taken = result.indices.filter { $0 != index }.compactMap { shownPaletteID(result[$0]) }
+            result[index].autoColorID = assignAutomatic(result[index].origin, taken: taken)
+        }
+        return result
+    }
+
     static func gradient(_ app: BridgedApp) -> [UInt32] {
         if let color = palette.first(where: { $0.id == app.tileColorID }) { return [color.dark, color.light] }
         if let rgb = parseTheme(app.themeColor) { return themeGradient(rgb) }
-        let color = palette[paletteIndex(app.origin)]
+        let color = palette.first { $0.id == app.autoColorID } ?? palette[paletteIndex(app.origin)]
         return [color.dark, color.light]
     }
 
