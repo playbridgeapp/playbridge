@@ -9,7 +9,6 @@ import { DETECTION_POLICY_PORT, detectionOptions, validDetectionPolicy } from ".
 import { LINKED_PAGE_EVENTS, PAGE_API_PORT, normalizeLinkedPageRelay, validPageRequestId } from "./page-relay";
 import { injectPageScriptWithChannel } from "./page-channel";
 import { isSupportedDomImage } from "./detected-media-kind";
-import { installPluginBridge } from "./plugin-bridge";
 import { installBlobSubtitleCapture } from "./blob-subtitles";
 
 let detectionEnabled = false;
@@ -352,7 +351,6 @@ function installPageApi(): void {
 installPageApi();
 
 // Only normal browsing pages with detection enabled receive player probes.
-installPluginBridge();
 
 function injectPlayerProbe(): void {
   if (window.top !== window || (!options.visibilityOverrides && !(options.playerProbes && options.videos))) return;

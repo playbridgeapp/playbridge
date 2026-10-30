@@ -348,6 +348,7 @@ dependencies {
     implementation(libs.geckoview.omni)
 
     testImplementation(libs.junit)
+    testImplementation("org.xerial:sqlite-jdbc:3.41.2.2")
     testImplementation(libs.kotlinx.coroutines.test)
     // Execute the native page-message validators on the JVM, not Android JSON stubs.
     testImplementation(libs.org.json)
@@ -378,10 +379,6 @@ dependencies {
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
 
-    // QuickJS + jsoup — sandboxed JS runtime for Nuvio scraper plugins (FOSS only)
-    "fossImplementation"(libs.quickjs.kt)
-    "fossImplementation"(libs.jsoup)
-    "testFossRuntimeOnly"("io.github.dokar3:quickjs-kt-jvm:1.0.15")
 
     implementation(project(":shared"))
 }
