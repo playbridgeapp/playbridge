@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0+34] — 2026-10-31
+## [0.16.0+34] — 2026-11-02
 
 > **Works best together**: Phones show the desktop's new remote settings, chapters, volume level and failure reasons with PlayBridge Phone 0.16.0. When the desktop controls a TV, live control updates and failure reasons need PlayBridge TV Player 0.16.0.
 
@@ -11,7 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Minimal control bar**: While playing, the built-in player shows a one-row bar (play/pause, stop, times, seek bar, audio, subtitles, fullscreen) instead of hiding every control. In fullscreen it hides with the cursor after 3 seconds without mouse movement.
 - **Remote player settings**: Phone remotes can change speed, loop, Fit/Zoom/Fill scaling and subtitle timing on the desktop player, and stay in sync with the desktop's own controls.
 - **Chapters**: The player's seek bars show chapter gaps, Page Up/Page Down jump between chapters with an on-screen label, and hovering the seek bar shows the time and chapter. Phones get chapters, skip segments and the buffered range for their seek bar.
-- **Volume level**: The desktop reports its system volume and mute state to connected phones (CoreAudio on macOS, Core Audio on Windows, wpctl/pactl/amixer on Linux). On macOS an in-app overlay shows volume changes.
+- **Volume level**: The desktop reports its system volume and mute state to connected phones (CoreAudio on macOS, Core Audio on Windows, wpctl/pactl/amixer on Linux). On macOS an in-app overlay shows volume changes. When the desktop controls a TV, Now Casting shows the TV's volume and mute state.
 - **Playback failure reasons**: When the desktop's player can't open an item cast to it, phones are told why in a fixed, safe sentence. When the desktop casts to a TV that gives up on a video, it shows the TV's reason in a snackbar and on the Send to TV and Now Casting screens.
 - **Receiver capabilities**: The desktop tells phones which controls it supports, so their remotes only show working controls. When it controls a TV, it offers only the controls the TV reports and follows live updates from the TV.
 

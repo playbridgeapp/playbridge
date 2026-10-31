@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0] — 2026-10-31 (build 11)
+## [0.16.0] — 2026-11-02 (build 11)
 
 > **mpv is now the default player.** A saved choice is kept; if you never picked one, playback now uses mpv. AVPlayer stays available in Settings, and mpv takes over when AVPlayer fails.
 
@@ -15,6 +15,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Error screen**: When mpv can't play an item it shows the reason with Try Again, Next and Close instead of failing silently, and reports the error to the phone.
 - **Phone controls the whole app**: The phone remote's D-pad, OK, Back and Home move around the app while it's idle. Allowing or denying a pairing still needs the Siri Remote.
 - **Website casts through a built-in proxy**: Video, subtitles and images a website sends (page casts and linked pages) play through a proxy inside the app that only reaches public addresses and the local-network addresses the website was allowed. Videos you pick in the phone's cast sheet still play directly.
+- **Receiver capabilities**: The app tells phones which remote keys and player settings it supports, so their remotes only show working controls. It keeps the queue item ids phones send.
 
 ### Changed
 - **Playlist**: A bottom sheet of artwork cards replaces the side list, and Playlist is hidden for a one-item queue.

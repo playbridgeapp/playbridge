@@ -5,7 +5,7 @@ All notable changes to the `stream-proxy-rust` project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.0] - 2026-10-31
+## [0.16.0] - 2026-11-02
 
 ### Changed
 - **Shared network rules**: The addresses the proxy may reach now come from the shared `net-policy` crate, which PlayBridge's TV apps and phones also use, so they all allow and refuse the same destinations.

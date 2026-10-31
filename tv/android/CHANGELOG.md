@@ -3,7 +3,7 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Player [0.16.0] — 2026-10-31 (versionCode 232)
+## Player [0.16.0] — 2026-11-02 (versionCode 232)
 
 > **Install this before GeckoView Plugin 0.16.0.** The new plugin only accepts commands from a player that holds the new browser-control permission; the older plugin keeps working with this player. The phone's matching controls (player Home, Loop switch, browser fullscreen, chapters on the seek bar, failure reasons, live remote updates) need PlayBridge Phone 0.16.0.
 
@@ -40,12 +40,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **GeckoView video status**: The plugin's playback status reaches the phone while the GeckoView browser is open.
 - **Browser fullscreen from the phone**: Fullscreen and restore work repeatedly without clicking the video on the TV first. If a site blocks real fullscreen, the video fills the screen instead.
 - **Scrolling in the browser**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
+- **Slideshows from the phone**: A photo's display time starts once it has loaded, so slow phone-served photos aren't skipped before they appear.
 
 ### Security
 - **Browser control**: Only apps signed with the PlayBridge key can open or control the GeckoView plugin or send it status, through a new signature permission and a protected bound service.
 - **Logs**: URLs in browser and player logs are redacted, header values aren't logged, and media titles are no longer kept in the persisted queue log.
 
-## GeckoView Plugin [0.16.0] — 2026-10-31 (versionCode 213)
+## GeckoView Plugin [0.16.0] — 2026-11-02 (versionCode 213)
 
 > **Requires TV Player 0.16.0 or later.** This plugin only accepts commands from a player that holds the new browser-control permission. With an older player, GeckoView mode can't be opened or controlled. Its version jumps from 0.3.4 to the 0.16.0 release train.
 

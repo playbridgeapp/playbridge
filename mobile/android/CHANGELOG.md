@@ -3,7 +3,7 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0] — 2026-10-31 (versionCode 229)
+## [0.16.0] — 2026-11-02 (versionCode 229)
 
 > **Upgrading removes the Library.** The Library, Stremio add-ons, debrid providers and Nuvio scrapers are gone, and their data is deleted on upgrade: installed add-ons, watchlist, resume positions, scrapers, debrid and TMDB/OMDB/TVDB keys, and their caches. Collections, IPTV, bridged apps, browser casting, Phone Files, downloads and the remote stay. Old backups still import; the removed sections are ignored.
 >

@@ -3,7 +3,7 @@
 All notable changes to the iOS phone app (`app.playbridge.phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0] — 2026-10-31 (build 11)
+## [0.16.0] — 2026-11-02 (build 11)
 
 > **Works best together**: Chapters and skip segments on the seek bar, the playback failure reason and Apple TV app control need PlayBridge receivers 0.16.0. Older receivers keep working with the controls they report.
 
