@@ -77,8 +77,9 @@ internal class ReceiverStreamProxy private constructor(
         url: String,
         headers: Map<String, String> = emptyMap(),
         contentType: String? = null,
-        allowedPrivateOrigins: List<String>? = null,
-        remoteOrigin: Boolean = false,
+        // Every registration on the receiver is page media: exact origins only, never DNS-derived trust.
+        allowedPrivateOrigins: List<String> = emptyList(),
+        remoteOrigin: Boolean = true,
     ): RegisteredMedia = withContext(Dispatchers.IO) {
         val headersJson = JSONObject()
         headers.forEach { (k, v) -> headersJson.put(k, v) }
@@ -89,9 +90,7 @@ internal class ReceiverStreamProxy private constructor(
             "remote_origin" to remoteOrigin,
         )
         if (!contentType.isNullOrBlank()) fields["content_type"] = contentType
-        if (allowedPrivateOrigins != null) {
-            fields["allowed_private_origins"] = JSONArray(allowedPrivateOrigins)
-        }
+        fields["allowed_private_origins"] = JSONArray(allowedPrivateOrigins)
         val data = submit(
             command = "proxy_register_url",
             fields = fields,
