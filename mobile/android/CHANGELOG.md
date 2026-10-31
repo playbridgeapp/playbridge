@@ -75,6 +75,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Browser engine upgrade**: GeckoView 157 and Android Components 157.0.1, with upstream security fixes.
 - **Pairing credential encryption**: Android TV credentials are encrypted at rest with the Android Keystore and excluded from backups and device transfer.
 - **Log privacy**: Release builds no longer log media titles, stream URLs, add-on and API URLs that can contain keys, raw API responses, pop-up and magnet links, pairing codes or typed text.
+- **Website playback on this phone and other devices**: Videos and subtitles a website plays on This phone, or on DLNA, Chromecast, Roku or a TV browser, now go through the phone's proxy. It reaches only public addresses and the local-network addresses you approved, and checks every redirect and segment.
 
 ## [0.15.0] — 2026-10-09 (versionCode 228)
 

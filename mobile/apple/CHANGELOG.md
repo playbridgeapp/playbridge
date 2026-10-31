@@ -30,6 +30,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Saved receivers after a network change**: Saved receivers no longer show as Offline when Bonjour finds them on the new network.
 - **Bridged apps waiting for ad blocking**: Installed bridged apps no longer wait for the full ad-block rules to compile before loading.
 - **This phone crash**: Tapping This phone no longer crashes.
+- **Website videos with subtitles on other devices**: A website video with subtitles now plays on Chromecast, DLNA or a TV browser, without the subtitles, instead of being refused. AirPlay still shows them.
+
+### Security
+- **Website playback on this phone and other devices**: Videos and subtitles a website plays on This phone, or on AirPlay, Chromecast, DLNA or a TV browser, now go through the iPhone's proxy. It reaches only public addresses and the local-network addresses you approved, and checks every redirect and segment.
 
 ## [0.15.0] — 2026-10-09 (build 7)
 
