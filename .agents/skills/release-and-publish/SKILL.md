@@ -25,9 +25,7 @@ versions also remain independent compatibility versions, not product train versi
 
 For Desktop, keep `version: <semver>+<build>` and `kAppVersion = '<semver>'` in lockstep. CI checks this in `desktop/test/update_test.dart`.
 
-Monorepo release policy (PR checks → draft release-build on uprev → publish): see `docs/release.md`. CLI is the reference: uprev arms `cli_build.yml` (draft `cli-v*`); `cli_publish.yml` sets `draft=false`. Inspect the affected workflow before shipping: the Rust proxy's current `stream_proxy_build.yml` publishes images directly on eligible main changes; it does not yet implement the draft/promotion model. Merging a stream-proxy version
-bump to `main` therefore publishes that version automatically after CI
-passes (unless that version's stream-proxy tag already exists).
+Monorepo release policy (PR checks → draft release-build on uprev → publish): see `docs/release.md`. CLI is the reference: uprev arms `cli_build.yml` (draft `cli-v*`); `cli_publish.yml` sets `draft=false`. Inspect the affected workflow before shipping. The Rust proxy ships as an image: `stream_proxy_build.yml` publishes only `:edge` from `main`, and publishes `:X.Y.Z` and `:latest` when a `stream-proxy-vX.Y.Z` tag that matches `Cargo.toml` is pushed.
 
 ## Workflow
 
@@ -44,5 +42,6 @@ passes (unless that version's stream-proxy tag already exists).
 6. Commit with a Conventional Commit message and follow the user's requested branch/PR delivery workflow using `commit-and-open-pr`. An explicitly requested direct-main push does not require a PR.
 7. Include new versions and verification results in the PR description or direct-push report, as applicable.
 8. After merge, for CLI: confirm the **draft** GitHub Release from `CLI Release Build`, then run **CLI Publish** when ready (do not treat draft creation as public ship).
+9. After merge, for a stream-proxy bump: when the user is ready to ship it, push a lightweight `stream-proxy-vX.Y.Z` tag at the merge commit. That tag publishes `:X.Y.Z` and `:latest`; merging alone publishes only `:edge`.
 
 Use the environment's configured Git/GitHub authentication. Do not clear or override authentication variables unless the user or environment specifically requires it.

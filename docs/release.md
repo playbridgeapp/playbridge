@@ -65,19 +65,31 @@ stable releases after each release's rollout delay.
 | **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
 | **Android TV player** | TV `versionName` / `versionCode` | `tv-player-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
 | **Android TV GeckoView plugin** | TV `versionName` / `versionCode` | `tv-geckoview-plugin-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → undraft |
-| **Stream proxy** | `stream-proxy-rust/Cargo.toml` | image tags / optional git tag | `stream-proxy-rust/CHANGELOG.md` | `stream_proxy_pr.yml` | `stream_proxy_build.yml` → **public image** | Automatic on eligible `main` changes |
+| **Stream proxy** | `stream-proxy-rust/Cargo.toml` | `stream-proxy-v*` | `stream-proxy-rust/CHANGELOG.md` | `stream_proxy_pr.yml` | `stream_proxy_build.yml` → `:edge` on eligible `main` changes | Push the `stream-proxy-vX.Y.Z` tag → `:X.Y.Z` and `:latest` |
 | **Web** | deploy-on-main | n/a | n/a | `web_pr.yml` | — | `web_deploy.yml` (Pages) |
 | **Protocol / Rust core** | n/a (library) | n/a | n/a | contract / rust PR checks | ships inside consumers | — |
 | **Apple apps** | Xcode `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `ios-v*`, `tvos-v*` | `mobile/apple/CHANGELOG.md`, `tv/apple/CHANGELOG.md` | `apple_pr.yml` | `apple_testflight.yml` → **TestFlight** (build `<CURRENT_PROJECT_VERSION>.<run>`) | Submit for review in App Store Connect |
 
-### Stream proxy publication exception
+### Stream proxy images
 
-`stream_proxy_build.yml` currently publishes the stream proxy image automatically
-on eligible `main` changes after its tests pass, rather than creating a draft for
-manual promotion. Changing the crate version to a new version with no existing
-`stream-proxy-v*` tag enables publication of that version and `latest`. **Merging
-a train bump therefore publishes that stream-proxy version.** Do not treat
-the proxy bump as preparation of a draft only.
+The stream proxy ships as a container image, not a GitHub Release.
+`stream_proxy_build.yml` publishes:
+
+- **`:edge`** (and the commit SHA) after tests pass on every eligible `main` push.
+  It never publishes `:latest` or a version tag from `main`.
+- **`:X.Y.Z` and `:latest`** only when a `stream-proxy-vX.Y.Z` tag is pushed. The
+  workflow refuses a tag that doesn't match `stream-proxy-rust/Cargo.toml` or
+  doesn't point at a commit on `main`.
+
+Merging a version bump therefore publishes nothing by itself. To release, push a
+lightweight tag at the merged commit:
+
+```bash
+git tag stream-proxy-vX.Y.Z <merge-commit>
+git push origin stream-proxy-vX.Y.Z
+```
+
+Don't move or reuse a published `stream-proxy-v*` tag; ship a new version instead.
 
 Shared libraries, protocol/ABI versions and the embedded GeckoView
 detector manifest keep their own compatibility versions and are not synchronized
