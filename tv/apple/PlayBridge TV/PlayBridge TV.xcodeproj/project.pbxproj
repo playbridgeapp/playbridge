@@ -15,6 +15,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B1A5E0010000000000000010 /* CastCoreOptional.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CastCoreOptional.xcconfig; sourceTree = "<group>"; };
 		E6F46D472F937ABC00653943 /* PlayBridge TV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayBridge TV.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F9556E50F0B149CF87E65874 /* messages.pb.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = messages.pb.swift; path = ../../../protocol/generated/swift/messages.pb.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
@@ -57,6 +58,7 @@
 			children = (
 				E6F46D492F937ABC00653943 /* PlayBridge TV */,
 				3DA5B3EE1B8D40B5B26B9A14 /* Protocol */,
+				B1A5E0010000000000000010 /* CastCoreOptional.xcconfig */,
 				E6F46D482F937ABC00653943 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -303,6 +305,7 @@
 		};
 		E6F46D532F937ABD00653943 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B1A5E0010000000000000010 /* CastCoreOptional.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -335,6 +338,7 @@
 		};
 		E6F46D542F937ABD00653943 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B1A5E0010000000000000010 /* CastCoreOptional.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

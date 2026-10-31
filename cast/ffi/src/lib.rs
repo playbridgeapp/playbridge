@@ -37,7 +37,8 @@ mod receiver_runtime;
 #[cfg(any(
     feature = "sender-services",
     feature = "sender-services-android",
-    feature = "sender-services-apple"
+    feature = "sender-services-apple",
+    feature = "receiver-proxy-apple"
 ))]
 mod sender_services;
 

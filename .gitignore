@@ -58,6 +58,7 @@ protocol/bin
 # Swift Package Manager
 **/.build/
 /mobile/apple/Native/*.xcframework/
+/tv/apple/Native/*.xcframework/
 
 # Xcode User State
 **/xcuserdata/
@@ -147,3 +148,4 @@ desktop/tool/
 
 # Generated Apple Rust static framework (rebuild with cast/build-apple.sh)
 /mobile/apple/Native/*.xcframework/
+/tv/apple/Native/*.xcframework/
