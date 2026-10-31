@@ -10,9 +10,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "browser-receiver")]
 use playbridge_browser_receiver::{
     BrowserReceiverConfig, BrowserReceiverEvent, BrowserReceiverHost, BrowserReceiverService,
 };
+#[cfg(feature = "browser-receiver")]
 use playbridge_cast_core::browser::{BrowserCommand, BrowserMedia};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,33 +56,40 @@ enum ServicesCommand {
         request_id: Value,
         id: String,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserStart {
         request_id: Value,
         preferred_port: Option<u16>,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserStop {
         request_id: Value,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserApprove {
         request_id: Value,
         session_id: String,
         code: String,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserLoad {
         request_id: Value,
         session_id: String,
         media: BrowserMedia,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserControl {
         request_id: Value,
         session_id: String,
         action: BrowserCommand,
         value: Option<f64>,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserDisconnect {
         request_id: Value,
         session_id: String,
     },
+    #[cfg(feature = "browser-receiver")]
     BrowserForget {
         request_id: Value,
         receiver_id: String,
@@ -97,14 +106,15 @@ impl ServicesCommand {
             | Self::ProxyRegisterFile { request_id, .. }
             | Self::ProxyRevoke { request_id, .. }
             | Self::ProxyRenew { request_id, .. }
-            | Self::BrowserStart { request_id, .. }
+            | Self::Shutdown { request_id } => request_id,
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserStart { request_id, .. }
             | Self::BrowserStop { request_id }
             | Self::BrowserApprove { request_id, .. }
             | Self::BrowserLoad { request_id, .. }
             | Self::BrowserControl { request_id, .. }
             | Self::BrowserDisconnect { request_id, .. }
-            | Self::BrowserForget { request_id, .. }
-            | Self::Shutdown { request_id } => request_id,
+            | Self::BrowserForget { request_id, .. } => request_id,
         }
     }
 
@@ -114,14 +124,21 @@ impl ServicesCommand {
             Self::ProxyRegisterFile { .. } => "proxy_register_file",
             Self::ProxyRevoke { .. } => "proxy_revoke",
             Self::ProxyRenew { .. } => "proxy_renew",
-            Self::BrowserStart { .. } => "browser_start",
-            Self::BrowserStop { .. } => "browser_stop",
-            Self::BrowserApprove { .. } => "browser_approve",
-            Self::BrowserLoad { .. } => "browser_load",
-            Self::BrowserControl { .. } => "browser_control",
-            Self::BrowserDisconnect { .. } => "browser_disconnect",
-            Self::BrowserForget { .. } => "browser_forget",
             Self::Shutdown { .. } => "shutdown",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserStart { .. } => "browser_start",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserStop { .. } => "browser_stop",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserApprove { .. } => "browser_approve",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserLoad { .. } => "browser_load",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserControl { .. } => "browser_control",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserDisconnect { .. } => "browser_disconnect",
+            #[cfg(feature = "browser-receiver")]
+            Self::BrowserForget { .. } => "browser_forget",
         }
     }
 }
@@ -194,6 +211,47 @@ impl Drop for SenderServices {
     }
 }
 
+/// The on-demand browser-receiver host. Proxy-only builds carry no browser state.
+#[cfg(feature = "browser-receiver")]
+#[derive(Default)]
+struct BrowserState {
+    host: Option<BrowserReceiverHost>,
+    service: Option<BrowserReceiverService>,
+    events: Option<tokio::sync::broadcast::Receiver<BrowserReceiverEvent>>,
+}
+
+#[cfg(not(feature = "browser-receiver"))]
+struct BrowserState;
+
+impl BrowserState {
+    fn new() -> Self {
+        #[cfg(feature = "browser-receiver")]
+        return Self::default();
+        #[cfg(not(feature = "browser-receiver"))]
+        Self
+    }
+
+    /// Resolves with the next browser event; pends forever when none can arrive.
+    async fn next_event(&mut self) -> Option<Value> {
+        #[cfg(feature = "browser-receiver")]
+        if let Some(receiver) = self.events.as_mut() {
+            return receiver
+                .recv()
+                .await
+                .ok()
+                .and_then(|event| serde_json::to_value(event).ok());
+        }
+        std::future::pending().await
+    }
+
+    async fn shutdown(&mut self) {
+        #[cfg(feature = "browser-receiver")]
+        if let Some(host) = self.host.take() {
+            let _ = host.shutdown().await;
+        }
+    }
+}
+
 async fn worker(
     mut commands: tokio_mpsc::Receiver<ServicesCommand>,
     events: SyncSender<Value>,
@@ -216,60 +274,29 @@ async fn worker(
             "proxyPort": proxy.local_addr().port(),
         }),
     );
-    let mut browser_host: Option<BrowserReceiverHost> = None;
-    let mut browser_service: Option<BrowserReceiverService> = None;
-    let mut browser_events: Option<tokio::sync::broadcast::Receiver<BrowserReceiverEvent>> = None;
+    let mut browser = BrowserState::new();
     // URL registrations may wait on DNS; they run beside the loop so renew, revoke
     // and stop are never queued behind them.
     let mut registrations = JoinSet::new();
 
     while !cancelled.load(Ordering::Acquire) {
         while registrations.try_join_next().is_some() {}
-        if let Some(receiver) = browser_events.as_mut() {
-            tokio::select! {
-                command = commands.recv() => {
-                    let Some(command) = command else { break };
-                    if process_command(
-                        command,
-                        &proxy,
-                        &mut registrations,
-                        &mut browser_host,
-                        &mut browser_service,
-                        &mut browser_events,
-                        &events,
-                    ).await {
-                        break;
-                    }
-                }
-                event = receiver.recv() => {
-                    if let Ok(event) = event {
-                        send_browser_event(&events, event);
-                    }
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else { break };
+                if process_command(command, &proxy, &mut registrations, &mut browser, &events).await {
+                    break;
                 }
             }
-        } else {
-            let Some(command) = commands.recv().await else {
-                break;
-            };
-            if process_command(
-                command,
-                &proxy,
-                &mut registrations,
-                &mut browser_host,
-                &mut browser_service,
-                &mut browser_events,
-                &events,
-            )
-            .await
-            {
-                break;
+            event = browser.next_event() => {
+                if let Some(event) = event {
+                    send_event(&events, event);
+                }
             }
         }
     }
 
-    if let Some(host) = browser_host {
-        let _ = host.shutdown().await;
-    }
+    browser.shutdown().await;
     registrations.shutdown().await;
     if let Ok(proxy) = Arc::try_unwrap(proxy) {
         let _ = proxy.shutdown().await;
@@ -281,9 +308,8 @@ async fn process_command(
     command: ServicesCommand,
     proxy: &Arc<ProxyServer>,
     registrations: &mut JoinSet<()>,
-    browser_host: &mut Option<BrowserReceiverHost>,
-    browser_service: &mut Option<BrowserReceiverService>,
-    browser_events: &mut Option<tokio::sync::broadcast::Receiver<BrowserReceiverEvent>>,
+    #[cfg_attr(not(feature = "browser-receiver"), allow(unused_variables))]
+    browser: &mut BrowserState,
     events: &SyncSender<Value>,
 ) -> bool {
     let operation = command.operation();
@@ -338,8 +364,11 @@ async fn process_command(
         ServicesCommand::ProxyRevoke { id, .. } => {
             Ok(json!({"revoked": proxy.service().revoke(&id)}))
         }
+        #[cfg(feature = "browser-receiver")]
         ServicesCommand::BrowserStart { preferred_port, .. } => {
-            if browser_host.is_none() {
+            if let Some(host) = &browser.host {
+                Ok(json!({"urls": host.urls(), "port": host.local_addr().port()}))
+            } else {
                 match BrowserReceiverHost::start(BrowserReceiverConfig {
                     preferred_port: preferred_port.unwrap_or(8770),
                     ..Default::default()
@@ -348,24 +377,22 @@ async fn process_command(
                 {
                     Ok(host) => {
                         let service = host.service();
-                        *browser_events = Some(service.subscribe());
+                        browser.events = Some(service.subscribe());
                         let urls = host.urls();
                         let port = host.local_addr().port();
-                        *browser_service = Some(service);
-                        *browser_host = Some(host);
+                        browser.service = Some(service);
+                        browser.host = Some(host);
                         Ok(json!({"urls": urls, "port": port}))
                     }
                     Err(error) => Err(error),
                 }
-            } else {
-                let host = browser_host.as_ref().expect("checked browser host");
-                Ok(json!({"urls": host.urls(), "port": host.local_addr().port()}))
             }
         }
+        #[cfg(feature = "browser-receiver")]
         ServicesCommand::BrowserStop { .. } => {
-            *browser_events = None;
-            *browser_service = None;
-            if let Some(host) = browser_host.take() {
+            browser.events = None;
+            browser.service = None;
+            if let Some(host) = browser.host.take() {
                 match host.shutdown().await {
                     Ok(()) => Ok(Value::Null),
                     Err(error) => Err(error),
@@ -374,40 +401,45 @@ async fn process_command(
                 Ok(Value::Null)
             }
         }
+        #[cfg(feature = "browser-receiver")]
         ServicesCommand::BrowserApprove {
             session_id, code, ..
-        } => match browser_service {
+        } => match &browser.service {
             Some(service) => service
                 .approve(&session_id, &code)
                 .await
                 .map(|_| Value::Null),
             None => Err("browser receiver host is not running".into()),
         },
+        #[cfg(feature = "browser-receiver")]
         ServicesCommand::BrowserLoad {
             session_id, media, ..
-        } => match browser_service {
+        } => match &browser.service {
             Some(service) => service
                 .load(&session_id, media)
                 .await
                 .map(|browser_request_id| json!({"browserRequestId": browser_request_id})),
             None => Err("browser receiver host is not running".into()),
         },
+        #[cfg(feature = "browser-receiver")]
         ServicesCommand::BrowserControl {
             session_id,
             action,
             value,
             ..
-        } => match browser_service {
+        } => match &browser.service {
             Some(service) => service
                 .command(&session_id, action, value)
                 .map(|browser_request_id| json!({"browserRequestId": browser_request_id})),
             None => Err("browser receiver host is not running".into()),
         },
-        ServicesCommand::BrowserDisconnect { session_id, .. } => match browser_service {
+        #[cfg(feature = "browser-receiver")]
+        ServicesCommand::BrowserDisconnect { session_id, .. } => match &browser.service {
             Some(service) => Ok(json!({"disconnected": service.disconnect(&session_id)})),
             None => Err("browser receiver host is not running".into()),
         },
-        ServicesCommand::BrowserForget { receiver_id, .. } => match browser_service {
+        #[cfg(feature = "browser-receiver")]
+        ServicesCommand::BrowserForget { receiver_id, .. } => match &browser.service {
             Some(service) => Ok(json!({
                 "forgotten": service.forget_receiver(&receiver_id),
             })),
@@ -536,12 +568,6 @@ fn validate_page_headers(
         }
     }
     Ok(headers)
-}
-
-fn send_browser_event(events: &SyncSender<Value>, event: BrowserReceiverEvent) {
-    if let Ok(value) = serde_json::to_value(event) {
-        send_event(events, value);
-    }
 }
 
 fn send_event(events: &SyncSender<Value>, event: Value) {
@@ -721,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_and_proxy_commands_use_the_documented_wire_names() {
+    fn proxy_commands_use_the_documented_wire_names() {
         let proxy: ServicesCommand = serde_json::from_str(
             r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl","allowed_private_origins":["http://192.168.1.20:8080"]}"#,
         )
@@ -736,12 +762,27 @@ mod tests {
             } if value == "application/vnd.apple.mpegurl"
                 && origins == &["http://192.168.1.20:8080"]
         ));
+    }
 
+    #[cfg(feature = "browser-receiver")]
+    #[test]
+    fn browser_commands_use_the_documented_wire_names() {
         let browser: ServicesCommand = serde_json::from_str(
             r#"{"command":"browser_control","request_id":"2","session_id":"session","action":"set_volume","value":0.5}"#,
         )
         .unwrap();
         assert_eq!(browser.operation(), "browser_control");
+    }
+
+    #[cfg(not(feature = "browser-receiver"))]
+    #[test]
+    fn proxy_only_builds_reject_browser_commands() {
+        assert!(
+            serde_json::from_str::<ServicesCommand>(
+                r#"{"command":"browser_start","request_id":"2"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

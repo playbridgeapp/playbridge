@@ -113,7 +113,8 @@ void pb_atv_free(const AtvRemote *handle);
 /*
  * Optional sender-services ABI. Build with `sender-services` (Desktop: reqwest
  * upstream), `sender-services-android` (HttpURLConnection callbacks), or
- * `sender-services-apple` (URLSession callbacks).
+ * `sender-services-apple` (URLSession callbacks). `receiver-proxy-apple` (Apple TV)
+ * is the same lifecycle with the proxy only: browser_* commands are rejected.
  * Owns one embedded stream proxy and an on-demand browser-receiver host.
  * Commands and events are UTF-8 JSON.
  */
