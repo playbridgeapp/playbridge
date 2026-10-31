@@ -37,6 +37,11 @@ class WebSocketServer: ObservableObject {
     private var historyStore: HistoryStore?
     let progressWebhook = PlaybackProgressWebhook()
     var playlistStore: PlaylistStore?
+    /// Page-controlled media plays only through the embedded proxy; cast-sheet media stays direct.
+    let pageMedia: PageMediaRouter
+    /// Commands that change the queue run in arrival order, behind any page-media registration.
+    private var commandChain: Task<Void, Never> = Task {}
+    private let commandChainLock = NSLock()
 
     private var inProgressHandshakes: [ObjectIdentifier: ConnectionHandshake] = [:]
     private var failedAttempts: [String: Int] = [:]
@@ -47,7 +52,10 @@ class WebSocketServer: ObservableObject {
 
     @Published var currentPlayRequest: Playbridge_PlayPayload? {
         didSet {
-            if currentPlayRequest == nil { activePlaybackEngine = nil }
+            if currentPlayRequest == nil {
+                activePlaybackEngine = nil
+                pageMedia.releaseAll()
+            }
             // Keep the phone's now-playing context in sync without it having to poll.
             broadcast(playbackContextFrame())
         }
@@ -148,7 +156,9 @@ class WebSocketServer: ObservableObject {
     /// driven by the player UI (next/jump), which never pass through the server.
     private var playlistCancellable: AnyCancellable?
 
-    init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil) {
+    init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil,
+         pageMedia: PageMediaRouter = PageMediaRouter(proxy: TVProxyHost.shared)) {
+        self.pageMedia = pageMedia
         self.historyStore = historyStore
         self.playlistStore = playlistStore
         self.localIP = getIPAddress()
@@ -986,7 +996,8 @@ class WebSocketServer: ObservableObject {
         let isLateSubtitle = action == "control"
             && (payload as? [String: Any])?["command"] as? String == "add_subtitle"
         if let requestID,
-           action == "playlist_jump" || action.hasPrefix("queue_") || isLateSubtitle {
+           action == "play" || action == "playlist" || action == "playlist_jump"
+            || action.hasPrefix("queue_") || isLateSubtitle {
             pendingCommandIDs.insert(requestID)
         }
 
@@ -1083,7 +1094,7 @@ class WebSocketServer: ObservableObject {
             }
             let candidates = p.items.isEmpty && p.hasItem ? [p.item] : p.items
             let valid = candidates.filter { $0.validURL != nil }
-            DispatchQueue.main.async {
+            ordered { [self] in
                 guard let store = self.playlistStore else { return }
                 guard requestID == nil || store.playbackID != nil else {
                     self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
@@ -1102,6 +1113,12 @@ class WebSocketServer: ObservableObject {
                     self.completeCommand(requestID, ok: false, error: "queue_full", to: connection)
                     return
                 }
+                // Queued page items are registered when they come up; refuse them now
+                // if the proxy could not route them.
+                guard await self.admitPageMedia(valid, routing: nil) else {
+                    self.completeCommand(requestID, ok: false, error: pageMediaUnavailableError, to: connection)
+                    return
+                }
                 guard store.addToQueue(items: valid) else {
                     self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                     return
@@ -1114,7 +1131,7 @@ class WebSocketServer: ObservableObject {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
-            DispatchQueue.main.async {
+            ordered { [self] in
                 guard let store = self.playlistStore, store.playbackID != nil else {
                     self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
                     return
@@ -1123,11 +1140,20 @@ class WebSocketServer: ObservableObject {
                     self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
                     return
                 }
+                // Register the target before it becomes current, so a refusal leaves
+                // the current item playing.
+                let target = p.hasItemID ? store.itemIDs.firstIndex(of: p.itemID) : Int(p.index)
+                if let target, store.items.indices.contains(target),
+                   await !self.admitPageMedia([store.items[target]], routing: 0) {
+                    self.completeCommand(requestID, ok: false, error: pageMediaUnavailableError, to: connection)
+                    self.broadcastPlaylistStatus(to: connection)
+                    return
+                }
                 let req = p.hasItemID
                     ? store.jumpTo(itemID: p.itemID)
                     : store.jumpTo(index: Int(p.index))
                 if let req {
-                    if !req.skipHistory, let url = req.validURL {
+                    if req.recordsHistory, let url = req.validURL {
                         self.historyStore?.addToHistory(
                             url: url,
                             title: req.titleOrNil,
@@ -1146,7 +1172,7 @@ class WebSocketServer: ObservableObject {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
-            DispatchQueue.main.async {
+            ordered { [self] in
                 guard let store = self.playlistStore, store.playbackID != nil else {
                     self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
                     return
@@ -1164,6 +1190,7 @@ class WebSocketServer: ObservableObject {
                     if previousItemID != store.currentItemID {
                         self.currentPlayRequest = store.currentItem
                     }
+                    self.retainPageMedia()
                     self.completeCommand(requestID, ok: true, to: connection)
                 } else {
                     self.completeCommand(requestID, ok: false, error: "item_not_found", to: connection)
@@ -1175,7 +1202,7 @@ class WebSocketServer: ObservableObject {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
-            DispatchQueue.main.async {
+            ordered { [self] in
                 guard let store = self.playlistStore, store.playbackID != nil else {
                     self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
                     return
@@ -1197,7 +1224,7 @@ class WebSocketServer: ObservableObject {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
-            DispatchQueue.main.async {
+            ordered { [self] in
                 guard let store = self.playlistStore, store.playbackID != nil else {
                     self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
                     return
@@ -1209,37 +1236,19 @@ class WebSocketServer: ObservableObject {
                 self.progressWebhook.finish(clear: true)
                 store.clear()
                 self.currentPlayRequest = nil
+                self.pageMedia.releaseAll()
                 self.completeCommand(requestID, ok: true, to: connection)
                 self.broadcastPlaylistStatus(to: connection)
             }
         case "control":
             if let p = try? Playbridge_ControlPayload(jsonString: payloadJson), !p.command.isEmpty {
-                DispatchQueue.main.async {
-                    if p.command == "add_subtitle" {
-                        guard p.hasSubtitleResource,
-                              ExternalSubtitleDownload.isValid(p.subtitleResource) else {
-                            self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
-                            return
-                        }
-                        guard self.playlistStore?.playbackID != nil else {
-                            self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
-                            return
-                        }
-                        var completed = false
-                        let finish: (Bool) -> Void = { [weak self] ok in
-                            guard let self, !completed else { return }
-                            completed = true
-                            self.completeCommand(requestID, ok: ok,
-                                                 error: ok ? nil : "subtitle_unavailable", to: connection)
-                        }
-                        NotificationCenter.default.post(
-                            name: Self.controlCommand, object: nil,
-                            userInfo: ["command": p.command,
-                                       "subtitleResource": p.subtitleResource,
-                                       "subtitleCompletion": finish])
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { finish(false) }
-                        return
+                if p.command == "add_subtitle" {
+                    ordered { [self] in
+                        await self.addLateSubtitle(p, requestID: requestID, connection: connection)
                     }
+                    return
+                }
+                DispatchQueue.main.async {
                     if StillWatchingGate.isPrompting {
                         if p.command == "stop" {
                             NotificationCenter.default.post(name: .playBridgeStillWatchingStop, object: nil)
@@ -1278,6 +1287,77 @@ class WebSocketServer: ObservableObject {
         }
     }
 
+    /// Runs `work` on the main actor once every earlier ordered command has finished.
+    private func ordered(_ work: @escaping @MainActor () async -> Void) {
+        commandChainLock.lock()
+        defer { commandChainLock.unlock() }
+        let previous = commandChain
+        commandChain = Task { @MainActor in
+            await previous.value
+            await work()
+        }
+    }
+
+    /// Page items must be routable before the queue accepts them. `routing` is the
+    /// index of the item that starts playing now; it is registered before the
+    /// command succeeds. Cast-sheet items always pass without touching the proxy.
+    private func admitPageMedia(_ items: [Playbridge_PlayPayload], routing index: Int?) async -> Bool {
+        do {
+            for item in items { try await pageMedia.preflight(item.pageMediaSource) }
+            if let index { _ = try await pageMedia.route(items[index].pageMediaSource) }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Keeps proxy registrations only for page items still in the queue.
+    private func retainPageMedia() {
+        guard let store = playlistStore else { return }
+        pageMedia.retain(only: Set(store.items.filter(\.isPageControlled).map(\.pageMediaSource)))
+    }
+
+    private func addLateSubtitle(_ p: Playbridge_ControlPayload, requestID: String?, connection: NWConnection) async {
+        guard p.hasSubtitleResource, ExternalSubtitleDownload.isValid(p.subtitleResource) else {
+            completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+            return
+        }
+        guard let store = playlistStore, store.playbackID != nil else {
+            completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+            return
+        }
+        var resource = p.subtitleResource
+        if let item = store.currentItem, item.isPageControlled {
+            // A website's subtitle is fetched by the proxy under the item's network policy.
+            do {
+                let proxied = try await pageMedia.lateSubtitle(
+                    url: resource.url, headers: resource.headers, for: item.pageMediaSource)
+                guard store.currentItem?.pageMediaSource == item.pageMediaSource else {
+                    completeCommand(requestID, ok: false, error: "subtitle_unavailable", to: connection)
+                    return
+                }
+                resource.url = proxied.absoluteString
+                resource.headers = [:]
+            } catch {
+                completeCommand(requestID, ok: false, error: "subtitle_unavailable", to: connection)
+                return
+            }
+        }
+        var completed = false
+        let finish: (Bool) -> Void = { [weak self] ok in
+            guard let self, !completed else { return }
+            completed = true
+            self.completeCommand(requestID, ok: ok,
+                                 error: ok ? nil : "subtitle_unavailable", to: connection)
+        }
+        NotificationCenter.default.post(
+            name: Self.controlCommand, object: nil,
+            userInfo: ["command": p.command,
+                       "subtitleResource": resource,
+                       "subtitleCompletion": finish])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { finish(false) }
+    }
+
     private func playbackMatches(_ expected: String?, store: PlaylistStore) -> Bool {
         expected == nil || expected == store.playbackID
     }
@@ -1309,14 +1389,19 @@ class WebSocketServer: ObservableObject {
         guard let url = payload.validURL else { return }
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
         debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
-        DispatchQueue.main.async {
+        ordered { [self] in
+            guard await self.admitPageMedia([payload], routing: 0) else {
+                if let connection { self.completeCommand(requestID, ok: false, error: pageMediaUnavailableError, to: connection) }
+                return
+            }
             guard self.playlistStore?.setPlaylist(items: [payload], startIndex: 0) == true else {
                 if let connection { self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection) }
                 return
             }
+            self.retainPageMedia()
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.progressWebhook.finish(clear: true)
-            if !payload.skipHistory {
+            if payload.recordsHistory {
                 self.historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
             }
             if let connection { self.completeCommand(requestID, ok: true, to: connection) }
@@ -1344,11 +1429,16 @@ class WebSocketServer: ObservableObject {
             completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
         }
-        DispatchQueue.main.async {
+        ordered { [self] in
+            guard await self.admitPageMedia(valid, routing: startIndex) else {
+                self.completeCommand(requestID, ok: false, error: pageMediaUnavailableError, to: connection)
+                return
+            }
             guard self.playlistStore?.setPlaylist(items: valid, startIndex: startIndex) == true else {
                 self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
+            self.retainPageMedia()
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.progressWebhook.finish(clear: true)
             self.completeCommand(requestID, ok: true, to: connection)
@@ -1358,7 +1448,7 @@ class WebSocketServer: ObservableObject {
                 playbackID: self.playlistStore?.playbackID ?? UUID().uuidString)
             self.skipPreplayForCurrentRequest = payload.skipPreplay
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
-                if !first.skipHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }
+                if first.recordsHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }
                 self.currentPlayRequest = first
             }
         }

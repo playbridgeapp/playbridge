@@ -10,12 +10,24 @@ enum MediaImageRequest {
         return "\(scheme)://\(host):\(url.port ?? (scheme == "https" ? 443 : 80))"
     }
 
+    /// The embedded proxy's listener, the only address a page-controlled image may load from.
+    static func isProxyURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "http" && url.host == "127.0.0.1" && url.user == nil && url.password == nil
+    }
+
     static func request(url: URL, headerOrigin: URL, headers: [String: String],
-                        detectedBy: String = "", allowedPrivateOrigins: [String] = []) -> URLRequest? {
+                        detectedBy: String = "", allowedPrivateOrigins: [String] = [],
+                        viaProxy: Bool = false) -> URLRequest? {
         guard origin(url) != nil, origin(headerOrigin) != nil else { return nil }
-        // URLSession cannot enforce DNS/connected-peer grants for untrusted pages.
-        // Fail closed until Apple TV has the full page-controlled media transport.
-        guard !["page_cast", "linked_page"].contains(detectedBy) else { return nil }
+        // URLSession cannot enforce DNS/connected-peer grants for untrusted pages, so a
+        // page-controlled image loads only from the proxy, which applies the item's
+        // network policy, headers and approved origins when it fetches the upstream.
+        if PageMediaPolicy.isPageControlled(detectedBy: detectedBy) {
+            guard viaProxy, isProxyURL(url), isProxyURL(headerOrigin) else { return nil }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 20
+            return request
+        }
         guard allowedPrivateOrigins.count <= 16,
               allowedPrivateOrigins.allSatisfy({ value in
                   guard let entry = URL(string: value) else { return false }
