@@ -4,8 +4,63 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 output_dir="$repo_dir/mobile/android/app/src/main/jniLibs"
+cargo_features="playbridge-cast-core-ffi/sender-services-android"
+no_default_features=0
 android_api=26
 target_root=${CARGO_TARGET_DIR:-"$repo_dir/target"}
+
+usage() {
+    cat <<'EOF'
+Usage: sh cast/build-android.sh [options]
+
+Options:
+  --tv                    Build minimal Android TV receiver proxy library into tv/android/player/app/src/main/jniLibs
+  --output-dir <dir>      Override jniLibs output directory
+  --features <features>   Override cargo --features list
+  --no-default-features   Pass --no-default-features to cargo build
+  -h, --help              Show this help text
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tv)
+            output_dir="$repo_dir/tv/android/player/app/src/main/jniLibs"
+            cargo_features="playbridge-cast-core-ffi/receiver-proxy-android"
+            no_default_features=1
+            shift
+            ;;
+        --output-dir)
+            if [ "$#" -lt 2 ]; then
+                echo "--output-dir requires an argument" >&2
+                exit 1
+            fi
+            output_dir=$2
+            shift 2
+            ;;
+        --features)
+            if [ "$#" -lt 2 ]; then
+                echo "--features requires an argument" >&2
+                exit 1
+            fi
+            cargo_features=$2
+            shift 2
+            ;;
+        --no-default-features)
+            no_default_features=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
 
 if ! command -v rustup >/dev/null 2>&1; then
     echo "rustup is required. Install it from https://rustup.rs and retry." >&2
@@ -72,7 +127,21 @@ build_target() {
     ln -sf "$linker" "$tool_bin/${rust_target}-clang"
     ln -sf "$linker" "$tool_bin/${rust_target}-gcc"
     # shellcheck disable=SC2064
-    trap 'rm -rf "$tool_bin"' RETURN
+    trap 'rm -rf "${tool_bin:?}"' RETURN
+
+    set -- \
+        --manifest-path "$repo_dir/Cargo.toml" \
+        --package playbridge-cast-core-ffi
+    if [ "$no_default_features" = 1 ]; then
+        set -- "$@" --no-default-features
+    fi
+    if [ -n "$cargo_features" ]; then
+        set -- "$@" --features "$cargo_features"
+    fi
+    set -- "$@" \
+        --release --locked \
+        --target-dir "$target_root" \
+        --target "$rust_target"
 
     env \
         "PATH=$tool_bin:$PATH" \
@@ -82,13 +151,7 @@ build_target() {
         "AR_${rust_env_target}=$toolchain/llvm-ar" \
         "RANLIB_${rust_env_target}=$toolchain/llvm-ranlib" \
         "CFLAGS_${rust_env_target}=-fPIC" \
-        cargo build \
-            --manifest-path "$repo_dir/Cargo.toml" \
-            --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services-android \
-            --release --locked \
-            --target-dir "$target_root" \
-            --target "$rust_target"
+        cargo build "$@"
 
     mkdir -p "$output_dir/$android_abi"
     cp "$target_root/$rust_target/release/libplaybridge_cast_core_ffi.so" \

@@ -44,7 +44,7 @@ build_target() {
         rustup run stable cargo build \
         --manifest-path "$repo_dir/Cargo.toml" \
         --package playbridge-cast-core-ffi \
-        --release --locked --features receiver-proxy-apple \
+        --release --locked --no-default-features --features receiver-proxy-apple \
         --target "$target" --target-dir "$target_root"
 }
 
