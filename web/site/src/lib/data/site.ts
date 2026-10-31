@@ -548,7 +548,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       ],
       notice: {
         badge: 'Beta',
-        text: 'Developers can also build it from source in Xcode (tv/apple).'
+        text: 'Only have an Apple TV? Email hello@playbridge.app for an invite code to redeem in TestFlight on the TV. Developers can also build it from source in Xcode (tv/apple).'
       }
     }
   },
