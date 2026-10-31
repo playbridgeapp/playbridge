@@ -1,5 +1,12 @@
 # Stream Proxy Rust (`stream-proxy-rust`)
 
+The proxy depends on the shared `cast/net-policy` crate. Docker builds use the
+repository root as their context:
+
+```sh
+docker build -f stream-proxy-rust/Dockerfile -t playbridge-stream-proxy-rust .
+```
+
 High-performance, lightweight Rust media stream proxy engine for PlayBridge. Built with Tokio, Axum, and FFmpeg AVIO.
 
 ## Features

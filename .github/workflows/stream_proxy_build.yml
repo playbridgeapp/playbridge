@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
     paths:
       - 'stream-proxy-rust/**'
+      - 'cast/net-policy/**'
+      - 'Cargo.lock'
       - '.github/workflows/stream_proxy_build.yml'
   workflow_dispatch:
 
@@ -83,7 +85,7 @@ jobs:
         if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ./stream-proxy-rust
+          context: .
           file: ./stream-proxy-rust/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true

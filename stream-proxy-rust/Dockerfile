@@ -9,9 +9,12 @@ RUN apt-get update \
 
 WORKDIR /usr/src/app
 
-COPY . .
+COPY stream-proxy-rust ./stream-proxy-rust
+COPY cast/net-policy ./cast/net-policy
+# Seed standalone resolution with workspace versions. Cargo prunes unrelated entries.
+COPY Cargo.lock ./stream-proxy-rust/Cargo.lock
 
-RUN cargo build --release --bin stream-proxy-rust
+RUN cargo build --release --manifest-path stream-proxy-rust/Cargo.toml --bin stream-proxy-rust
 
 FROM debian:bookworm-slim
 
@@ -26,7 +29,7 @@ RUN apt-get update \
     && groupadd --system --gid 10001 playbridge \
     && useradd --system --uid 10001 --gid playbridge --no-create-home playbridge
 
-COPY --from=builder /usr/src/app/target/release/stream-proxy-rust /usr/local/bin/stream-proxy-rust
+COPY --from=builder /usr/src/app/stream-proxy-rust/target/release/stream-proxy-rust /usr/local/bin/stream-proxy-rust
 
 ENV PORT=8888
 ENV ADDRESS=0.0.0.0

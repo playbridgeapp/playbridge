@@ -1,8 +1,8 @@
 services:
   stream-proxy-rust:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: stream-proxy-rust/Dockerfile
     image: ghcr.io/playbridgeapp/playbridge-stream-proxy:latest
     container_name: stream-proxy-rust
     ports:

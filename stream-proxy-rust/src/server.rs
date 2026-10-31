@@ -177,7 +177,7 @@ impl ProxyService {
         {
             return Err("only bounded HTTP(S) media URLs without userinfo can be proxied".into());
         }
-        let policy = NetworkPolicy::for_native_registered_media(&original_url).await?;
+        let policy = crate::upstream::for_native_registered_media(&original_url).await?;
         self.register_remote_with_network_policy(
             base_url,
             original_url,
