@@ -6,10 +6,13 @@ import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.SubtitleRef
+import com.playbridge.sender.cast.proxy.StreamRouteMode
+import com.playbridge.sender.cast.proxy.StreamRouteService
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.player.PagePlayerSession
 import com.playbridge.sender.player.PlayerActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -29,6 +32,8 @@ class PagePlaybackCoordinator(
 
     private var active: LinkedPageCastOpenRequest? = null
     private var externalProgress: Job? = null
+    /** Proxy leases for the active session's media; released when the session ends. */
+    private var pageMediaLeases: PageMediaLeases? = null
     private var createdAtMillis = 0L
     private var lastActivityAtMillis = 0L
 
@@ -139,8 +144,13 @@ class PagePlaybackCoordinator(
                 }
                 if (active !== session) { reply(message, "session_ended"); return@launch }
                 val array = payload.optJSONArray("items") ?: JSONArray()
-                val items = if (array.length() == 0 && payload.optBoolean("endOfList")) emptyList()
+                val parsed = if (array.length() == 0 && payload.optBoolean("endOfList")) emptyList()
                     else LinkedPageCastCoordinator.parseItems(array, origins)
+                val leases = pageMediaLeases
+                val items = if (parsed == null || leases == null) null else routeOrNull {
+                    parsed.map { PageMediaProxy.route(it, PageMediaProxy.LOCAL_HOST, leases) }
+                }
+                if (active !== session) { reply(message, "session_ended"); return@launch }
                 if (items == null || !PagePlayerSession.supply(session.sessionId, payload.optString("requestId"), items,
                         payload.optBoolean("endOfList"))) reply(message, "stale_request") else reply(message)
             }
@@ -160,9 +170,14 @@ class PagePlaybackCoordinator(
         linked.supersedeIfActive()
         active = request
         createdAtMillis = System.currentTimeMillis(); lastActivityAtMillis = createdAtMillis
-        val item = request.items[request.startIndex]
+        val leases = PageMediaLeases()
         if (destination.optString("kind") == "local") {
-            PagePlayerSession.open(request) { name, detail -> if (active === request) event(name, detail) }
+            val items = routeOrNull {
+                request.items.map { PageMediaProxy.route(it, PageMediaProxy.LOCAL_HOST, leases) }
+            }
+            if (!adoptLeases(request, leases, items != null)) return
+            val item = items!![request.startIndex]
+            PagePlayerSession.open(request.copy(items = items)) { name, detail -> if (active === request) event(name, detail) }
             val intent = Intent(context, PlayerActivity::class.java)
                 .putExtra(PlayerActivity.EXTRA_URL, item.payload.url)
                 .putExtra(PlayerActivity.EXTRA_TITLE, item.payload.title)
@@ -174,18 +189,25 @@ class PagePlaybackCoordinator(
             catch (_: Exception) { reject(request, "playback_failed"); end("playback_failed") }
         } else {
             if (request.items.size > 1) { reject(request, "unsupported_queue"); end("unsupported_queue"); return }
-            val value = item.payload
+            // Credentialed sidecars require the native PlayBridge/local path.
+            if (request.items[request.startIndex].payload.subtitle_resources.any { it.headers.isNotEmpty() }) {
+                reject(request, "unsupported_subtitles"); end("unsupported_subtitles"); return
+            }
+            // The device fetches from the phone's proxy on the LAN, never from the website's URL.
+            val host = StreamRouteService.lanIpv4()
+            val routed = if (host == null) null else routeOrNull {
+                PageMediaProxy.route(request.items[request.startIndex], host, leases)
+            }
+            if (!adoptLeases(request, leases, routed != null)) return
+            val value = routed!!.payload
             val subtitles = value.subtitles.map { SubtitleRef(it) } + value.subtitle_resources.map {
                 SubtitleRef(it.url, it.label, it.language)
-            }
-            // Credentialed sidecars require the native PlayBridge/local path.
-            if (value.subtitle_resources.any { it.headers.isNotEmpty() }) {
-                reject(request, "unsupported_subtitles"); end("unsupported_subtitles"); return
             }
             val previousEpoch = connection.externalStatus.value?.loadEpoch
             if (!connection.castToSelectedExternal(MediaItem(url = value.url, headers = value.headers,
                     title = value.title, mimeType = value.content_type, subtitles = subtitles,
-                    visualMetadata = value.visual_metadata, startPositionMs = value.start_position_ms ?: 0))) {
+                    visualMetadata = value.visual_metadata, startPositionMs = value.start_position_ms ?: 0,
+                    effectiveRoute = StreamRouteMode.VIA_PHONE, routeReason = "page_media_policy"))) {
                 reject(request, "playback_failed"); end("playback_failed"); return
             }
             val loadedEpoch = connection.externalStatus.value?.loadEpoch
@@ -233,13 +255,38 @@ class PagePlaybackCoordinator(
         active = null
         externalProgress?.cancel(); externalProgress = null
         PagePlayerSession.unlink(session.sessionId)
+        releasePageMedia()
+    }
+
+    /** Registration failure fails closed: website media never falls back to a direct fetch. */
+    private suspend fun <T> routeOrNull(block: suspend () -> T): T? = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Keeps [leases] only while [request] is still the active session and routing succeeded. */
+    private fun adoptLeases(request: LinkedPageCastOpenRequest, leases: PageMediaLeases, routed: Boolean): Boolean {
+        if (active !== request || !routed) {
+            leases.close()
+            if (active === request) { reject(request, "playback_failed"); end("playback_failed") }
+            return false
+        }
+        pageMediaLeases = leases
+        return true
+    }
+
+    private fun releasePageMedia() {
+        pageMediaLeases?.close(); pageMediaLeases = null
     }
 
     private fun event(name: String, detail: JSONObject) {
         val session = active ?: return
         Components.postLinkedMessage(JSONObject().put("type", "linked_event").put("sessionId", session.sessionId)
             .put("event", name).put("detail", detail))
-        if (name == "ended") { active = null; externalProgress?.cancel(); externalProgress = null }
+        if (name == "ended") { active = null; externalProgress?.cancel(); externalProgress = null; releasePageMedia() }
     }
 
     private suspend fun pageDestinationMatches(request: LinkedPageCastOpenRequest): Boolean {
