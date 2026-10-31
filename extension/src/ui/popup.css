@@ -887,6 +887,19 @@ input:checked+.slider:before {
     color: var(--accent);
 }
 
+.badge-experimental {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    vertical-align: middle;
+    color: var(--accent);
+    background-color: rgba(163, 137, 246, 0.15);
+}
+
 .badge-online {
     font-size: 11px;
     color: var(--success);

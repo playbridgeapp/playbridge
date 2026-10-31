@@ -8,7 +8,8 @@ export const SHOW_VIDEO_CAST_OVERLAY_KEY = "showVideoCastOverlay";
 export const VIDEO_CAST_OVERLAY_SITE_OVERRIDES_KEY =
   "videoCastOverlaySiteOverrides";
 
-export const SHOW_VIDEO_CAST_OVERLAY_DEFAULT = true;
+/** Experimental: off until the user turns it on. */
+export const SHOW_VIDEO_CAST_OVERLAY_DEFAULT = false;
 
 export const VIDEO_CAST_OVERLAY_POSITIONS = [
   "top-left",
