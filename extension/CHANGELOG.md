@@ -5,6 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.16.0] — 2026-10-31
 
 ### Changed
+- **Cast overlay is now experimental and off by default**: The cast button on videos only appears once you turn it on in the popup's settings. If you already chose a setting, it's kept.
 - **Popup URLs tab**: The heading is now "Play URL on TV".
 - **Licence**: PlayBridge's own code is now under MPL-2.0.
 
