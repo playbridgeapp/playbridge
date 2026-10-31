@@ -17,17 +17,13 @@ import Foundation
     private var changingItem = false
     private var finalState: [String: Any]?
     private var cues: [(start: Double, end: Double, text: String)] = []
-    private let route: StreamRoute
-    private let configuration: RemoteProxyConfiguration
 
-    private init(request: PageCastRequest, media: RoutedStream, route: StreamRoute,
-                 configuration: RemoteProxyConfiguration, alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)?,
+    private init(request: PageCastRequest, media: RoutedStream, alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)?,
                  event: @escaping (String, [String: Any]) -> Void) {
         items = request.items; index = request.startIndex; self.event = event
-        self.route = route; self.configuration = configuration
         let item = request.items[request.startIndex]
-        session = PlaybackSession(media: media, route: route, contentType: item["contentType"] as? String, initialOrientation: request.initialOrientation, alternativeFactory: alternativeFactory, prepare: {
-            try await Self.prepare(item, route: route, configuration: configuration)
+        session = PlaybackSession(media: media, route: .phone, contentType: item["contentType"] as? String, initialOrientation: request.initialOrientation, alternativeFactory: alternativeFactory, prepare: {
+            try await Self.prepare(item)
         })
         session.onWebsiteClose = { [weak self] in self?.close() }
         session.onWebsiteSubtitleSelection = { [weak self] in self?.selectSubtitle($0) }
@@ -49,24 +45,24 @@ import Foundation
 
     static func start(_ request: PageCastRequest, alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil,
                       event: @escaping (String, [String: Any]) -> Void) async throws -> WebsitePhonePlayback {
-        let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
-        let configuration = StreamProxySettingsStore.load()
         let item = request.items[request.startIndex]
-        let media = try await prepare(item, route: route, configuration: configuration)
+        let media = try await prepare(item)
         try Task.checkCancellation()
-        let playback = WebsitePhonePlayback(request: request, media: media, route: route, configuration: configuration,
-                                            alternativeFactory: alternativeFactory, event: event)
+        let playback = WebsitePhonePlayback(request: request, media: media, alternativeFactory: alternativeFactory, event: event)
         await playback.session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0, contentType: item["contentType"] as? String, autoplay: false)
         do { try Task.checkCancellation() }
         catch { playback.session.close(); throw error }
         return playback
     }
 
-    private static func prepare(_ item: [String: Any], route: StreamRoute, configuration: RemoteProxyConfiguration) async throws -> RoutedStream {
+    /// The coordinator tags each item with the origins approved for it; untagged items get public addresses only.
+    static func allowedPrivateOrigins(_ item: [String: Any]) -> [String] { item["allowedPrivateOrigins"] as? [String] ?? [] }
+
+    private static func prepare(_ item: [String: Any]) async throws -> RoutedStream {
         guard (item["mediaKind"] as? String ?? "video") != "image" else { throw PageCastError(code: "unsupported_target") }
-        return try await StreamRouteService.localPlayback.prepare(url: item["url"] as! String,
-            headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
-            route: route, configuration: configuration)
+        return try await StreamRouteService.website(allowedPrivateOrigins: allowedPrivateOrigins(item), local: true)
+            .prepareWebsite(url: item["url"] as! String, headers: item["headers"] as? [String: String] ?? [:],
+                            contentType: item["contentType"] as? String)
     }
 
     func snapshot() -> [String: Any] {
@@ -100,7 +96,7 @@ import Foundation
         changingItem = true; session.websiteQueueError = nil; updateQueue()
         defer { changingItem = false; updateQueue() }
         let item = items[selected]
-        let media = try await Self.prepare(item, route: route, configuration: configuration)
+        let media = try await Self.prepare(item)
         try Task.checkCancellation()
         guard !closed else { throw PageCastError(code: "session_ended") }
         // Native next/previous bypass the page jump operation. Flush the old
@@ -108,10 +104,9 @@ import Foundation
         if !ended { event?("statechange", snapshot()) }
         guard !closed else { throw PageCastError(code: "session_ended") }
         index = selected; ended = false; updateTracks(); updateQueue()
-        let route = route; let configuration = configuration
         await session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0,
             contentType: item["contentType"] as? String,
-            prepare: { try await Self.prepare(item, route: route, configuration: configuration) })
+            prepare: { try await Self.prepare(item) })
     }
     private func advanceIfAvailable() {
         guard ended, index + 1 < items.count else { return }
@@ -166,12 +161,17 @@ import Foundation
         let raw = session.websiteSubtitleTracks[selected].url
         let resource = (items[index]["subtitleResources"] as? [[String: Any]] ?? []).first { $0["url"] as? String == raw }
         let headers = resource?["headers"] as? [String: String] ?? [:]
+        let origins = Self.allowedPrivateOrigins(items[index])
         subtitleTask = Task { [weak self] in
             guard let self else { return }
             let client = URLSession(configuration: .ephemeral, delegate: WebsiteCaptionRedirectPolicy(), delegateQueue: nil)
             defer { client.invalidateAndCancel() }
             do {
-                var request = URLRequest(url: URL(string: raw)!); request.allHTTPHeaderFields = headers; request.timeoutInterval = 30
+                // Fetch through the checked proxy; it carries the subtitle's headers and validates redirects.
+                let routed = try await StreamRouteService.website(allowedPrivateOrigins: origins, local: true)
+                    .prepareWebsite(url: raw, headers: headers, contentType: nil)
+                var request = URLRequest(url: routed.url); request.timeoutInterval = 30
+                defer { withExtendedLifetime(routed.registration) {} }
                 let (bytes, response) = try await client.bytes(for: request)
                 guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode) else { throw PageCastError(code: "network_unavailable") }
                 var data = Data()

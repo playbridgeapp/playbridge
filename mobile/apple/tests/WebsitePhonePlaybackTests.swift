@@ -1,11 +1,17 @@
 import Foundation
 import AVFoundation
 
-final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
+final class PhoneProxyRegistration {
+    let url: URL
+    init(url: URL) { self.url = url }
+}
+/// Website media must always reach the phone's checked proxy, on loopback, with the item's grants.
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
-        fatalError("Unexpected proxy startup")
+    var registrations: [(url: String, origins: [String], local: Bool)] = []
+    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = [], forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+        registrations.append((url, allowedPrivateOrigins, forLocalPlayback))
+        return PhoneProxyRegistration(url: URL(string: "http://127.0.0.1:9/s/\(registrations.count)/")!.appendingPathComponent(URL(string: url)!.lastPathComponent))
     }
 }
 enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration { .init() } }
@@ -38,6 +44,10 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         let request = try PageCastRequest.parse(["initialOrientation": "landscape", "items": [["id": "first", "url": "https://media.invalid/first.mp4", "title": "Episode one",
             "subtitleResources": [["url": "https://media.invalid/en.vtt", "label": "English"]]]]], linked: true)
         let playback = try await WebsitePhonePlayback.start(request, alternativeFactory: factory) { events.append(($0, $1)) }
+        precondition(PhoneSenderServices.shared.registrations.map(\.url) == ["https://media.invalid/first.mp4"]
+                     && PhoneSenderServices.shared.registrations.allSatisfy { $0.local && $0.origins.isEmpty },
+                     "Website media must use the loopback proxy even when the route setting is Direct")
+        precondition(engines.last!.loads.last!.0.host == "127.0.0.1", "The player must never receive the website's own URL")
         precondition(engines.last!.plays == 0 && !engines.last!.loads.last!.3, "Preparation must not start playback before owner and destination validation")
         precondition(playback.session.websiteSubtitleTracks.count == 1 && playback.session.websiteSubtitleTracks[0].label == "English")
         precondition(playback.snapshot()["currentIndex"] as? Int == 0)

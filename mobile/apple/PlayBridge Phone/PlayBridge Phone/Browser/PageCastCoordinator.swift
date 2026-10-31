@@ -298,10 +298,12 @@ final class PageCastCoordinator: ObservableObject {
         } else { expected = nil }
         let grants = try await authorize(request, items: parsed.items, declared: parsed.privateOrigins, metadata: parsed.metadata)
         if let expected { try checkDestination(expected, origin: request.origin) }
+        // This phone and non-PlayBridge devices fetch through the phone's proxy, limited to these grants.
+        let phoneFetched = parsed.withAllowedPrivateOrigins(grants)
         if request.operation == "play", transport?.playbackDestination["kind"] as? String == "local", let transport {
             endSession("superseded")
             let session = Session(owner: request, receiverID: "this-device", items: parsed.items, grants: grants, local: true)
-            try await transport.startWebsiteLocalPlayback(parsed) { [weak self, weak session] name, detail in
+            try await transport.startWebsiteLocalPlayback(phoneFetched) { [weak self, weak session] name, detail in
                 guard let self, let session, self.active === session, session.ready else { return }
                 var detail = detail
                 detail["items"] = session.ids.enumerated().map { ["index": $0.offset, "id": $0.element] }
@@ -323,7 +325,7 @@ final class PageCastCoordinator: ObservableObject {
             guard let rawId = transport.playbackDestination["id"] as? String else { throw PageCastError(code: "receiver_changed") }
             let session = Session(owner: request, receiverID: rawId, items: parsed.items, grants: grants)
             session.external = true
-            try await transport.startWebsiteExternalPlayback(parsed)
+            try await transport.startWebsiteExternalPlayback(phoneFetched)
             try check(request); try checkDestination(expected, origin: request.origin)
             session.playbackID = transport.websitePlayback?.playbackId
             active = session; controllerName = Self.displayName(request.origin)
@@ -464,7 +466,10 @@ final class PageCastCoordinator: ObservableObject {
                 guard session.need?.id == suppliedID else { throw PageCastError(code: "stale_request") }
                 guard items.count <= (session.need?.count ?? 0) else { throw PageCastError(code: "invalid_request") }
             }
-            if session.local { transport.appendWebsiteLocalItems(items, endOfList: endOfList) }
+            if session.local {
+                transport.appendWebsiteLocalItems(items.map { var item = $0; item["allowedPrivateOrigins"] = combined.sorted(); return item },
+                                                  endOfList: endOfList)
+            }
             for var item in session.local ? [] : items {
                 item.removeValue(forKey: "id")
                 item["allowedPrivateOrigins"] = combined.sorted()

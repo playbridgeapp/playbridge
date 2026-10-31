@@ -4,7 +4,7 @@ import AVFoundation
 final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = [], forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
         fatalError("Unexpected proxy startup")
     }
 }

@@ -1830,17 +1830,18 @@ extension ConnectionViewModel: PageCastTransport {
         var urls = item["subtitles"] as? [String] ?? []
         for resource in resources { if let url = resource["url"] as? String, !urls.contains(url) { urls.append(url) } }
         guard isAirPlay || urls.isEmpty else { throw PageCastError(code: "unsupported_subtitles") }
-        let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
-        let media: RoutedStream
-        if externalReceiver?.protocolID == "browser" {
-            media = try await prepareExternal(url: item["url"] as! String,
-                headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String)
-        } else {
-            media = try await StreamRouteService().prepare(url: item["url"] as! String,
-                headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
-                route: route, configuration: StreamProxySettingsStore.load())
+        // The device fetches the website's media from this phone's checked proxy, never directly (#480).
+        let origins = WebsitePhonePlayback.allowedPrivateOrigins(item)
+        let routed = try await StreamRouteService.website(allowedPrivateOrigins: origins, local: false)
+            .prepareWebsite(url: item["url"] as! String, headers: item["headers"] as? [String: String] ?? [:],
+                            contentType: item["contentType"] as? String)
+        // AirPlay subtitles are downloaded by this phone, so they use loopback registrations.
+        var subtitleRoutes: [String: RoutedStream] = [:]
+        for raw in urls {
+            let resource = resources.first { $0["url"] as? String == raw }
+            subtitleRoutes[raw] = try await StreamRouteService.website(allowedPrivateOrigins: origins, local: true)
+                .prepareWebsite(url: raw, headers: resource?["headers"] as? [String: String] ?? [:], contentType: nil)
         }
-        let routed = try await prepareAirPlayMedia(media, contentType: item["contentType"] as? String)
         try Task.checkCancellation()
         guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
         let resume = item["start_position_ms"] as? Int ?? 0
@@ -1849,7 +1850,7 @@ extension ConnectionViewModel: PageCastTransport {
             let attempt = airPlay.beginRequest(queue: false)
             let subtitles = urls.enumerated().map { offset, raw -> AirPlaySubtitleSource in
                 let resource = resources.first { $0["url"] as? String == raw }
-                return .init(url: URL(string: raw)!, headers: resource?["headers"] as? [String: String] ?? [:],
+                return .init(url: subtitleRoutes[raw]!.url, headers: [:],
                     title: resource?["label"] as? String ?? resource?["language"] as? String ?? "Subtitle \(offset + 1)")
             }
             try await airPlay.send(media: routed, title: item["title"] as? String ?? "Video",
@@ -1863,7 +1864,7 @@ extension ConnectionViewModel: PageCastTransport {
         }
         try Task.checkCancellation()
         guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
-        routedStreamRegistrations = [routed.registration, media.registration, browserRegistration].compactMap { $0 }
+        routedStreamRegistrations = ([routed.registration, browserRegistration] + subtitleRoutes.values.map(\.registration)).compactMap { $0 }
         recordCast(request.playlistCommand(allowedPrivateOrigins: []))
     }
     @MainActor var websiteLocalState: [String: Any]? { websitePhonePlayback?.snapshot() }
