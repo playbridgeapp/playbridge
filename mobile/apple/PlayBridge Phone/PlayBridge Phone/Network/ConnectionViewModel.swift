@@ -1829,7 +1829,8 @@ extension ConnectionViewModel: PageCastTransport {
         let resources = item["subtitleResources"] as? [[String: Any]] ?? []
         var urls = item["subtitles"] as? [String] ?? []
         for resource in resources { if let url = resource["url"] as? String, !urls.contains(url) { urls.append(url) } }
-        guard isAirPlay || urls.isEmpty else { throw PageCastError(code: "unsupported_subtitles") }
+        // Only AirPlay can show website subtitles. Elsewhere the video plays without them, as on Android.
+        if !isAirPlay { urls = [] }
         // The device fetches the website's media from this phone's checked proxy, never directly (#480).
         let origins = WebsitePhonePlayback.allowedPrivateOrigins(item)
         let routed = try await StreamRouteService.website(allowedPrivateOrigins: origins, local: false)
