@@ -78,6 +78,8 @@ class PhoneSenderServices private constructor(
         url: String,
         headers: Map<String, String> = emptyMap(),
         contentType: String? = null,
+        /** Website media: public addresses plus exactly these approved origins, checked per connection. */
+        allowedPrivateOrigins: List<String>? = null,
     ): RegisteredMedia = withContext(Dispatchers.IO) {
         val headersJson = JSONObject()
         headers.forEach { (k, v) -> headersJson.put(k, v) }
@@ -87,6 +89,7 @@ class PhoneSenderServices private constructor(
             "headers" to headersJson,
         )
         if (!contentType.isNullOrBlank()) fields["content_type"] = contentType
+        if (allowedPrivateOrigins != null) fields["allowed_private_origins"] = JSONArray(allowedPrivateOrigins)
         val data = submit(
             command = "proxy_register_url",
             fields = fields,
