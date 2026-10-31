@@ -3,6 +3,7 @@ import Combine
 
 struct ImagePresentationView: View {
     let payload: Playbridge_PlayPayload
+    let mediaURL: URL
     let engine: String
     let onBroadcast: ([String: Any]) -> Void
     let onNavigate: (Int) -> Void
@@ -17,10 +18,11 @@ struct ImagePresentationView: View {
     private let ticker = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
-    init(payload: Playbridge_PlayPayload, engine: String, prompting: Bool,
+    init(payload: Playbridge_PlayPayload, mediaURL: URL, engine: String, prompting: Bool,
          onBroadcast: @escaping ([String: Any]) -> Void,
          onNavigate: @escaping (Int) -> Void, onExit: @escaping () -> Void) {
         self.payload = payload
+        self.mediaURL = mediaURL
         self.engine = engine
         self.prompting = prompting
         self.onBroadcast = onBroadcast
@@ -73,10 +75,11 @@ struct ImagePresentationView: View {
             visible = true
             clock.start(now: now)
             snapshot()
-            guard let url = payload.validURL else { failed = true; return }
-            let loader = MediaImageDownload(url: url, headerOrigin: url, headers: payload.headers,
+            // `mediaURL` is the proxy's URL for a page-controlled image.
+            let loader = MediaImageDownload(url: mediaURL, headerOrigin: mediaURL, headers: payload.headers,
                                             detectedBy: payload.detectedBy,
-                                            allowedPrivateOrigins: payload.allowedPrivateOrigins)
+                                            allowedPrivateOrigins: payload.allowedPrivateOrigins,
+                                            viaProxy: payload.isPageControlled)
             download = loader
             loader.start { result in
                 guard visible else { return }

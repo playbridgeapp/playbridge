@@ -53,6 +53,9 @@ struct PlayerView: View {
     @State private var appVolumeBanner: String?
     @State private var appVolumeShownLevel = PlayerAppVolume.storedLevel()
     @State private var appVolumeBannerID = 0
+    /// Bumped when a page item's proxy registration settles, so the body re-reads its route.
+    @State private var pageRouteRevision = 0
+    @State private var reportedPageFailure: String?
     @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
 
@@ -198,7 +201,7 @@ struct PlayerView: View {
             mediaGeneration &+= 1
             syncExitFence()
             noteCurrentItem(nextRequest)
-            if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
+            if nextRequest.recordsHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
             onDismiss()
@@ -213,7 +216,7 @@ struct PlayerView: View {
         historyStore.flushProgress()
         consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
-            if !jumpRequest.skipHistory { historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil) }
+            if jumpRequest.recordsHistory { historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil) }
             resumeTime = 0
             withAnimation { showPlaylist = false }
         }
@@ -245,7 +248,7 @@ struct PlayerView: View {
                                           content: content, state: json["state"] as? String ?? "",
                                           position: position, duration: duration)
         }
-        guard !isPreBuffering, !item.skipHistory, item.resolvedMediaKind != .image, let url = item.validURL,
+        guard !isPreBuffering, item.recordsHistory, item.resolvedMediaKind != .image, let url = item.validURL,
               url == (playlistStore.currentItem ?? payload).validURL,
               json["type"] as? String == "status",
               let position = json["position"] as? Int,
@@ -328,6 +331,51 @@ struct PlayerView: View {
         }
     }
 
+    /// Registers the current page item with the proxy (and the next one ahead of time).
+    /// A refusal leaves the item unplayable; it is never played directly.
+    private func routePageMedia() async {
+        let router = server.pageMedia
+        let current = playlistStore.currentItem ?? payload
+        if current.isPageControlled, case .pending = router.state(for: current.pageMediaSource) {
+            _ = try? await router.route(current.pageMediaSource)
+            pageRouteRevision &+= 1
+        }
+        let nextIndex = playlistStore.currentIndex + 1
+        if playlistStore.items.indices.contains(nextIndex) {
+            let next = playlistStore.items[nextIndex]
+            if next.isPageControlled, case .pending = router.state(for: next.pageMediaSource) {
+                _ = try? await router.route(next.pageMediaSource)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pageMediaPlaceholder(failed: Bool, for item: Playbridge_PlayPayload) -> some View {
+        ZStack {
+            Color.black
+            if failed {
+                VStack(spacing: 20) {
+                    Image(systemName: "exclamationmark.lock").font(.system(size: 72))
+                    Text("This website’s media can’t be played safely").font(.title2)
+                    Text(item.titleOrNil ?? "").font(.headline)
+                }
+                .foregroundStyle(.white.opacity(0.8))
+                .onAppear {
+                    guard reportedPageFailure != item.itemID else { return }
+                    reportedPageFailure = item.itemID
+                    broadcast(["type": "status", "state": "error", "position": 0, "duration": 0,
+                               "error": pageMediaUnavailableError], for: item)
+                }
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .ignoresSafeArea()
+        .focusable()
+        .focused($isPlayerFocused)
+        .onExitCommand { exitPlayback() }
+    }
+
     private func transportMetadata(for payload: Playbridge_PlayPayload) -> TransportMetadata {
         guard payload.hasVisualMetadata else { return TransportMetadata() }
         let metadata = payload.visualMetadata
@@ -370,7 +418,14 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
 
             let currentRequest = playlistStore.currentItem ?? payload
-            if let currentURL = currentRequest.validURL {
+            if let originalURL = currentRequest.validURL {
+                // Page-controlled media only plays through the proxy. Until it is
+                // routed, nothing is handed to AVPlayer, mpv or the image loader.
+                let _ = pageRouteRevision
+                let route = server.pageMedia.state(for: currentRequest.pageMediaSource)
+                let playable = route.playable(url: originalURL, headers: currentRequest.headersOrNil,
+                                              subtitles: currentRequest.subtitlesOrNil)
+                let currentURL = playable?.url ?? originalURL
                 let currentEngine = effectiveEngine(for: currentRequest)
                 let currentGeneration = mediaGeneration
                 let mediaIdentity = PlayerMediaIdentity(playbackID: playlistStore.playbackID,
@@ -381,9 +436,12 @@ struct PlayerView: View {
                                               itemID: playlistStore.currentItemID,
                                               active: server.currentPlayRequest != nil)
                 }
-                if currentRequest.resolvedMediaKind == .image {
+                if playable == nil {
+                    pageMediaPlaceholder(failed: { if case .failed = route { return true } else { return false } }(),
+                                         for: currentRequest)
+                } else if currentRequest.resolvedMediaKind == .image {
                     ImagePresentationView(
-                        payload: currentRequest, engine: currentEngine.rawValue,
+                        payload: currentRequest, mediaURL: currentURL, engine: currentEngine.rawValue,
                         prompting: stillWatching.isPrompting,
                         onBroadcast: { frame in
                             guard isCurrentItem() else { return }
@@ -401,8 +459,8 @@ struct PlayerView: View {
                 } else if currentEngine == .mpv {
                     MPVPlayerView(
                         url: currentURL,
-                        headers: currentRequest.headersOrNil,
-                        subtitles: currentRequest.subtitlesOrNil,
+                        headers: playable?.headers,
+                        subtitles: playable?.subtitles,
                         skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         mediaIdentity: mediaGeneration,
@@ -443,8 +501,8 @@ struct PlayerView: View {
                 } else {
                     NativePlayerView(
                         url: currentURL,
-                        headers: currentRequest.headersOrNil,
-                        subtitles: currentRequest.subtitlesOrNil,
+                        headers: playable?.headers,
+                        subtitles: playable?.subtitles,
                         skipMetadata: skipMetadata(for: currentRequest),
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
@@ -534,6 +592,7 @@ struct PlayerView: View {
                 .zIndex(100)
             }
         }
+        .task(id: playlistStore.currentItemID ?? payload.url) { await routePageMedia() }
         .onAppear {
             isPlayerFocused = true
             syncExitFence()

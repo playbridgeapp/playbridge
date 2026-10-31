@@ -126,8 +126,24 @@ samples kept outside the repository. Reconnect the phone to refresh capabilities
   Pre-play appears only for video, honors skipPreplay, and cannot appear over music
   or images when the first item changes kind.
 
-Page-controlled image/artwork downloads (`page_cast` / `linked_page`) are rejected:
-Apple TV has no DNS/connected-peer grant enforcement yet. Direct HTTP(S), including
-phone-served LAN media, uses standard URLSession trust and scoped headers. Do not
-interpret `allowedPrivateOrigins` as permission to bypass TLS or page network policy.
+Page-controlled media (`detectedBy` `page_cast` / `linked_page`): video, audio,
+subtitles (including late `add_subtitle`) and images play only through the embedded
+Rust stream proxy (`Network/PageMediaRoute.swift`, `Network/TVProxyHost.swift`).
+The proxy listens on 127.0.0.1, starts with the first page item and stops after 30 s
+without registrations. It resolves DNS, follows redirects and fetches HLS children
+under the page-cast network policy: public destinations plus the item's exact
+`allowedPrivateOrigins`, never loopback. AVPlayer, mpv, the subtitle loader and the
+image loader are given the proxy URL; the original URL and credential headers never
+reach them. A refused or unavailable proxy (or a build without the Cast Core
+library) rejects `play`, `playlist`, `queue_add` and `playlist_jump` with
+`page_media_unavailable`, and a late subtitle with `subtitle_unavailable`; nothing
+falls back to direct playback. Queued page items are registered when they come up,
+and a page item that is not routed shows an error instead of playing. Page items are
+not saved to History, because a History replay is a TV-initiated direct play.
+Cast-sheet media (any other `detectedBy`) keeps playing directly, including
+phone-served LAN media with standard URLSession trust and scoped headers.
+Build the proxy with `sh cast/build-apple-tvos.sh` (see `cast/README.md`). Host
+checks cover the routing decision; confirm real playback on an Apple TV: an HLS
+page cast with a public host, one with an approved LAN origin, an unapproved LAN
+origin (must be refused), and a late subtitle.
 Diagnostic logs over WSS are deferred and are not advertised.
