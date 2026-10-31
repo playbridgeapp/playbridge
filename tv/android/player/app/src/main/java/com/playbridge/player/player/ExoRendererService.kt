@@ -117,6 +117,8 @@ class ExoRendererService : Service() {
             pendingInitialSubtitleLabel = request.getString(RendererProtocol.KEY_INITIAL_SUBTITLE_LABEL)
 
             val renderer = engine ?: ExoPlayerEngine(applicationContext).also { engine = it }
+            renderer.trustedLocalProxyOrigin =
+                request.getString(RendererProtocol.KEY_TRUSTED_LOCAL_PROXY_ORIGIN)
             surface?.let {
                 renderer.setVideoSurface(it)
                 startPendingLoad(renderer, requestedSessionId)

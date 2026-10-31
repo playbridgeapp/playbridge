@@ -150,4 +150,78 @@ class MediaNetworkPolicyTest {
         assertTrue(MediaNetworkPolicy.sameOrigin("https://example.com/a", "https://example.com:443/b"))
         assertFalse(MediaNetworkPolicy.sameOrigin("https://example.com/a", "https://cdn.example.com/a"))
     }
+
+    @Test
+    fun permitsOnlyTrustedLocalProxyStreamUrlsOnLoopback() {
+        val proxyOrigin = "http://127.0.0.1:41920"
+        val loopback = InetAddress.getByName("127.0.0.1")
+
+        assertEquals(proxyOrigin, MediaNetworkPolicy.normalizeTrustedLocalProxyOrigin(proxyOrigin))
+        assertNull(MediaNetworkPolicy.normalizeTrustedLocalProxyOrigin("https://127.0.0.1:41920"))
+        assertNull(MediaNetworkPolicy.normalizeTrustedLocalProxyOrigin("http://localhost:41920"))
+        assertNull(MediaNetworkPolicy.normalizeTrustedLocalProxyOrigin("http://127.0.0.1"))
+
+        val validStreamUrl = "$proxyOrigin/s/session-1/index.m3u8"
+        assertTrue(MediaNetworkPolicy.isTrustedLocalProxyUrl(validStreamUrl, proxyOrigin))
+        assertTrue(
+            MediaNetworkPolicy.isAllowedUrlSyntaxOrTrustedProxy(
+                validStreamUrl,
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+        assertTrue(
+            MediaNetworkPolicy.areAllowedAddressesForHostOrTrustedProxy(
+                "127.0.0.1",
+                listOf(loopback),
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+        assertTrue(
+            MediaNetworkPolicy.areAllowedConnectionOrTrustedProxy(
+                validStreamUrl,
+                loopback,
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+
+        // Untrusted ports, routes, or missing proxy origin remain blocked.
+        val wrongPortUrl = "http://127.0.0.1:8080/s/session-1/index.m3u8"
+        val adminRouteUrl = "$proxyOrigin/register"
+        assertFalse(MediaNetworkPolicy.isTrustedLocalProxyUrl(wrongPortUrl, proxyOrigin))
+        assertFalse(MediaNetworkPolicy.isTrustedLocalProxyUrl(adminRouteUrl, proxyOrigin))
+        assertFalse(
+            MediaNetworkPolicy.isAllowedUrlSyntaxOrTrustedProxy(
+                wrongPortUrl,
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+        assertFalse(
+            MediaNetworkPolicy.areAllowedConnectionOrTrustedProxy(
+                wrongPortUrl,
+                loopback,
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+        assertFalse(
+            MediaNetworkPolicy.areAllowedConnectionOrTrustedProxy(
+                adminRouteUrl,
+                loopback,
+                emptySet(),
+                proxyOrigin,
+            ),
+        )
+        assertFalse(
+            MediaNetworkPolicy.areAllowedAddressesForHostOrTrustedProxy(
+                "127.0.0.1",
+                listOf(loopback),
+                emptySet(),
+                null,
+            ),
+        )
+    }
 }

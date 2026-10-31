@@ -7,17 +7,21 @@ import org.junit.Test
 
 class RendererSessionCoordinatorTest {
     @Test
-    fun pageControlledMediaCanOnlyUsePolicyEnforcingRenderer() {
-        assertTrue(rendererAllowedForPageMedia(pageControlled = true, RendererKind.EXO))
-        assertFalse(rendererAllowedForPageMedia(pageControlled = true, RendererKind.MPV))
-        assertTrue(rendererAllowedForPageMedia(pageControlled = false, RendererKind.MPV))
+    fun pageControlledMediaAllowsMpvOnlyWhenProxyIsAvailable() {
+        assertTrue(rendererAllowedForPageMedia(pageControlled = true, RendererKind.EXO, proxyAvailable = false))
+        assertFalse(rendererAllowedForPageMedia(pageControlled = true, RendererKind.MPV, proxyAvailable = false))
+        assertTrue(rendererAllowedForPageMedia(pageControlled = true, RendererKind.MPV, proxyAvailable = true))
+        assertFalse(rendererAllowedForPageMedia(pageControlled = true, RendererKind.WEBVIEW, proxyAvailable = true))
+        assertTrue(rendererAllowedForPageMedia(pageControlled = false, RendererKind.MPV, proxyAvailable = false))
     }
 
     @Test
-    fun pageControlledExoFailureDoesNotFallBackToMpv() {
-        assertEquals(null, fallbackRenderer(RendererKind.EXO, pageControlled = true))
-        assertEquals(RendererKind.MPV, fallbackRenderer(RendererKind.EXO, pageControlled = false))
-        assertEquals(RendererKind.EXO, fallbackRenderer(RendererKind.MPV, pageControlled = true))
+    fun pageControlledExoFallbackToMpvRequiresProxyAvailability() {
+        assertEquals(null, fallbackRenderer(RendererKind.EXO, pageControlled = true, proxyAvailable = false))
+        assertEquals(RendererKind.MPV, fallbackRenderer(RendererKind.EXO, pageControlled = true, proxyAvailable = true))
+        assertEquals(RendererKind.MPV, fallbackRenderer(RendererKind.EXO, pageControlled = false, proxyAvailable = false))
+        assertEquals(RendererKind.EXO, fallbackRenderer(RendererKind.MPV, pageControlled = true, proxyAvailable = false))
+        assertEquals(RendererKind.EXO, fallbackRenderer(RendererKind.MPV, pageControlled = true, proxyAvailable = true))
     }
 
     @Test

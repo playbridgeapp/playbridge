@@ -7,16 +7,20 @@ internal enum class RendererKind { MPV, EXO, WEBVIEW, IMAGE }
 internal fun rendererAllowedForPageMedia(
     pageControlled: Boolean,
     target: RendererKind,
-): Boolean = !pageControlled || target == RendererKind.EXO
+    proxyAvailable: Boolean = false,
+): Boolean = !pageControlled ||
+    target == RendererKind.EXO ||
+    (proxyAvailable && target == RendererKind.MPV)
 
 internal fun fallbackRenderer(
     failed: RendererKind,
     pageControlled: Boolean,
+    proxyAvailable: Boolean = false,
 ): RendererKind? = when (failed) {
     RendererKind.MPV -> RendererKind.EXO
     RendererKind.EXO -> RendererKind.MPV
     else -> null
-}.takeIf { it != null && rendererAllowedForPageMedia(pageControlled, it) }
+}.takeIf { it != null && rendererAllowedForPageMedia(pageControlled, it, proxyAvailable) }
 
 internal enum class RendererSessionPhase { IDLE, PREPARING, READY, PLAYING, STOPPING, FAILED }
 

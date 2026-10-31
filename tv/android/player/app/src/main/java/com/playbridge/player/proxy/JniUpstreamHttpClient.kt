@@ -1,0 +1,388 @@
+package com.playbridge.player.proxy
+
+import android.util.Log
+import okhttp3.Call
+import okhttp3.ConnectionPool
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import org.json.JSONObject
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.URI
+import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Host-side origin fetch for `stream-proxy-rust` (`upstream-jni`) on Android TV.
+ *
+ * Checked page-cast origins route through the Rust-owned authenticated loopback gateway so
+ * DNS resolution, destination classification, redirect checks, and credential scoping remain
+ * enforced in Rust while TLS verifies the target hostname via Android's trust store.
+ *
+ * Methods are `@JvmStatic` so Rust JNI trampolines can invoke them directly on the class.
+ */
+internal object JniUpstreamHttpClient {
+    private const val TAG = "TvJniUpstreamHttp"
+    private const val CONNECT_TIMEOUT_MS = 30_000
+    private const val READ_TIMEOUT_MS = 45_000
+
+    const val DEFAULT_UA =
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/120.0.0.0 Safari/537.36"
+
+    private val nextHandle = AtomicLong(1)
+    private val nextRequestId = AtomicLong(1)
+    private val openHandles = ConcurrentHashMap<Long, OpenHandle>()
+
+    private data class OpenHandle(
+        val connection: HttpURLConnection? = null,
+        val input: InputStream?,
+        val response: Response? = null,
+        val call: Call? = null,
+    )
+
+    @JvmStatic
+    fun open(url: String, requestHeadersJson: String): String {
+        return try {
+            val headers = parseHeadersJson(requestHeadersJson)
+            openWithRetry(url, headers)
+        } catch (e: Throwable) {
+            warn("open failed: ${e.javaClass.simpleName}")
+            errorJson(e.message ?: "open failed")
+        }
+    }
+
+    /** Checked origins use a Rust-owned authenticated loopback gateway; TLS verifies URL host. */
+    @JvmStatic
+    fun openChecked(url: String, requestHeadersJson: String, proxyJson: String): String = try {
+        val gateway = proxyJson.takeIf { it.isNotBlank() }?.let(::checkedClient)
+            ?: return errorJson("Checked native origin gateway missing")
+        openWithRetry(url, parseHeadersJson(requestHeadersJson), gateway)
+    } catch (_: Exception) {
+        errorJson("Checked native origin unavailable")
+    }
+
+    private fun checkedClient(json: String): OkHttpClient {
+        val metadata = JSONObject(json)
+        require(metadata.getString("host") == "127.0.0.1")
+        val port = metadata.getInt("port")
+        require(port in 1..65535)
+        val username = metadata.getString("username")
+        val password = metadata.getString("password")
+        require(username == "playbridge" && password.length in 32..128)
+        val credential = Credentials.basic(username, password)
+        return OkHttpClient.Builder()
+            .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
+            .proxyAuthenticator { _, response ->
+                if (response.request.header("Proxy-Authorization") != null) {
+                    null
+                } else {
+                    response.request.newBuilder()
+                        .header("Proxy-Authorization", credential)
+                        .build()
+                }
+            }
+            .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .connectTimeout(CONNECT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    @JvmStatic
+    fun read(handle: Long, maxLen: Int): ByteArray? {
+        if (maxLen <= 0) return ByteArray(0)
+        val open = openHandles[handle] ?: return null
+        val input = open.input ?: return ByteArray(0)
+        return try {
+            val buf = ByteArray(maxLen.coerceAtMost(256 * 1024))
+            val n = input.read(buf)
+            when {
+                n <= 0 -> ByteArray(0)
+                n == buf.size -> buf
+                else -> buf.copyOf(n)
+            }
+        } catch (e: Throwable) {
+            warn("read failed handle=$handle: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    @JvmStatic
+    fun close(handle: Long) {
+        val open = openHandles.remove(handle) ?: return
+        runCatching { open.input?.close() }
+        runCatching { open.response?.close() }
+        runCatching { open.call?.cancel() }
+        runCatching { open.connection?.disconnect() }
+    }
+
+    private fun openWithRetry(
+        url: String,
+        headers: Map<String, String>,
+        gateway: OkHttpClient? = null,
+    ): String {
+        val filtered = filterHeaders(headers)
+        val requestId = nextRequestId.getAndIncrement()
+        val resourceType = resourceTypeForLog(url)
+        fun result(strategy: String, outcome: ConnectOutcome): String {
+            val message =
+                "request=$requestId resource=$resourceType strategy=$strategy status=${outcome.status}"
+            if (outcome.ok) debug(message) else warn("$message final=true")
+            return if (outcome.ok) outcome.json else errorJson(outcome.error ?: "HTTP ${outcome.status}")
+        }
+
+        val first = connectOnce(url, filtered, gateway)
+        if (first.ok || first.status !in RETRYABLE_STATUSES) return result("captured", first)
+
+        if (first.status == 403) {
+            originRefererHeaders(filtered)?.let { withReferer ->
+                warn("request=$requestId resource=$resourceType strategy=captured status=403; retrying=origin_referer")
+                val retried = connectOnce(url, withReferer, gateway)
+                if (retried.ok) return result("origin_referer", retried)
+                warn("request=$requestId resource=$resourceType strategy=origin_referer status=${retried.status}; retrying=minimal")
+            }
+        }
+
+        val minimal = connectOnce(url, minimalHeaders(filtered), gateway)
+        return result("minimal", minimal)
+    }
+
+    /** Synthesizes only an origin-level Referer, never a page path or signed query. */
+    internal fun originRefererHeaders(headers: Map<String, String>): Map<String, String>? {
+        if (headers.keys.any { it.equals("Referer", ignoreCase = true) }) return null
+        val origin = headers.entries.firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value
+            ?: return null
+        val parsed = runCatching { URI(origin) }.getOrNull() ?: return null
+        if (parsed.scheme !in setOf("http", "https") ||
+            parsed.host.isNullOrBlank() ||
+            parsed.userInfo != null
+        ) return null
+        val referer = URI(parsed.scheme, null, parsed.host, parsed.port, "/", null, null).toString()
+        return headers + ("Referer" to referer)
+    }
+
+    /** Fixed category rather than URL, host, path, or signed query. */
+    internal fun resourceTypeForLog(url: String): String {
+        val path = runCatching { URL(url).path.lowercase() }.getOrDefault("")
+        return when {
+            path.endsWith(".m3u8") -> "hls_playlist"
+            path.endsWith(".mpd") -> "dash_manifest"
+            listOf(".vtt", ".srt", ".ass", ".ssa", ".ttml").any(path::endsWith) -> "subtitle"
+            listOf(".ts", ".m4s", ".jpg", ".jpeg", ".aac").any(path::endsWith) -> "segment"
+            else -> "media"
+        }
+    }
+
+    private data class ConnectOutcome(
+        val ok: Boolean,
+        val json: String = "",
+        val status: Int = 0,
+        val error: String? = null,
+    )
+
+    private fun connectOnce(
+        url: String,
+        headers: Map<String, String>,
+        gateway: OkHttpClient? = null,
+    ): ConnectOutcome {
+        if (gateway != null) return connectChecked(url, headers, gateway)
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = false
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+            requestMethod = "GET"
+            useCaches = false
+            doInput = true
+            headers.forEach { (k, v) ->
+                runCatching { setRequestProperty(k, v) }
+            }
+            if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                setRequestProperty("User-Agent", DEFAULT_UA)
+            }
+            if (headers.keys.none { it.equals("Accept", ignoreCase = true) }) {
+                setRequestProperty(
+                    "Accept",
+                    "application/vnd.apple.mpegurl, application/x-mpegURL, application/dash+xml, */*;q=0.8",
+                )
+            }
+        }
+
+        val code = try {
+            conn.responseCode
+        } catch (e: Exception) {
+            conn.disconnect()
+            return ConnectOutcome(ok = false, error = e.message ?: "connect failed")
+        }
+
+        val stream = try {
+            if (code in 200..299 || code == 206) conn.inputStream else conn.errorStream
+        } catch (_: Exception) {
+            null
+        }
+
+        if (code !in 200..399) {
+            runCatching { stream?.close() }
+            conn.disconnect()
+            return ConnectOutcome(
+                ok = false,
+                status = code,
+                error = "HTTP $code ${conn.responseMessage ?: ""}".trim(),
+            )
+        }
+
+        val handle = nextHandle.getAndIncrement()
+        openHandles[handle] = OpenHandle(connection = conn, input = stream)
+
+        val respHeaders = JSONObject()
+        conn.contentType?.let { respHeaders.put("content-type", it) }
+        val cl = conn.contentLengthLong
+        if (cl >= 0) respHeaders.put("content-length", cl.toString())
+        conn.getHeaderField("Location")?.let { respHeaders.put("location", it) }
+        conn.getHeaderField("Content-Range")?.let { respHeaders.put("content-range", it) }
+        conn.getHeaderField("Accept-Ranges")?.let { respHeaders.put("accept-ranges", it) }
+        conn.getHeaderField("Cache-Control")?.let { respHeaders.put("cache-control", it) }
+        conn.getHeaderField("Vary")?.let { respHeaders.put("vary", it) }
+        conn.getHeaderField("Expires")?.let { respHeaders.put("expires", it) }
+        conn.getHeaderField("Age")?.let { respHeaders.put("age", it) }
+        conn.getHeaderField("Date")?.let { respHeaders.put("date", it) }
+
+        val out = JSONObject()
+            .put("ok", true)
+            .put("handle", handle)
+            .put("status", code)
+            .put("headers", respHeaders)
+        return ConnectOutcome(ok = true, json = out.toString(), status = code)
+    }
+
+    private fun connectChecked(
+        url: String,
+        headers: Map<String, String>,
+        client: OkHttpClient,
+    ): ConnectOutcome {
+        val builder = Request.Builder().url(url).get()
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            builder.header("User-Agent", DEFAULT_UA)
+        }
+        if (headers.keys.none { it.equals("Accept", ignoreCase = true) }) {
+            builder.header("Accept", "*/*")
+        }
+        builder.header("Accept-Encoding", "identity")
+        val call = client.newCall(builder.build())
+        val response = try {
+            call.execute()
+        } catch (_: Exception) {
+            call.cancel()
+            return ConnectOutcome(false, error = "Native origin connection failed")
+        }
+        val status = response.code
+        if (status !in 200..399) {
+            response.close()
+            return ConnectOutcome(false, status = status, error = "HTTP $status")
+        }
+        val handle = nextHandle.getAndIncrement()
+        openHandles[handle] = OpenHandle(
+            input = response.body?.byteStream(),
+            response = response,
+            call = call,
+        )
+        val returnedHeaders = JSONObject()
+        for (name in listOf(
+            "content-type",
+            "content-length",
+            "content-range",
+            "accept-ranges",
+            "location",
+            "content-encoding",
+            "cache-control",
+            "vary",
+            "expires",
+            "age",
+            "date",
+        )) {
+            response.header(name)?.let { returnedHeaders.put(name, it) }
+        }
+        return ConnectOutcome(
+            ok = true,
+            json = JSONObject()
+                .put("ok", true)
+                .put("handle", handle)
+                .put("status", status)
+                .put("headers", returnedHeaders)
+                .toString(),
+            status = status,
+        )
+    }
+
+    internal fun filterHeaders(headers: Map<String, String>): Map<String, String> =
+        headers.filterKeys { k ->
+            val lk = k.lowercase()
+            !lk.startsWith("sec-fetch") &&
+                !lk.startsWith("sec-ch") &&
+                lk != "host" &&
+                lk != "proxy-authorization" &&
+                lk != "proxy-connection" &&
+                lk != "accept-encoding" &&
+                lk != "connection" &&
+                lk != "content-length" &&
+                lk != "content-type" &&
+                lk != "transfer-encoding" &&
+                lk != "te" &&
+                lk != "upgrade" &&
+                lk != "http2-settings"
+        }
+
+    private fun minimalHeaders(headers: Map<String, String>): Map<String, String> {
+        val out = headers.filterKeys { k ->
+            val lk = k.lowercase()
+            lk == "user-agent" || lk == "referer" || lk == "cookie" || lk == "authorization" ||
+                lk == "range"
+        }.toMutableMap()
+        if (out.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            out["User-Agent"] = DEFAULT_UA
+        }
+        return out
+    }
+
+    private fun parseHeadersJson(json: String): Map<String, String> {
+        if (json.isBlank()) return emptyMap()
+        val obj = JSONObject(json)
+        val out = LinkedHashMap<String, String>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            out[k] = obj.optString(k, "")
+        }
+        return out
+    }
+
+    private fun errorJson(message: String): String =
+        JSONObject().put("ok", false).put("error", message).toString()
+
+    private fun warn(message: String) {
+        try {
+            Log.w(TAG, message)
+        } catch (_: Throwable) {
+            // Pure JVM unit tests do not mock android.util.Log.
+        }
+    }
+
+    private fun debug(message: String) {
+        try {
+            Log.d(TAG, message)
+        } catch (_: Throwable) {
+            // Pure JVM unit tests do not mock android.util.Log.
+        }
+    }
+
+    private val RETRYABLE_STATUSES = setOf(401, 403, 429, 500, 502, 503)
+}
