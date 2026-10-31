@@ -372,7 +372,7 @@ internal class PageMediaProxyRouter(
                 rawUrl = subtitleUrl,
                 headers = headers,
                 contentType = contentType,
-                allowedPrivateOrigins = item.allowed_private_origins,
+                allowedPrivateOrigins = withUserChosenOrigin(item.allowed_private_origins, subtitleUrl),
                 leasesOut = acquiredLeases,
             )
             val lease = acquiredLeases.singleOrNull()
@@ -463,6 +463,15 @@ internal class PageMediaProxyRouter(
 
     companion object {
         const val MAX_PAGE_SUBTITLES = 16
+
+        /**
+         * A subtitle the viewer adds during playback is their choice, not the page's: its own
+         * origin is approved on top of the item's grants. Loopback and forbidden addresses stay
+         * refused because the policy never accepts them as grants.
+         */
+        internal fun withUserChosenOrigin(origins: List<String>, subtitleUrl: String): List<String> =
+            (origins + listOfNotNull(MediaNetworkPolicy.normalizeOrigin(subtitleUrl.substringBefore('#'))))
+                .distinct()
         private const val MAX_PAGE_HEADERS = 16
         private const val MAX_HEADER_VALUE_LEN = 8_192
 

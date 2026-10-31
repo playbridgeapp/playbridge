@@ -267,6 +267,19 @@ class PageMediaProxyRouterTest {
         assertTrue(failedLate.isFailure)
         assertNull(router.resolveSubtitleFetch("https://cdn.example.com/subs/broken.vtt", null))
 
+        // A subtitle the viewer adds from another LAN origin (a file served by the phone) is
+        // their choice: it registers with its own origin approved on top of the item's grants.
+        val phoneSubtitle = router.registerLateSubtitle(
+            item = pageItem,
+            subtitleUrl = "http://192.168.1.30:43210/subtitle/file.srt#file.srt",
+            headers = emptyMap(),
+        ).getOrThrow()
+        assertTrue(phoneSubtitle.startsWith("http://127.0.0.1:46100/s/"))
+        assertEquals(
+            listOf("http://10.0.0.50:8080", "http://192.168.1.30:43210"),
+            fakeProxy.registrations.last().allowedPrivateOrigins,
+        )
+
         // Forbidden loopback late subtitle is rejected before touching proxy registration.
         val regCountBefore = fakeProxy.registrations.size
         val forbiddenLate = router.registerLateSubtitle(

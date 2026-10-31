@@ -61,6 +61,19 @@ nonisolated enum PageMediaPolicy {
         return result
     }
 
+    /// A subtitle the viewer adds during playback is their choice, not the page's:
+    /// its own origin is approved on top of the item's grants. The proxy still
+    /// never reaches loopback or other forbidden addresses.
+    static func withUserChosenOrigin(_ origins: [String], subtitle: String) -> [String] {
+        guard let url = URL(string: subtitle), let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(), !host.isEmpty else { return origins }
+        let authority = host.contains(":") ? "[\(host)]" : host
+        let defaultPort = scheme == "https" ? 443 : 80
+        let port = url.port.flatMap { $0 == defaultPort ? nil : ":\($0)" } ?? ""
+        let origin = "\(scheme)://\(authority)\(port)"
+        return origins.contains(origin) ? origins : origins + [origin]
+    }
+
     static func isRemoteHTTP(_ string: String) -> Bool {
         guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme), url.host?.isEmpty == false,
@@ -225,8 +238,8 @@ nonisolated final class PageMediaRouter: @unchecked Sendable {
                                isProxied: true, grants: grants)
     }
 
-    /// A subtitle added while a page item plays. The result is the URL to
-    /// download; a page item never gets its original subtitle URL back.
+    /// A subtitle the viewer added while a page item plays. The result is the URL
+    /// to download; a page item never gets its original subtitle URL back.
     func lateSubtitle(url: String, headers: [String: String],
                       for source: PageMediaSource) async throws -> URL {
         guard source.isPageControlled else {
@@ -237,7 +250,8 @@ nonisolated final class PageMediaRouter: @unchecked Sendable {
         guard PageMediaPolicy.isRemoteHTTP(url) else { throw PageMediaError.refused }
         let grant = try await proxy.register(
             url: url, headers: PageMediaPolicy.proxyHeaders(headers), contentType: nil,
-            allowedPrivateOrigins: source.allowedPrivateOrigins)
+            allowedPrivateOrigins: PageMediaPolicy.withUserChosenOrigin(
+                source.allowedPrivateOrigins, subtitle: url))
         lock.withLock { lateGrants[source, default: []].append(grant) }
         return grant.url
     }
