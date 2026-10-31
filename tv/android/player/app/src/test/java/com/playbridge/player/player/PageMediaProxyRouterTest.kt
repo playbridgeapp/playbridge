@@ -299,15 +299,15 @@ class PageMediaProxyRouterTest {
         assertTrue(startFailRouter.prepareItem(pageItem).isFailure)
         assertNull(startFailRouter.currentPrepared())
 
-        // 3. Subtitle registration failure -> fails entire item and revokes media lease.
+        // 3. Subtitle registration failure -> the subtitle is dropped and the media still plays.
         val subFailClient = FakePageProxyClient(
             failOnUrlPredicate = { it.endsWith("en.vtt") },
         )
         val subFailRouter = PageMediaProxyRouter(subFailClient)
-        assertTrue(subFailRouter.prepareItem(pageItem).isFailure)
-        assertNull(subFailRouter.currentPrepared())
-        assertTrue(subFailClient.activeLeases.isEmpty())
-        assertEquals(listOf("reg-1"), subFailClient.closedLeases)
+        val subFailPrepared = subFailRouter.prepareItem(pageItem).getOrThrow()
+        assertTrue(subFailPrepared.enginePayload(RendererKind.EXO).subtitles.isEmpty())
+        assertNull(subFailPrepared.resolveSubtitleFetch("https://cdn.example.com/video/en.vtt", null))
+        assertEquals(listOf("reg-1"), subFailClient.activeLeases.toList())
 
         // 4. Forbidden loopback/metadata/ungranted-LAN URLs and disallowed headers are rejected.
         val strictClient = FakePageProxyClient()
@@ -333,6 +333,40 @@ class PageMediaProxyRouterTest {
             assertTrue(strictRouter.prepareItem(badItem).isFailure)
         }
         assertEquals(0, strictClient.startCalls)
+    }
+
+    @Test
+    fun refusedPageSubtitlesAreDroppedWithoutBlockingTheItem() = runBlocking {
+        val client = FakePageProxyClient()
+        val router = PageMediaProxyRouter(client)
+        val item = PlayPayload(
+            url = "https://cdn.example.com/video/master.m3u8",
+            detected_by = "page_cast",
+            subtitles = listOf(
+                "http://10.0.0.50:8080/ungranted.vtt",
+                "https://cdn.example.com/video/en.vtt",
+            ),
+            subtitle_resources = listOf(
+                SubtitleResource(url = "http://127.0.0.1:9000/secret.vtt"),
+            ),
+        )
+
+        assertTrue(router.canAcceptItem(item))
+        val prepared = router.prepareItem(item).getOrThrow()
+
+        // Only the media and the public subtitle reach the proxy; refused ones are never fetched.
+        assertEquals(
+            listOf(
+                "https://cdn.example.com/video/master.m3u8",
+                "https://cdn.example.com/video/en.vtt",
+            ),
+            client.registrations.map { it.url },
+        )
+        val subtitles = prepared.enginePayload(RendererKind.EXO).subtitles
+        assertEquals(1, subtitles.size)
+        assertTrue(subtitles.single().startsWith("http://127.0.0.1:43125/s/"))
+        assertNull(prepared.resolveSubtitleFetch("http://10.0.0.50:8080/ungranted.vtt", null))
+        assertNull(prepared.resolveSubtitleFetch("http://127.0.0.1:9000/secret.vtt", null))
     }
 
     @Test
