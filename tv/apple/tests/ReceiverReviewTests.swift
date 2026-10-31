@@ -2382,4 +2382,241 @@ private func runAppFocusTests() {
     assert(stack.active(eligible: [rootScope]) == rootScope)
     assert(stack.active(eligible: []) == nil)
     print("PASS: app directional geometry, SwiftUI focus IDs, rapid moves, direct OK, Cancel-first modal isolation, scope restoration and input gates")
+    pageMediaRoutingChecks()
+}
+
+// MARK: - Page-controlled media routing
+
+private final class FakeGrant: PageMediaGrant, @unchecked Sendable {
+    let url: URL
+    private let onRelease: () -> Void
+    init(url: URL, onRelease: @escaping () -> Void) { self.url = url; self.onRelease = onRelease }
+    deinit { onRelease() }
+}
+
+private final class FakeProxy: PageMediaProxying, @unchecked Sendable {
+    struct Registration: Equatable {
+        let url: String
+        let headers: [String: String]
+        let contentType: String?
+        let origins: [String]
+    }
+    private let lock = NSLock()
+    private var _registrations: [Registration] = []
+    private var _revoked = 0
+    private var _starts = 0
+    var startError: PageMediaError?
+    /// Registrations for these URLs are refused.
+    var refused = Set<String>()
+    var registrations: [Registration] { lock.withLock { _registrations } }
+    var revoked: Int { lock.withLock { _revoked } }
+    var starts: Int { lock.withLock { _starts } }
+
+    func start() async throws {
+        lock.withLock { _starts += 1 }
+        if let startError { throw startError }
+    }
+
+    func register(url: String, headers: [String: String], contentType: String?,
+                  allowedPrivateOrigins: [String]) async throws -> any PageMediaGrant {
+        if let startError { throw startError }
+        if refused.contains(url) { throw PageMediaError.refused }
+        let index = lock.withLock { () -> Int in
+            _registrations.append(Registration(url: url, headers: headers, contentType: contentType,
+                                               origins: allowedPrivateOrigins))
+            return _registrations.count
+        }
+        // A suspension point lets concurrent callers overlap.
+        try await Task.sleep(nanoseconds: 1_000_000)
+        return FakeGrant(url: URL(string: "http://127.0.0.1:41000/media/\(index)")!) { [self] in
+            lock.withLock { _revoked += 1 }
+        }
+    }
+}
+
+private func blocking<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) -> Result<T, Error> {
+    let done = DispatchSemaphore(value: 0)
+    let box = ResultBox<T>()
+    Task.detached {
+        do { box.set(.success(try await body())) } catch { box.set(.failure(error)) }
+        done.signal()
+    }
+    done.wait()
+    return box.value!
+}
+
+private final class ResultBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Result<T, Error>?
+    func set(_ value: Result<T, Error>) { lock.withLock { stored = value } }
+    var value: Result<T, Error>? { lock.withLock { stored } }
+}
+
+private func pageMediaRoutingChecks() {
+    func source(_ detectedBy: String, url: String = "https://example.com/video.m3u8",
+                headers: [String: String] = [:], subtitles: [String] = [],
+                origins: [String] = []) -> PageMediaSource {
+        PageMediaSource(detectedBy: detectedBy, url: url, headers: headers, contentType: "application/vnd.apple.mpegurl",
+                        subtitles: subtitles, allowedPrivateOrigins: origins)
+    }
+    let original = URL(string: "https://example.com/video.m3u8")!
+
+    // Cast-sheet media keeps playing directly and never touches the proxy.
+    for detected in ["", "cast_sheet", "dlna", "browser"] {
+        let proxy = FakeProxy()
+        let router = PageMediaRouter(proxy: proxy)
+        let item = source(detected, headers: ["Authorization": "Bearer synthetic"], subtitles: ["https://example.com/en.vtt"])
+        assert(!item.isPageControlled)
+        guard case .direct = router.state(for: item) else { fatalError("cast-sheet state") }
+        let media = try! blocking { try await router.route(item) }.get()
+        assert(!media.isProxied && media.url == original && media.subtitles == ["https://example.com/en.vtt"])
+        let playable = router.state(for: item).playable(url: original, headers: ["Authorization": "Bearer synthetic"],
+                                                        subtitles: ["https://example.com/en.vtt"])
+        assert(playable?.url == original && playable?.headers?["Authorization"] == "Bearer synthetic")
+        assert((try? blocking { try await router.preflight(item) }.get()) != nil && proxy.starts == 0)
+        let late = try! blocking { try await router.lateSubtitle(url: "http://192.0.2.9/en.vtt", headers: [:], for: item) }.get()
+        assert(late.absoluteString == "http://192.0.2.9/en.vtt" && proxy.registrations.isEmpty, "cast-sheet subtitles stay direct")
+        // Without a proxy library cast-sheet media still plays.
+        assert(PageMediaRouter(proxy: nil).state(for: item).playable(url: original, headers: nil, subtitles: nil)?.url == original)
+        assert((try? blocking { try await PageMediaRouter(proxy: nil).preflight(item) }.get()) != nil)
+    }
+
+    // Page items are registered with their origins and headers, and players get the proxy URL.
+    for detected in ["page_cast", "linked_page"] {
+        let proxy = FakeProxy()
+        proxy.refused = ["https://example.com/bad.vtt"]
+        let router = PageMediaRouter(proxy: proxy)
+        let item = source(detected,
+                          headers: ["Authorization": "Bearer synthetic", "Cookie": "a=b", "X-Custom": "dropped",
+                                    "user-agent": "Synthetic/1.0", "Referer": "https://example.com/"],
+                          subtitles: ["https://example.com/en.vtt", "file:///private/var/secret.vtt",
+                                      "https://example.com/bad.vtt", "http://192.168.1.20:8080/fr.vtt"],
+                          origins: ["http://192.168.1.20:8080"])
+        assert(item.isPageControlled)
+        guard case .pending = router.state(for: item) else { fatalError("unrouted page item must be pending") }
+        assert(router.state(for: item).playable(url: original, headers: nil, subtitles: nil) == nil,
+               "A page item is never handed its original URL before it is routed")
+        let media = try! blocking { try await router.route(item) }.get()
+        assert(media.isProxied && media.url.host == "127.0.0.1" && media.headers == nil)
+        let first = proxy.registrations[0]
+        assert(first.url == item.url && first.contentType == "application/vnd.apple.mpegurl")
+        assert(first.origins == ["http://192.168.1.20:8080"])
+        assert(first.headers["Authorization"] == "Bearer synthetic" && first.headers["Cookie"] == "a=b")
+        assert(first.headers["X-Custom"] == nil && first.headers["user-agent"] == "Synthetic/1.0")
+        // Subtitles: the refused one and the file URL are dropped; none carry credentials.
+        assert(media.subtitles.count == 2 && media.subtitles.allSatisfy { $0.hasPrefix("http://127.0.0.1:") })
+        let subtitleRegistrations = proxy.registrations.dropFirst()
+        assert(subtitleRegistrations.map(\.url) == ["https://example.com/en.vtt", "http://192.168.1.20:8080/fr.vtt"])
+        assert(subtitleRegistrations.allSatisfy { $0.headers["Authorization"] == nil && $0.headers["Cookie"] == nil })
+        assert(subtitleRegistrations.allSatisfy { $0.origins == ["http://192.168.1.20:8080"] })
+        assert(subtitleRegistrations.contains { $0.headers["user-agent"] == "Synthetic/1.0" })
+        let playable = router.state(for: item).playable(url: original, headers: item.headers, subtitles: item.subtitles)
+        assert(playable?.url == media.url && playable?.headers == nil && playable?.subtitles?.count == 2)
+        // The same item routes once, even for concurrent callers.
+        let before = proxy.registrations.count
+        _ = blocking { try await router.route(item) }
+        assert(proxy.registrations.count == before)
+    }
+    let concurrent = FakeProxy()
+    let concurrentRouter = PageMediaRouter(proxy: concurrent)
+    let racing = source("page_cast")
+    _ = blocking {
+        async let one = concurrentRouter.route(racing)
+        async let two = concurrentRouter.route(racing)
+        _ = try await (one, two)
+        return true
+    }
+    assert(concurrent.registrations.count == 1, "Concurrent routes share one registration")
+
+    // Refusal: no proxy, a proxy that cannot start, or a refused registration never plays directly.
+    let page = source("page_cast")
+    let missing = PageMediaRouter(proxy: nil)
+    assert(blocking { try await missing.route(page) }.error as? PageMediaError == .unavailable)
+    assert(blocking { try await missing.preflight(page) }.error as? PageMediaError == .unavailable)
+    guard case .failed = missing.state(for: page) else { fatalError("failed route must stay failed") }
+    assert(missing.state(for: page).playable(url: original, headers: nil, subtitles: nil) == nil)
+    let broken = FakeProxy()
+    broken.startError = .unavailable
+    let brokenRouter = PageMediaRouter(proxy: broken)
+    assert(blocking { try await brokenRouter.preflight(page) }.error as? PageMediaError == .unavailable)
+    assert(blocking { try await brokenRouter.route(page) }.error as? PageMediaError == .unavailable)
+    assert(brokenRouter.state(for: page).playable(url: original, headers: nil, subtitles: nil) == nil)
+    let refusing = FakeProxy()
+    refusing.refused = [page.url]
+    let refusingRouter = PageMediaRouter(proxy: refusing)
+    assert(blocking { try await refusingRouter.route(page) }.error as? PageMediaError == .refused)
+    assert(refusingRouter.state(for: page).playable(url: original, headers: nil, subtitles: nil) == nil)
+    for bad in ["file:///private/var/media.mp4", "ftp://example.com/a.mp4", "http://user:pass@example.com/a.mp4", "not a url"] {
+        let item = source("linked_page", url: bad)
+        assert(blocking { try await PageMediaRouter(proxy: FakeProxy()).route(item) }.error as? PageMediaError == .refused, bad)
+        assert(blocking { try await PageMediaRouter(proxy: FakeProxy()).preflight(item) }.error as? PageMediaError == .refused, bad)
+    }
+    let tooMany = source("page_cast", origins: (0..<17).map { "http://192.168.1.\($0 + 1):8080" })
+    assert(blocking { try await PageMediaRouter(proxy: FakeProxy()).preflight(tooMany) }.error as? PageMediaError == .refused)
+
+    // queue_add: page items must be routable up front, then register when they come up.
+    let queueProxy = FakeProxy()
+    let queueRouter = PageMediaRouter(proxy: queueProxy)
+    let queued = source("page_cast", url: "https://example.com/episode-2.m3u8")
+    assert((try? blocking { try await queueRouter.preflight(queued) }.get()) != nil && queueProxy.starts == 1)
+    assert(queueProxy.registrations.isEmpty, "queue_add preflight must not register")
+    // playlist_jump and auto-advance reach the player only through state(for:).
+    guard case .pending = queueRouter.state(for: queued) else { fatalError("queued page item must wait for registration") }
+    assert(queueRouter.state(for: queued).playable(url: URL(string: queued.url)!, headers: nil, subtitles: nil) == nil)
+    _ = blocking { try await queueRouter.route(queued) }
+    guard case .ready = queueRouter.state(for: queued) else { fatalError("routed queue item") }
+
+    // Late subtitles on page playback go through the proxy under the item's origins.
+    let lateProxy = FakeProxy()
+    let lateRouter = PageMediaRouter(proxy: lateProxy)
+    let playing = source("page_cast", origins: ["http://10.0.0.5:8096"])
+    let late = try! blocking {
+        try await lateRouter.lateSubtitle(url: "http://10.0.0.5:8096/s.vtt",
+                                          headers: ["Authorization": "Bearer synthetic", "X-Other": "dropped"], for: playing)
+    }.get()
+    assert(late.host == "127.0.0.1" && late.scheme == "http")
+    assert(lateProxy.registrations == [FakeProxy.Registration(
+        url: "http://10.0.0.5:8096/s.vtt", headers: ["Authorization": "Bearer synthetic"],
+        contentType: nil, origins: ["http://10.0.0.5:8096"])])
+    assert(blocking { try await lateRouter.lateSubtitle(url: "file:///private/var/s.vtt", headers: [:], for: playing) }.error as? PageMediaError == .refused)
+    assert(blocking { try await missing.lateSubtitle(url: "https://example.com/s.vtt", headers: [:], for: page) }.error as? PageMediaError == .unavailable)
+    assert(blocking { try await brokenRouter.lateSubtitle(url: "https://example.com/s.vtt", headers: [:], for: page) }.error as? PageMediaError == .unavailable)
+
+    // Registrations follow the queue: pruned or released items are revoked and unplayable again.
+    let lifetime = FakeProxy()
+    let lifetimeRouter = PageMediaRouter(proxy: lifetime)
+    let keep = source("page_cast", url: "https://example.com/keep.m3u8")
+    let drop = source("page_cast", url: "https://example.com/drop.m3u8")
+    _ = blocking { try await lifetimeRouter.route(keep) }
+    _ = blocking { try await lifetimeRouter.route(drop) }
+    assert(lifetimeRouter.hasRegistrations && lifetime.revoked == 0)
+    lifetimeRouter.retain(only: [keep])
+    assert(lifetime.revoked == 1)
+    guard case .pending = lifetimeRouter.state(for: drop) else { fatalError("pruned item") }
+    guard case .ready = lifetimeRouter.state(for: keep) else { fatalError("kept item") }
+    lifetimeRouter.releaseAll()
+    assert(lifetime.revoked == 2 && !lifetimeRouter.hasRegistrations)
+
+    // Headers: only the proxy's page-header set, never credentials toward subtitle hosts.
+    assert(PageMediaPolicy.proxyHeaders(["authorization": "a", "Authorization": "b"]).count == 1, "case-duplicates collapse")
+    assert(PageMediaPolicy.proxyHeaders(["Cookie": "a\r\nX-Evil: 1"]).isEmpty)
+    assert(PageMediaPolicy.subtitleContextHeaders(["Authorization": "a", "Cookie": "b", "Origin": "https://example.com", "Accept-Language": "en"]).keys.sorted() == ["Accept-Language", "Origin"])
+
+    // Images: a page-controlled image loads only from the proxy's loopback listener.
+    let proxied = URL(string: "http://127.0.0.1:41000/media/1")!
+    let remote = URL(string: "https://example.com/poster.jpg")!
+    for detected in ["page_cast", "linked_page"] {
+        assert(MediaImageRequest.request(url: remote, headerOrigin: remote, headers: [:], detectedBy: detected, viaProxy: true) == nil)
+        assert(MediaImageRequest.request(url: proxied, headerOrigin: proxied, headers: [:], detectedBy: detected) == nil)
+        let request = MediaImageRequest.request(url: proxied, headerOrigin: proxied, headers: ["Authorization": "Bearer synthetic"],
+                                                detectedBy: detected, viaProxy: true)
+        assert(request?.url == proxied && request?.value(forHTTPHeaderField: "Authorization") == nil)
+        assert(MediaImageRequest.request(url: URL(string: "http://localhost:41000/media/1")!, headerOrigin: proxied, headers: [:],
+                                         detectedBy: detected, viaProxy: true) == nil)
+    }
+    print("PASS: page media routing, cast-sheet passthrough, fail-closed refusal, queue preflight, late subtitles, registration lifetime and proxied images")
+}
+
+private extension Result {
+    var error: Error? { if case .failure(let error) = self { return error } else { return nil } }
 }

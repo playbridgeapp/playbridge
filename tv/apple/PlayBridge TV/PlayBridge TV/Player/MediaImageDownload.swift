@@ -9,11 +9,13 @@ final class MediaImageDownload: NSObject, URLSessionDownloadDelegate {
     private let headers: [String: String]
     private let detectedBy: String
     private let allowedPrivateOrigins: [String]
+    private let viaProxy: Bool
     private var session: URLSession?
     private var completion: ((UIImage?) -> Void)?
 
     init(url: URL, headerOrigin: URL, headers: [String: String], detectedBy: String,
-         allowedPrivateOrigins: [String]) {
+         allowedPrivateOrigins: [String], viaProxy: Bool = false) {
+        self.viaProxy = viaProxy
         self.url = url
         self.headerOrigin = headerOrigin
         self.headers = headers
@@ -38,7 +40,8 @@ final class MediaImageDownload: NSObject, URLSessionDownloadDelegate {
 
     private func request(for target: URL) -> URLRequest? {
         MediaImageRequest.request(url: target, headerOrigin: headerOrigin, headers: headers,
-                                  detectedBy: detectedBy, allowedPrivateOrigins: allowedPrivateOrigins)
+                                  detectedBy: detectedBy, allowedPrivateOrigins: allowedPrivateOrigins,
+                                  viaProxy: viaProxy)
     }
 
     private func finish(_ image: UIImage?) {

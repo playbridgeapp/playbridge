@@ -66,4 +66,18 @@ extension Playbridge_PlayPayload {
 
     /// Returns nil when the proto's optional title is unset/empty.
     var titleOrNil: String? { hasTitle ? title : nil }
+
+    /// What the page-media router needs to route this item.
+    var pageMediaSource: PageMediaSource {
+        PageMediaSource(detectedBy: detectedBy, url: url, headers: headers,
+                        contentType: hasContentType ? contentType : nil,
+                        subtitles: subtitles, allowedPrivateOrigins: allowedPrivateOrigins)
+    }
+
+    /// Whether the website, not the user, chose this item's URL.
+    var isPageControlled: Bool { PageMediaPolicy.isPageControlled(detectedBy: detectedBy) }
+
+    /// History replays an item as a plain TV-initiated play, which would skip the
+    /// proxy. A page-controlled URL is therefore never saved.
+    var recordsHistory: Bool { !skipHistory && !isPageControlled }
 }
