@@ -10,23 +10,33 @@ description = "UniFFI and stable C bindings for PlayBridge Cast Core"
 [features]
 default = []
 adblock-engine = ["playbridge-cast-core/adblock-engine"]
+# The sender-hosted web receiver beside the embedded proxy.
+browser-receiver = ["dep:playbridge-browser-receiver"]
 # Desktop / Docker-style embed: reqwest (+ AVIO) origin fetch.
 sender-services = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-reqwest",
     "stream-proxy-rust/upstream-avio",
 ]
 # Android phone embed: host HttpURLConnection via JNI callbacks (no reqwest).
 sender-services-android = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-jni",
 ]
 
 # Apple phone embed: host URLSession via the same platform-neutral C callbacks.
 sender-services-apple = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
+    "dep:stream-proxy-rust",
+    "stream-proxy-rust/upstream-jni",
+]
+
+# Apple TV receiver embed: the proxy alone (no browser receiver, no adblock), so
+# page-controlled media is fetched through URLSession callbacks under the proxy's
+# network policy.
+receiver-proxy-apple = [
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-jni",
 ]

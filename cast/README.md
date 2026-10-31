@@ -51,6 +51,25 @@ must be released with `pb_string_free`; handles must be cancelled and released.
 Consumers must check `pb_cast_core_abi_version` before resolving the rest of the
 session API.
 
+Apple TV receiver builds use `receiver-proxy-apple`: the stream proxy with the
+same platform-neutral `pb_proxy_upstream_*` callbacks (URLSession), without the
+browser receiver or the adblock engine. It exposes the `pb_sender_services_*`
+lifecycle with the proxy commands (`proxy_register_url` with
+`allowed_private_origins`, `proxy_renew`, `proxy_revoke`, `proxy_register_file`)
+and `shutdown`; browser commands are rejected. Build it for tvOS with:
+
+```sh
+sh cast/build-apple-tvos.sh   # writes tv/apple/Native/PlayBridgeCastCore.xcframework
+```
+
+The script builds `aarch64-apple-tvos` and `aarch64-apple-tvos-sim` with the stable
+toolchain's prebuilt tvOS standard library (`rustup target add` is run for you; set
+`PB_APPLE_NO_INSTALL=1` to require the targets to be installed already). Like
+`build-apple.sh`, it refuses to overwrite an existing XCFramework. The generated
+`PlayBridgeCastCore.xcconfig` is included by `tv/apple/PlayBridge TV/CastCoreOptional.xcconfig`,
+so the PlayBridge TV target links it automatically. Without it, the app still
+builds and refuses every page-controlled item.
+
 Desktop builds enable the optional `sender-services` feature (reqwest upstream).
 Android phone builds use `sender-services-android` (JNI upstream callbacks via
 `pb_proxy_upstream_*`). Both expose the same `pb_sender_services_*` lifecycle
