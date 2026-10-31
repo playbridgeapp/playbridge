@@ -1,5 +1,7 @@
+use std::ffi::{CString, c_char};
+#[cfg(feature = "cast-core")]
 use std::{
-    ffi::{CStr, CString, c_char},
+    ffi::CStr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -9,9 +11,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "cast-core")]
 use playbridge_cast_core::discovery::{
     DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver, ReceiverProtocol,
 };
+#[cfg(feature = "cast-core")]
 use playbridge_cast_core::{
     CastError,
     castv2::{DEFAULT_MEDIA_RECEIVER_APP_ID, SessionLaunchStrategy},
@@ -19,33 +23,46 @@ use playbridge_cast_core::{
     session::{DLNA_LOAD_TIMEOUT, MediaRequest, PlaybackState, ReceiverSession},
     upnp::{ActionFailure, Renderer, is_transport_failure},
 };
+#[cfg(feature = "cast-core")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "cast-core")]
 use serde_json::Value;
 
+#[cfg(feature = "cast-core")]
 uniffi::setup_scaffolding!();
 
 #[cfg(feature = "adblock-engine")]
 mod adblock_engine;
 
+#[cfg(feature = "cast-core")]
 mod atv_remote;
-#[cfg(test)]
+#[cfg(all(test, feature = "cast-core"))]
 mod atv_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cast-core"))]
 mod dlna_tests;
+#[cfg(feature = "cast-core")]
 mod receiver_runtime;
 #[cfg(any(
     feature = "sender-services",
     feature = "sender-services-android",
     feature = "sender-services-apple",
-    feature = "receiver-proxy-apple"
+    feature = "receiver-proxy-apple",
+    feature = "receiver-proxy-android"
 ))]
 mod sender_services;
 
 /// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.
-#[cfg(all(target_os = "android", feature = "sender-services-android"))]
+#[cfg(all(
+    target_os = "android",
+    any(
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    )
+))]
 mod android_upstream;
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 pub enum Protocol {
     PlayBridge,
@@ -55,6 +72,7 @@ pub enum Protocol {
     GoogleCast,
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
 pub struct ReceiverInfo {
     pub id: String,
@@ -67,6 +85,7 @@ pub struct ReceiverInfo {
     pub uuid: Option<String>,
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Enum)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ReceiverEvent {
@@ -77,22 +96,28 @@ pub enum ReceiverEvent {
     Finished { protocol: Protocol },
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum BindingError {
     #[error("failed to start discovery worker: {message}")]
     StartFailed { message: String },
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(uniffi::Object)]
 pub struct DiscoveryScanner {
     events: Mutex<mpsc::Receiver<ReceiverEvent>>,
     cancelled: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "cast-core")]
 const CAST_CORE_ABI_VERSION: u32 = 2;
+#[cfg(feature = "cast-core")]
 const SESSION_COMMAND_CAPACITY: usize = 32;
+#[cfg(feature = "cast-core")]
 const SESSION_EVENT_CAPACITY: usize = 64;
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SessionProtocol {
@@ -101,6 +126,7 @@ enum SessionProtocol {
     GoogleCast,
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SessionLaunchPolicy {
@@ -109,6 +135,7 @@ enum SessionLaunchPolicy {
     ReuseOrLaunch,
 }
 
+#[cfg(feature = "cast-core")]
 impl From<SessionLaunchPolicy> for SessionLaunchStrategy {
     fn from(value: SessionLaunchPolicy) -> Self {
         match value {
@@ -118,6 +145,7 @@ impl From<SessionLaunchPolicy> for SessionLaunchStrategy {
     }
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Clone, Deserialize)]
 struct SessionTarget {
     protocol: SessionProtocol,
@@ -134,6 +162,7 @@ struct SessionTarget {
 
 // Java network handles are signed longs; preserve their opaque 64-bit pattern
 // while continuing to accept the unsigned values used by existing consumers.
+#[cfg(feature = "cast-core")]
 fn deserialize_network_handle<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<u64>, D::Error> {
@@ -151,6 +180,7 @@ fn deserialize_network_handle<'de, D: serde::Deserializer<'de>>(
     )
 }
 
+#[cfg(feature = "cast-core")]
 impl SessionTarget {
     fn address(&self) -> Result<&str, String> {
         self.addresses
@@ -172,6 +202,7 @@ impl SessionTarget {
     }
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Deserialize)]
 struct DlnaLoadOptions {
     #[serde(default)]
@@ -180,6 +211,7 @@ struct DlnaLoadOptions {
     fallback_content_type: Option<String>,
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum SessionCommand {
@@ -240,6 +272,7 @@ enum SessionCommand {
     },
 }
 
+#[cfg(feature = "cast-core")]
 impl SessionCommand {
     fn request_id(&self) -> &Value {
         match self {
@@ -283,6 +316,7 @@ impl SessionCommand {
     }
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Serialize)]
 struct SessionCapabilities {
     load: bool,
@@ -293,6 +327,7 @@ struct SessionCapabilities {
     receiver_app_available: Option<bool>,
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 enum SessionEvent {
@@ -329,6 +364,7 @@ enum SessionEvent {
     },
 }
 
+#[cfg(feature = "cast-core")]
 #[derive(Debug, Serialize)]
 struct SessionPlaybackStatus {
     state: &'static str,
@@ -343,12 +379,14 @@ struct SessionPlaybackStatus {
     muted: Option<bool>,
 }
 
+#[cfg(feature = "cast-core")]
 pub struct CastSession {
     commands: SyncSender<SessionCommand>,
     events: Mutex<MessageReceiver<SessionEvent>>,
     cancelled: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "cast-core")]
 #[uniffi::export]
 impl DiscoveryScanner {
     #[uniffi::constructor]
@@ -420,6 +458,7 @@ impl DiscoveryScanner {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn forward_event(sender: &SyncSender<ReceiverEvent>, event: ReceiverEvent) -> bool {
     match sender.try_send(event) {
         Ok(()) | Err(TrySendError::Full(_)) => true,
@@ -427,12 +466,14 @@ fn forward_event(sender: &SyncSender<ReceiverEvent>, event: ReceiverEvent) -> bo
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl Drop for DiscoveryScanner {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl CastSession {
     fn start(target: SessionTarget, timeout_ms: u64) -> Result<Arc<Self>, BindingError> {
         validate_target(&target).map_err(|message| BindingError::StartFailed { message })?;
@@ -482,12 +523,14 @@ impl CastSession {
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl Drop for CastSession {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn validate_target(target: &SessionTarget) -> Result<(), String> {
     match target.protocol {
         SessionProtocol::Dlna => {
@@ -513,6 +556,7 @@ fn validate_target(target: &SessionTarget) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "cast-core")]
 fn session_worker(
     target: SessionTarget,
     operation_timeout: Duration,
@@ -716,6 +760,7 @@ fn session_worker(
     );
 }
 
+#[cfg(feature = "cast-core")]
 fn session_finish_reason(error: &CastError) -> Option<&'static str> {
     match error {
         CastError::ReceiverSessionEnded => Some("receiver_ended"),
@@ -725,6 +770,7 @@ fn session_finish_reason(error: &CastError) -> Option<&'static str> {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn session_error_reason(error: &CastError) -> Option<&'static str> {
     match error {
         CastError::ReceiverPlaybackError => Some("playback_error"),
@@ -733,6 +779,7 @@ fn session_error_reason(error: &CastError) -> Option<&'static str> {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn maintenance_event_operation(finish_reason: Option<&'static str>) -> &'static str {
     if finish_reason.is_some() {
         "connection"
@@ -741,6 +788,7 @@ fn maintenance_event_operation(finish_reason: Option<&'static str>) -> &'static 
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn connect_failure_reason(message: &str) -> Option<&'static str> {
     (message.contains("No route to host")
         || message.contains("Network is unreachable")
@@ -748,10 +796,12 @@ fn connect_failure_reason(message: &str) -> Option<&'static str> {
     .then_some("local_network_unreachable")
 }
 
+#[cfg(feature = "cast-core")]
 fn command_finish_reason(error: &CastError) -> Option<&'static str> {
     session_finish_reason(error)
 }
 
+#[cfg(feature = "cast-core")]
 fn upnp_error(error: &CastError) -> Option<ActionFailure> {
     match error {
         CastError::UpnpAction(failure) => Some(failure.as_ref().clone()),
@@ -759,6 +809,7 @@ fn upnp_error(error: &CastError) -> Option<ActionFailure> {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn command_result_finish_reason(
     protocol: SessionProtocol,
     operation: &str,
@@ -780,6 +831,7 @@ fn command_result_finish_reason(
     }
 }
 
+#[cfg(feature = "cast-core")]
 async fn connect_target(
     target: &SessionTarget,
     operation_timeout: Duration,
@@ -880,6 +932,7 @@ async fn connect_target(
     }
 }
 
+#[cfg(feature = "cast-core")]
 async fn execute_session_command(
     target: &SessionTarget,
     _connected_address: Option<&str>,
@@ -1030,12 +1083,14 @@ async fn execute_session_command(
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn receiver_mut(receiver: &mut Option<ReceiverSession>) -> Result<&mut ReceiverSession, CastError> {
     receiver
         .as_mut()
         .ok_or_else(|| CastError::Protocol("receiver is not connected".to_owned()))
 }
 
+#[cfg(feature = "cast-core")]
 fn playback_state_name(state: PlaybackState) -> &'static str {
     match state {
         PlaybackState::Buffering => "buffering",
@@ -1047,6 +1102,7 @@ fn playback_state_name(state: PlaybackState) -> &'static str {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn send_session_event(
     sender: &SyncSender<SessionEvent>,
     mut event: SessionEvent,
@@ -1067,6 +1123,7 @@ fn send_session_event(
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl From<Protocol> for ReceiverProtocol {
     fn from(value: Protocol) -> Self {
         match value {
@@ -1079,6 +1136,7 @@ impl From<Protocol> for ReceiverProtocol {
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl From<ReceiverProtocol> for Protocol {
     fn from(value: ReceiverProtocol) -> Self {
         match value {
@@ -1091,6 +1149,7 @@ impl From<ReceiverProtocol> for Protocol {
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl From<Receiver> for ReceiverInfo {
     fn from(value: Receiver) -> Self {
         Self {
@@ -1106,6 +1165,7 @@ impl From<Receiver> for ReceiverInfo {
     }
 }
 
+#[cfg(feature = "cast-core")]
 impl From<DiscoveryEvent> for ReceiverEvent {
     fn from(value: DiscoveryEvent) -> Self {
         match value {
@@ -1129,6 +1189,7 @@ impl From<DiscoveryEvent> for ReceiverEvent {
     }
 }
 
+#[cfg(feature = "cast-core")]
 fn protocols_from_mask(mask: u32) -> Vec<Protocol> {
     [
         (1, Protocol::PlayBridge),
@@ -1143,6 +1204,7 @@ fn protocols_from_mask(mask: u32) -> Vec<Protocol> {
 }
 
 /// Returns the version of the stable C ABI and its JSON contracts.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pb_cast_core_abi_version() -> u32 {
     CAST_CORE_ABI_VERSION
@@ -1154,6 +1216,7 @@ pub extern "C" fn pb_cast_core_abi_version() -> u32 {
 ///
 /// `target_json` must point to a valid NUL-terminated string for the duration of
 /// this call.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_session_start(
     target_json: *const c_char,
@@ -1183,6 +1246,7 @@ pub unsafe extern "C" fn pb_session_start(
 ///
 /// `session` must be a live session handle and `command_json` must point to a
 /// valid NUL-terminated string for the duration of this call.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_session_submit_json(
     session: *const CastSession,
@@ -1209,6 +1273,7 @@ pub unsafe extern "C" fn pb_session_submit_json(
 /// # Safety
 ///
 /// `session` must be null or a live session handle.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_session_next_json(
     session: *const CastSession,
@@ -1230,6 +1295,7 @@ pub unsafe extern "C" fn pb_session_next_json(
 /// # Safety
 ///
 /// `session` must be null or a live session handle.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_session_cancel(session: *const CastSession) {
     if let Some(session) = unsafe { session.as_ref() } {
@@ -1242,6 +1308,7 @@ pub unsafe extern "C" fn pb_session_cancel(session: *const CastSession) {
 /// # Safety
 ///
 /// `session` must be null or a live session handle.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_session_free(session: *const CastSession) {
     if !session.is_null() {
@@ -1251,6 +1318,7 @@ pub unsafe extern "C" fn pb_session_free(session: *const CastSession) {
 
 /// Starts a discovery scanner for Dart/other C consumers. Bitmask values are
 /// PlayBridge=1, DLNA=2, Roku=4, generic DIAL=8, GoogleCast=16.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub extern "C" fn pb_discovery_start(protocol_mask: u32, timeout_ms: u64) -> *mut DiscoveryScanner {
     let protocols = protocols_from_mask(protocol_mask);
@@ -1267,6 +1335,7 @@ pub extern "C" fn pb_discovery_start(protocol_mask: u32, timeout_ms: u64) -> *mu
 ///
 /// `scanner` must be null or a live handle returned by `pb_discovery_start` that
 /// has not yet been passed to `pb_discovery_free`.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_discovery_next_json(
     scanner: *const DiscoveryScanner,
@@ -1289,6 +1358,7 @@ pub unsafe extern "C" fn pb_discovery_next_json(
 ///
 /// `scanner` must be null or a live handle returned by `pb_discovery_start` that
 /// has not yet been passed to `pb_discovery_free`.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_discovery_cancel(scanner: *const DiscoveryScanner) {
     if let Some(scanner) = unsafe { scanner.as_ref() } {
@@ -1302,6 +1372,7 @@ pub unsafe extern "C" fn pb_discovery_cancel(scanner: *const DiscoveryScanner) {
 ///
 /// `scanner` must be null or a live handle returned by `pb_discovery_start` and
 /// this function must be called at most once for that handle.
+#[cfg(feature = "cast-core")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pb_discovery_free(scanner: *const DiscoveryScanner) {
     if !scanner.is_null() {
@@ -1324,27 +1395,52 @@ pub unsafe extern "C" fn pb_string_free(value: *mut c_char) {
 
 #[cfg(target_os = "android")]
 mod android_jni {
+    #[cfg(any(
+        feature = "cast-core",
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
     use jni::{
         EnvUnowned,
         errors::ThrowRuntimeExAndDefault,
         objects::{JClass, JString},
         sys::{jboolean, jint, jlong},
     };
+    #[cfg(any(
+        feature = "cast-core",
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
     use std::ffi::{CStr, CString, c_char};
 
+    #[cfg(any(
+        feature = "cast-core",
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    use super::pb_string_free;
+    #[cfg(feature = "cast-core")]
     use super::{
         CastSession, DiscoveryScanner, pb_cast_core_abi_version, pb_discovery_cancel,
         pb_discovery_free, pb_discovery_start, pb_session_cancel, pb_session_free,
-        pb_session_next_json, pb_session_start, pb_session_submit_json, pb_string_free,
+        pb_session_next_json, pb_session_start, pb_session_submit_json,
     };
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
     use super::sender_services::{
         SenderServices, pb_sender_services_abi_version, pb_sender_services_cancel,
         pb_sender_services_free, pb_sender_services_next_json, pb_sender_services_start,
         pb_sender_services_submit_json,
     };
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_start<
         'local,
@@ -1360,6 +1456,7 @@ mod android_jni {
         .unwrap_or(0)
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_nextEvent<
         'local,
@@ -1394,6 +1491,7 @@ mod android_jni {
             .resolve::<ThrowRuntimeExAndDefault>()
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_cancel(
         _env: EnvUnowned,
@@ -1407,6 +1505,7 @@ mod android_jni {
         });
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_free(
         _env: EnvUnowned,
@@ -1420,6 +1519,7 @@ mod android_jni {
         });
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_abiVersion(
         _env: EnvUnowned,
@@ -1428,6 +1528,7 @@ mod android_jni {
         std::panic::catch_unwind(|| pb_cast_core_abi_version()).unwrap_or(0) as jint
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_start<
         'local,
@@ -1451,6 +1552,7 @@ mod android_jni {
         .unwrap_or(0)
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_submitJson<
         'local,
@@ -1477,6 +1579,7 @@ mod android_jni {
         .unwrap_or(false)
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_nextEvent<
         'local,
@@ -1512,6 +1615,7 @@ mod android_jni {
             .resolve::<ThrowRuntimeExAndDefault>()
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_cancel(
         _env: EnvUnowned,
@@ -1525,6 +1629,7 @@ mod android_jni {
         });
     }
 
+    #[cfg(feature = "cast-core")]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_free(
         _env: EnvUnowned,
@@ -1538,35 +1643,35 @@ mod android_jni {
         });
     }
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
-    #[unsafe(no_mangle)]
-    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_abiVersion(
-        _env: EnvUnowned,
-        _class: JClass,
-    ) -> jint {
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_abi_version() -> jint {
         std::panic::catch_unwind(|| pb_sender_services_abi_version()).unwrap_or(0) as jint
     }
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
-    #[unsafe(no_mangle)]
-    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_start(
-        _env: EnvUnowned,
-        _class: JClass,
-    ) -> jlong {
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_start() -> jlong {
         std::panic::catch_unwind(|| pb_sender_services_start() as jlong).unwrap_or(0)
     }
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
-    #[unsafe(no_mangle)]
-    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_submitJson<
-        'local,
-    >(
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_submit_json<'local>(
         mut unowned_env: EnvUnowned<'local>,
-        _class: JClass<'local>,
         handle: jlong,
         command_json: JString<'local>,
     ) -> jboolean {
-        let accepted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if handle == 0 {
                 return false;
             }
@@ -1586,17 +1691,16 @@ mod android_jni {
                 pb_sender_services_submit_json(handle as *const SenderServices, c_command.as_ptr())
             }
         }))
-        .unwrap_or(false);
-        accepted
+        .unwrap_or(false)
     }
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
-    #[unsafe(no_mangle)]
-    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_nextEvent<
-        'local,
-    >(
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_next_event<'local>(
         mut unowned_env: EnvUnowned<'local>,
-        _class: JClass<'local>,
         handle: jlong,
         wait_ms: jlong,
     ) -> JString<'local> {
@@ -1626,6 +1730,98 @@ mod android_jni {
             .resolve::<ThrowRuntimeExAndDefault>()
     }
 
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_cancel(handle: jlong) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_sender_services_cancel(handle as *const SenderServices) };
+            }
+        });
+    }
+
+    #[cfg(any(
+        feature = "sender-services",
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_services_free(handle: jlong) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_sender_services_free(handle as *const SenderServices) };
+            }
+        });
+    }
+
+    #[cfg(any(
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_upstream_abi_version() -> jint {
+        std::panic::catch_unwind(|| stream_proxy_rust::pb_proxy_upstream_abi_version() as jint)
+            .unwrap_or(0)
+    }
+
+    #[cfg(any(
+        feature = "sender-services-android",
+        feature = "receiver-proxy-android"
+    ))]
+    fn jni_upstream_callbacks_registered() -> jboolean {
+        let ready = std::panic::catch_unwind(|| {
+            stream_proxy_rust::upstream::jni_fetcher::pb_proxy_upstream_checked_callbacks_registered()
+                != 0
+        })
+        .unwrap_or(false);
+        ready as jboolean
+    }
+
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_abiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        jni_services_abi_version()
+    }
+
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_start(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jlong {
+        jni_services_start()
+    }
+
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_submitJson<
+        'local,
+    >(
+        unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        command_json: JString<'local>,
+    ) -> jboolean {
+        jni_services_submit_json(unowned_env, handle, command_json)
+    }
+
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_nextEvent<
+        'local,
+    >(
+        unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        wait_ms: jlong,
+    ) -> JString<'local> {
+        jni_services_next_event(unowned_env, handle, wait_ms)
+    }
+
     #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_cancel(
@@ -1633,11 +1829,7 @@ mod android_jni {
         _class: JClass,
         handle: jlong,
     ) {
-        let _ = std::panic::catch_unwind(|| {
-            if handle != 0 {
-                unsafe { pb_sender_services_cancel(handle as *const SenderServices) };
-            }
-        });
+        jni_services_cancel(handle);
     }
 
     #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
@@ -1647,11 +1839,7 @@ mod android_jni {
         _class: JClass,
         handle: jlong,
     ) {
-        let _ = std::panic::catch_unwind(|| {
-            if handle != 0 {
-                unsafe { pb_sender_services_free(handle as *const SenderServices) };
-            }
-        });
+        jni_services_free(handle);
     }
 
     /// Upstream JNI callback ABI (only meaningful with `sender-services-android`).
@@ -1661,8 +1849,7 @@ mod android_jni {
         _env: EnvUnowned,
         _class: JClass,
     ) -> jint {
-        std::panic::catch_unwind(|| stream_proxy_rust::pb_proxy_upstream_abi_version() as jint)
-            .unwrap_or(0)
+        jni_upstream_abi_version()
     }
 
     #[cfg(feature = "sender-services-android")]
@@ -1671,11 +1858,7 @@ mod android_jni {
         _env: EnvUnowned,
         _class: JClass,
     ) -> jboolean {
-        let ready = std::panic::catch_unwind(|| {
-            stream_proxy_rust::upstream::jni_fetcher::pb_proxy_upstream_checked_callbacks_registered() != 0
-        })
-        .unwrap_or(false);
-        ready as jboolean
+        jni_upstream_callbacks_registered()
     }
 
     /// Register Kotlin HttpURLConnection open/read/close as proxy upstream.
@@ -1689,13 +1872,106 @@ mod android_jni {
     ) -> jboolean {
         super::android_upstream::java_install_upstream(env, class)
     }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_abiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        jni_services_abi_version()
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_start(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jlong {
+        jni_services_start()
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_submitJson<
+        'local,
+    >(
+        unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        command_json: JString<'local>,
+    ) -> jboolean {
+        jni_services_submit_json(unowned_env, handle, command_json)
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_nextEvent<
+        'local,
+    >(
+        unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        wait_ms: jlong,
+    ) -> JString<'local> {
+        jni_services_next_event(unowned_env, handle, wait_ms)
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_cancel(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        jni_services_cancel(handle);
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_free(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        jni_services_free(handle);
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_upstreamAbiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        jni_upstream_abi_version()
+    }
+
+    #[cfg(feature = "receiver-proxy-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_upstreamCallbacksRegistered(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jboolean {
+        jni_upstream_callbacks_registered()
+    }
+
+    #[cfg(all(target_os = "android", feature = "receiver-proxy-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_player_proxy_ReceiverProxyNative_installUpstreamHttpClient<
+        'local,
+    >(
+        env: EnvUnowned<'local>,
+        class: JClass<'local>,
+    ) -> jboolean {
+        super::android_upstream::java_install_receiver_upstream(env, class)
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cast-core"))]
 #[path = "../../core/tests/support/tls.rs"]
 mod test_tls;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cast-core"))]
 mod tests {
     use super::*;
 

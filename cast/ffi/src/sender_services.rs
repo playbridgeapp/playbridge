@@ -774,6 +774,68 @@ mod tests {
         assert_eq!(browser.operation(), "browser_control");
     }
 
+    #[test]
+    fn proxy_worker_starts_registers_renews_revokes_and_rejects_forbidden_page_inputs() {
+        let services = super::SenderServices::start().expect("proxy worker starts");
+        let started = services
+            .next_event(5_000)
+            .expect("proxy worker emits started event");
+        assert_eq!(started["event"], "started");
+        let port = started["proxyPort"].as_u64().expect("proxy port");
+        assert!(port > 0);
+
+        let accepted: ServicesCommand = serde_json::from_str(
+            r#"{"command":"proxy_register_url","request_id":"ok-1","host":"127.0.0.1","url":"https://example.com/video.m3u8","allowed_private_origins":[],"remote_origin":true}"#,
+        )
+        .unwrap();
+        assert!(services.submit(accepted));
+        let registered = services.next_event(5_000).expect("registration completes");
+        assert_eq!(registered["event"], "operation");
+        assert_eq!(registered["requestId"], "ok-1");
+        let id = registered["data"]["id"].as_str().expect("id");
+        let proxy_url = registered["data"]["url"].as_str().expect("url");
+        assert!(proxy_url.starts_with(&format!("http://127.0.0.1:{port}/s/")));
+
+        let renew: ServicesCommand = serde_json::from_value(serde_json::json!({
+            "command": "proxy_renew",
+            "request_id": "renew-1",
+            "id": id,
+        }))
+        .unwrap();
+        assert!(services.submit(renew));
+        let renewed = services.next_event(5_000).expect("renew completes");
+        assert_eq!(renewed["data"]["renewed"], true);
+
+        let revoke: ServicesCommand = serde_json::from_value(serde_json::json!({
+            "command": "proxy_revoke",
+            "request_id": "revoke-1",
+            "id": id,
+        }))
+        .unwrap();
+        assert!(services.submit(revoke));
+        let revoked = services.next_event(5_000).expect("revoke completes");
+        assert_eq!(revoked["data"]["revoked"], true);
+
+        for (req_id, bad_json) in [
+            (
+                "bad-origin",
+                r#"{"command":"proxy_register_url","request_id":"bad-origin","host":"127.0.0.1","url":"http://localhost:8080/secret.m3u8","allowed_private_origins":["http://localhost:8080"],"remote_origin":true}"#,
+            ),
+            (
+                "bad-header",
+                r#"{"command":"proxy_register_url","request_id":"bad-header","host":"127.0.0.1","url":"https://example.com/video.m3u8","headers":{"X-Custom":"forbidden"},"allowed_private_origins":[],"remote_origin":true}"#,
+            ),
+        ] {
+            let cmd: ServicesCommand = serde_json::from_str(bad_json).unwrap();
+            assert!(services.submit(cmd));
+            let rejected = services.next_event(5_000).expect("rejected");
+            assert_eq!(rejected["event"], "error");
+            assert_eq!(rejected["requestId"], req_id);
+        }
+
+        services.cancel();
+    }
+
     #[cfg(not(feature = "browser-receiver"))]
     #[test]
     fn proxy_only_builds_reject_browser_commands() {

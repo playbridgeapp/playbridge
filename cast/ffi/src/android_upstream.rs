@@ -1,13 +1,16 @@
-//! Android host origin-fetch: JNI trampolines → Kotlin HttpURLConnection.
+//! Android host origin-fetch: JNI trampolines → Kotlin HTTP client.
 //!
-//! Registers [stream_proxy_rust::PbUpstreamCallbacks] that call
-//! `com.playbridge.sender.cast.proxy.JniUpstreamHttpClient` open/read/close.
+//! Registers [stream_proxy_rust::PbUpstreamCheckedCallbacks] that call either
+//! `com.playbridge.sender.cast.proxy.JniUpstreamHttpClient` (phone sender) or
+//! `com.playbridge.player.proxy.JniUpstreamHttpClient` (Android TV receiver)
+//! `openChecked`/`read`/`close`.
 //!
 //! The host bridge is stored as `Arc` and **cloned out** of the registration
 //! mutex before any JNI call so concurrent segment open/read/close do not
 //! serialize on a global lock.
 
 use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
+use jni::strings::JNIStr;
 use jni::sys::jboolean;
 use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::ffi::{CStr, CString, c_char};
@@ -27,13 +30,11 @@ unsafe impl Sync for HostBridge {}
 
 static HOST: Mutex<Option<Arc<HostBridge>>> = Mutex::new(None);
 
-/// Install C upstream callbacks that dispatch to [JniUpstreamHttpClient].
-pub fn install_from_env(env: &mut Env) -> Result<(), String> {
+/// Install C upstream callbacks that dispatch to `class_name` (`JniUpstreamHttpClient`).
+pub fn install_from_env(env: &mut Env, class_name: &'static JNIStr) -> Result<(), String> {
     let jvm = env.get_java_vm().map_err(|e| format!("get_java_vm: {e}"))?;
     let class = env
-        .find_class(jni_str!(
-            "com/playbridge/sender/cast/proxy/JniUpstreamHttpClient"
-        ))
+        .find_class(class_name)
         .map_err(|e| format!("find_class JniUpstreamHttpClient: {e}"))?;
     let global = env
         .new_global_ref(&class)
@@ -271,17 +272,16 @@ unsafe extern "C" fn trampoline_close(handle: i64) {
     })();
 }
 
-/// JNI entry: `SenderServicesNative.installUpstreamHttpClient()`.
-pub extern "system" fn java_install_upstream<'local>(
+fn java_install_upstream_for_class<'local>(
     mut unowned_env: EnvUnowned<'local>,
-    _class: JClass<'local>,
+    class_name: &'static JNIStr,
 ) -> jboolean {
     use jni::errors::ThrowRuntimeExAndDefault;
 
     let ok: bool = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unowned_env
             .with_env(|env| -> Result<bool, jni::errors::Error> {
-                match install_from_env(env) {
+                match install_from_env(env, class_name) {
                     Ok(()) => Ok(true),
                     Err(msg) => {
                         eprintln!("[android_upstream] install failed: {msg}");
@@ -293,4 +293,28 @@ pub extern "system" fn java_install_upstream<'local>(
     }))
     .unwrap_or(false);
     ok as jboolean
+}
+
+/// JNI entry: `SenderServicesNative.installUpstreamHttpClient()`.
+#[cfg(feature = "sender-services-android")]
+pub extern "system" fn java_install_upstream<'local>(
+    unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    java_install_upstream_for_class(
+        unowned_env,
+        jni_str!("com/playbridge/sender/cast/proxy/JniUpstreamHttpClient"),
+    )
+}
+
+/// JNI entry: `ReceiverProxyNative.installUpstreamHttpClient()`.
+#[cfg(feature = "receiver-proxy-android")]
+pub extern "system" fn java_install_receiver_upstream<'local>(
+    unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    java_install_upstream_for_class(
+        unowned_env,
+        jni_str!("com/playbridge/player/proxy/JniUpstreamHttpClient"),
+    )
 }
