@@ -66,8 +66,9 @@ internal object ReceiverStreamProxyClient : PageProxyClient {
  * Routes page-controlled media (`page_cast` and `linked_page`) and all of its subtitles through
  * the loopback Rust stream proxy while leaving non-page items untouched.
  *
- * Fails closed: if proxy startup, policy validation, or URL registration fails for a page item
- * or page subtitle, callers receive a failure result and never receive a direct upstream URL.
+ * Fails closed: if proxy startup, policy validation, or URL registration fails for a page item,
+ * callers receive a failure result and never receive a direct upstream URL. A page subtitle that
+ * fails is dropped and the item plays without it, as on tvOS; it is never fetched directly.
  */
 internal class PageMediaProxyRouter(
     private val proxyClient: PageProxyClient = ReceiverStreamProxyClient,
@@ -189,51 +190,17 @@ internal class PageMediaProxyRouter(
 
     /**
      * Synchronous validation for queue admission (`QueueAdd`) so page-controlled items cannot
-     * enter an active queue when the local proxy is unavailable or their URLs/headers are invalid.
+     * enter an active queue when the local proxy is unavailable or their media URL/headers are
+     * invalid. Subtitles never block admission; refused ones are dropped in [prepareItem].
      */
     fun canAcceptItem(item: PlayPayload): Boolean {
         if (!item.isPageControlledMedia()) return true
         if (!proxyClient.isSupported) return false
-        if (validatePageRegistrationInput(
-                rawUrl = item.url,
-                headers = item.headers,
-                allowedPrivateOrigins = item.allowed_private_origins,
-            ).isFailure
-        ) {
-            return false
-        }
-        val cleanSubs = item.subtitles.filter(String::isNotBlank).take(MAX_PAGE_SUBTITLES)
-        for (subUrl in cleanSubs) {
-            val subHeaders = if (MediaNetworkPolicy.sameOrigin(
-                    item.url.substringBefore('#'),
-                    subUrl.substringBefore('#'),
-                )
-            ) {
-                item.headers
-            } else {
-                emptyMap()
-            }
-            if (validatePageRegistrationInput(
-                    rawUrl = subUrl,
-                    headers = subHeaders,
-                    allowedPrivateOrigins = item.allowed_private_origins,
-                ).isFailure
-            ) {
-                return false
-            }
-        }
-        val remaining = (MAX_PAGE_SUBTITLES - cleanSubs.size).coerceAtLeast(0)
-        for (resource in item.subtitle_resources.filter { it.url.isNotBlank() }.take(remaining)) {
-            if (validatePageRegistrationInput(
-                    rawUrl = resource.url,
-                    headers = resource.headers,
-                    allowedPrivateOrigins = item.allowed_private_origins,
-                ).isFailure
-            ) {
-                return false
-            }
-        }
-        return true
+        return validatePageRegistrationInput(
+            rawUrl = item.url,
+            headers = item.headers,
+            allowedPrivateOrigins = item.allowed_private_origins,
+        ).isSuccess
     }
 
     suspend fun prepareItem(
@@ -307,14 +274,13 @@ internal class PageMediaProxyRouter(
                 } else {
                     emptyMap()
                 }
-                val reg = registerCheckedUrl(
+                val reg = registerSubtitleOrNull(
                     origin = origin,
                     rawUrl = subUrl,
                     headers = subHeaders,
-                    contentType = null,
                     allowedPrivateOrigins = item.allowed_private_origins,
                     leasesOut = acquiredLeases,
-                )
+                ) ?: continue
                 putSubtitleMapping(subtitleMappings, subUrl, reg.url)
                 registeredSubCount++
             }
@@ -322,14 +288,13 @@ internal class PageMediaProxyRouter(
             for (resource in item.subtitle_resources.filter { it.url.isNotBlank() }) {
                 if (registeredSubCount >= MAX_PAGE_SUBTITLES) break
                 if (subtitleMappings.containsKey(resource.url)) continue
-                val reg = registerCheckedUrl(
+                val reg = registerSubtitleOrNull(
                     origin = origin,
                     rawUrl = resource.url,
                     headers = resource.headers,
-                    contentType = null,
                     allowedPrivateOrigins = item.allowed_private_origins,
                     leasesOut = acquiredLeases,
-                )
+                ) ?: continue
                 putSubtitleMapping(subtitleMappings, resource.url, reg.url)
                 registeredSubCount++
             }
@@ -339,15 +304,13 @@ internal class PageMediaProxyRouter(
                 !subtitleMappings.containsKey(normalizedSavedSub) &&
                 !subtitleMappings.containsKey(normalizedSavedSub.substringBefore('#'))
             ) {
-                val reg = registerCheckedUrl(
+                registerSubtitleOrNull(
                     origin = origin,
                     rawUrl = normalizedSavedSub,
                     headers = item.headersForSubtitle(normalizedSavedSub),
-                    contentType = null,
                     allowedPrivateOrigins = item.allowed_private_origins,
                     leasesOut = acquiredLeases,
-                )
-                putSubtitleMapping(subtitleMappings, normalizedSavedSub, reg.url)
+                )?.let { reg -> putSubtitleMapping(subtitleMappings, normalizedSavedSub, reg.url) }
             }
 
             val prepared = PreparedPageItem(
@@ -448,6 +411,28 @@ internal class PageMediaProxyRouter(
         if (previous !== next) {
             previous?.close()
         }
+    }
+
+    /** Registers a page subtitle, or returns null when the policy or proxy refuses it. */
+    private suspend fun registerSubtitleOrNull(
+        origin: String,
+        rawUrl: String,
+        headers: Map<String, String>,
+        allowedPrivateOrigins: List<String>,
+        leasesOut: MutableList<AutoCloseable>,
+    ): RegisteredMedia? = try {
+        registerCheckedUrl(
+            origin = origin,
+            rawUrl = rawUrl,
+            headers = headers,
+            contentType = null,
+            allowedPrivateOrigins = allowedPrivateOrigins,
+            leasesOut = leasesOut,
+        )
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
     }
 
     private suspend fun registerCheckedUrl(
