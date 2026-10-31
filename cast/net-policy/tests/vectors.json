@@ -1,0 +1,845 @@
+[
+  {
+    "name": "loopback 127.0.0.1",
+    "url": "http://127.0.0.1/video",
+    "allowed_private_origins": [
+      "http://127.0.0.1"
+    ],
+    "expected": "deny",
+    "note": "Page media cannot reach loopback, even with a literal grant."
+  },
+  {
+    "name": "loopback 127.0.0.2",
+    "url": "http://127.0.0.2/video",
+    "allowed_private_origins": [
+      "http://127.0.0.2"
+    ],
+    "expected": "deny",
+    "note": "Page media cannot reach loopback, even with a literal grant."
+  },
+  {
+    "name": "loopback [::1]",
+    "url": "http://[::1]/video",
+    "allowed_private_origins": [
+      "http://[::1]"
+    ],
+    "expected": "deny",
+    "note": "Page media cannot reach loopback, even with a literal grant."
+  },
+  {
+    "name": "loopback [::ffff:127.0.0.1]",
+    "url": "http://[::ffff:127.0.0.1]/video",
+    "allowed_private_origins": [
+      "http://[::ffff:127.0.0.1]"
+    ],
+    "expected": "deny",
+    "note": "Page media cannot reach loopback, even with a literal grant."
+  },
+  {
+    "name": "loopback name localhost",
+    "url": "http://localhost/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "The hostname is forbidden even if DNS supplies a public answer.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "loopback name media.localhost",
+    "url": "http://media.localhost/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "The hostname is forbidden even if DNS supplies a public answer.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "loopback name LOCALHOST",
+    "url": "http://LOCALHOST/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "The hostname is forbidden even if DNS supplies a public answer.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "loopback DNS answer",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "127.0.0.1"
+    ]
+  },
+  {
+    "name": "private ungranted 10.0.0.1",
+    "url": "http://10.0.0.1/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted 10.0.0.1",
+    "url": "http://10.0.0.1/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted 172.16.0.1",
+    "url": "http://172.16.0.1/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted 172.16.0.1",
+    "url": "http://172.16.0.1/video",
+    "allowed_private_origins": [
+      "http://172.16.0.1"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted 192.168.0.1",
+    "url": "http://192.168.0.1/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted 192.168.0.1",
+    "url": "http://192.168.0.1/video",
+    "allowed_private_origins": [
+      "http://192.168.0.1"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted 100.64.0.1",
+    "url": "http://100.64.0.1/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted 100.64.0.1",
+    "url": "http://100.64.0.1/video",
+    "allowed_private_origins": [
+      "http://100.64.0.1"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted 100.127.255.254",
+    "url": "http://100.127.255.254/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted 100.127.255.254",
+    "url": "http://100.127.255.254/video",
+    "allowed_private_origins": [
+      "http://100.127.255.254"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted [fd00::1]",
+    "url": "http://[fd00::1]/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted [fd00::1]",
+    "url": "http://[fd00::1]/video",
+    "allowed_private_origins": [
+      "http://[fd00::1]"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted [fc00::1]",
+    "url": "http://[fc00::1]/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted [fc00::1]",
+    "url": "http://[fc00::1]/video",
+    "allowed_private_origins": [
+      "http://[fc00::1]"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private ungranted [::ffff:10.0.0.1]",
+    "url": "http://[::ffff:10.0.0.1]/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "RFC1918, CGNAT and ULA require an exact-origin grant."
+  },
+  {
+    "name": "private granted [::ffff:10.0.0.1]",
+    "url": "http://[::ffff:10.0.0.1]/video",
+    "allowed_private_origins": [
+      "http://[::ffff:10.0.0.1]"
+    ],
+    "expected": "allow",
+    "note": "An exact grant permits private LAN; mapped IPv4 inherits the IPv4 classification."
+  },
+  {
+    "name": "private port mismatch",
+    "url": "http://10.0.0.1:8080/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": ""
+  },
+  {
+    "name": "private scheme mismatch",
+    "url": "https://10.0.0.1/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": ""
+  },
+  {
+    "name": "private host mismatch",
+    "url": "http://10.0.0.2/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": ""
+  },
+  {
+    "name": "effective default port",
+    "url": "HTTP://10.0.0.1:80/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1/"
+    ],
+    "expected": "allow",
+    "note": ""
+  },
+  {
+    "name": "normalized hostname",
+    "url": "https://MEDIA.EXAMPLE.COM:443/video",
+    "allowed_private_origins": [
+      "https://media.example.com/"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "IDNA punycode",
+    "url": "https://xn--bcher-kva.example/video",
+    "allowed_private_origins": [
+      "https://XN--BCHER-KVA.example:443"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "IDNA unicode",
+    "url": "https://bücher.example/video",
+    "allowed_private_origins": [
+      "https://xn--bcher-kva.example"
+    ],
+    "expected": "allow",
+    "note": "Rust URL parsing normalizes the Unicode host to IDNA.",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "local name ungranted",
+    "url": "http://media.local/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": ".local requires a grant even with public answers.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "local name granted",
+    "url": "http://media.local/video",
+    "allowed_private_origins": [
+      "http://media.local"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "public hostname",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "public 8.8.8.8",
+    "url": "https://8.8.8.8/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Synthetic address input only; no fixture makes a network request."
+  },
+  {
+    "name": "public 100.63.255.255",
+    "url": "https://100.63.255.255/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Synthetic address input only; no fixture makes a network request."
+  },
+  {
+    "name": "public 100.128.0.1",
+    "url": "https://100.128.0.1/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Synthetic address input only; no fixture makes a network request."
+  },
+  {
+    "name": "public [2606:4700:4700::1111]",
+    "url": "https://[2606:4700:4700::1111]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Synthetic address input only; no fixture makes a network request."
+  },
+  {
+    "name": "public [::ffff:8.8.8.8]",
+    "url": "https://[::ffff:8.8.8.8]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Synthetic address input only; no fixture makes a network request."
+  },
+  {
+    "name": "mixed public private",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8",
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "mixed granted",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "https://example.com"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8",
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "mixed forbidden",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "https://example.com"
+    ],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8",
+      "127.0.0.1"
+    ]
+  },
+  {
+    "name": "rebinding private",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "The same name permitted by public hostname now resolves to LAN; recheck at connect time.",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "rebinding granted",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "https://example.com"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "10.0.0.1"
+    ]
+  },
+  {
+    "name": "empty answers",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": []
+  },
+  {
+    "name": "forbidden 0.0.0.0",
+    "url": "http://0.0.0.0/video",
+    "allowed_private_origins": [
+      "http://0.0.0.0"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 0.1.2.3",
+    "url": "http://0.1.2.3/video",
+    "allowed_private_origins": [
+      "http://0.1.2.3"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 169.254.1.1",
+    "url": "http://169.254.1.1/video",
+    "allowed_private_origins": [
+      "http://169.254.1.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 192.0.2.1",
+    "url": "http://192.0.2.1/video",
+    "allowed_private_origins": [
+      "http://192.0.2.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 198.51.100.1",
+    "url": "http://198.51.100.1/video",
+    "allowed_private_origins": [
+      "http://198.51.100.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 203.0.113.1",
+    "url": "http://203.0.113.1/video",
+    "allowed_private_origins": [
+      "http://203.0.113.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 198.18.0.1",
+    "url": "http://198.18.0.1/video",
+    "allowed_private_origins": [
+      "http://198.18.0.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 224.0.0.1",
+    "url": "http://224.0.0.1/video",
+    "allowed_private_origins": [
+      "http://224.0.0.1"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden 255.255.255.255",
+    "url": "http://255.255.255.255/video",
+    "allowed_private_origins": [
+      "http://255.255.255.255"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [::]",
+    "url": "http://[::]/video",
+    "allowed_private_origins": [
+      "http://[::]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [fe80::1]",
+    "url": "http://[fe80::1]/video",
+    "allowed_private_origins": [
+      "http://[fe80::1]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [fec0::1]",
+    "url": "http://[fec0::1]/video",
+    "allowed_private_origins": [
+      "http://[fec0::1]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [ff02::1]",
+    "url": "http://[ff02::1]/video",
+    "allowed_private_origins": [
+      "http://[ff02::1]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [2001:db8::1]",
+    "url": "http://[2001:db8::1]/video",
+    "allowed_private_origins": [
+      "http://[2001:db8::1]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "forbidden [::ffff:192.0.2.1]",
+    "url": "http://[::ffff:192.0.2.1]/video",
+    "allowed_private_origins": [
+      "http://[::ffff:192.0.2.1]"
+    ],
+    "expected": "deny",
+    "note": "A grant never permits link-local, multicast, unspecified, reserved or documentation addresses."
+  },
+  {
+    "name": "transition [64:ff9b::a00:1]",
+    "url": "http://[64:ff9b::a00:1]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Preserves current Rust handling: only IPv4-mapped addresses unwrap; NAT64, 6to4 and IPv4-compatible addresses are otherwise public."
+  },
+  {
+    "name": "transition [64:ff9b::7f00:1]",
+    "url": "http://[64:ff9b::7f00:1]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Preserves current Rust handling: only IPv4-mapped addresses unwrap; NAT64, 6to4 and IPv4-compatible addresses are otherwise public."
+  },
+  {
+    "name": "transition [2002:0a00:0001::1]",
+    "url": "http://[2002:0a00:0001::1]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Preserves current Rust handling: only IPv4-mapped addresses unwrap; NAT64, 6to4 and IPv4-compatible addresses are otherwise public."
+  },
+  {
+    "name": "transition [2002:7f00:0001::1]",
+    "url": "http://[2002:7f00:0001::1]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Preserves current Rust handling: only IPv4-mapped addresses unwrap; NAT64, 6to4 and IPv4-compatible addresses are otherwise public."
+  },
+  {
+    "name": "transition [::8.8.8.8]",
+    "url": "http://[::8.8.8.8]/video",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Preserves current Rust handling: only IPv4-mapped addresses unwrap; NAT64, 6to4 and IPv4-compatible addresses are otherwise public."
+  },
+  {
+    "name": "userinfo",
+    "url": "https://user@example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "password",
+    "url": "https://user:fixture@example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "non-http",
+    "url": "ftp://example.com/video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "file scheme",
+    "url": "file:///video",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "invalid URL",
+    "url": "this is not a URL",
+    "allowed_private_origins": [],
+    "expected": "deny",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "long URL",
+    "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "allowed_private_origins": [],
+    "expected": "allow",
+    "note": "Existing Rust has no URL length cap; Kotlin and Swift are stricter at 8192.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant path",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1/path"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant query",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1/?x=1"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant fragment",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1/#x"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant userinfo",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://user@10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant scheme",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "ftp://10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant wildcard",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://*.local"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant localhost",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://localhost"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant subdomain localhost",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://media.localhost"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant overflow",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1",
+      "http://10.0.0.2",
+      "http://10.0.0.3",
+      "http://10.0.0.4",
+      "http://10.0.0.5",
+      "http://10.0.0.6",
+      "http://10.0.0.7",
+      "http://10.0.0.8",
+      "http://10.0.0.9",
+      "http://10.0.0.10",
+      "http://10.0.0.11",
+      "http://10.0.0.12",
+      "http://10.0.0.13",
+      "http://10.0.0.14",
+      "http://10.0.0.15",
+      "http://10.0.0.16",
+      "http://10.0.0.17"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant duplicate overflow",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1",
+      "http://10.0.0.1"
+    ],
+    "expected": "deny",
+    "note": "Reject an invalid grant list even when the destination is public.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "grant limit accepted",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://10.0.0.1",
+      "http://10.0.0.2",
+      "http://10.0.0.3",
+      "http://10.0.0.4",
+      "http://10.0.0.5",
+      "http://10.0.0.6",
+      "http://10.0.0.7",
+      "http://10.0.0.8",
+      "http://10.0.0.9",
+      "http://10.0.0.10",
+      "http://10.0.0.11",
+      "http://10.0.0.12",
+      "http://10.0.0.13",
+      "http://10.0.0.14",
+      "http://10.0.0.15",
+      "http://10.0.0.16"
+    ],
+    "expected": "allow",
+    "note": "",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "inert loopback literal grant",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://127.0.0.1"
+    ],
+    "expected": "allow",
+    "note": "Legacy Rust/Kotlin accept this inert grant; page loopback destinations remain denied. Swift rejects the list.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  },
+  {
+    "name": "inert forbidden literal grant",
+    "url": "https://example.com/video",
+    "allowed_private_origins": [
+      "http://192.0.2.1"
+    ],
+    "expected": "allow",
+    "note": "Legacy Rust/Kotlin accept this inert grant; forbidden destinations remain denied. Swift rejects the list.",
+    "dns_answers": [
+      "8.8.8.8"
+    ]
+  }
+]

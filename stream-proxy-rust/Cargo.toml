@@ -3,7 +3,7 @@ license = "MPL-2.0"
 name = "stream-proxy-rust"
 version = "0.15.0"
 edition = "2021"
-rust-version = "1.91"  # Not inherited: the Docker build copies only this crate.
+rust-version = "1.91"  # Explicit for the standalone Docker build.
 description = "High-performance PlayBridge streaming proxy server in Rust with MediaFlow AES-256 encryption & stateful sessions"
 
 [features]
@@ -16,6 +16,7 @@ upstream-avio = ["upstream-reqwest", "dep:libloading"]
 upstream-jni = []
 
 [dependencies]
+playbridge-net-policy = { path = "../cast/net-policy" }
 tokio = { version = "1.38", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io"] }

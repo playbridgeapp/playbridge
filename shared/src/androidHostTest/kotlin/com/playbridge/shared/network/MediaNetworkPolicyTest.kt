@@ -1,6 +1,11 @@
 package com.playbridge.shared.network
 
 import java.net.InetAddress
+import java.net.URI
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,6 +13,46 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class MediaNetworkPolicyTest {
+    @Test
+    fun sharedDestinationVectors() {
+        // Preserve stricter existing checks until the shared policy replaces this copy.
+        val stricterCases = mapOf(
+            "IDNA unicode" to "java.net.URI does not expose a Unicode hostname",
+            "long URL" to "Kotlin caps URLs at 8192 characters",
+        )
+        val seenDifferences = mutableSetOf<String>()
+        val resource = checkNotNull(javaClass.getResourceAsStream("/vectors.json"))
+        val vectors = resource.bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
+        assertTrue(vectors.isNotEmpty())
+        for (element in vectors) {
+            val vector = element.jsonObject
+            val name = vector.getValue("name").jsonPrimitive.content
+            val url = vector.getValue("url").jsonPrimitive.content
+            val grants = vector.getValue("allowed_private_origins").jsonArray.map { it.jsonPrimitive.content }
+            val rustAllows = vector.getValue("expected").jsonPrimitive.content == "allow"
+            val syntaxAllowed = MediaNetworkPolicy.isAllowedUrlSyntax(url, grants)
+            val addresses = vector["dns_answers"]?.jsonArray?.map {
+                InetAddress.getByName(it.jsonPrimitive.content)
+            } ?: if (syntaxAllowed) {
+                // Absent answers mean an IP-literal URL; never resolve a fixture hostname.
+                val host = URI(url).host.trim('[', ']')
+                check(host.contains(':') || host.all { it.isDigit() || it == '.' })
+                listOf(InetAddress.getByName(host))
+            } else emptyList()
+            val addressesAllowed = MediaNetworkPolicy.areAllowedAddresses(url, addresses, grants)
+            val allowed = syntaxAllowed && addressesAllowed
+            val difference = stricterCases[name]
+            if (difference != null) {
+                assertTrue(rustAllows, "$name must be an allow-to-deny difference")
+                seenDifferences += name
+                assertFalse(allowed, "$name: $difference")
+            } else {
+                assertEquals(rustAllows, allowed, "$name: ${vector.getValue("note").jsonPrimitive.content}")
+            }
+        }
+        assertEquals(stricterCases.keys, seenDifferences)
+    }
+
     @Test
     fun dnsFreeValidationAcceptsPublicHostnamesAndRequiresExactLocalOrigin() {
         assertTrue(MediaNetworkPolicy.isAllowedUrlSyntax("https://cdn.example/video.m3u8", emptySet()))

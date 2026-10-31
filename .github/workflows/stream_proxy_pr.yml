@@ -41,6 +41,8 @@ jobs:
           filters: |
             relevant:
               - 'stream-proxy-rust/**'
+              - 'cast/net-policy/**'
+              - 'Cargo.lock'
               - '.github/workflows/stream_proxy_pr.yml'
 
       - name: Resolve check gate
@@ -85,6 +87,6 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ./stream-proxy-rust
+          context: .
           file: ./stream-proxy-rust/Dockerfile
           push: false

@@ -2508,6 +2508,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "playbridge-net-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "polyval"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3581,6 +3590,7 @@ dependencies = [
  "httpdate",
  "libloading",
  "mime_guess",
+ "playbridge-net-policy",
  "rand 0.8.7",
  "regex",
  "reqwest 0.12.28",

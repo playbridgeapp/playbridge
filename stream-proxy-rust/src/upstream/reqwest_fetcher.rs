@@ -23,34 +23,29 @@ pub struct ReqwestUpstreamFetcher {
 
 #[derive(Debug)]
 struct PolicyDns {
-    allow_private_network: bool,
-    allow_loopback: bool,
+    policy: playbridge_net_policy::AddressPolicy,
 }
 
 impl reqwest::dns::Resolve for PolicyDns {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
-        let allow_private_network = self.allow_private_network;
-        let allow_loopback = self.allow_loopback;
+        let policy = self.policy;
         Box::pin(async move {
-            let lower = host.to_ascii_lowercase();
-            if (!allow_loopback && (lower == "localhost" || lower.ends_with(".localhost")))
-                || (!allow_private_network && lower.ends_with(".local"))
-            {
-                return Err(dns_policy_error());
-            }
+            policy
+                .validate_host(&host)
+                .map_err(|_| dns_policy_error())?;
             let addresses: Vec<_> = tokio::net::lookup_host((host.as_str(), 0))
                 .await
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)?
                 .collect();
-            if addresses.is_empty()
-                || addresses.iter().any(|address| {
-                    !(super::is_allowed_address(address.ip(), allow_private_network)
-                        || allow_loopback && address.ip().is_loopback())
-                })
-            {
-                return Err(dns_policy_error());
-            }
+            policy
+                .validate_addresses(
+                    &addresses
+                        .iter()
+                        .map(|address| address.ip())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|_| dns_policy_error())?;
             Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -73,16 +68,20 @@ impl ReqwestUpstreamFetcher {
         let public_only_client = Self::client_builder()
             .no_proxy()
             .dns_resolver(Arc::new(PolicyDns {
-                allow_private_network: false,
-                allow_loopback: false,
+                policy: playbridge_net_policy::AddressPolicy {
+                    allow_private_network: false,
+                    allow_loopback: false,
+                },
             }))
             .build()
             .ok();
         let local_network_client = Self::client_builder()
             .no_proxy()
             .dns_resolver(Arc::new(PolicyDns {
-                allow_private_network: true,
-                allow_loopback: false,
+                policy: playbridge_net_policy::AddressPolicy {
+                    allow_private_network: true,
+                    allow_loopback: false,
+                },
             }))
             .build()
             .ok();
@@ -90,8 +89,10 @@ impl ReqwestUpstreamFetcher {
         let trusted_origin_client = Self::client_builder()
             .no_proxy()
             .dns_resolver(Arc::new(PolicyDns {
-                allow_private_network: true,
-                allow_loopback: true,
+                policy: playbridge_net_policy::AddressPolicy {
+                    allow_private_network: true,
+                    allow_loopback: true,
+                },
             }))
             .build()
             .ok();
@@ -416,8 +417,10 @@ mod tests {
     async fn public_only_dns_rejects_local_names() {
         let name = "localhost".parse().expect("valid DNS name");
         assert!(PolicyDns {
-            allow_private_network: false,
-            allow_loopback: false,
+            policy: playbridge_net_policy::AddressPolicy {
+                allow_private_network: false,
+                allow_loopback: false,
+            },
         }
         .resolve(name)
         .await

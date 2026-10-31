@@ -1,5 +1,15 @@
 # iPhone standalone fixture checks
 
+Shared page-media destination vectors (macOS host only; no DNS or simulator):
+
+```sh
+bash mobile/apple/tests/run-net-policy-vector-checks.sh
+```
+
+Runs `cast/net-policy/tests/vectors.json` against the production Swift policy
+primitives. Existing stricter Swift decisions are asserted explicitly; see
+`cast/net-policy/README.md` for the complete differences.
+
 Casting restrictions (macOS host and Node; no simulator or phone):
 
 ```sh

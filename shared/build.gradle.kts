@@ -23,6 +23,10 @@ kotlin {
     }
 
     sourceSets {
+        getByName("androidHostTest") {
+            resources.srcDir("../cast/net-policy/tests")
+            resources.include("vectors.json")
+        }
         commonMain {
             kotlin.srcDir("../protocol/generated/kotlin")
         }

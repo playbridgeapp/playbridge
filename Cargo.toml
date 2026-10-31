@@ -2,6 +2,7 @@
 members = [
     "cli",
     "cast/core",
+    "cast/net-policy",
     "cast/receiver",
     "cast/ffi",
     "stream-proxy-rust",

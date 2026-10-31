@@ -1,0 +1,13 @@
+# This Dockerfile uses the repository root as its build context.
+**
+!Cargo.lock
+!stream-proxy-rust/
+!stream-proxy-rust/Cargo.toml
+!stream-proxy-rust/demo.html
+!stream-proxy-rust/src/
+!stream-proxy-rust/src/**
+!cast/
+!cast/net-policy/
+!cast/net-policy/Cargo.toml
+!cast/net-policy/src/
+!cast/net-policy/src/**
