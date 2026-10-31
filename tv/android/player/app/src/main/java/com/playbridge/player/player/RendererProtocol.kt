@@ -47,6 +47,7 @@ internal object RendererProtocol {
     const val KEY_SUBTITLE_URI = "subtitle_uri"
     const val KEY_INITIAL_SUBTITLE_URI = "initial_subtitle_uri"
     const val KEY_INITIAL_SUBTITLE_LABEL = "initial_subtitle_label"
+    const val KEY_TRUSTED_LOCAL_PROXY_ORIGIN = "trusted_local_proxy_origin"
     const val KEY_SUCCESS = "success"
     const val KEY_IS_LIVE = "is_live"
     const val KEY_IS_SEEKABLE = "is_seekable"

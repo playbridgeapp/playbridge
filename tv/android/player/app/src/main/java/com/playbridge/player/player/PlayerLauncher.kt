@@ -5,6 +5,7 @@ import android.content.Intent
 import com.playbridge.player.data.PlaybackContext
 import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.proxy.ReceiverStreamProxy
 import com.playbridge.player.server.ServerService
 import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import com.playbridge.shared.protocol.encodePlaylistPayloadJson
@@ -63,14 +64,11 @@ object PlayerLauncher {
         PlaylistStore.currentPlaylist = safePayload.items
 
         val firstItem = safePayload.items.getOrNull(safePayload.start_index) ?: safePayload.items.firstOrNull()
-        val pageControlled = firstItem?.detected_by in setOf("page_cast", "linked_page")
-
-        val mode = when {
-            pageControlled -> "exo"
-            tvPlayerMode == "mpv" || tvPlayerMode == "exo" -> tvPlayerMode
-            firstItem?.player_mode == "mpv" -> "mpv"
-            else -> "exo"
-        }
+        val mode = selectRendererMode(
+            firstItem = firstItem,
+            tvPlayerMode = tvPlayerMode,
+            proxyAvailable = ReceiverStreamProxy.isSupported(),
+        )
         return Intent(context, PlayerHostActivity::class.java).apply {
             putExtra(EXTRA_PLAYBACK_REQUEST_ID, requestId)
             historyId?.let { putExtra(EXTRA_HISTORY_ID, it) }
@@ -135,6 +133,20 @@ object PlayerLauncher {
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
         }
+    }
+
+    internal fun selectRendererMode(
+        firstItem: PlayPayload?,
+        tvPlayerMode: String,
+        proxyAvailable: Boolean,
+    ): String {
+        val desired = when {
+            tvPlayerMode == "mpv" || tvPlayerMode == "exo" -> tvPlayerMode
+            firstItem?.player_mode == "mpv" -> "mpv"
+            else -> "exo"
+        }
+        val pageControlled = firstItem?.isPageControlledMedia() == true
+        return if (desired == "mpv" && pageControlled && !proxyAvailable) "exo" else desired
     }
 
     /** Resolve a playlist across the main/MPV process boundary. */

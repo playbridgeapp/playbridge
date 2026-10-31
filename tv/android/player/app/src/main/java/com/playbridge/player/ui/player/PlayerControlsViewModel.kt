@@ -51,6 +51,14 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     var subtitleRequestHeadersByUrl: Map<String, Map<String, String>> = emptyMap()
     var enforcePageSubtitleNetworkPolicy: Boolean = false
     var allowedPrivateSubtitleOrigins: List<String> = emptyList()
+    var trustedLocalSubtitleProxyOrigin: String? = null
+    var subtitleTargetResolver: ((String, Map<String, String>?) -> SubtitleLoadTarget?)? = null
+
+    data class SubtitleLoadTarget(
+        val fetchUrl: String,
+        val headers: Map<String, String>?,
+        val trustedLocalProxyOrigin: String? = null,
+    )
 
     /**
      * Lazily download + parse the given subtitle URLs (for the live preview in the overlay).
@@ -60,12 +68,22 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     fun preloadSubtitleCues(urls: List<String>) {
         urls.forEach { url ->
             if (SubtitleCueLoader.cached(url) != null || SubtitleCueLoader.isLoading(url)) return@forEach
+            val fallbackHeaders = subtitleRequestHeadersByUrl[url] ?: subtitleRequestHeaders
+            val resolver = subtitleTargetResolver
+            val resolved = if (resolver != null) {
+                resolver(url, fallbackHeaders) ?: return@forEach
+            } else {
+                null
+            }
             scope.launch {
                 SubtitleCueLoader.load(
-                    url,
-                    subtitleRequestHeadersByUrl[url] ?: subtitleRequestHeaders,
-                    enforcePageSubtitleNetworkPolicy,
-                    allowedPrivateSubtitleOrigins,
+                    url = url,
+                    headers = if (resolved != null) resolved.headers else fallbackHeaders,
+                    enforcePageNetworkPolicy = enforcePageSubtitleNetworkPolicy,
+                    allowedPrivateOrigins = allowedPrivateSubtitleOrigins,
+                    fetchUrl = resolved?.fetchUrl ?: url,
+                    trustedLocalProxyOrigin = resolved?.trustedLocalProxyOrigin
+                        ?: trustedLocalSubtitleProxyOrigin,
                 )
                 _controlsState.update { it.copy(subtitleCuesVersion = it.subtitleCuesVersion + 1) }
             }
@@ -675,6 +693,18 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         forceNetworkPolicy: Boolean = false,
         onResult: ((Boolean) -> Unit)? = null,
     ) {
+        val resolver = subtitleTargetResolver
+        val resolved = if (resolver != null) {
+            val target = resolver(url, headers)
+            if (target == null) {
+                clearSubtitle()
+                onResult?.invoke(false)
+                return
+            }
+            target
+        } else {
+            null
+        }
         if (subtitleManager == null) {
             subtitleManager = SubtitleManager(viewModelScope) { text ->
                 _controlsState.update { it.copy(currentSubtitleText = text) }
@@ -683,11 +713,13 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         subtitleManager?.setPlayer { engine?.currentPosition ?: 0L }
         subtitleManager?.setOffset(_controlsState.value.subtitleDelayMs)
         subtitleManager?.loadSubtitle(
-            url,
-            headers,
-            enforcePageSubtitleNetworkPolicy || forceNetworkPolicy,
-            allowedPrivateSubtitleOrigins,
-            onResult,
+            url = resolved?.fetchUrl ?: url,
+            headers = if (resolved != null) resolved.headers else headers,
+            enforcePageNetworkPolicy = enforcePageSubtitleNetworkPolicy || forceNetworkPolicy,
+            allowedPrivateOrigins = allowedPrivateSubtitleOrigins,
+            trustedLocalProxyOrigin = resolved?.trustedLocalProxyOrigin
+                ?: trustedLocalSubtitleProxyOrigin,
+            onResult = onResult,
         )
     }
 
@@ -725,6 +757,8 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         skipSegmentsJob?.cancel()
         chapterOsdJob?.cancel()
         cachedOnlineTracks = emptyList()
+        trustedLocalSubtitleProxyOrigin = null
+        subtitleTargetResolver = null
         onEndSegmentSkipped = null
         engine = null
     }

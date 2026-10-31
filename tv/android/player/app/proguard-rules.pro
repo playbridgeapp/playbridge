@@ -10,6 +10,10 @@
 -dontwarn java.lang.management.ManagementFactory
 -dontwarn java.lang.management.RuntimeMXBean
 
+# Embedded Rust stream-proxy JNI surface and upstream HTTP callbacks (`cast/ffi`).
+-keep class com.playbridge.player.proxy.ReceiverProxyNative { *; }
+-keep class com.playbridge.player.proxy.JniUpstreamHttpClient { *; }
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

@@ -124,6 +124,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     private var currentPayload: PlayPayload? = null
 
     /**
+     * Exact origin (`http://127.0.0.1:<port>`) of an embedded local stream proxy when the host
+     * routes page-controlled media through loopback, or null when no local proxy is trusted.
+     */
+    @Volatile
+    var trustedLocalProxyOrigin: String? = null
+
+    /**
      * Subtitle timing offset in milliseconds. Positive values advance subtitles relative to
      * video (same convention as TV SubtitleManager / remote UI). Applied by [OffsetTextRenderer].
      */
@@ -193,9 +200,15 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     private fun buildPerItemSource(payload: PlayPayload): PerItemSource {
         val isPageCastStream = payload.detected_by == "page_cast" || payload.detected_by == "linked_page"
         val allowedPrivateOrigins = payload.allowed_private_origins
-        if (isPageCastStream && !MediaNetworkPolicy.isAllowedUrlSyntax(
+        val localProxyOrigin = trustedLocalProxyOrigin
+        val isTrustedLocalProxyStream = MediaNetworkPolicy.isTrustedLocalProxyUrl(
+            payload.url,
+            localProxyOrigin,
+        )
+        if (isPageCastStream && !MediaNetworkPolicy.isAllowedUrlSyntaxOrTrustedProxy(
                 payload.url,
                 allowedPrivateOrigins,
+                localProxyOrigin,
             )
         ) {
             throw IllegalArgumentException("Page-cast media destination is not allowed")
@@ -227,7 +240,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             logger.w(TAG, "Failed to parse URL for Basic Auth extraction", e)
         }
 
-        if (!requestProperties.containsKey("Referer")) {
+        if (!isTrustedLocalProxyStream && !requestProperties.containsKey("Referer")) {
             try {
                 val uri = Uri.parse(payload.url)
                 val scheme = uri.scheme ?: "https"
@@ -272,10 +285,11 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .dns(object : okhttp3.Dns {
                     override fun lookup(hostname: String): List<java.net.InetAddress> {
                         val addresses = ipv4FirstDns.lookup(hostname)
-                        if (isPageCastStream && !MediaNetworkPolicy.areAllowedAddressesForHost(
+                        if (isPageCastStream && !MediaNetworkPolicy.areAllowedAddressesForHostOrTrustedProxy(
                                 hostname,
                                 addresses,
                                 allowedPrivateOrigins,
+                                localProxyOrigin,
                             )
                         ) {
                             throw UnknownHostException("Page-cast media destination is not allowed")
@@ -295,14 +309,12 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                         val originBoundNames = requestProperties.keys.toSet()
                         addNetworkInterceptor { chain ->
                             val targetUrl = chain.request().url.toString()
-                            val targetHost = chain.request().url.host
                             val peerAddress = chain.connection()?.route()?.socketAddress?.address
-                            if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowedPrivateOrigins) ||
-                                peerAddress == null ||
-                                !MediaNetworkPolicy.areAllowedAddresses(
+                            if (!MediaNetworkPolicy.areAllowedConnectionOrTrustedProxy(
                                     targetUrl,
-                                    listOf(peerAddress),
+                                    peerAddress,
                                     allowedPrivateOrigins,
+                                    localProxyOrigin,
                                 )
                             ) {
                                 throw IOException("Page-cast media destination is not allowed")
