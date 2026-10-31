@@ -59,11 +59,15 @@ jobs:
             project: mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj
             scheme: PlayBridge Phone
             destination: generic/platform=iOS
+            rust_targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+            cast_core_script: cast/build-apple.sh
           - app: tv
             tag_prefix: tvos-v
             project: tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj
             scheme: PlayBridge TV
             destination: generic/platform=tvOS
+            rust_targets: aarch64-apple-tvos,aarch64-apple-tvos-sim
+            cast_core_script: cast/build-apple-tvos.sh
 
     steps:
     - uses: actions/checkout@v7.0.1
@@ -97,20 +101,22 @@ jobs:
         echo "run=$run" >> "$GITHUB_OUTPUT"
 
     - name: Set up Rust
-      if: steps.gate.outputs.run == 'true' && matrix.app == 'phone'
+      if: steps.gate.outputs.run == 'true'
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: stable
-        targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+        targets: ${{ matrix.rust_targets }}
         components: llvm-tools
 
     - name: Build Rust Cast Core XCFramework
-      if: steps.gate.outputs.run == 'true' && matrix.app == 'phone'
+      if: steps.gate.outputs.run == 'true'
+      env:
+        CAST_CORE_SCRIPT: ${{ matrix.cast_core_script }}
       run: |
         # Xcode's nm can't read objects from Rust's newer LLVM; the ABI check needs Rust's own llvm-nm.
         export PB_APPLE_NM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-nm"
         test -x "$PB_APPLE_NM"
-        sh cast/build-apple.sh
+        sh "$CAST_CORE_SCRIPT"
 
     - name: Install App Store Connect API key
       if: steps.gate.outputs.run == 'true'
