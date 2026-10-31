@@ -8,25 +8,42 @@ license = "MPL-2.0"
 description = "UniFFI and stable C bindings for PlayBridge Cast Core"
 
 [features]
-default = []
-adblock-engine = ["playbridge-cast-core/adblock-engine"]
+default = ["cast-core"]
+cast-core = [
+    "dep:playbridge-cast-core",
+    "dep:playbridge-cast-receiver",
+    "dep:base64",
+    "dep:thiserror",
+    "dep:uniffi",
+    "dep:url",
+]
+browser-receiver = [
+    "dep:playbridge-browser-receiver",
+    "dep:playbridge-cast-core",
+]
+adblock-engine = ["cast-core", "playbridge-cast-core/adblock-engine"]
 # Desktop / Docker-style embed: reqwest (+ AVIO) origin fetch.
 sender-services = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-reqwest",
     "stream-proxy-rust/upstream-avio",
 ]
 # Android phone embed: host HttpURLConnection via JNI callbacks (no reqwest).
 sender-services-android = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-jni",
 ]
 
 # Apple phone embed: host URLSession via the same platform-neutral C callbacks.
 sender-services-apple = [
-    "dep:playbridge-browser-receiver",
+    "browser-receiver",
+    "dep:stream-proxy-rust",
+    "stream-proxy-rust/upstream-jni",
+]
+# Android TV receiver embed: loopback stream proxy + JNI upstream only (no cast-core or browser receiver).
+receiver-proxy-android = [
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-jni",
 ]
@@ -35,18 +52,18 @@ sender-services-apple = [
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
-playbridge-cast-core = { path = "../core" }
-playbridge-cast-receiver = { path = "../receiver" }
+playbridge-cast-core = { path = "../core", optional = true }
+playbridge-cast-receiver = { path = "../receiver", optional = true }
 playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
-# Features selected by the sender-services variants (no default features).
+# Features selected by the sender-services / receiver-proxy variants (no default features).
 stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true, default-features = false }
-base64 = "0.22"
+base64 = { version = "0.22", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
-thiserror = "2"
-uniffi = "0.32"
-url = "2"
+thiserror = { version = "2", optional = true }
+uniffi = { version = "0.32", optional = true }
+url = { version = "2", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"
