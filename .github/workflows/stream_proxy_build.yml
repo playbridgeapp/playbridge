@@ -6,7 +6,6 @@ on:
     paths:
       - 'stream-proxy-rust/**'
       - 'cast/net-policy/**'
-      - 'Cargo.lock'
       - '.github/workflows/stream_proxy_build.yml'
   workflow_dispatch:
 
