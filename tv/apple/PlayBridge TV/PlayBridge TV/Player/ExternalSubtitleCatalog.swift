@@ -7,6 +7,8 @@ struct ExternalSubtitleCatalog {
         let id: Int
         let url: String
         let name: String
+        /// A subtitle resource's own request headers; nil loads it like a plain URL.
+        var headers: [String: String]? = nil
     }
 
     let options: [Option]
@@ -14,14 +16,21 @@ struct ExternalSubtitleCatalog {
     private init(options: [Option]) { self.options = options }
 
     init(urls: [String]) {
+        self.init(subtitles: urls.map { ItemSubtitle(url: $0) })
+    }
+
+    init(subtitles: [ItemSubtitle]) {
         var seen = Set<String>()
-        options = urls.compactMap { raw in
+        options = subtitles.compactMap { subtitle in
+            let raw = subtitle.url
             guard let url = URL(string: raw),
                   ((["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil)
                     || (url.isFileURL && !url.path.isEmpty)),
                   seen.insert(raw).inserted else { return nil }
             let number = seen.count
-            return Option(id: -number - 1, url: raw, name: "External subtitle \(number)")
+            return Option(id: -number - 1, url: raw,
+                          name: subtitle.label ?? "External subtitle \(number)",
+                          headers: subtitle.headers)
         }
     }
 

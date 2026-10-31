@@ -61,8 +61,19 @@ extension Playbridge_PlayPayload {
     /// Returns nil for empty headers, matching the legacy `[String: String]?` ergonomic.
     var headersOrNil: [String: String]? { headers.isEmpty ? nil : headers }
 
-    /// Returns nil for empty subtitles list.
-    var subtitlesOrNil: [String]? { subtitles.isEmpty ? nil : subtitles }
+    /// The item's plain subtitle URLs and valid subtitle resources, or nil when it has none.
+    var itemSubtitlesOrNil: [ItemSubtitle]? {
+        let all = pageMediaSource.allSubtitles
+        return all.isEmpty ? nil : all
+    }
+
+    /// Valid `subtitle_resources` with their own headers and labels.
+    var itemSubtitleResources: [ItemSubtitle] {
+        subtitleResources.filter(ExternalSubtitleDownload.isValid).map {
+            ItemSubtitle(url: $0.url, headers: $0.headers,
+                         label: $0.hasLabel && !$0.label.isEmpty ? $0.label : nil)
+        }
+    }
 
     /// Returns nil when the proto's optional title is unset/empty.
     var titleOrNil: String? { hasTitle ? title : nil }
@@ -71,7 +82,8 @@ extension Playbridge_PlayPayload {
     var pageMediaSource: PageMediaSource {
         PageMediaSource(detectedBy: detectedBy, url: url, headers: headers,
                         contentType: hasContentType ? contentType : nil,
-                        subtitles: subtitles, allowedPrivateOrigins: allowedPrivateOrigins)
+                        subtitles: subtitles, allowedPrivateOrigins: allowedPrivateOrigins,
+                        subtitleResources: itemSubtitleResources)
     }
 
     /// Whether the website, not the user, chose this item's URL.

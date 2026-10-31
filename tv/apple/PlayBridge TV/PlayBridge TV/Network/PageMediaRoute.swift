@@ -82,6 +82,16 @@ nonisolated enum PageMediaPolicy {
     }
 }
 
+/// One subtitle a cast item carries. A plain `subtitles` URL has no headers or
+/// label; a sender's `subtitle_resources` entry brings its own request headers
+/// and menu label.
+nonisolated struct ItemSubtitle: Hashable, Sendable {
+    var url: String
+    /// nil for a plain URL, which keeps loading as it always has.
+    var headers: [String: String]? = nil
+    var label: String? = nil
+}
+
 /// What the router needs to know about one queue item. The wire payload stays
 /// out of this type so the routing decision runs without the protobuf package.
 nonisolated struct PageMediaSource: Hashable {
@@ -91,6 +101,20 @@ nonisolated struct PageMediaSource: Hashable {
     var contentType: String?
     var subtitles: [String]
     var allowedPrivateOrigins: [String]
+    /// The item's `subtitle_resources`, each with its own headers.
+    var subtitleResources: [ItemSubtitle] = []
+
+    /// Every subtitle in order: plain URLs first, then resources not already
+    /// listed. A resource's headers and label win for a URL sent both ways.
+    var allSubtitles: [ItemSubtitle] {
+        let resources = Dictionary(subtitleResources.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = Set<String>()
+        var result: [ItemSubtitle] = []
+        for url in subtitles + subtitleResources.map(\.url) where seen.insert(url).inserted {
+            result.append(resources[url] ?? ItemSubtitle(url: url))
+        }
+        return result
+    }
 
     var isPageControlled: Bool { PageMediaPolicy.isPageControlled(detectedBy: detectedBy) }
 }
@@ -100,7 +124,7 @@ nonisolated struct PageRoutedMedia: @unchecked Sendable {
     let url: URL
     /// nil for direct media, which keeps its own headers.
     let headers: [String: String]?
-    let subtitles: [String]
+    let subtitles: [ItemSubtitle]
     let isProxied: Bool
     /// Registrations that keep the proxied URLs alive.
     fileprivate let grants: [any PageMediaGrant]
@@ -119,14 +143,14 @@ nonisolated enum PageMediaRouteState {
 nonisolated struct PageMediaPlayable {
     let url: URL
     let headers: [String: String]?
-    let subtitles: [String]?
+    let subtitles: [ItemSubtitle]?
 }
 
 extension PageMediaRouteState {
     /// The original values for cast-sheet media, the proxy URL once a page item is
     /// routed, and nothing while it is pending or refused: a player is never
     /// handed a page item's original URL.
-    nonisolated func playable(url: URL, headers: [String: String]?, subtitles: [String]?) -> PageMediaPlayable? {
+    nonisolated func playable(url: URL, headers: [String: String]?, subtitles: [ItemSubtitle]?) -> PageMediaPlayable? {
         switch self {
         case .direct: return PageMediaPlayable(url: url, headers: headers, subtitles: subtitles)
         case .ready(let media):
@@ -178,7 +202,7 @@ nonisolated final class PageMediaRouter: @unchecked Sendable {
     func route(_ source: PageMediaSource) async throws -> PageRoutedMedia {
         guard source.isPageControlled else {
             guard let url = URL(string: source.url) else { throw PageMediaError.refused }
-            return PageRoutedMedia(url: url, headers: nil, subtitles: source.subtitles,
+            return PageRoutedMedia(url: url, headers: nil, subtitles: source.allSubtitles,
                                    isProxied: false, grants: [])
         }
         let (cached, task) = join(source)
@@ -223,16 +247,18 @@ nonisolated final class PageMediaRouter: @unchecked Sendable {
             url: source.url, headers: PageMediaPolicy.proxyHeaders(source.headers),
             contentType: source.contentType, allowedPrivateOrigins: source.allowedPrivateOrigins)
         var grants: [any PageMediaGrant] = [media]
-        var subtitles: [String] = []
+        var subtitles: [ItemSubtitle] = []
         let context = PageMediaPolicy.subtitleContextHeaders(source.headers)
-        for subtitle in source.subtitles {
+        for subtitle in source.allSubtitles {
+            // A plain URL gets only context headers; a resource sends its own.
             // A subtitle the proxy refuses is dropped, never fetched directly.
-            guard PageMediaPolicy.isRemoteHTTP(subtitle),
+            let headers = subtitle.headers.map(PageMediaPolicy.proxyHeaders) ?? context
+            guard PageMediaPolicy.isRemoteHTTP(subtitle.url),
                   let grant = try? await proxy.register(
-                      url: subtitle, headers: context, contentType: nil,
+                      url: subtitle.url, headers: headers, contentType: nil,
                       allowedPrivateOrigins: source.allowedPrivateOrigins) else { continue }
             grants.append(grant)
-            subtitles.append(grant.url.absoluteString)
+            subtitles.append(ItemSubtitle(url: grant.url.absoluteString, label: subtitle.label))
         }
         return PageRoutedMedia(url: media.url, headers: nil, subtitles: subtitles,
                                isProxied: true, grants: grants)

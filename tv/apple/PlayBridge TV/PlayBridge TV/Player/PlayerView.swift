@@ -424,7 +424,7 @@ struct PlayerView: View {
                 let _ = pageRouteRevision
                 let route = server.pageMedia.state(for: currentRequest.pageMediaSource)
                 let playable = route.playable(url: originalURL, headers: currentRequest.headersOrNil,
-                                              subtitles: currentRequest.subtitlesOrNil)
+                                              subtitles: currentRequest.itemSubtitlesOrNil)
                 let currentURL = playable?.url ?? originalURL
                 let currentEngine = effectiveEngine(for: currentRequest)
                 let currentGeneration = mediaGeneration

@@ -20,7 +20,7 @@ final class ActivityAVPlayerViewController: AVPlayerViewController {
 struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
-    let subtitles: [String]?
+    let subtitles: [ItemSubtitle]?
     let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let isPreBuffering: Bool
@@ -136,7 +136,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
         }
 
-        let subtitleOptions = ExternalSubtitleCatalog(urls: subtitles ?? []).options
+        let subtitleOptions = ExternalSubtitleCatalog(subtitles: subtitles ?? []).options
         let subtitleOffAction = UIAction(title: "No External Subtitle") { [weak coordinator = context.coordinator] _ in
             coordinator?.clearExternalSubtitle(explicitOff: false)
         }
@@ -330,7 +330,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         init(title: String?, onDismiss: @escaping () -> Void, onExit: @escaping () -> Void,
              onSwitch: @escaping (PlaybackEngine, Double) -> Void,
-             headers: [String: String]?, subtitles: [String]?,
+             headers: [String: String]?, subtitles: [ItemSubtitle]?,
              onBroadcast: @escaping ([String: Any]) -> Void,
              onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
              onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
@@ -342,7 +342,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.onExit = onExit
             self.onSwitch = onSwitch
             self.headers = headers
-            self.externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+            self.externalSubtitleCatalog = ExternalSubtitleCatalog(subtitles: subtitles ?? [])
             self.onBroadcast = onBroadcast
             self.onLoopChanged = onLoopChanged
             self.onEndOfFile = onEndOfFile
@@ -533,7 +533,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             configuration.urlCache = nil
             let session = URLSession(configuration: configuration)
             subtitleSession = session
-            let request = ExternalSubtitleDownload.request(for: url, playbackHeaders: headers)
+            let request = option.headers.map { ExternalSubtitleDownload.request(for: url, subtitleHeaders: $0) }
+                ?? ExternalSubtitleDownload.request(for: url, playbackHeaders: headers)
             let task = session.downloadTask(with: request) { [weak self] temporaryFile, response, error in
                 let result: Result<ExternalSubtitleCues, Error>
                 if let error {

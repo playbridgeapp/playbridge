@@ -23,6 +23,14 @@ enum ExternalSubtitleDownloadError: Error {
 enum ExternalSubtitleDownload {
     static let maximumBytes = 8 * 1024 * 1024
 
+    /// A sender's subtitle resource: it names its own request headers.
+    static func request(for url: URL, subtitleHeaders: [String: String]) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        for (name, value) in subtitleHeaders { request.setValue(value, forHTTPHeaderField: name) }
+        return request
+    }
+
     static func request(for url: URL, playbackHeaders: [String: String]?) -> URLRequest {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
@@ -70,10 +78,7 @@ enum ExternalSubtitleDownload {
 
     static func request(for resource: Playbridge_SubtitleResource) -> URLRequest? {
         guard isValid(resource), let url = URL(string: resource.url) else { return nil }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 20
-        for (name, value) in resource.headers { request.setValue(value, forHTTPHeaderField: name) }
-        return request
+        return request(for: url, subtitleHeaders: resource.headers)
     }
 #endif
 
