@@ -115,12 +115,21 @@ struct PageCastRequest {
         }
     }
 
+    /// Items for playback that this phone fetches, tagged with the origins its proxy may reach.
+    func withAllowedPrivateOrigins(_ origins: Set<String>) -> PageCastRequest {
+        var copy = self
+        copy.items = items.map { var item = $0; item["allowedPrivateOrigins"] = origins.sorted(); return item }
+        return copy
+    }
+
     func playlistCommand(allowedPrivateOrigins: Set<String>) -> String {
         let wireItems = items.map { source -> [String: Any] in
             var item = source
             item.removeValue(forKey: "id")
             // Defense in depth if a native caller constructs or mutates a request.
             item.removeValue(forKey: "progressWebhook")
+            // Only the caller's grants reach the wire, never a tag from local routing.
+            item.removeValue(forKey: "allowedPrivateOrigins")
             if !allowedPrivateOrigins.isEmpty { item["allowedPrivateOrigins"] = allowedPrivateOrigins.sorted() }
             return item
         }

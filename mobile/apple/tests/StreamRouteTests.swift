@@ -8,8 +8,10 @@ final class PhoneProxyRegistration {
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
     var localFlags: [Bool] = []
-    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+    var origins: [[String]] = []
+    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = [], forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
         localFlags.append(forLocalPlayback)
+        origins.append(allowedPrivateOrigins)
         return PhoneProxyRegistration(local: forLocalPlayback)
     }
 }
@@ -58,6 +60,16 @@ final class PhoneSenderServices {
         precondition(advertised.url.host == "phone.test" && PhoneSenderServices.shared.localFlags == [true, false])
         _ = try await StreamRouteService.localPlayback.prepare(url: source, headers: headers, contentType: nil, route: .direct, configuration: .init())
         precondition(PhoneSenderServices.shared.localFlags == [true, false], "Local Direct must still bypass the proxy")
+        // Website media always uses the checked proxy with exactly the approved origins.
+        let grants = ["http://192.168.1.20:8080"]
+        let websiteLocal = try await StreamRouteService.website(allowedPrivateOrigins: grants, local: true)
+            .prepareWebsite(url: source, headers: headers, contentType: nil)
+        let websiteLAN = try await StreamRouteService.website(allowedPrivateOrigins: [], local: false)
+            .prepareWebsite(url: source, headers: headers, contentType: nil)
+        precondition(websiteLocal.url.host == "127.0.0.1" && websiteLocal.headers.isEmpty && websiteLocal.registration != nil)
+        precondition(websiteLAN.url.host == "phone.test" && websiteLAN.headers.isEmpty)
+        precondition(PhoneSenderServices.shared.localFlags == [true, false, true, false])
+        precondition(PhoneSenderServices.shared.origins.suffix(2) == [grants, []])
         let request = try RemoteProxyClient.request(url: source, headers: headers, contentType: "application/vnd.apple.mpegurl", configuration: config)
         precondition(request.httpMethod == "POST" && request.url?.path == "/prefix/register")
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
@@ -77,6 +89,6 @@ final class PhoneSenderServices {
                 precondition(error.localizedDescription.contains("403"))
             }
         }
-        print("PASS Direct bypass, loopback local playback, LAN-advertised casting, explicit remote routes and no silent fallback")
+        print("PASS Direct bypass, loopback local playback, LAN-advertised casting, website media through the checked proxy, explicit remote routes and no silent fallback")
     }
 }

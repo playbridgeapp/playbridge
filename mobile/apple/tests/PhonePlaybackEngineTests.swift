@@ -1,10 +1,17 @@
 import Foundation
 import AVFoundation
 
-final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
+final class PhoneProxyRegistration {
+    let url: URL
+    init(url: URL) { self.url = url }
+}
+/// Website media goes through the loopback proxy; keep the file name so engine selection still sees it.
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration { fatalError("Unexpected proxy startup") }
+    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = [], forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+        precondition(forLocalPlayback, "Website media on this phone must use a loopback registration")
+        return PhoneProxyRegistration(url: URL(string: "http://127.0.0.1:9/s/id/")!.appendingPathComponent(URL(string: url)!.lastPathComponent))
+    }
 }
 enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration { .init() } }
 

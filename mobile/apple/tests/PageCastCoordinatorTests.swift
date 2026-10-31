@@ -26,6 +26,7 @@ private final class FakeTransport: PageCastTransport {
     var localCancellation = 0
     var localFinishedSupply = false
     var externalOpens = 0
+    var phoneFetchedItems: [[String: Any]] = []
     var playbackKind = "native"
     var playbackDestination: [String: Any] {
         ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": playbackKind,
@@ -35,16 +36,20 @@ private final class FakeTransport: PageCastTransport {
     @MainActor func selectWebsiteLocalDestination() { destinationID = nil; isConnected = false; playbackKind = "local" }
     @MainActor func startWebsiteLocalPlayback(_ request: PageCastRequest, event: @escaping (String, [String: Any]) -> Void) async throws {
         localOpens += 1
+        phoneFetchedItems += request.items
         await localPreparation?()
         localState = ["currentIndex": request.startIndex, "positionMs": 40_000, "durationMs": 60_000, "state": "playing", "closed": false]
     }
     @MainActor func commitWebsiteLocalPlayback() { localCommits += 1 }
     @MainActor func cancelWebsiteLocalPreparation() { localCancellation += 1 }
-    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool) { localAppends += items.count; localFinishedSupply = endOfList }
+    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool) {
+        localAppends += items.count; localFinishedSupply = endOfList; phoneFetchedItems += items
+    }
     @MainActor func jumpWebsiteLocalItem(_ index: Int) async throws { localState?["currentIndex"] = index }
     @MainActor func detachWebsiteLocalPlayback() { localDetached += 1 }
     @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws {
         externalOpens += 1
+        phoneFetchedItems += request.items
         websitePlayback = TvPlaybackStatus(state: "playing", positionMs: 10_000, durationMs: 60_000, playbackId: "external-load")
     }
     var destinationID: String? = "receiver-one"
@@ -229,6 +234,44 @@ private final class FakeTransport: PageCastTransport {
         precondition(f.coordinator.presentation == nil && f.transport.sends.count == 2)
         precondition((f.transport.sends[1].request.items[0]["subtitleResources"] as? [[String: Any]])?.count == 1)
         print("PASS private grants and complete basic/linked payload forwarding")
+    }
+
+    /// This phone and non-PlayBridge devices fetch through the phone's proxy, which needs each item's grants.
+    @MainActor static func phoneFetchedPlaybackCarriesGrants() async {
+        let privateOrigin = "http://192.168.1.25:80"
+        let lanItem: (String) -> [String: Any] = { ["id": $0, "url": "http://192.168.1.25/\($0).m3u8"] }
+        do {
+            let f = Fixture(approved: true) { _, _, _ in [privateOrigin] }
+            f.transport.selectWebsiteLocalDestination()
+            let play = f.send("play", payload: ["destinationId": "this-device", "items": [lanItem("one")]])
+            await f.wait({ f.coordinator.presentation != nil }, "private server approval")
+            f.coordinator.resolvePrompt(true)
+            let session = await f.response(play)["sessionId"] as! String
+            _ = await f.response(f.send("ping", session: session, payload: ["ready": true]))
+            let demand = f.page.events("needitems").last?["detail"] as! [String: Any]
+            _ = await f.response(f.send("supply", session: session, payload: ["requestId": demand["requestId"]!, "items": [lanItem("two")]]))
+            precondition(f.transport.phoneFetchedItems.count == 2)
+            precondition(f.transport.phoneFetchedItems.allSatisfy { $0["allowedPrivateOrigins"] as? [String] == [privateOrigin] },
+                         "Local items, including supplied ones, must carry the approved origins to the phone's proxy")
+        }
+        do {
+            let f = Fixture(approved: true)
+            f.transport.playbackKind = "external"; f.transport.isAirPlay = true
+            _ = await f.response(f.send("play", payload: ["destinationId": f.pageDestinationId(), "items": [Fixture.item()]]))
+            precondition(f.transport.phoneFetchedItems.count == 1)
+            precondition(f.transport.phoneFetchedItems[0]["allowedPrivateOrigins"] as? [String] == [],
+                         "Public-only external playback must still be tagged so the proxy allows no private origins")
+        }
+        do {
+            let f = Fixture(approved: true) { _, _, _ in [privateOrigin] }
+            let open = f.send("open", payload: ["items": [lanItem("tv")]])
+            await f.wait({ f.coordinator.presentation != nil }, "private server approval")
+            f.coordinator.resolvePrompt(true)
+            _ = await f.response(open)
+            let command = f.transport.sends[0].request.playlistCommand(allowedPrivateOrigins: [])
+            precondition(!command.contains("allowedPrivateOrigins"), "Receiver commands carry only explicit grants")
+        }
+        print("PASS phone-fetched website playback carries its approved origins")
     }
 
     @MainActor static func demandAndSupply() async {
@@ -665,6 +708,7 @@ private final class FakeTransport: PageCastTransport {
         await unifiedPlayback()
         await permissionFlow()
         await privatePermissionsAndPayloads()
+        await phoneFetchedPlaybackCarriesGrants()
         await demandAndSupply()
         await ownership()
         await cancellationDuringDNS()

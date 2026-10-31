@@ -54,6 +54,21 @@ struct StreamRouteService {
         })
     }
 
+    /// Website media always goes through the phone's checked proxy, limited to public addresses
+    /// and the origins the user approved, whatever the route setting (#480). `local` keeps the
+    /// registration on loopback for the phone's own player and subtitle fetches.
+    static func website(allowedPrivateOrigins: [String], local: Bool) -> Self {
+        Self(phone: { url, headers, type in
+            let registration = try await PhoneSenderServices.shared.register(url: url, headers: headers,
+                contentType: type, allowedPrivateOrigins: allowedPrivateOrigins, forLocalPlayback: local)
+            return RoutedStream(url: registration.url, headers: [:], registration: registration)
+        })
+    }
+
+    func prepareWebsite(url: String, headers: [String: String], contentType: String?) async throws -> RoutedStream {
+        try await prepare(url: url, headers: headers, contentType: contentType, route: .phone, configuration: .init())
+    }
+
     func prepare(url: String, headers: [String: String], contentType: String?, route: StreamRoute,
                  configuration: RemoteProxyConfiguration) async throws -> RoutedStream {
         try Task.checkCancellation()
