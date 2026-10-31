@@ -50,6 +50,7 @@ import com.playbridge.player.data.PlaybackContext
 import com.playbridge.player.data.PlaybackTrackPreference
 import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.proxy.ReceiverStreamProxy
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
 import com.playbridge.player.ui.player.MediaPresentation
@@ -236,6 +237,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var externalSubtitleOverlayActive = false
     private val externalSubtitleStager by lazy { ExternalSubtitleStager(applicationContext) }
     private val stagedSubtitleFiles = linkedSetOf<File>()
+    private val pageProxyRouter = PageMediaProxyRouter()
+    private var itemPrepareJob: Job? = null
+    private var lateSubtitleRegisterJob: Job? = null
     private var subtitleStageJob: Job? = null
     private var pendingNativeSubtitleUri: String? = null
     private var pendingNativeSubtitleMode: SubtitleRenderingMode? = null
@@ -323,7 +327,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     dy = intent.getFloatExtra(ServerService.EXTRA_MOUSE_DY, 0f),
                 )
                 ServerService.ACTION_QUEUE_ADD -> playbackCoordinator.queueAdd(
-                    ServerService.drainPendingQueueItems(this@PlayerHostActivity),
+                    filterPendingQueueItems(
+                        ServerService.drainPendingQueueItems(this@PlayerHostActivity),
+                    ),
                 )
                 ServerService.ACTION_PLAYLIST_JUMP -> {
                     val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
@@ -451,7 +457,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // Register before draining to avoid a lost wake-up: phone library queue items can arrive
         // while the Activity is starting. If the broadcast preceded registration, the pending
         // store is drained here; if it followed registration, the receiver drains it first.
-        playbackCoordinator.queueAdd(ServerService.drainPendingQueueItems(this))
+        playbackCoordinator.queueAdd(
+            filterPendingQueueItems(ServerService.drainPendingQueueItems(this)),
+        )
         lifecycleScope.launch {
             ServerService.drainPendingQueueCommands().forEach { applyQueueCommand(it) }
         }
@@ -481,6 +489,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun setupControlsOverlay() {
         controlsViewModel.setEngine(controlsAdapter, rendererKind.name.lowercase(), this)
+        controlsViewModel.subtitleTargetResolver = ::resolveControlsSubtitleTarget
         controlsViewModel.setEndSegmentSkipHandler(::advanceAfterEndSegment)
         if (getSharedPreferences("browser_prefs", MODE_PRIVATE)
                 .getBoolean("loudness_enhancer", false)
@@ -662,6 +671,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         sessionId: Long,
     ) {
         failPendingLateSubtitleRequests()
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
         subtitleStageJob?.cancel()
         subtitleStageJob = null
         clearPendingNativeSubtitle()
@@ -686,6 +697,48 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     ) {
         if (url.isBlank()) return
         failPendingLateSubtitleRequests(exceptUrl = url)
+        val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: run {
+            completeLateSubtitleRequest(url, false)
+            return
+        }
+        if (item.isPageControlledMedia() && pageProxyRouter.resolveSubtitleFetch(url, null) == null) {
+            val lateResource = lateSubtitleResources[url]
+            val subHeaders = lateResource?.headers ?: item.headersForSubtitle(url)
+            lateSubtitleRegisterJob?.cancel()
+            lateSubtitleRegisterJob = lifecycleScope.launch {
+                val registered = pageProxyRouter.registerLateSubtitle(
+                    item = item,
+                    subtitleUrl = url,
+                    headers = subHeaders,
+                    contentType = null,
+                )
+                if (session?.sessionId != sessionId) return@launch
+                registered.onSuccess {
+                    val activeRenderer = rendererService ?: run {
+                        completeLateSubtitleRequest(url, false)
+                        return@launch
+                    }
+                    selectExternalSubtitleReady(url, activeRenderer, sessionId)
+                }.onFailure { error ->
+                    FileLogger.w(TAG, "Rejected webpage subtitle registration: ${error.message}")
+                    completeLateSubtitleRequest(url, false)
+                    Toast.makeText(
+                        this@PlayerHostActivity,
+                        "Unable to proxy webpage subtitle",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+            return
+        }
+        selectExternalSubtitleReady(url, renderer, sessionId)
+    }
+
+    private fun selectExternalSubtitleReady(
+        url: String,
+        renderer: IRendererService,
+        sessionId: Long,
+    ) {
         externalSubtitleUrls = (externalSubtitleUrls + url).distinct()
         currentExternalSubtitleUrl = url
         clearInitialSubtitleHandled()
@@ -695,6 +748,40 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         syncPlaybackContext()
         broadcastTracks()
     }
+
+    private fun resolveControlsSubtitleTarget(
+        canonicalUrl: String,
+        fallbackHeaders: Map<String, String>?,
+    ): PlayerControlsViewModel.SubtitleLoadTarget? {
+        val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
+            ?: return null
+        if (!item.isPageControlledMedia()) {
+            return PlayerControlsViewModel.SubtitleLoadTarget(
+                fetchUrl = canonicalUrl,
+                headers = fallbackHeaders,
+                trustedLocalProxyOrigin = null,
+            )
+        }
+        val resolved = pageProxyRouter.resolveSubtitleFetch(canonicalUrl, fallbackHeaders)
+            ?: return null
+        return PlayerControlsViewModel.SubtitleLoadTarget(
+            fetchUrl = resolved.fetchUrl,
+            headers = resolved.headers,
+            trustedLocalProxyOrigin = resolved.trustedLocalProxyOrigin,
+        )
+    }
+
+    private fun filterPendingQueueItems(items: List<PlayPayload>): List<PlayPayload> =
+        items.filter { item ->
+            pageProxyRouter.canAcceptItem(item).also { allowed ->
+                if (!allowed) {
+                    FileLogger.w(
+                        TAG,
+                        "Dropped queued webpage item because local proxy/policy rejected it",
+                    )
+                }
+            }
+        }
 
     private fun completeLateSubtitleRequest(url: String, ok: Boolean) {
         val request = pendingLateSubtitleRequests.remove(url) ?: return
@@ -765,11 +852,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val requestedMode = renderingMode
                 subtitleStageJob = lifecycleScope.launch {
                     try {
+                        val subTarget = if (item.isPageControlledMedia()) {
+                            pageProxyRouter.resolveSubtitleFetch(url, subtitleHeaders)
+                                ?: throw IllegalStateException(
+                                    "Webpage subtitle is not registered with local proxy",
+                                )
+                        } else {
+                            SubtitleFetchTarget(
+                                fetchUrl = url,
+                                headers = subtitleHeaders,
+                                trustedLocalProxyOrigin = null,
+                            )
+                        }
                         val file = externalSubtitleStager.stage(
-                            url,
-                            subtitleHeaders,
+                            subTarget.fetchUrl,
+                            subTarget.headers,
                             enforcePageNetworkPolicy = lateResource != null || item.isPageControlledMedia(),
                             allowedPrivateOrigins = item.allowed_private_origins,
+                            trustedLocalProxyOrigin = subTarget.trustedLocalProxyOrigin,
                         )
                         if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
                             externalSubtitleStager.delete(file)
@@ -792,20 +892,26 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         FileLogger.w(TAG, "Unable to stage external subtitle for built-in rendering")
                         if (requestedMode == SubtitleRenderingMode.AUTO &&
                             session?.sessionId == sessionId &&
-                            currentExternalSubtitleUrl == url
+                            currentExternalSubtitleUrl == url &&
+                            (!item.isPageControlledMedia() ||
+                                pageProxyRouter.resolveSubtitleFetch(url, subtitleHeaders) != null)
                         ) {
                             externalSubtitleOverlayActive = true
                             controlsViewModel.loadExternalSubtitle(
                                 url, subtitleHeaders, forceNetworkPolicy = lateResource != null,
                                 onResult = { completeLateSubtitleRequest(url, it) },
                             )
-                        } else if (requestedMode == SubtitleRenderingMode.BUILT_IN) {
+                        } else {
                             completeLateSubtitleRequest(url, false)
-                            Toast.makeText(
-                                this@PlayerHostActivity,
-                                "Unable to load subtitle with the built-in player",
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            if (requestedMode == SubtitleRenderingMode.BUILT_IN ||
+                                item.isPageControlledMedia()
+                            ) {
+                                Toast.makeText(
+                                    this@PlayerHostActivity,
+                                    "Unable to load subtitle with the built-in player",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
                         }
                     }
                 }
@@ -818,7 +924,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val pageControlled = playbackCoordinator.playlist
             .getOrNull(playbackCoordinator.index)
             ?.isPageControlledMedia() == true
-        if (!rendererAllowedForPageMedia(pageControlled, target)) {
+        if (!rendererAllowedForPageMedia(
+                pageControlled = pageControlled,
+                target = target,
+                proxyAvailable = pageProxyRouter.isProxyAvailable(),
+            )
+        ) {
             FileLogger.w(TAG, "Rejected renderer switch to $target for page-controlled media")
             return
         }
@@ -831,6 +942,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val oldSession = session
         requestedStartPositionMs = lastPositionMs.takeIf { it > 0L }
         pendingSeekTracker.clear()
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
         subtitleStageJob?.cancel()
         subtitleStageJob = null
         clearPendingNativeSubtitle()
@@ -870,8 +985,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         imageLoadFallback?.cancel()
         imageTimerJob = null
         cancelFailureFinish()
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
         subtitleStageJob?.cancel()
         subtitleStageJob = null
+        pageProxyRouter.close()
         progressManager.saveProgress()
         val currentSession = session
         if (currentSession != null) {
@@ -890,7 +1010,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.detach()
         stillWatchingController.dispose()
         ServerService.notifyContextIdle(this, rendererKind.engineId)
-        activeHostCount.decrementAndGet()
+        if (activeHostCount.decrementAndGet() <= 0) {
+            ReceiverStreamProxy.shutdownIfRunning()
+        }
         super.onDestroy()
     }
 
@@ -908,6 +1030,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         imageTimerJob = null
         imageTimerRunning = false
         cancelFailureFinish()
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
+        pageProxyRouter.clearActiveItem()
 
         val oldKind = rendererKind
         val oldSession = session
@@ -922,9 +1049,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
-        currentMediaKind = resolveMediaKind(playlist.items[playbackCoordinator.index])
+        val initialItem = playlist.items[playbackCoordinator.index]
+        currentMediaKind = resolveMediaKind(initialItem)
         setPresentation(
-            playlist.items[playbackCoordinator.index].takeIf { currentMediaKind != MediaKind.VIDEO },
+            initialItem.takeIf {
+                currentMediaKind != MediaKind.VIDEO && !initialItem.isPageControlledMedia()
+            },
         )
         session = sessionCoordinator.begin(
             if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else targetKind,
@@ -941,7 +1071,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
         )
         applySavedPlaybackSettings()
-        playbackCoordinator.queueAdd(ServerService.drainPendingQueueItems(this))
+        playbackCoordinator.queueAdd(
+            filterPendingQueueItems(ServerService.drainPendingQueueItems(this)),
+        )
         requestedStartPositionMs = requestIntent
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
             .takeIf { it > 0L }
@@ -1157,99 +1289,172 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun prepareRenderer(renderer: IRendererService) {
         val currentSession = session ?: return
-        if (preparedSessionId == currentSession.sessionId) return
+        if (preparedSessionId == currentSession.sessionId || itemPrepareJob?.isActive == true) {
+            return
+        }
         val payload = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
         if (payload == null) {
             handleRendererFailure("Host launch did not include a PlayPayload")
             return
         }
         currentMediaKind = resolveMediaKind(payload)
-        setPresentation(payload.takeIf { currentMediaKind != MediaKind.VIDEO })
-        if (currentMediaKind == MediaKind.IMAGE) {
-            configureProgress(payload)
-            startImagePresentation(payload, currentSession.sessionId)
+        if (payload.isPageControlledMedia() && !pageProxyRouter.canAcceptItem(payload)) {
+            FileLogger.w(TAG, "Refusing webpage media item because local proxy/policy rejected it")
+            handleRendererFailure(
+                message = "Local media proxy rejected webpage stream",
+                severity = ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+            )
             return
         }
-        if (surface == null) {
+        if (currentMediaKind != MediaKind.IMAGE && surface == null) {
             FileLogger.d(TAG, "Waiting for a fresh surface before preparing $rendererKind")
             return
         }
 
-        configureProgress(payload)
-        preparedSessionId = currentSession.sessionId
-        val externalUrl = currentExternalSubtitleUrl
-        val renderingMode = SubtitleRenderingMode.read(this)
-        val stageForInitialExoPrepare = rendererKind == RendererKind.EXO &&
-            externalUrl != null &&
-            renderingMode != SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
-
-        if (!stageForInitialExoPrepare) {
-            if (externalUrl != null && renderingMode == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY) {
-                markInitialSubtitleHandled(currentSession.sessionId, externalUrl)
+        val savedExternal = sessionPlaybackContext?.externalSubtitleUrl
+            ?.takeIf { restoreSavedExternalForCurrentItem }
+        itemPrepareJob = lifecycleScope.launch {
+            val preparedResult = pageProxyRouter.prepareItem(payload, savedExternal)
+            if (finishingSession || session?.sessionId != currentSession.sessionId) return@launch
+            val prepared = preparedResult.getOrElse { error ->
+                FileLogger.w(
+                    TAG,
+                    "Refusing webpage media playback without local proxy: ${error.message}",
+                )
+                handleRendererFailure(
+                    message = error.message ?: "Unable to start local media proxy for webpage media",
+                    severity = ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+                )
+                return@launch
             }
-            prepareRendererNow(renderer, payload, currentSession.sessionId)
-            return
-        }
-        val initialExternalUrl = checkNotNull(externalUrl)
-        val initialLateResource = lateSubtitleResources[initialExternalUrl]
+            controlsViewModel.trustedLocalSubtitleProxyOrigin = prepared.proxyOrigin
+            setPresentation(
+                prepared.presentationPayload().takeIf { currentMediaKind != MediaKind.VIDEO },
+            )
+            if (currentMediaKind == MediaKind.IMAGE) {
+                configureProgress(payload)
+                startImagePresentation(prepared.presentationPayload(), currentSession.sessionId)
+                return@launch
+            }
+            if (surface == null || rendererService?.asBinder() != renderer.asBinder()) {
+                return@launch
+            }
 
-        cancelStartupWatchdog()
-        subtitleStageJob?.cancel()
-        subtitleStageJob = lifecycleScope.launch {
-            try {
-                val file = externalSubtitleStager.stage(
-                    initialExternalUrl,
-                    initialLateResource?.headers ?: payload.headersForSubtitle(initialExternalUrl),
-                    enforcePageNetworkPolicy = initialLateResource != null || payload.isPageControlledMedia(),
-                    allowedPrivateOrigins = payload.allowed_private_origins,
-                )
-                if (session?.sessionId != currentSession.sessionId ||
-                    currentExternalSubtitleUrl != initialExternalUrl ||
-                    rendererKind != RendererKind.EXO ||
-                    rendererService?.asBinder() != renderer.asBinder()
-                ) {
-                    externalSubtitleStager.delete(file)
-                    if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
-                    return@launch
+            configureProgress(payload)
+            preparedSessionId = currentSession.sessionId
+            val enginePayload = prepared.enginePayload(rendererKind)
+            val trustedProxyOrigin = prepared.proxyOrigin
+            val externalUrl = currentExternalSubtitleUrl
+            val renderingMode = SubtitleRenderingMode.read(this@PlayerHostActivity)
+            if (payload.isPageControlledMedia() &&
+                externalUrl != null &&
+                renderingMode == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
+            ) {
+                externalSubtitleOverlayActive = true
+                controlsViewModel.loadExternalSubtitle(externalUrl, emptyMap())
+            }
+            val stageForInitialExoPrepare = rendererKind == RendererKind.EXO &&
+                externalUrl != null &&
+                renderingMode != SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
+
+            if (!stageForInitialExoPrepare) {
+                if (externalUrl != null && renderingMode == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY) {
+                    markInitialSubtitleHandled(currentSession.sessionId, externalUrl)
                 }
-                stagedSubtitleFiles += file
-                val stagedUri = externalSubtitleStager.uriFor(file)
-                pendingNativeSubtitleUri = stagedUri
-                pendingNativeSubtitleMode = renderingMode
-                markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
                 prepareRendererNow(
-                    renderer,
-                    payload,
-                    currentSession.sessionId,
-                    initialSubtitleUri = stagedUri,
-                    initialSubtitleLabel = initialLateResource?.label?.takeIf(String::isNotBlank)
-                        ?: externalSubtitleName(initialExternalUrl),
+                    renderer = renderer,
+                    payload = enginePayload,
+                    sessionId = currentSession.sessionId,
+                    trustedLocalProxyOrigin = trustedProxyOrigin,
                 )
-            } catch (error: CancellationException) {
-                if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
-                throw error
-            } catch (error: Exception) {
-                clearPendingNativeSubtitle()
-                markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
-                FileLogger.w(TAG, "Unable to stage subtitle before Exo playback")
-                if (renderingMode == SubtitleRenderingMode.AUTO &&
-                    session?.sessionId == currentSession.sessionId &&
-                    currentExternalSubtitleUrl == initialExternalUrl
-                ) {
-                    externalSubtitleOverlayActive = true
-                    controlsViewModel.loadExternalSubtitle(
-                        initialExternalUrl,
-                        initialLateResource?.headers ?: payload.headersForSubtitle(initialExternalUrl),
-                        forceNetworkPolicy = initialLateResource != null,
+                return@launch
+            }
+            val initialExternalUrl = checkNotNull(externalUrl)
+            val initialLateResource = lateSubtitleResources[initialExternalUrl]
+            val fallbackHeaders = initialLateResource?.headers
+                ?: payload.headersForSubtitle(initialExternalUrl)
+
+            cancelStartupWatchdog()
+            subtitleStageJob?.cancel()
+            subtitleStageJob = lifecycleScope.launch {
+                try {
+                    val subTarget = if (payload.isPageControlledMedia()) {
+                        prepared.resolveSubtitleFetch(initialExternalUrl, fallbackHeaders)
+                            ?: throw IllegalStateException(
+                                "Webpage subtitle is not registered with local proxy",
+                            )
+                    } else {
+                        SubtitleFetchTarget(
+                            fetchUrl = initialExternalUrl,
+                            headers = fallbackHeaders,
+                            trustedLocalProxyOrigin = null,
+                        )
+                    }
+                    val file = externalSubtitleStager.stage(
+                        subTarget.fetchUrl,
+                        subTarget.headers,
+                        enforcePageNetworkPolicy = initialLateResource != null || payload.isPageControlledMedia(),
+                        allowedPrivateOrigins = payload.allowed_private_origins,
+                        trustedLocalProxyOrigin = subTarget.trustedLocalProxyOrigin,
                     )
-                } else if (renderingMode == SubtitleRenderingMode.BUILT_IN) {
-                    Toast.makeText(
-                        this@PlayerHostActivity,
-                        "Unable to load subtitle with the built-in player",
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    if (session?.sessionId != currentSession.sessionId ||
+                        currentExternalSubtitleUrl != initialExternalUrl ||
+                        rendererKind != RendererKind.EXO ||
+                        rendererService?.asBinder() != renderer.asBinder()
+                    ) {
+                        externalSubtitleStager.delete(file)
+                        if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
+                        return@launch
+                    }
+                    stagedSubtitleFiles += file
+                    val stagedUri = externalSubtitleStager.uriFor(file)
+                    pendingNativeSubtitleUri = stagedUri
+                    pendingNativeSubtitleMode = renderingMode
+                    markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
+                    prepareRendererNow(
+                        renderer = renderer,
+                        payload = enginePayload,
+                        sessionId = currentSession.sessionId,
+                        initialSubtitleUri = stagedUri,
+                        initialSubtitleLabel = initialLateResource?.label?.takeIf(String::isNotBlank)
+                            ?: externalSubtitleName(initialExternalUrl),
+                        trustedLocalProxyOrigin = trustedProxyOrigin,
+                    )
+                } catch (error: CancellationException) {
+                    if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
+                    throw error
+                } catch (error: Exception) {
+                    clearPendingNativeSubtitle()
+                    markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
+                    FileLogger.w(TAG, "Unable to stage subtitle before Exo playback")
+                    if (renderingMode == SubtitleRenderingMode.AUTO &&
+                        session?.sessionId == currentSession.sessionId &&
+                        currentExternalSubtitleUrl == initialExternalUrl &&
+                        (!payload.isPageControlledMedia() ||
+                            prepared.resolveSubtitleFetch(initialExternalUrl, fallbackHeaders) != null)
+                    ) {
+                        externalSubtitleOverlayActive = true
+                        controlsViewModel.loadExternalSubtitle(
+                            initialExternalUrl,
+                            fallbackHeaders,
+                            forceNetworkPolicy = initialLateResource != null,
+                        )
+                    } else if (renderingMode == SubtitleRenderingMode.BUILT_IN ||
+                        payload.isPageControlledMedia()
+                    ) {
+                        Toast.makeText(
+                            this@PlayerHostActivity,
+                            "Unable to load subtitle with the built-in player",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    prepareRendererNow(
+                        renderer = renderer,
+                        payload = enginePayload,
+                        sessionId = currentSession.sessionId,
+                        trustedLocalProxyOrigin = trustedProxyOrigin,
+                    )
                 }
-                prepareRendererNow(renderer, payload, currentSession.sessionId)
             }
         }
     }
@@ -1342,6 +1547,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         sessionId: Long,
         initialSubtitleUri: String? = null,
         initialSubtitleLabel: String? = null,
+        trustedLocalProxyOrigin: String? = null,
     ) {
         if (session?.sessionId != sessionId || preparedSessionId != sessionId) return
         val rendererSurface = surface ?: run {
@@ -1350,6 +1556,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         val request = Bundle().apply {
             putString(RendererProtocol.KEY_PAYLOAD_JSON, encodePlayPayloadListJson(listOf(payload)))
+            trustedLocalProxyOrigin?.let {
+                putString(RendererProtocol.KEY_TRUSTED_LOCAL_PROXY_ORIGIN, it)
+            }
             initialSubtitleUri?.let {
                 putString(RendererProtocol.KEY_INITIAL_SUBTITLE_URI, it)
                 putString(RendererProtocol.KEY_INITIAL_SUBTITLE_LABEL, initialSubtitleLabel)
@@ -1796,13 +2005,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun updateControlsForCurrentItem(showPrePlay: Boolean = false) {
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
+        SubtitleCueLoader.clear()
         controlsViewModel.setTitle(item.title ?: "")
         val pageControlled = item.isPageControlledMedia()
-        controlsViewModel.setPlayerSwitchAllowed(!pageControlled)
+        controlsViewModel.setPlayerSwitchAllowed(!pageControlled || pageProxyRouter.isProxyAvailable())
         controlsViewModel.subtitleRequestHeaders = if (pageControlled) null else item.headers
-        controlsViewModel.subtitleRequestHeadersByUrl = item.subtitleHeadersByUrl()
+        controlsViewModel.subtitleRequestHeadersByUrl =
+            if (pageControlled) emptyMap() else item.subtitleHeadersByUrl()
         controlsViewModel.enforcePageSubtitleNetworkPolicy = pageControlled
         controlsViewModel.allowedPrivateSubtitleOrigins = item.allowed_private_origins
+        controlsViewModel.trustedLocalSubtitleProxyOrigin = pageProxyRouter.currentTrustedProxyOrigin()
         val shouldShowPrePlay = showPrePlay && item.visual_metadata != null
         controlsViewModel.setPrePlay(
             item.visual_metadata,
@@ -1834,7 +2046,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             (sessionPlaybackContext?.subtitleTrack != null ||
                 sessionPlaybackContext?.subtitlesDisabled == true)
         val externalUrl = currentExternalSubtitleUrl
-        if (externalUrl != null &&
+        if (!pageControlled &&
+            externalUrl != null &&
             SubtitleRenderingMode.read(this) == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
         ) {
             externalSubtitleOverlayActive = true
@@ -2038,12 +2251,21 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         val payload = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
         val outgoingSession = session
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
+        pageProxyRouter.clearActiveItem()
         imageTimerJob?.cancel()
         imageLoadFallback?.cancel()
         imageTimerJob = null
         imageTimerRunning = false
         currentMediaKind = resolveMediaKind(payload)
-        setPresentation(payload.takeIf { currentMediaKind != MediaKind.VIDEO })
+        setPresentation(
+            payload.takeIf {
+                currentMediaKind != MediaKind.VIDEO && !payload.isPageControlledMedia()
+            },
+        )
         if (currentMediaKind == MediaKind.IMAGE && outgoingSession != null) {
             runCatchingLogged(TAG, "Renderer detach before playlist item failed", ::logPlayerFailure) {
                 renderer.detachSurface(outgoingSession.sessionId)
@@ -2102,6 +2324,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         finishingSession = true
         broadcastWebhookTerminalStatus("stopped")
         failPendingLateSubtitleRequests()
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        lateSubtitleRegisterJob?.cancel()
+        lateSubtitleRegisterJob = null
+        pageProxyRouter.clearActiveItem()
         logPlaybackContextCheckpoint("finishPlaybackSession")
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
@@ -2175,7 +2402,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     message.payload.item?.let(::add)
                     addAll(message.payload.items)
                 }
-                playbackCoordinator.queueAdd(items, message.payload.if_playback_id)
+                if (items.any { !pageProxyRouter.canAcceptItem(it) }) {
+                    PlaybackCoordinator.MutationResult.InvalidCommand
+                } else {
+                    playbackCoordinator.queueAdd(items, message.payload.if_playback_id)
+                }
             }
             is com.playbridge.shared.protocol.IncomingMessage.PlaylistJump -> {
                 message.payload.item_id?.let {
@@ -2584,7 +2815,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ?.isPageControlledMedia() == true
         val fallback = failureReporter.fallbackOrReport(
             allowEngineFailover = allowEngineFailover,
-            fallback = fallbackRenderer(failedKind, pageControlled),
+            fallback = fallbackRenderer(
+                failed = failedKind,
+                pageControlled = pageControlled,
+                proxyAvailable = pageProxyRouter.isProxyAvailable(),
+            ),
             attemptedRenderers = attemptedRenderers,
             message = message,
             positionMs = lastPositionMs,
@@ -2595,6 +2830,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             broadcastStatus = { status -> ServerService.broadcastStatus(this, status) },
         )
         if (fallback == null) {
+            itemPrepareJob?.cancel()
+            itemPrepareJob = null
+            lateSubtitleRegisterJob?.cancel()
+            lateSubtitleRegisterJob = null
+            pageProxyRouter.clearActiveItem()
             if (message == PlaybackStallDetector.MESSAGE) {
                 controlsViewModel.showPlaybackTransition(PlaybackStallDetector.MESSAGE)
             } else {

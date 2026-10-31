@@ -49,6 +49,110 @@ object MediaNetworkPolicy {
         return normalizedOrigin(a) == normalizedOrigin(b)
     }
 
+    /**
+     * Normalizes an embedded local stream-proxy origin (`http://127.0.0.1:<port>`).
+     * Rejects non-HTTP schemes, non-`127.0.0.1` hosts, implicit/invalid ports, paths, and queries.
+     */
+    fun normalizeTrustedLocalProxyOrigin(origin: String?): String? {
+        val raw = origin?.takeIf(String::isNotBlank) ?: return null
+        val uri = parseHttpUri(raw) ?: return null
+        if (!uri.scheme.equals("http", ignoreCase = true) ||
+            uri.host != "127.0.0.1" ||
+            uri.port !in 1..65535 ||
+            uri.path !in listOf("", "/") ||
+            uri.query != null ||
+            uri.fragment != null
+        ) {
+            return null
+        }
+        return "http://127.0.0.1:${uri.port}"
+    }
+
+    /**
+     * Returns true only for stream/segment URLs served by the trusted local proxy instance
+     * (`http://127.0.0.1:<port>/s/...` or `/proxy/...`), never management routes or other ports.
+     */
+    fun isTrustedLocalProxyUrl(value: String, trustedLocalProxyOrigin: String?): Boolean {
+        val trusted = normalizeTrustedLocalProxyOrigin(trustedLocalProxyOrigin) ?: return false
+        val uri = parseHttpUri(value) ?: return false
+        if (normalizedOrigin(uri) != trusted) return false
+        val path = uri.path ?: return false
+        return path.startsWith("/s/") || path.startsWith("/proxy/")
+    }
+
+    /**
+     * DNS-free validation for registering a page-supplied URL with the local proxy.
+     *
+     * Rejects loopback/link-local/forbidden IP literals, non-canonical numeric IPv4 forms,
+     * ungranted RFC1918/CGNAT/ULA IP literals, and forbidden IP literals inside [allowedPrivateOrigins].
+     */
+    fun isAllowedRegistrationUrlSyntax(
+        value: String,
+        allowedPrivateOrigins: Collection<String>,
+    ): Boolean {
+        if (!isAllowedUrlSyntax(value, allowedPrivateOrigins)) return false
+        for (origin in allowedPrivateOrigins) {
+            val originHost = parseHttpUri(origin)?.host ?: return false
+            if (isNonCanonicalNumericHost(originHost)) return false
+            val literal = parseIpLiteralWithoutDns(originHost)
+            if (literal != null && classifyAddress(literal) == AddressClass.FORBIDDEN) {
+                return false
+            }
+        }
+        val uri = parseHttpUri(value) ?: return false
+        val host = uri.host ?: return false
+        if (isNonCanonicalNumericHost(host)) return false
+        val literal = parseIpLiteralWithoutDns(host) ?: return true
+        return areAllowedAddresses(value, listOf(literal), allowedPrivateOrigins)
+    }
+
+    /**
+     * Syntax check for second-layer player/subtitle loaders that permits either a URL owned by
+     * [trustedLocalProxyOrigin] or a valid page-cast destination under [allowedPrivateOrigins].
+     */
+    fun isAllowedUrlSyntaxOrTrustedProxy(
+        value: String,
+        allowedPrivateOrigins: Collection<String>,
+        trustedLocalProxyOrigin: String?,
+    ): Boolean = isTrustedLocalProxyUrl(value, trustedLocalProxyOrigin) ||
+        isAllowedRegistrationUrlSyntax(value, allowedPrivateOrigins)
+
+    /**
+     * DNS check for second-layer player/subtitle loaders. Permits `127.0.0.1` resolution only when
+     * a valid [trustedLocalProxyOrigin] is configured; the connection interceptor still enforces
+     * exact port and `/s/` or `/proxy/` path before any request bytes are sent.
+     */
+    fun areAllowedAddressesForHostOrTrustedProxy(
+        host: String,
+        addresses: List<InetAddress>,
+        allowedPrivateOrigins: Collection<String>,
+        trustedLocalProxyOrigin: String?,
+    ): Boolean {
+        if (normalizeTrustedLocalProxyOrigin(trustedLocalProxyOrigin) != null && host == "127.0.0.1") {
+            return addresses.isNotEmpty() && addresses.all {
+                it.isLoopbackAddress && it.hostAddress == "127.0.0.1"
+            }
+        }
+        return areAllowedAddressesForHost(host, addresses, allowedPrivateOrigins)
+    }
+
+    /**
+     * Connected-socket check for second-layer player/subtitle loaders.
+     */
+    fun areAllowedConnectionOrTrustedProxy(
+        targetUrl: String,
+        peerAddress: InetAddress?,
+        allowedPrivateOrigins: Collection<String>,
+        trustedLocalProxyOrigin: String?,
+    ): Boolean {
+        val peer = peerAddress ?: return false
+        if (isTrustedLocalProxyUrl(targetUrl, trustedLocalProxyOrigin)) {
+            return peer.isLoopbackAddress && peer.hostAddress == "127.0.0.1"
+        }
+        return isAllowedRegistrationUrlSyntax(targetUrl, allowedPrivateOrigins) &&
+            areAllowedAddresses(targetUrl, listOf(peer), allowedPrivateOrigins)
+    }
+
     /** Resolves immediately before use so DNS changes cannot bypass the page-cast grant. */
     fun isAllowedDestination(value: String, allowedPrivateOrigins: Collection<String>): Boolean {
         val uri = parseHttpUri(value) ?: return false
@@ -150,6 +254,38 @@ object MediaNetworkPolicy {
 
     private fun isLanHostname(host: String): Boolean =
         isLoopbackHostname(host) || host.endsWith(".local", ignoreCase = true)
+
+    private fun isNonCanonicalNumericHost(host: String): Boolean {
+        if (host.startsWith("[") && host.endsWith("]")) return false
+        val looksNumericOrHex = host.all { it.isDigit() || it == '.' } ||
+            host.startsWith("0x", ignoreCase = true) ||
+            host.split('.').any { part -> part.startsWith("0x", ignoreCase = true) }
+        if (!looksNumericOrHex) return false
+        return parseCanonicalIpv4Literal(host) == null
+    }
+
+    private fun parseCanonicalIpv4Literal(host: String): InetAddress? {
+        val parts = host.split('.')
+        if (parts.size != 4) return null
+        val bytes = ByteArray(4)
+        for (i in 0 until 4) {
+            val part = parts[i]
+            if (part.isEmpty() || part.length > 3 || !part.all(Char::isDigit)) return null
+            if (part.length > 1 && part.startsWith('0')) return null
+            val octet = part.toIntOrNull() ?: return null
+            if (octet !in 0..255) return null
+            bytes[i] = octet.toByte()
+        }
+        return InetAddress.getByAddress(bytes)
+    }
+
+    private fun parseIpLiteralWithoutDns(host: String): InetAddress? {
+        if (host.startsWith("[") && host.endsWith("]")) {
+            // Bracketed IPv6 literals are parsed by InetAddress without invoking DNS.
+            return runCatching { InetAddress.getByName(host) }.getOrNull()
+        }
+        return parseCanonicalIpv4Literal(host)
+    }
 
     private fun classifyAddress(address: InetAddress): AddressClass {
         if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||

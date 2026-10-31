@@ -43,6 +43,7 @@ class SubtitleManager(
         headers: Map<String, String>? = null,
         enforcePageNetworkPolicy: Boolean = false,
         allowedPrivateOrigins: List<String> = emptyList(),
+        trustedLocalProxyOrigin: String? = null,
         onResult: ((Boolean) -> Unit)? = null,
     ) {
         Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
@@ -59,6 +60,7 @@ class SubtitleManager(
                     headers,
                     enforcePageNetworkPolicy,
                     allowedPrivateOrigins,
+                    trustedLocalProxyOrigin,
                 )
                 val content = SubtitleParser.decode(downloaded.bytes)
                 val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT
