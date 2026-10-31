@@ -1,12 +1,16 @@
 name: Stream Proxy Build & Publish
 
+# Versioned images come only from release tags. A push to main publishes `edge`
+# (plus its commit SHA) and never touches `latest` or a version tag (#487).
 on:
   push:
     branches: [ "main" ]
+    # Path filters apply to branch pushes only; every release tag is built.
     paths:
       - 'stream-proxy-rust/**'
       - 'cast/net-policy/**'
       - '.github/workflows/stream_proxy_build.yml'
+    tags: [ "stream-proxy-v*" ]
   workflow_dispatch:
 
 env:
@@ -36,33 +40,50 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version
-        id: version
+      - name: Choose image tags
+        id: release
         shell: bash
         run: |
           VERSION=$(grep '^version =' stream-proxy-rust/Cargo.toml | cut -d '"' -f2 | tr -d '[:space:]')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check tag
-        id: check_tag
-        shell: bash
-        run: |
-          if git rev-parse "stream-proxy-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "skipped=true" >> $GITHUB_OUTPUT
-            echo "⏭️ stream-proxy-v${{ steps.version.outputs.version }} already exists, skipping."
+          if [[ "$GITHUB_REF" == refs/tags/stream-proxy-v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/stream-proxy-v}"
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "::error::Tag stream-proxy-v$TAG_VERSION does not match stream-proxy-rust/Cargo.toml version $VERSION."
+              exit 1
+            fi
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::stream-proxy-v$TAG_VERSION must point at a commit on main."
+              exit 1
+            fi
+            {
+              echo "tags<<EOF"
+              echo "type=raw,value=$VERSION"
+              echo "type=raw,value=latest"
+              echo "type=sha,format=long"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "Publishing release $VERSION and latest."
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            {
+              echo "tags<<EOF"
+              echo "type=raw,value=edge"
+              echo "type=sha,format=long"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "Publishing edge from main (Cargo.toml version $VERSION is not published here)."
           else
-            echo "skipped=false" >> $GITHUB_OUTPUT
+            echo "::error::Run this workflow from main or a stream-proxy-v* tag."
+            exit 1
           fi
 
       - name: Set up QEMU for multi-arch builds
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to the Container registry
-        if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -71,17 +92,12 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.version.outputs.version }}
-            type=sha,format=long
+          tags: ${{ steps.release.outputs.tags }}
 
       - name: Build and push Docker image
-        if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
