@@ -2,7 +2,7 @@ name: playbridge_desktop
 license: MPL-2.0
 description: "PlayBridge desktop receiver — accepts cast commands from the phone and plays via libmpv."
 publish_to: 'none'
-version: 0.15.1+33
+version: 0.16.0+34
 
 environment:
   sdk: ^3.6.0
