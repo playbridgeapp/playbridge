@@ -47,14 +47,14 @@ test("site keys use the normalized hostname of web pages", () => {
   assert.equal(siteKeyFromUrl("not a URL"), null);
 });
 
-test("overlay preferences default to globally enabled and top right", async () => {
+test("the experimental overlay defaults to off, at the top right", async () => {
   const { storage } = memoryStorage();
   assert.deepEqual(
     await getVideoCastOverlayPreferences(storage, "video.example"),
     {
-      globalEnabled: true,
+      globalEnabled: false,
       siteEnabled: true,
-      enabled: true,
+      enabled: false,
       position: VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
       siteKey: "video.example",
       hasSiteOverride: false,
