@@ -9,7 +9,7 @@ import Libmpv
 struct MPVPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
-    let subtitles: [String]?
+    let subtitles: [ItemSubtitle]?
     let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let mediaIdentity: Int
@@ -144,7 +144,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: Configuration (set by representable before viewDidLoad)
     var url: URL?
     var headers: [String: String]?
-    var subtitles: [String]?
+    var subtitles: [ItemSubtitle]?
     var initialTime: Double = 0.0
     var mediaIdentity = 0
     var skipMetadata = SkipSegmentMetadata()
@@ -227,11 +227,13 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private var mpv: OpaquePointer?
     private let mpvQueue = DispatchQueue(label: "mpv.playbridge.tvos", qos: .userInitiated)
     private var isMpvStopped = false
-    private var pendingExternalSubtitles: [String] = []
+    private var pendingExternalSubtitles: [ItemSubtitle] = []
     private var externalSubtitleCatalog = ExternalSubtitleCatalog(urls: [])
     private var lateSubtitleDownloads: [UUID: ScopedSubtitleDownload] = [:]
     private var lateSubtitleFiles: [URL] = []
     private var lateSubtitleSelectionID: UUID?
+    /// Downloaded subtitle file path → the catalog URL it came from, so the picker hides it once loaded.
+    private var downloadedSubtitleSources: [String: String] = [:]
     /// Opaque pointer to a +1-retained `self` handed to mpv's wakeup callback. Keeping self
     /// alive while the callback is installed means the callback never forms a weak reference
     /// to a deallocating object. Balanced (released) once in `teardown()`.
@@ -332,7 +334,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.currentTime = initialTime
         playbackState.prebuffering = isPreBuffering
         playbackState.isLooping = initialLoop
-        externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+        externalSubtitleCatalog = ExternalSubtitleCatalog(subtitles: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(openInfoPanelFromSwipe))
@@ -723,7 +725,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     /// Swap in the next item on the live mpv core (episode advance). All per-item
     /// state is reset; the handle, render context, and demuxer caches survive.
-    func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
+    func loadNewItem(url: URL, headers: [String: String]?, subtitles: [ItemSubtitle]?,
                      initialTime: Double, title: String?) {
         guard !isMpvStopped else { return }
         discardTouchScrub()
@@ -732,6 +734,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         lateSubtitleSelectionID = nil
         let oldSubtitleFiles = lateSubtitleFiles
         lateSubtitleFiles.removeAll()
+        downloadedSubtitleSources.removeAll()
         debugLogNetworkRequest("MPV playback", url: url, headers: headers)
         self.url = url
         self.headers = headers
@@ -757,7 +760,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.userPaused = false
         playbackState.audioTracks = []
         playbackState.subtitleTracks = []
-        externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+        externalSubtitleCatalog = ExternalSubtitleCatalog(subtitles: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
 
         clearFailure()
@@ -955,7 +958,15 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         // Attach only the sender's first/preferred external subtitle. Others remain in
         // the picker and load only on selection, avoiding many simultaneous fetches.
         if let firstSub = pendingExternalSubtitles.first {
-            mpvCommandAsync(handle, ["sub-add", firstSub, "auto"])
+            if firstSub.headers != nil {
+                // A subtitle resource sends its own headers, so it is downloaded first.
+                DispatchQueue.main.async { [weak self] in
+                    self?.addDownloadedSubtitle(Self.resource(for: firstSub), flag: "auto") { _ in }
+                }
+            } else {
+                // Without a title mpv names the track after the file; keep the sender's label.
+                mpvCommandAsync(handle, ["sub-add", firstSub.url, "auto"] + (firstSub.label.map { [$0] } ?? []))
+            }
         }
         pendingExternalSubtitles = []
     }
@@ -1165,7 +1176,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             guard let self, !self.isMpvStopped, self.mediaIdentity == itemIdentity else { return }
             self.playbackState.audioTracks = audioTracks
             self.playbackState.subtitleTracks = subtitleTracks
-            self.playbackState.externalSubtitleTracks = self.externalSubtitleCatalog.unloadedTracks(excluding: loadedExternalURLs)
+            let loadedSources = loadedExternalURLs.compactMap { self.downloadedSubtitleSources[$0] }
+            self.playbackState.externalSubtitleTracks = self.externalSubtitleCatalog.unloadedTracks(
+                excluding: loadedExternalURLs.union(loadedSources))
             self.playbackState.currentAudioIndex = Int(currentAid)
             self.playbackState.currentSubtitleIndex = Int(currentSid)
 
@@ -2113,7 +2126,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         onBroadcast?([
             "type": "tracks",
             "audio": encode(playbackState.audioTracks, selected: playbackState.currentAudioIndex),
-            "subtitle": encode(playbackState.subtitleTracks, selected: playbackState.currentSubtitleIndex),
+            // Unloaded sender subtitles too, so the phone can pick one before mpv has fetched it.
+            "subtitle": encode(playbackState.subtitleTracks, selected: playbackState.currentSubtitleIndex)
+                + encode(playbackState.externalSubtitleTracks, selected: playbackState.currentSubtitleIndex),
         ])
     }
 
@@ -2140,57 +2155,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         }
         if cmd == "add_subtitle" {
             guard let resource = note.userInfo?["subtitleResource"] as? Playbridge_SubtitleResource,
-                  let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void),
-                  !isMpvStopped, mpv != nil else {
+                  let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void) else {
                 (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
                 return
             }
-            lateSubtitleDownloads.values.forEach { $0.cancel() }
-            lateSubtitleDownloads.removeAll()
-            let id = UUID()
-            lateSubtitleSelectionID = id
-            let download = ScopedSubtitleDownload(resource: resource)
-            lateSubtitleDownloads[id] = download
-            download.start { [weak self] result in
-                guard let self else { completion(false); return }
-                guard self.lateSubtitleDownloads.removeValue(forKey: id) != nil else {
-                    if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
-                    completion(false)
-                    return
-                }
-                guard !self.isMpvStopped, let handle = self.mpv else {
-                    if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
-                    completion(false)
-                    return
-                }
-                switch result {
-                case .failure: completion(false)
-                case .success(let file):
-                    self.mpvQueue.async { [weak self] in
-                        guard let self, self.mpv == handle,
-                              self.lateSubtitleSelectionID == id else {
-                            try? FileManager.default.removeItem(at: file)
-                            DispatchQueue.main.async { completion(false) }
-                            return
-                        }
-                        let label = resource.hasLabel && !resource.label.isEmpty
-                            ? resource.label : "External subtitle"
-                        let ok = self.mpvCommand(handle, ["sub-add", file.path, "select", label]) >= 0
-                        if ok { self.updateTracks() }
-                        DispatchQueue.main.async {
-                            guard self.lateSubtitleSelectionID == id else {
-                                if ok { self.lateSubtitleFiles.append(file) }
-                                else { try? FileManager.default.removeItem(at: file) }
-                                completion(false)
-                                return
-                            }
-                            if ok { self.lateSubtitleFiles.append(file) }
-                            else { try? FileManager.default.removeItem(at: file) }
-                            completion(ok)
-                        }
-                    }
-                }
-            }
+            addDownloadedSubtitle(resource, flag: "select", completion: completion)
             return
         }
         if cmd == "loop_on" || cmd == "loop_off" {
@@ -2350,7 +2319,77 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         return false
     }
 
+    /// Downloads a subtitle with its own request headers, then hands mpv the local file.
+    private func addDownloadedSubtitle(_ resource: Playbridge_SubtitleResource, flag: String,
+                                       completion: @escaping (Bool) -> Void) {
+        guard !isMpvStopped, mpv != nil else { completion(false); return }
+        lateSubtitleDownloads.values.forEach { $0.cancel() }
+        lateSubtitleDownloads.removeAll()
+        let id = UUID()
+        lateSubtitleSelectionID = id
+        let download = ScopedSubtitleDownload(resource: resource)
+        lateSubtitleDownloads[id] = download
+        download.start { [weak self] result in
+            guard let self else { completion(false); return }
+            guard self.lateSubtitleDownloads.removeValue(forKey: id) != nil else {
+                if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                completion(false)
+                return
+            }
+            guard !self.isMpvStopped, let handle = self.mpv else {
+                if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                completion(false)
+                return
+            }
+            switch result {
+            case .failure: completion(false)
+            case .success(let file):
+                // Recorded before mpv lists the track, so the picker never shows it twice.
+                self.downloadedSubtitleSources[file.path] = resource.url
+                self.mpvQueue.async { [weak self] in
+                    guard let self, self.mpv == handle,
+                          self.lateSubtitleSelectionID == id else {
+                        try? FileManager.default.removeItem(at: file)
+                        DispatchQueue.main.async { completion(false) }
+                        return
+                    }
+                    let label = resource.hasLabel && !resource.label.isEmpty
+                        ? resource.label : "External subtitle"
+                    let ok = self.mpvCommand(handle, ["sub-add", file.path, flag, label]) >= 0
+                    if ok { self.updateTracks() }
+                    DispatchQueue.main.async {
+                        guard self.lateSubtitleSelectionID == id else {
+                            if ok { self.lateSubtitleFiles.append(file) }
+                            else { try? FileManager.default.removeItem(at: file) }
+                            completion(false)
+                            return
+                        }
+                        if ok { self.lateSubtitleFiles.append(file) }
+                        else { try? FileManager.default.removeItem(at: file) }
+                        completion(ok)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func resource(for subtitle: ItemSubtitle) -> Playbridge_SubtitleResource {
+        var resource = Playbridge_SubtitleResource()
+        resource.url = subtitle.url
+        resource.headers = subtitle.headers ?? [:]
+        if let label = subtitle.label { resource.label = label }
+        return resource
+    }
+
     private func selectSubtitleTrack(_ trackId: Int) {
+        if let option = externalSubtitleCatalog.option(for: trackId), let headers = option.headers {
+            addDownloadedSubtitle(
+                Self.resource(for: ItemSubtitle(url: option.url, headers: headers, label: option.name)),
+                flag: "select") { _ in }
+            TrackPreferences.shared.subtitlesOff = false
+            TrackPreferences.shared.subtitleName = option.name
+            return
+        }
         if let option = externalSubtitleCatalog.option(for: trackId) {
             // `cached` selects an existing file if the user taps again while loading.
             // The track-list observer replaces this menu entry once loading succeeds.
@@ -2430,6 +2469,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 setPropertyAsync("sid", value: "no")
                 playbackState.currentSubtitleIndex = -1
                 recordSubtitlePreference(id: -1)
+            } else if let external = Int(id), externalSubtitleCatalog.option(for: external) != nil {
+                selectSubtitleTrack(external)
             } else {
                 setPropertyAsync("sid", value: id)
                 if let i = Int(id) {

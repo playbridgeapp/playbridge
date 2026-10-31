@@ -2469,9 +2469,9 @@ private func pageMediaRoutingChecks() {
         assert(!item.isPageControlled)
         guard case .direct = router.state(for: item) else { fatalError("cast-sheet state") }
         let media = try! blocking { try await router.route(item) }.get()
-        assert(!media.isProxied && media.url == original && media.subtitles == ["https://example.com/en.vtt"])
+        assert(!media.isProxied && media.url == original && media.subtitles == [ItemSubtitle(url: "https://example.com/en.vtt")])
         let playable = router.state(for: item).playable(url: original, headers: ["Authorization": "Bearer synthetic"],
-                                                        subtitles: ["https://example.com/en.vtt"])
+                                                        subtitles: [ItemSubtitle(url: "https://example.com/en.vtt")])
         assert(playable?.url == original && playable?.headers?["Authorization"] == "Bearer synthetic")
         assert((try? blocking { try await router.preflight(item) }.get()) != nil && proxy.starts == 0)
         let late = try! blocking { try await router.lateSubtitle(url: "http://192.0.2.9/en.vtt", headers: [:], for: item) }.get()
@@ -2504,19 +2504,50 @@ private func pageMediaRoutingChecks() {
         assert(first.headers["Authorization"] == "Bearer synthetic" && first.headers["Cookie"] == "a=b")
         assert(first.headers["X-Custom"] == nil && first.headers["user-agent"] == "Synthetic/1.0")
         // Subtitles: the refused one and the file URL are dropped; none carry credentials.
-        assert(media.subtitles.count == 2 && media.subtitles.allSatisfy { $0.hasPrefix("http://127.0.0.1:") })
+        assert(media.subtitles.count == 2 && media.subtitles.allSatisfy { $0.url.hasPrefix("http://127.0.0.1:") && $0.headers == nil })
         let subtitleRegistrations = proxy.registrations.dropFirst()
         assert(subtitleRegistrations.map(\.url) == ["https://example.com/en.vtt", "http://192.168.1.20:8080/fr.vtt"])
         assert(subtitleRegistrations.allSatisfy { $0.headers["Authorization"] == nil && $0.headers["Cookie"] == nil })
         assert(subtitleRegistrations.allSatisfy { $0.origins == ["http://192.168.1.20:8080"] })
         assert(subtitleRegistrations.contains { $0.headers["user-agent"] == "Synthetic/1.0" })
-        let playable = router.state(for: item).playable(url: original, headers: item.headers, subtitles: item.subtitles)
+        let playable = router.state(for: item).playable(url: original, headers: item.headers, subtitles: item.allSubtitles)
         assert(playable?.url == media.url && playable?.headers == nil && playable?.subtitles?.count == 2)
         // The same item routes once, even for concurrent callers.
         let before = proxy.registrations.count
         _ = blocking { try await router.route(item) }
         assert(proxy.registrations.count == before)
     }
+    // Subtitle resources: a page item registers each with its own (filtered) headers and keeps
+    // its label; a URL sent both ways is registered once, with the resource's details.
+    let resourceProxy = FakeProxy()
+    resourceProxy.refused = ["https://example.com/refused.vtt"]
+    let resourceRouter = PageMediaRouter(proxy: resourceProxy)
+    var withResources = source("page_cast", headers: ["Cookie": "media=1"],
+                               subtitles: ["https://example.com/en.vtt"])
+    withResources.subtitleResources = [
+        ItemSubtitle(url: "https://example.com/en.vtt", headers: ["Referer": "https://example.com/", "X-Custom": "dropped"],
+                     label: "English"),
+        ItemSubtitle(url: "https://subs.example.net/fr.vtt", headers: ["Cookie": "subs=1"], label: "Français"),
+        ItemSubtitle(url: "https://example.com/refused.vtt", headers: [:], label: "Refused"),
+    ]
+    let routedResources = try! blocking { try await resourceRouter.route(withResources) }.get()
+    let resourceRegistrations = Array(resourceProxy.registrations.dropFirst())
+    assert(resourceRegistrations.map(\.url) == ["https://example.com/en.vtt", "https://subs.example.net/fr.vtt"])
+    assert(resourceRegistrations[0].headers == ["Referer": "https://example.com/"])
+    assert(resourceRegistrations[1].headers == ["Cookie": "subs=1"], "a resource sends its own headers, not the media's")
+    assert(routedResources.subtitles.map(\.label) == ["English", "Français"])
+    assert(routedResources.subtitles.allSatisfy { $0.url.hasPrefix("http://127.0.0.1:") && $0.headers == nil })
+    // Cast-sheet items keep resources direct, with their headers and labels.
+    var castSheetResources = withResources
+    castSheetResources.detectedBy = "cast_sheet"
+    let direct = try! blocking { try await PageMediaRouter(proxy: FakeProxy()).route(castSheetResources) }.get()
+    assert(direct.subtitles.map(\.url) == ["https://example.com/en.vtt", "https://subs.example.net/fr.vtt",
+                                           "https://example.com/refused.vtt"])
+    assert(direct.subtitles[1].headers == ["Cookie": "subs=1"] && direct.subtitles[0].label == "English")
+    let labelled = ExternalSubtitleCatalog(subtitles: direct.subtitles + [ItemSubtitle(url: "https://example.com/plain.vtt")])
+    assert(labelled.options.map(\.name) == ["English", "Français", "Refused", "External subtitle 4"])
+    assert(labelled.options[1].headers == ["Cookie": "subs=1"] && labelled.options[3].headers == nil)
+
     let concurrent = FakeProxy()
     let concurrentRouter = PageMediaRouter(proxy: concurrent)
     let racing = source("page_cast")
