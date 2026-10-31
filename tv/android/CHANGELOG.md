@@ -3,10 +3,74 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## Player [0.16.0] — 2026-10-31 (versionCode 232)
+
+> **Install this before GeckoView Plugin 0.16.0.** The new plugin only accepts commands from a player that holds the new browser-control permission; the older plugin keeps working with this player. The phone's matching controls (player Home, Loop switch, browser fullscreen, chapters on the seek bar, failure reasons, live remote updates) need PlayBridge Phone 0.16.0.
+
+### Added
+- **Website casts through a built-in proxy**: Video, subtitles and images a website sends (page casts and linked pages) now play through a proxy inside the TV app. It only reaches public addresses and the local-network addresses the website was explicitly allowed, never the TV itself. Videos you pick in the phone's cast sheet still play directly.
+- **mpv for website casts**: Website casts can now play in mpv as well as ExoPlayer, because the proxy applies the same network rules to both.
+- **Chapters**: Chapter gaps, intro/credits bands and the current chapter on the seek bar, a Chapters button and picker, and Channel Up/Down, Page Up/Down and Media Skip keys to jump between chapters (they seek ±10 s when there are none). D-pad Up/Down still control volume.
+- **Timeline for phones**: The player sends its buffered position, mpv chapters and skip segments, so the phone's seek bar shows them. The TV's own seek bar shows the real buffered position.
+- **Volume level**: The player reports the TV's volume level and mute state to connected phones.
+- **Player Home**: Home from the phone remote finishes playback, saves progress and returns the TV to its idle screen, not the system launcher.
+- **Loop state**: The player reports whether looping is on, so the phone's Loop switch shows the real state.
+- **Browser fullscreen**: Both TV browsers report fullscreen on enter and exit, including exits with the TV's Back button, so the phone's fullscreen control follows.
+- **Receiver capabilities**: The player tells phones which remote keys, player settings, browser controls and volume it supports and which engine (ExoPlayer, mpv, WebView or GeckoView) is active, and pushes an update when that changes, such as when the GeckoView plugin is installed or removed.
+- **GeckoView zoom**: Pinch on the phone touchpad zooms pages in the GeckoView browser.
+- **Playback failure reason**: When the player gives up on a video after trying every engine, it tells the phone why in a fixed, safe sentence ("The media couldn't be loaded (HTTP 403)"). URLs, headers and raw error text are never sent.
+
+### Changed
+- **Fullscreen video in frames**: Fullscreen video inside embedded frames keeps the site's own player controls.
+- **Browser typing**: Text and Enter from the phone reach the focused field in both TV browsers, including search fields inside embedded frames and in native fullscreen.
+- **Browser zoom**: Both TV browsers zoom smoothly with the phone's pinch, centred on the cursor, between half and three times the page size. Zoom resets when the page changes.
+- **Subtitle names**: Subtitles sent with a video use the label the sender gave them instead of the end of their link.
+- **Skip segments**: TheIntroDB lookups use API v4, keep saved custom API URLs, and keep intro/recap ranges that start at the beginning. Skip-segment requests identify the app version.
 
 ### Fixed
-- **TheIntroDB skip segments**: Use API v4 for movie and episode lookups, retain saved custom/versioned API URLs, and handle intro/recap ranges starting at the beginning. (#379)
+- **Stalled playback**: A video that keeps buffering without progress fails over or reports a failure after 30 seconds (45 seconds mid-play) instead of spinning.
+- **mpv failures**: mpv load failures are reported straight away instead of after the 60-second open timeout.
+- **Error messages**: Failures use fixed sentences for unsupported formats, link (HTTP) errors, network errors and stalls.
+- **Subtitle delay direction**: A positive subtitle delay now shows subtitles later in ExoPlayer, matching mpv. Delays saved under ExoPlayer in history now apply in the other direction.
+- **Website casts with a blocked subtitle**: A subtitle from an address the website wasn't allowed is dropped and the video plays without it, instead of the whole video being refused.
+- **Subtitles you add from the phone**: A subtitle added during a website cast, such as a file served by the phone, loads instead of being refused.
+- **GeckoView browser on the phone**: The GeckoView browser is reported as "browser", so the phone shows the browser remote, title and scrubber instead of "Nothing playing".
+- **Low-memory TVs**: While a browser is open, the preloaded mpv/ExoPlayer renderers are released instead of restarted, so Android doesn't kill the phone connection first.
+- **Connection recovery**: If the player restarts while the GeckoView browser is on screen, phones reconnect straight away and remote and touchpad input reach the browser again.
+- **GeckoView video status**: The plugin's playback status reaches the phone while the GeckoView browser is open.
+- **Browser fullscreen from the phone**: Fullscreen and restore work repeatedly without clicking the video on the TV first. If a site blocks real fullscreen, the video fills the screen instead.
+- **Scrolling in the browser**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open or control the GeckoView plugin or send it status, through a new signature permission and a protected bound service.
+- **Logs**: URLs in browser and player logs are redacted, header values aren't logged, and media titles are no longer kept in the persisted queue log.
+
+## GeckoView Plugin [0.16.0] — 2026-10-31 (versionCode 213)
+
+> **Requires TV Player 0.16.0 or later.** This plugin only accepts commands from a player that holds the new browser-control permission. With an older player, GeckoView mode can't be opened or controlled. Its version jumps from 0.3.4 to the 0.16.0 release train.
+
+### Added
+- **Video controls**: Play/pause, seek, switch video source, unmute and forward from the phone remote, D-pad control of the active video (including in fullscreen), on-screen feedback, automatic unmute of muted autoplay, and the title and scrubber on the phone. Works for videos in the page and in cross-origin player frames, using the same controller as the built-in WebView browser.
+- **Fullscreen typing**: Text and Enter from the phone reach the focused field in native fullscreen, including search fields inside embedded frames.
+- **Page zoom**: Pinch on the phone touchpad zooms pages smoothly around the TV cursor, between half and three times the page size. Zoom resets when the page changes.
+
+### Changed
+- **Player connection**: A direct, protected connection to the TV player while the browser is open keeps remote and touchpad input responsive, and the player isn't killed first on low-memory TVs.
+- **Fullscreen reporting**: The browser reports fullscreen on enter and exit, including exits with the TV's Back button, so the phone's fullscreen control follows.
+- **Fullscreen video in frames**: Fullscreen video inside embedded frames keeps the site's own player controls.
+
+### Fixed
+- **Browser continuity**: Media pauses when the browser goes to the background and the session resumes when you return.
+- **Navigation state**: The current URL is tracked, Back/Home close cleanly, and switching out of browser mode keeps the replacement player active.
+- **Phone keyboard and maximize**: Typing from the phone keyboard and the maximize button work again.
+- **Home in fullscreen**: Home from the phone remote exits fullscreen and closes the browser.
+- **Fullscreen from the phone**: Fullscreen and restore work repeatedly without clicking the video on the TV first. If a site blocks real fullscreen, the video fills the screen instead.
+- **Scrolling**: Scrolling a playing video off screen no longer clears the title and seek bar on the phone.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open the plugin or send it remote, touchpad, text, navigation or user-agent commands. Before, any app on the TV could control it.
+- **Browser engine upgrade**: GeckoView 157 and Android Components 157.0.1, with upstream security fixes.
+- **Browser logs**: URLs are redacted in browser logs, and header values aren't logged.
 
 ## Player [0.15.0] — 2026-10-09 (versionCode 231)
 
