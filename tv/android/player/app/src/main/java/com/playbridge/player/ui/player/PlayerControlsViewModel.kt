@@ -2,6 +2,7 @@ package com.playbridge.player.ui.player
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.playbridge.player.player.PageMediaProxyRouter
 import com.playbridge.player.player.PlayerEngineAdapter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -690,7 +691,7 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     fun loadExternalSubtitle(
         url: String,
         headers: Map<String, String>? = null,
-        forceNetworkPolicy: Boolean = false,
+        userAdded: Boolean = false,
         onResult: ((Boolean) -> Unit)? = null,
     ) {
         val resolver = subtitleTargetResolver
@@ -715,8 +716,12 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         subtitleManager?.loadSubtitle(
             url = resolved?.fetchUrl ?: url,
             headers = if (resolved != null) resolved.headers else headers,
-            enforcePageNetworkPolicy = enforcePageSubtitleNetworkPolicy || forceNetworkPolicy,
-            allowedPrivateOrigins = allowedPrivateSubtitleOrigins,
+            enforcePageNetworkPolicy = enforcePageSubtitleNetworkPolicy || userAdded,
+            allowedPrivateOrigins = if (userAdded) {
+                PageMediaProxyRouter.withUserChosenOrigin(allowedPrivateSubtitleOrigins, url)
+            } else {
+                allowedPrivateSubtitleOrigins
+            },
             trustedLocalProxyOrigin = resolved?.trustedLocalProxyOrigin
                 ?: trustedLocalSubtitleProxyOrigin,
             onResult = onResult,

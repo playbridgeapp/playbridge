@@ -841,7 +841,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> {
                 externalSubtitleOverlayActive = true
                 controlsViewModel.loadExternalSubtitle(
-                    url, subtitleHeaders, forceNetworkPolicy = lateResource != null,
+                    url, subtitleHeaders, userAdded = lateResource != null,
                     onResult = { completeLateSubtitleRequest(url, it) },
                 )
             }
@@ -868,7 +868,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             subTarget.fetchUrl,
                             subTarget.headers,
                             enforcePageNetworkPolicy = lateResource != null || item.isPageControlledMedia(),
-                            allowedPrivateOrigins = item.allowed_private_origins,
+                            allowedPrivateOrigins = if (lateResource != null) {
+                                PageMediaProxyRouter.withUserChosenOrigin(item.allowed_private_origins, url)
+                            } else {
+                                item.allowed_private_origins
+                            },
                             trustedLocalProxyOrigin = subTarget.trustedLocalProxyOrigin,
                         )
                         if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
@@ -898,7 +902,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         ) {
                             externalSubtitleOverlayActive = true
                             controlsViewModel.loadExternalSubtitle(
-                                url, subtitleHeaders, forceNetworkPolicy = lateResource != null,
+                                url, subtitleHeaders, userAdded = lateResource != null,
                                 onResult = { completeLateSubtitleRequest(url, it) },
                             )
                         } else {
@@ -1394,7 +1398,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         subTarget.fetchUrl,
                         subTarget.headers,
                         enforcePageNetworkPolicy = initialLateResource != null || payload.isPageControlledMedia(),
-                        allowedPrivateOrigins = payload.allowed_private_origins,
+                        allowedPrivateOrigins = if (initialLateResource != null) {
+                            PageMediaProxyRouter.withUserChosenOrigin(
+                                payload.allowed_private_origins,
+                                initialExternalUrl,
+                            )
+                        } else {
+                            payload.allowed_private_origins
+                        },
                         trustedLocalProxyOrigin = subTarget.trustedLocalProxyOrigin,
                     )
                     if (session?.sessionId != currentSession.sessionId ||
@@ -1437,7 +1448,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         controlsViewModel.loadExternalSubtitle(
                             initialExternalUrl,
                             fallbackHeaders,
-                            forceNetworkPolicy = initialLateResource != null,
+                            userAdded = initialLateResource != null,
                         )
                     } else if (renderingMode == SubtitleRenderingMode.BUILT_IN ||
                         payload.isPageControlledMedia()
@@ -2669,7 +2680,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 controlsViewModel.loadExternalSubtitle(
                     url,
                     lateResource?.headers ?: item.headersForSubtitle(url),
-                    forceNetworkPolicy = lateResource != null,
+                    userAdded = lateResource != null,
                     onResult = { completeLateSubtitleRequest(url, it) },
                 )
             }

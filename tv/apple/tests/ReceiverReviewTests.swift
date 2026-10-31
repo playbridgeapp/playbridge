@@ -2566,7 +2566,7 @@ private func pageMediaRoutingChecks() {
     _ = blocking { try await queueRouter.route(queued) }
     guard case .ready = queueRouter.state(for: queued) else { fatalError("routed queue item") }
 
-    // Late subtitles on page playback go through the proxy under the item's origins.
+    // Late subtitles on page playback go through the proxy under the item's origins plus their own.
     let lateProxy = FakeProxy()
     let lateRouter = PageMediaRouter(proxy: lateProxy)
     let playing = source("page_cast", origins: ["http://10.0.0.5:8096"])
@@ -2578,6 +2578,16 @@ private func pageMediaRoutingChecks() {
     assert(lateProxy.registrations == [FakeProxy.Registration(
         url: "http://10.0.0.5:8096/s.vtt", headers: ["Authorization": "Bearer synthetic"],
         contentType: nil, origins: ["http://10.0.0.5:8096"])])
+    // A file the viewer picks on the phone is served from the phone's LAN origin: that origin is
+    // approved for this subtitle only, still through the proxy.
+    let phoneFile = try! blocking {
+        try await lateRouter.lateSubtitle(url: "http://192.168.1.30:43210/subtitle/file.srt#file.srt",
+                                          headers: [:], for: playing)
+    }.get()
+    assert(phoneFile.host == "127.0.0.1")
+    assert(lateProxy.registrations.last?.origins == ["http://10.0.0.5:8096", "http://192.168.1.30:43210"])
+    assert(PageMediaPolicy.withUserChosenOrigin([], subtitle: "https://example.com:443/s.vtt") == ["https://example.com"])
+    assert(PageMediaPolicy.withUserChosenOrigin([], subtitle: "http://[fd00::1]:8080/s.vtt") == ["http://[fd00::1]:8080"])
     assert(blocking { try await lateRouter.lateSubtitle(url: "file:///private/var/s.vtt", headers: [:], for: playing) }.error as? PageMediaError == .refused)
     assert(blocking { try await missing.lateSubtitle(url: "https://example.com/s.vtt", headers: [:], for: page) }.error as? PageMediaError == .unavailable)
     assert(blocking { try await brokenRouter.lateSubtitle(url: "https://example.com/s.vtt", headers: [:], for: page) }.error as? PageMediaError == .unavailable)
