@@ -1,6 +1,6 @@
 # PlayBridge CLI Changelog
 
-## 0.16.0 (2026-11-02)
+## 0.16.0 (2026-10-31)
 
 ### Added
 - **Android TV remote**: `playbridge atv discover | pair | status | key | volume | text | app` pairs with any Android TV or Google TV and controls it like its remote. Credentials are stored privately in `~/.config/playbridge/atv`.

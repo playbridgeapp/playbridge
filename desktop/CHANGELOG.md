@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0+34] — 2026-11-02
+## [0.16.0+34] — 2026-10-31
 
 > **Works best together**: Phones show the desktop's new remote settings, chapters, volume level and failure reasons with PlayBridge Phone 0.16.0. When the desktop controls a TV, live control updates and failure reasons need PlayBridge TV Player 0.16.0.
 

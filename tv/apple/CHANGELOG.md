@@ -2,7 +2,7 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.16.0] — 2026-11-02 (build 11)
+## [0.16.0] — 2026-10-31 (build 11)
 
 > **mpv is now the default player.** A saved choice is kept; if you never picked one, playback now uses mpv. AVPlayer stays available in Settings, and mpv takes over when AVPlayer fails.
 
