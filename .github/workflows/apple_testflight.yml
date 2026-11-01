@@ -3,6 +3,12 @@ name: Apple TestFlight
 # Archives the iPhone and/or Apple TV app and uploads it to TestFlight.
 # App Store submission is still promoted manually in App Store Connect.
 #
+# After upload, scripts/ci/testflight_finish.py waits for processing, sets the
+# English (U.S.) "What to Test" text from the version's CHANGELOG.md section and
+# links the app's latest approved encryption declaration (answer the export
+# compliance questions in App Store Connect once per app). That step can't fail
+# the upload or the tag.
+#
 # Runs automatically on main when an app's MARKETING_VERSION has no ios-v*/tvos-v*
 # tag yet, and tags that version after a successful upload. Use workflow_dispatch
 # to upload another build of a version that is already tagged.
@@ -47,7 +53,7 @@ jobs:
   upload:
     needs: test
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: write
     strategy:
@@ -61,6 +67,9 @@ jobs:
             destination: generic/platform=iOS
             rust_targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
             cast_core_script: cast/build-apple.sh
+            bundle_id: app.playbridge.phone
+            asc_platform: IOS
+            changelog: mobile/apple/CHANGELOG.md
           - app: tv
             tag_prefix: tvos-v
             project: tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj
@@ -68,6 +77,9 @@ jobs:
             destination: generic/platform=tvOS
             rust_targets: aarch64-apple-tvos,aarch64-apple-tvos-sim
             cast_core_script: cast/build-apple-tvos.sh
+            bundle_id: app.playbridge.tv
+            asc_platform: TV_OS
+            changelog: tv/apple/CHANGELOG.md
 
     steps:
     - uses: actions/checkout@v7.0.1
@@ -193,6 +205,22 @@ jobs:
           git tag "$TAG" "$GITHUB_SHA"
           git push origin "$TAG"
         fi
+
+    - name: Set What to Test and export compliance
+      if: steps.gate.outputs.run == 'true'
+      continue-on-error: true
+      env:
+        ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        BUNDLE_ID: ${{ matrix.bundle_id }}
+        ASC_PLATFORM: ${{ matrix.asc_platform }}
+        CHANGELOG: ${{ matrix.changelog }}
+        VERSION: ${{ steps.gate.outputs.version }}
+      run: |
+        python3 scripts/ci/testflight_finish.py \
+          --bundle-id "$BUNDLE_ID" --platform "$ASC_PLATFORM" \
+          --version "$VERSION" --build "$BUILD_NUMBER" \
+          --changelog "$CHANGELOG" --timeout 1800
 
     - name: Remove API key
       if: always()
