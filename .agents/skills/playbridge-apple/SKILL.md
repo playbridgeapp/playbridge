@@ -88,6 +88,10 @@ From `tv/apple/PlayBridge TV/`:
 xcodebuild -project "PlayBridge TV.xcodeproj" -scheme "PlayBridge TV" -configuration Debug -destination 'generic/platform=tvOS' build
 ```
 
+Before building the TV app for a device or simulator test, run `sh cast/build-apple-tvos.sh` from the repository root once. It writes the receiver proxy XCFramework to the ignored `tv/apple/Native/`, which `CastCoreOptional.xcconfig` links when present. Without it the build still succeeds but uses the unavailable stub, so website casts (page casts and linked pages) fail on the TV.
+
+Export compliance: do not add `ITSAppUsesNonExemptEncryption` to either app. MPVKit ships GnuTLS, `YES` is rejected on upload (ITMS-90592) and `NO` is inaccurate. Answer the question per build in App Store Connect and keep France out of availability; see `docs/app-store-submission-drafts.md`.
+
 Report simulator, SDK, signing, or package-resolution limitations explicitly; do not treat an unavailable Apple toolchain as successful verification.
 
 For Google Cast adapter or native ABI work, build the optional XCFramework from
