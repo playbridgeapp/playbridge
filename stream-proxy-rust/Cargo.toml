@@ -1,7 +1,7 @@
 [package]
 license = "MPL-2.0"
 name = "stream-proxy-rust"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2021"
 rust-version = "1.91"  # Explicit for the standalone Docker build.
 description = "High-performance PlayBridge streaming proxy server in Rust with MediaFlow AES-256 encryption & stateful sessions"

@@ -5,6 +5,14 @@ All notable changes to the `stream-proxy-rust` project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-10-31
+
+### Changed
+- **Shared network rules**: The addresses the proxy may reach now come from the shared `net-policy` crate, which PlayBridge's TV apps and phones also use, so they all allow and refuse the same destinations.
+- **Container build**: The image now builds from the repository root (`docker build -f stream-proxy-rust/Dockerfile .`), and `docker-compose.yml` points there.
+- **Image tags**: `:latest` and version tags are published only for releases. Builds from `main` are published as `:edge`.
+- **Licence**: PlayBridge's own code is now under MPL-2.0.
+
 ## [0.15.0] - 2026-10-09
 
 ### Added

@@ -3,20 +3,64 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.16.0] — 2026-10-31 (versionCode 229)
+
+> **Upgrading removes the Library.** The Library, Stremio add-ons, debrid providers and Nuvio scrapers are gone, and their data is deleted on upgrade: installed add-ons, watchlist, resume positions, scrapers, debrid and TMDB/OMDB/TVDB keys, and their caches. Collections, IPTV, bridged apps, browser casting, Phone Files, downloads and the remote stay. Old backups still import; the removed sections are ignored.
+>
+> **Works best together**: Player Home, the Loop switch, browser fullscreen state, chapters and skip segments on the seek bar, the playback failure reason and live remote updates need PlayBridge TV Player 0.16.0, PlayBridge Desktop 0.16.0 or PlayBridge for Apple TV 0.16.0. Older receivers keep working with the controls they report. Full Android TV control works with any Android TV or Google TV, with or without PlayBridge installed.
+
+### Removed
+- **Library, add-ons, debrid and Nuvio scrapers**: Removed from the app, including their screens, dashboard tiles and settings, `stremio://` add-on installs, magnet handling, add-on episode resolution and Library watch-progress tracking.
 
 ### Added
+- **Android TV full control**: Pair with any Android TV or Google TV using the on-screen code and control the D-pad, Home, Back, volume, the keyboard and Open app from the remote. Paired TVs are listed and removable in Settings → TV.
+- **TV remote without PlayBridge running**: With a Full control pairing, the Remote opens even when PlayBridge isn't running on the TV, shows "PlayBridge isn't running on this TV." with **Open PlayBridge**, and switches to the full remote in place once PlayBridge connects. The cast sheet offers **Open PlayBridge on <TV>**.
+- **Remote that matches the receiver**: The remote shows only the keys, player settings, browser controls and volume control the connected receiver reports, follows the engine active on the TV, and updates live when that changes (for example when the TV's GeckoView plugin is installed or removed).
+- **Apple TV app control**: The D-pad, OK, Back and Home drive the whole PlayBridge Apple TV app while it's idle, not just the player.
+- **Seek bar with chapters and skip segments**: A wavy seek bar shows chapter gaps, intro/recap/credits bands and the buffered range; scrubbing shows the chapter or segment and snaps to chapter starts and segment ends.
+- **Volume level**: One line shows the receiver's volume and mute state ("TV volume 40/100 · Unmuted"). The volume pill opens a sheet with an exact-level slider or large step buttons, plus mute. The media notification's volume follows the real level.
+- **Subtitles sheet**: One sheet with Tracks, Adjust and Add pages: filter by origin, language chips and search for long lists, readable track names ("English" instead of "eng"), timing in ±0.1/±0.5 s steps with Reset, and adding from the page, a phone file or a link.
+- **Up next**: Upcoming items with watched and progress state, and an All sheet with season tabs to jump ahead or manage the queue.
+- **Playback failure reason**: When a receiver gives up on a video, the phone shows why ("The media couldn't be loaded (HTTP 403)") in a banner that stays until dismissed, and in the cast notification.
+- **Play on sheet**: One Play on sheet replaces the Devices screen and the Cast to dialog: the current receiver, This phone and saved devices, nearby devices, pairing, adding a device by address, device details and Configure TV.
+- **This phone**: Picking This phone, or switching to another device, disconnects the previous one but leaves it playing. A warning appears first when it's playing something the phone serves or something a website controls. A TV that drops stays chosen, and the Dashboard shows "Lost <TV> · Use this phone".
+- **Phone Files and phone lists**: Redesigned Phone Files. Lists of any length play on the TV as a moving queue, with a music-style Up next sheet (reorder, remove, repeat, save) and colours taken from the current item's artwork.
+- **Dashboard redesign**: A top bar with Remote and Settings, a chip naming where videos play, one grid of tiles with live status, and a Customize home screen to reorder and hide tiles.
+- **Bridged app tiles**: Each bridged app gets its own tile colour (Automatic, a chosen colour or the site's `theme_color`) and a real icon, falling back to the site's favicon and then a monogram.
+- **Media controls in the cast notification**: Media title, Play/Pause, Stop and a seek bar while casting, on the lock screen too; the phone's volume keys control the receiver.
 - **Downloads library**: Thumbnails and video length, date and source site for every download, search and sort, multi-select delete, tap to play on the selected device (cast to a receiver or play in the app), and the now-playing bar for quick access to the remote. Each download's menu adds Cast to…, Open with…, Share, Rename, Open source page, Show in Downloads folder and Remove from list with undo. In-progress downloads show speed and time left.
 - **Download notifications**: Follow each download's progress, pause/resume/cancel from the shade, retry failures, and open completed files. Multiple downloads are grouped together.
-- **Receiver media controls**: Control cast playback and seeking from the notification and lock screen, adjust supported receiver volume, and tap to open the remote.
 - **Direct cast controls in the background**: Keep receiver controls available while external media is loaded or paused, including Direct and Via proxy routes, without holding CPU or Wi-Fi locks for those routes.
 - **Notification recovery**: When notifications are off, show a one-time playback or casting reminder with a shortcut to enable them or open notification settings.
 - **Website media seeking**: Show playback position, duration and speed in media controls, with seeking for supported videos and background in-app playback.
+- **Blob subtitles**: Subtitles that a site builds in the page (`blob:` URLs) appear in the cast sheet and play on the TV, served from the phone.
+- **Remote haptics, button pad and keyboard**: Adjustable vibration on remote presses, a toggle between the swipe pad and arrow buttons, and a keyboard sheet for typing into TV text fields.
 
 ### Changed
+- **Remote redesign**: The remote adapts to portrait and landscape, uses the seek bar for play/pause, seeking and volume, hides the pad while media plays, and shows the TV's activity (Watching, Listening, Browsing, Viewing) in its header. Stop moves to the bottom bar.
+- **Seeking**: A quick swipe always seeks; scrubbing starts after a 0.4 s hold. The pad steps by distance with stationary hold-to-repeat.
+- **Player controls**: The Loop control is a switch when the TV reports its state, Home from the player returns the TV to PlayBridge's idle screen, and More is hidden when it has nothing to show. The title line no longer repeats Paused, Buffering or Live.
+- **Browser fullscreen and typing**: The remote follows the TV browser's fullscreen state, and typed text reaches fields inside embedded players and in fullscreen.
+- **Full control connection**: Connects to the selected TV straight away without scanning, stays up while PlayBridge is open and closes 60 seconds after it goes to the background.
+- **Pop-up blocked toast**: Shows where the pop-up was going and which site opened it, with **Open**, **Always allow** and close, and dismisses itself after about 6 seconds.
+- **Address bar**: Copied plain text shows as "Text you copied" and searches. localhost, local IP addresses, `.local` names and `name:port` open over http; `javascript:` input is searched, never run.
+- **Desktop site**: A per-tab setting; new tabs start in mobile mode.
 - **Website media notifications**: Use the page title with informative media details or the site host, route controls to the displayed media owner, and open its playing tab when tapped.
+- **Linked website casts**: The phone no longer asks the receiver to resend everything every 2 seconds during a website cast.
+- **Streams**: No longer added on first launch or treated specially; an existing Streams tile stays as an ordinary bridged app.
+- **Licence**: PlayBridge's own code is now under MPL-2.0.
 
 ### Fixed
+- **Video detection in popup tabs**: Videos on pages a site opens in a new tab or popup are detected again.
+- **Saved receivers after a Wi-Fi change**: Saved PlayBridge receivers no longer show as Offline when discovery finds them on the new network, and their addresses are refreshed.
+- **Duplicate DLNA devices**: A UPnP renderer (such as Kodi) appears once instead of several times; saved devices keep matching.
+- **Downloads that wouldn't play on Apple TV**: MP4s made from HLS downloads now write their AAC audio correctly, so AVPlayer plays them.
+- **Browser on a TV Stop**: Stopping the TV browser host no longer stops another receiver that's playing.
+- **Pairing a second phone**: Pairing another phone with the same Android TV no longer disconnects the first.
+- **Android TV pairing storage**: Pairings are saved atomically, with "Couldn't save the pairing" or "Couldn't remove the TV" and a retry when that fails.
+- **Keyboard in web pages**: Focused fields in web pages and bridged apps stay above the soft keyboard.
+- **Player-to-browser transitions**: Switching from the player to the TV browser clears the old title, playlist and seek bar from the remote.
+- **Roku playback**: A stale stop no longer interrupts a newer load.
 - **Deleting downloads**: Delete now removes the saved video from the phone instead of only the list entry, asking for permission when Android requires it.
 - **Open source page**: New downloads remember the page they were started from, and the page opens in a new tab even when no tab is open.
 - **Concurrent downloads**: Give each download its own progress and result notifications, including a resumable paused notification when the foreground time budget is reached.
@@ -26,6 +70,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Media notification cleanup**: Stop delayed service starts whose last owner has already left, and expire idle media notifications even when no playback state arrives.
 - **Media notification titles**: Restore each owner's title, artist and artwork when playback resumes after dismissing or stopping its notification.
 - **"Casting" after stopping on the receiver**: When a receiver stops playback on its own without telling the phone (such as stopping a video in PlayBridge Desktop), the phone now notices after a few seconds and the notification switches back to Connected.
+
+### Security
+- **Browser engine upgrade**: GeckoView 157 and Android Components 157.0.1, with upstream security fixes.
+- **Pairing credential encryption**: Android TV credentials are encrypted at rest with the Android Keystore and excluded from backups and device transfer.
+- **Log privacy**: Release builds no longer log media titles, stream URLs, add-on and API URLs that can contain keys, raw API responses, pop-up and magnet links, pairing codes or typed text.
+- **Website playback on this phone and other devices**: Videos and subtitles a website plays on This phone, or on DLNA, Chromecast, Roku or a TV browser, now go through the phone's proxy. It reaches only public addresses and the local-network addresses you approved, and checks every redirect and segment.
 
 ## [0.15.0] — 2026-10-09 (versionCode 228)
 

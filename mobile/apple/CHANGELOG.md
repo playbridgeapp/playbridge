@@ -3,6 +3,38 @@
 All notable changes to the iOS phone app (`app.playbridge.phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.0] — 2026-10-31 (build 11)
+
+> **Works best together**: Chapters and skip segments on the seek bar, the playback failure reason and Apple TV app control need PlayBridge receivers 0.16.0. Older receivers keep working with the controls they report.
+
+### Added
+- **Play on sheet**: One Play on sheet replaces the Devices screen: the current receiver, This phone, AirPlay and saved devices, nearby devices, pairing, adding a device by address, device details and Configure TV.
+- **Browser on a TV**: Play on → Add a device can host a page for a TV's web browser, pair it with a code and cast to it. Keep PlayBridge open while the TV browser is connected.
+- **This phone**: Picking This phone, or switching to another device, disconnects the previous one but leaves it playing. A warning appears first when it's playing something the phone serves or something a website controls.
+- **Dashboard redesign**: A top bar with Remote and Settings, a chip naming where videos play, one grid of tiles with live status, and a Customize home screen to reorder and hide tiles.
+- **Phone Files and phone lists**: Redesigned Phone Files. Lists of any length play on the TV as a moving queue, with a music-style Up next sheet and colours taken from the current item's artwork. Song art comes through from the iPhone.
+- **Seek bar with chapters and skip segments**: A wavy seek bar shows chapter gaps, intro/recap/credits bands and the buffered range; scrubbing shows the chapter or segment and snaps to chapter starts and segment ends.
+- **Volume and subtitles sheets**: The volume pill opens a sheet with an exact-level slider or step buttons, plus mute. The Subtitles sheet has Tracks, Adjust and Add pages, readable track names and timing in ±0.1/±0.5 s steps.
+- **Apple TV app control**: The remote's D-pad, OK, Back and Home drive the whole PlayBridge Apple TV app while it's idle.
+- **Bridged app tiles**: Each bridged app gets its own tile colour (Automatic, a chosen colour or the site's `theme_color`) and a real icon, falling back to the site's favicon and then a monogram.
+- **Blob subtitles**: Subtitles that a site builds in the page (`blob:` URLs) appear in the cast sheet and play on the TV, served from the iPhone.
+
+### Changed
+- **Remote**: Matches the Android remote: a bottom bar with Back, Home, Keyboard, the volume pill and Stop; Loop and AirPlay queue controls move into More; player settings are grouped as Playback, Picture and Audio.
+- **Streaming services**: Casting is turned off on YouTube and paid streaming and music services; pages still play on the phone, and casting shows "This site doesn't allow casting."
+- **Playlists**: The IPTV screen is now called Playlists.
+- **Licence**: PlayBridge's own code is now under MPL-2.0.
+
+### Fixed
+- **Nothing playing after connecting**: Connecting to a TV that's already playing shows the title, tracks and seek bar straight away.
+- **Saved receivers after a network change**: Saved receivers no longer show as Offline when Bonjour finds them on the new network.
+- **Bridged apps waiting for ad blocking**: Installed bridged apps no longer wait for the full ad-block rules to compile before loading.
+- **This phone crash**: Tapping This phone no longer crashes.
+- **Website videos with subtitles on other devices**: A website video with subtitles now plays on Chromecast, DLNA or a TV browser, without the subtitles, instead of being refused. AirPlay still shows them.
+
+### Security
+- **Website playback on this phone and other devices**: Videos and subtitles a website plays on This phone, or on AirPlay, Chromecast, DLNA or a TV browser, now go through the iPhone's proxy. It reaches only public addresses and the local-network addresses you approved, and checks every redirect and segment.
+
 ## [0.15.0] — 2026-10-09 (build 7)
 
 ### Added

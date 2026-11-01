@@ -2,19 +2,35 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.16.0+34] — 2026-10-31
+
+> **Works best together**: Phones show the desktop's new remote settings, chapters, volume level and failure reasons with PlayBridge Phone 0.16.0. When the desktop controls a TV, live control updates and failure reasons need PlayBridge TV Player 0.16.0.
 
 ### Added
 - **Windows one-line installer**: `irm https://playbridge.app/desktop.ps1 | iex` installs or updates PlayBridge Desktop for the current user (no administrator rights) in `%LOCALAPPDATA%\Programs\PlayBridge`, after verifying the release's SHA-256. It adds a Start menu shortcut and an Installed apps entry; uninstalling also removes the browser-extension and Explorer "Play on TV" registrations but keeps your settings and pairings. Set `PLAYBRIDGE_VERSION` to install a specific version.
+- **Minimal control bar**: While playing, the built-in player shows a one-row bar (play/pause, stop, times, seek bar, audio, subtitles, fullscreen) instead of hiding every control. In fullscreen it hides with the cursor after 3 seconds without mouse movement.
+- **Remote player settings**: Phone remotes can change speed, loop, Fit/Zoom/Fill scaling and subtitle timing on the desktop player, and stay in sync with the desktop's own controls.
+- **Chapters**: The player's seek bars show chapter gaps, Page Up/Page Down jump between chapters with an on-screen label, and hovering the seek bar shows the time and chapter. Phones get chapters, skip segments and the buffered range for their seek bar.
+- **Volume level**: The desktop reports its system volume and mute state to connected phones (CoreAudio on macOS, Core Audio on Windows, wpctl/pactl/amixer on Linux). On macOS an in-app overlay shows volume changes. When the desktop controls a TV, Now Casting shows the TV's volume and mute state.
+- **Playback failure reasons**: When the desktop's player can't open an item cast to it, phones are told why in a fixed, safe sentence. When the desktop casts to a TV that gives up on a video, it shows the TV's reason in a snackbar and on the Send to TV and Now Casting screens.
+- **Receiver capabilities**: The desktop tells phones which controls it supports, so their remotes only show working controls. When it controls a TV, it offers only the controls the TV reports and follows live updates from the TV.
 
 ### Changed
 - **Signed and notarized on macOS**: The macOS app is signed with Developer ID and notarized by Apple, so it opens without the Gatekeeper warning or the right-click → Open workaround.
 - **New macOS bundle id**: The macOS app is now `app.playbridge.desktop`, matching the iPhone and Apple TV apps. On first launch it copies your settings, pairing and TLS identity from the previous id, so paired phones keep working, and moves launch at login over. macOS may ask once more for local network access.
+- **Browser receivers**: Casting several files or a playlist to a TV's web browser is refused with "Web browser receivers play one file at a time." instead of loading only the first item.
+- **Skip segments**: TheIntroDB lookups use API v4, keep saved custom and versioned API URLs, and keep intro/recap ranges that start at the beginning (#379). Requests identify the app version.
+- **Licence**: PlayBridge's own code is now under MPL-2.0.
 
 ### Fixed
 - **Phone shows "Casting" after stopping on the desktop**: The desktop now tells connected phones when its player starts or goes idle, including stopping a video on the desktop, the queue ending and closing the player. Previously only a stop from the phone did.
+- **Stalled playback**: A video that keeps buffering without progress is reported as failed instead of spinning.
 - **Launch at login**: The tray menu and Settings now control the same login item. They previously wrote separate entries and could disagree.
-- **TheIntroDB skip segments**: Use API v4 for movie and episode lookups, retain saved custom/versioned API URLs, and handle intro/recap ranges starting at the beginning. (#379)
+- **Duplicate DLNA devices**: A UPnP renderer appears once instead of several times; saved devices keep matching.
+- **Queue item ids**: The desktop receiver keeps the item ids phones send, so phone lists stay in step with the queue.
+
+### Security
+- **Saved diagnostics log**: Stream proxy session tokens and local-file grants are redacted in the saved log.
 
 ## [0.15.1+33] — 2026-10-11
 
