@@ -14,4 +14,6 @@ description: Safely stage task files, verify, commit, push, and create or update
 7. Create or update a PR with `gh` when requested or when the task uses the repository's PR workflow. Describe the final behavior, tests, and material limitations. For multiline descriptions, use structured arguments or `--body-file` to preserve literal text.
 8. Verify the remote commit and working-tree state. For a PR, verify its URL and initial checks. Report pending checks accurately; a successful push does not mean CI has passed.
 
+When merging from a worktree, omit `gh pr merge --delete-branch`: `main` is checked out in the primary checkout, so gh fails while deleting the local branch. Merge, then run `git worktree remove <path>`, `git branch -D <branch>` and `git push origin --delete <branch>`.
+
 Do not force-push, rewrite history, merge, or mutate release metadata unless the user explicitly authorizes that action.
