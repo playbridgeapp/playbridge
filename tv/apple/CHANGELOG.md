@@ -28,6 +28,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Volume between casts**: The app volume keeps its level from one cast to the next.
 - **Remote and controls**: Phone ±15 s works while paused, Back steps out one level at a time, Play/Pause always toggles, audio picks carry to the next item, and the Skip Segments setting is focusable.
 - **Subtitles you add from the phone**: A subtitle added during a website cast, such as a file served by the phone, loads instead of being refused.
+- **Pairing requests on any screen**: A pairing code now appears above whatever the TV is showing, including during playback, instead of only on Pair Device. Back cancels it.
 - **Pairing and sidebar**: The pairing screen shows the port without a separator, sidebar titles stay on one line, and Remove All asks for confirmation.
 
 ## [0.15.0] — 2026-10-09 (build 6)
