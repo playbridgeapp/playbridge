@@ -29,6 +29,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
+    private var pairingPending: Bool { server.pendingPairingRequest != nil }
+
     init() {
         PlaybackEngine.migrateLegacyPreference(in: .standard)
         let hStore = HistoryStore()
@@ -75,7 +77,7 @@ struct ContentView: View {
                 .frame(width: 400)
                 .background(Color.black.opacity(0.3).edgesIgnoringSafeArea(.all))
                 .focusSection()
-                .disabled(server.currentPlayRequest != nil)
+                .disabled(server.currentPlayRequest != nil || pairingPending)
 
                 // Main Content
                 ZStack {
@@ -93,9 +95,9 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .focusSection()
-                .disabled(server.currentPlayRequest != nil)
+                .disabled(server.currentPlayRequest != nil || pairingPending)
             }
-            .disabled(server.currentPlayRequest != nil)
+            .disabled(server.currentPlayRequest != nil || pairingPending)
 
             // Instant black curtain — covers home screen the moment a request arrives,
             // in the same render pass, before PrePlayView has a chance to composite.
@@ -143,19 +145,25 @@ struct ContentView: View {
                     }
                 }
                 .zIndex(5)
+                .disabled(pairingPending)
+            }
+
+            if let request = server.pendingPairingRequest {
+                PairingRequestOverlay(request: request)
+                    .zIndex(20)
             }
         }
         .background(AppRemoteAnchor(
             driver: appRemote,
             enabled: { AppRemoteInputGate.allows(foreground: scenePhase == .active,
                                                 hasPlayer: server.currentPlayRequest != nil,
-                                                pairingPending: server.pendingPairingRequest != nil) },
+                                                pairingPending: pairingPending) },
             onBack: { if currentScreen != .pairing { currentScreen = .pairing } },
             onHome: { currentScreen = .pairing }))
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in
             guard AppRemoteInputGate.allows(foreground: scenePhase == .active,
                                            hasPlayer: server.currentPlayRequest != nil,
-                                           pairingPending: server.pendingPairingRequest != nil),
+                                           pairingPending: pairingPending),
                   let key = note.userInfo?["key"] as? String else { return }
             appRemote.handle(key)
         }

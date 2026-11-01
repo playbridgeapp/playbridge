@@ -1,16 +1,24 @@
 import SwiftUI
 
 struct PairingView: View {
+    var body: some View {
+        PairingIdleView()
+    }
+}
+
+/// Shown above every screen, including the player, while a phone waits for its pairing code.
+/// Back cancels the request, like the Cancel button.
+struct PairingRequestOverlay: View {
+    let request: PairingRequest
     @EnvironmentObject var server: WebSocketServer
 
     var body: some View {
         ZStack {
-            if let request = server.pendingPairingRequest {
-                PairingApprovalCard(request: request)
-            } else {
-                PairingIdleView()
-            }
+            Color.black.opacity(0.72).ignoresSafeArea()
+            PairingApprovalCard(request: request)
         }
+        .focusSection()
+        .onExitCommand { server.denyPairing() }
     }
 }
 
