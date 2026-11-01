@@ -326,14 +326,28 @@ jobs:
         key="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
         echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$key"
         ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
-        xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
-          --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-          --wait --timeout 45m --output-format json > "$RUNNER_TEMP/notary.json"
-        status=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+        auth=(--key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
+        xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" "${auth[@]}" \
+          --output-format json > "$RUNNER_TEMP/notary.json"
+        submission=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
+        echo "Notary submission: $submission"
+
+        # Polling Apple's notary service can drop a single request; retry the wait
+        # instead of failing the job and re-uploading.
+        status=""
+        for attempt in 1 2 3 4 5; do
+          xcrun notarytool wait "$submission" "${auth[@]}" --timeout 45m || true
+          if xcrun notarytool info "$submission" "${auth[@]}" \
+              --output-format json > "$RUNNER_TEMP/notary.json"; then
+            status=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+            [ "$status" != "In Progress" ] && break
+          fi
+          echo "::warning::Notarization not finished (attempt $attempt, status '${status:-unknown}'); retrying"
+          sleep 30
+        done
         if [ "$status" != Accepted ]; then
-          echo "::error::Notarization status: $status"
-          xcrun notarytool log "$(plutil -extract id raw "$RUNNER_TEMP/notary.json")" \
-            --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+          echo "::error::Notarization status: ${status:-unknown}"
+          xcrun notarytool log "$submission" "${auth[@]}" || true
           exit 1
         fi
         xcrun stapler staple "$app"
