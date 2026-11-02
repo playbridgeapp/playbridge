@@ -1,5 +1,7 @@
 # Bridged Apps (Android and iOS v1)
 
+The [`bridged-app-development` skill](../.agents/skills/bridged-app-development/SKILL.md) is the workflow guide for building one. Update it when this page changes how sites declare, play or test.
+
 A Bridged App is a website opened inside PlayBridge's existing browser (GeckoView on Android, WKWebView on iOS) with its toolbar hidden. It uses the same `window.playbridge.cast()` and `window.playbridge.linkCast()` APIs as a normal browser tab. Installation adds a tile to the PlayBridge dashboard; it does not create a system home-screen shortcut or grant casting permission. Public sites require HTTPS. Local development servers on literal private IPv4 or loopback addresses, or `localhost`, may use HTTP.
 
 To opt in, serve `/.well-known/playbridge-app.json` from the same origin as the site:
