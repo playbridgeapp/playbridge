@@ -14,6 +14,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 | `commit-and-open-pr` | Commit, push, or create/update a pull request without an implicit uprev |
 | `code-review-graph-workflow` | High-impact exploration, debugging, review, or refactoring where repository-wide relationships or blast radius matter |
 | `android-adb` | Drive a phone/TV device or emulator over ADB (install, launch, input, screenshots, UI dump) |
+| `bridged-app-development` | Build or review a Bridged App website: its `playbridge-app.json` declaration, `window.playbridge` playback, and testing in PlayBridge |
 
 ### Project specialists
 
