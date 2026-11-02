@@ -73,17 +73,33 @@ Rules that hosts enforce:
   Call `choosePlaybackDestination()` from a click or tap: it asks for consent,
   then opens the native picker. It rejects with `not_allowed` if the user says
   no, and `user_gesture_required` without a real user gesture.
-- **Play to the chosen destination.** Pass the id from those calls to
+- **Both calls resolve to `{ ok: true, destination }`**, not the destination
+  itself. Read `destination.id`; reading `.id` on the reply is always
+  `undefined`.
+- **Pick once, then reuse.** Call `getPlaybackDestination()` first and use its
+  `destination.id` when set. Call `choosePlaybackDestination()` (which always
+  opens the picker) only when the id is `null` or the user asks to switch.
+- **Play to the chosen destination.** Pass that id to
   `play({ destinationId, items, startIndex })`. Ids are per origin, so never
   store or share them across sites. `this-device` is the literal id for the
   phone itself and also needs a user gesture.
+- **Check `destination.kind` before queueing.** `external` (Google Cast, DLNA,
+  AirPlay) takes exactly one item; a longer `play()` fails with
+  `unsupported_queue` (Android) or `unsupported_target` (iOS).
 - **Re-check after async work.** If the destination changes while you resolve a
   stream, `play()` rejects. Offer reconnecting or This device; never fall back
   to another device silently.
-- **Items** carry `url`, and optionally `id`, `title`, `contentType`,
+- **Items** carry `id` and `url`, and optionally `title`, `contentType`,
   `startPositionMs`, `headers`, `subtitleResources` and `metadata` (title,
   year, poster and backdrop URLs, season, episode). Send only media URLs the
   user is allowed to play.
+- **Stay inside the request limits** in the spec's *Request limits* table:
+  ids of at most 128 characters (so not page URLs), 50 items per call, 200
+  per session, and only allowlisted header names. A breach rejects the whole
+  request with a bare `invalid_request`.
+- **Photos** are items with an `image/*` `contentType` or an image file
+  extension. Websites can't set a display time, so each photo stays up until
+  the user presses Next.
 - Never send `progressWebhook`, at any level. Requests containing it fail.
 - `capabilities.localPlaybackOrientation === 1` allows
   `initialOrientation: 'auto' | 'portrait' | 'landscape'`, for This device only.
@@ -95,8 +111,8 @@ Rules that hosts enforce:
 ```ts
 session.addEventListener('statechange', (e) => { /* e.detail: state, positionMs, durationMs, currentIndex */ });
 session.addEventListener('needitems', (e) => {
-  const { requestId, count } = e.detail;
-  // Resolve up to `count` next items, then:
+  const { requestId, count, afterIndex, afterItemId } = e.detail;
+  // Resolve up to `count` (at most 10) items after afterItemId, then:
   void session.provideItems(requestId, { items, endOfList });
 });
 session.addEventListener('ended', (e) => { /* release listeners, save final progress */ });
@@ -105,13 +121,15 @@ session.addEventListener('ended', (e) => { /* release listeners, save final prog
 
 - Resolve only the first item before calling `play()`; supply the rest on
   `needitems`. The page must stay loaded to supply more.
+- One request is open at a time, and the host repeats it every 5 seconds
+  until answered. More than `count` items, or a repeated id, is rejected.
 - A failed or empty lookup is **not** the end of the list. Keep the request
   retryable and only set `endOfList` when nothing is left.
 - Fence late results with a generation counter: a lookup that finishes after
   the user started something else must not reach the old session.
 - `unlink()` hands control back to PlayBridge; playback may continue on the TV.
-- External receivers (Google Cast, DLNA and similar) take single items and
-  fewer subtitle formats. Fail clearly when a queue isn't supported.
+- External receivers take single items and fewer subtitle formats; they never
+  send `needitems`.
 
 ### Older hosts
 
@@ -147,8 +165,24 @@ into the destination flow.
 - [ ] Destination choice and This device run from user gestures; denial and
       stale destinations show a clear message.
 - [ ] Queues supply on `needitems`, retry failures and end only when empty.
+- [ ] Item ids are short and unique; requests fit the spec's limits table.
+- [ ] `external` destinations get one item, not a queue.
 - [ ] No `progressWebhook`; `window.playbridge` is never assigned.
 - [ ] Tested on a real phone, both as a browser tab and as an installed app.
+
+## Source of truth
+
+When the spec and behavior disagree, the host code wins; fix the spec too.
+
+- Page API and reply shapes: `extension/src/core/page-bridge.ts` (Android) and
+  `PageCastScript.swift` (iOS)
+- Android validation, limits and `needitems`:
+  `mobile/android/app/src/main/java/com/playbridge/sender/browser/LinkedPageCastCoordinator.kt`
+- Android destinations and single-item external playback:
+  `PagePlaybackCoordinator.kt` and `PageDestinationPrivacy.kt` (same folder)
+- iOS validation and queue: `mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/PageCastRequest.swift`
+  and `PageCastCoordinator.swift`
+- Photo detection: `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/MediaKind.kt`
 
 For PlayBridge's own apps (Streams, Jellyfin), also follow the
 [`bridged-apps` repo guide](https://github.com/playbridgeapp/bridged-apps/blob/main/AGENTS.md)

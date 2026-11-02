@@ -35,10 +35,11 @@ Linked website casts do not display a mini playback bar over browser or bridged-
 Android and iOS advertise `playbridge.capabilities.playback === 1`. The selected native destination is authoritative, including an explicit **This device** selection. Websites can display and change it without starting media, but the destination identity is consent-gated:
 
 ```ts
-const status = await playbridge.getPlaybackDestination()
+// Both calls resolve to { ok: true, destination }, never the destination itself.
+let { destination } = await playbridge.getPlaybackDestination()
 // Before website-casting consent: { id: null, name: null, kind, connected }
 // After consent: { id, name, kind: 'local' | 'native' | 'external', connected }
-const { destination } = await playbridge.choosePlaybackDestination() // obtains consent if needed, then opens the native picker
+if (!destination.id) ({ destination } = await playbridge.choosePlaybackDestination()) // obtains consent if needed, then opens the native picker
 // Or choosePlaybackDestination({ destinationId: 'this-device' }) for explicit local recovery
 const session = await playbridge.play({
   destinationId: destination.id,
@@ -60,6 +61,42 @@ Call `choosePlaybackDestination()` from a user interaction to obtain a usable de
 Phone hosts advertise `capabilities.localPlaybackOrientation === 1`. The optional top-level `play()` field `initialOrientation` accepts only `auto`, `portrait`, or `landscape` and is honored only for **This device**. Omission/`auto` preserves the host’s existing orientation policy; explicit choices set the opening orientation without removing native rotation controls. iOS requests scene geometry once and restores the preceding page on dismissal; if the OS refuses the request, playback continues with a visible explanation. Orientation is session presentation state, not receiver playlist metadata, and episode changes do not reopen or rotate the player. Websites must feature-detect this capability rather than assume older hosts support it.
 
 Local playback and native PlayBridge receivers support the website's lazy episode queue. The Android and iOS phone players expose a live **Queue** with next/previous controls; it updates when the website supplies items. Queued episodes advance automatically, and a late supply can continue after the current episode ends. Only resolved items appear in the queue, so Next stays disabled until another item is supplied. The owning page must remain loaded to resolve further episodes; already-delivered items remain playable after Unlink. External receivers retain their existing single-item capabilities; they do not request next episodes. Unsupported external queues fail explicitly. Website subtitles reach external devices only where PlayBridge can show them (AirPlay on iOS, the TV browser on Android); elsewhere the video plays without them. Unlinking releases website control and progress reporting while playback continues. Existing `cast()` and `linkCast()` remain available for compatibility. A website without the bridge uses its own web player.
+
+### Choosing a destination
+
+`choosePlaybackDestination()` without `destinationId` always opens the native picker. With `{ destinationId: 'this-device' }` it selects the phone directly, unless a receiver is connected, in which case it opens the picker. Any other `destinationId` is rejected with `invalid_request`. To show the picker once and then play straight to the same device, call `getPlaybackDestination()` first and use its `destination.id` when it is set; call `choosePlaybackDestination()` only when it is `null` or the user asks to change device.
+
+### Receiver types
+
+`destination.kind` tells the website what the selected device supports. `local` (this phone) and `native` (a PlayBridge TV) accept a lazy queue. `external` (Google Cast, DLNA, AirPlay and similar) accepts exactly one item: a `play()` with more than one item is rejected with `unsupported_queue` on Android and `unsupported_target` on iOS, and the session ends. Check `kind` before building a queue and send a single item to `external` destinations.
+
+### Photos
+
+An item is treated as a photo when its `contentType` starts with `image/`, or, without a content type, when its URL path ends in a common image extension (`jpg`, `jpeg`, `png`, `webp`, `avif`, `gif`, `bmp`, `heic`, `heif`). Anything else plays as video. A photo has no display time: it stays on screen until the user moves to the next item. The iOS host also accepts the item fields `mediaKind` (`video`, `audio` or `image`) and `displayDurationMs`; the Android host ignores them, so websites cannot rely on either yet.
+
+### Supplying queue items
+
+The host asks for more items with a `needitems` event whose `detail` is `{ requestId, count, afterIndex, afterItemId }`. `count` is the user's prefetch window (1–10) minus the items already queued after the current one, so a website never needs to hold more than ten items ahead. Only one request is open at a time. The host repeats it every 5 seconds until the website answers with `provideItems(requestId, { items, endOfList })`, and sends none while it waits for the receiver to confirm the queue or after `endOfList`. Supplying more than `count` items, or an id already used in the session, is rejected with `invalid_request`.
+
+### Request limits
+
+Hosts validate every website request and reject it as a whole when any limit is exceeded. Item rejections use `invalid_request`; the session limit uses `resource_limit`. The error does not say which rule failed, so check requests against this table. The source of truth is `parseItems` and its constants in `mobile/android/.../browser/LinkedPageCastCoordinator.kt` and `PageCastRequest.swift` on iOS.
+
+| Rule | Limit |
+|---|---|
+| Items per `play()` or `provideItems()` call | 1–50 (`provideItems()` may send 0 with `endOfList`) |
+| Items per linked session | 200 |
+| Item `id` | Required, 1–128 characters, unique within the session |
+| Item `url` | `http` or `https` |
+| `title` | 4096 characters (iOS drops a longer title instead of rejecting) |
+| `contentType` | 256 characters |
+| `headers` | 16 entries, 16 KiB in total; names only from `authorization`, `cookie`, `referer`, `origin`, `user-agent`, `accept`, `accept-language`; no control characters; `origin` and `referer` must be URLs |
+| Subtitles (`subtitles` plus `subtitleResources`) | 16 per item; resource `label` 256 and `language` 64 characters |
+| `metadata` | 16 KiB |
+| Whole request | 64 KiB |
+| `progressWebhook` | Not allowed anywhere (see below) |
+
+Page URLs are a poor choice of item `id`: they often exceed 128 characters. Use a short stable key, such as a hash or the catalog id.
 
 ## Website progress callbacks
 
