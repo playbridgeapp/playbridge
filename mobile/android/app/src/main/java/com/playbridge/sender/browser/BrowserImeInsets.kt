@@ -1,7 +1,9 @@
 package com.playbridge.sender.browser
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -40,3 +42,8 @@ internal fun browserBottomSpace(
 @Composable
 internal fun Modifier.browserEngineImePadding(bottomToolbarVisible: Boolean): Modifier =
     if (bottomToolbarVisible) this else windowInsetsPadding(WindowInsets.ime)
+
+/** The bottom toolbar steps aside while the keyboard is open, so only the page sits on it. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun isKeyboardOpen(): Boolean = WindowInsets.isImeVisible

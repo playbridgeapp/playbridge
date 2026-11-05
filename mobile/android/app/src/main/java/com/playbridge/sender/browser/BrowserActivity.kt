@@ -2264,10 +2264,10 @@ class BrowserActivity : ComponentActivity() {
                 currentScreen = Screen.Remote
             }, LocalPlayOnRemoteVisible provides (currentScreen == Screen.Remote)) {
             PlayBridgeTheme {
-                // Bridged Apps and chrome-hidden browsing hide this bar. The engine then
-                // takes the keyboard inset itself (see browserBottomSpace).
+                // Bridged Apps, chrome-hidden browsing and an open keyboard hide this bar. The
+                // engine then takes the keyboard inset itself (see browserBottomSpace).
                 val browserBottomToolbarVisible =
-                    currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden
+                    currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden && !isKeyboardOpen()
                 bookmarkRemovalUrl?.let { url ->
                     AlertDialog(
                         onDismissRequest = { bookmarkRemovalUrl = null },
@@ -2476,10 +2476,8 @@ class BrowserActivity : ComponentActivity() {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            // max(navigation bar, keyboard): closed keyboard matches
-                                            // the previous nav-bar padding; an open keyboard lifts
-                                            // the buttons onto the keyboard and shortens the engine.
-                                            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                                            // The bar hides while the keyboard is open, so only the nav bar applies.
+                                            .windowInsetsPadding(WindowInsets.navigationBars)
                                             .padding(horizontal = 16.dp, vertical = 2.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
