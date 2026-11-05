@@ -25,8 +25,9 @@ contributor's code was relicensed without consent.
 - You can use, modify and redistribute PlayBridge, including in commercial or closed
   products, as long as files you modify stay available under MPL-2.0.
 - Third-party components keep their own licences. In particular, the Android TV player APK
-  bundles GPL-3.0 libraries (mpv-android and nextlib), so that APK as a whole is distributed
-  under GPL-3.0 terms. See [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md).
+  bundles GPL-3.0 libraries (mpv-android and nextlib), and the Android phone APK bundles
+  mpv-android, so each of those APKs as a whole is distributed under GPL-3.0 terms. PlayBridge's
+  own source files stay under MPL-2.0. See [THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md).
 - The licence doesn't cover the PlayBridge name and logos. Forks use their own name and
   icon; see [TRADEMARKS.md](../TRADEMARKS.md).
 

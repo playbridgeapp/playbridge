@@ -3,6 +3,7 @@ package com.playbridge.sender.data.settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import com.playbridge.sender.browser.CustomUserAgent
+import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +27,8 @@ class SettingsRepository(
         val DEFAULT_VIDEO_QUALITY = stringPreferencesKey("default_video_quality")
         val MAX_BITRATE_CAP_MBPS = doublePreferencesKey("max_bitrate_cap_mbps")
         val TV_PLAYER_MODE = stringPreferencesKey("tv_player_mode")
+        /** A [com.playbridge.sender.player.PhonePlayerMode] id: "auto" (default), "exo" or "mpv". */
+        val PHONE_PLAYER_MODE = stringPreferencesKey("phone_player_mode")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
         val MEDIA_DETECTION = stringPreferencesKey("media_detection")
@@ -57,6 +60,8 @@ class SettingsRepository(
     val defaultVideoQuality: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.DEFAULT_VIDEO_QUALITY] ?: "Auto" }
     val maxBitrateCapMbps: Flow<Double> = dataStore.data.catch { handleException(it) }.map { it[Keys.MAX_BITRATE_CAP_MBPS] ?: 0.0 }
     val tvPlayerMode: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.TV_PLAYER_MODE] ?: "tv" }
+    val phonePlayerMode: Flow<PhonePlayerMode> = dataStore.data.catch { handleException(it) }
+        .map { PhonePlayerMode.fromId(it[Keys.PHONE_PLAYER_MODE]) }
     /** How many episodes to keep resolved & queued ahead on the TV for series without a play-endpoint addon. */
     val tvPrefetchWindow: Flow<Int> = dataStore.data.catch { handleException(it) }.map { (it[Keys.TV_PREFETCH_WINDOW] ?: 1).coerceIn(1, 10) }
     val detectVideos: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.DETECT_VIDEOS] ?: true }
@@ -91,6 +96,7 @@ class SettingsRepository(
     suspend fun setDefaultVideoQuality(value: String) = write { it[Keys.DEFAULT_VIDEO_QUALITY] = value }
     suspend fun setMaxBitrateCapMbps(value: Double) = write { it[Keys.MAX_BITRATE_CAP_MBPS] = value }
     suspend fun setTvPlayerMode(value: String) = write { it[Keys.TV_PLAYER_MODE] = value }
+    suspend fun setPhonePlayerMode(value: PhonePlayerMode) = write { it[Keys.PHONE_PLAYER_MODE] = value.id }
     suspend fun setTvPrefetchWindow(value: Int) = write { it[Keys.TV_PREFETCH_WINDOW] = value.coerceIn(1, 10) }
     suspend fun setDetectVideos(value: Boolean) = write { it[Keys.DETECT_VIDEOS] = value }
     suspend fun setMediaDetectionSettings(value: MediaDetectionSettings) = write {

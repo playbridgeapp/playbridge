@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.serialization.Serializable
 import mozilla.components.browser.state.state.ContentState
 import mozilla.components.browser.state.state.TabSessionState
@@ -84,6 +85,7 @@ object BackupUtils {
             iptvSortAscending = settingsRepository.iptvSortAscending.first(),
             iptvActiveFirst = settingsRepository.iptvActiveFirst.first(),
             hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
+            phonePlayerMode = settingsRepository.phonePlayerMode.first().id,
         )
 
         val exported = ExportedSettings(
@@ -172,6 +174,7 @@ object BackupUtils {
                 s.iptvSortAscending?.let { settingsRepository.setIptvSortAscending(it) }
                 s.iptvActiveFirst?.let { settingsRepository.setIptvActiveFirst(it) }
                 s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
+                s.phonePlayerMode?.let { settingsRepository.setPhonePlayerMode(PhonePlayerMode.fromId(it)) }
             }
 
 

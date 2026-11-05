@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.filled.SwapHoriz
 import android.graphics.Bitmap
 import android.view.PixelCopy
 import android.os.Handler
@@ -127,10 +128,14 @@ import androidx.media3.ui.PlayerView
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.R
 import com.playbridge.sender.cast.openInExternalPlayer
+import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.koin.android.ext.android.get
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -139,7 +144,7 @@ import kotlin.math.roundToInt
 private const val PB_PLAYER = "PB_PLAYER"
 
 /** Prepare only after PlayerView is attached (TextureView surface ready). */
-private fun ensurePrepared(player: ExoPlayer) {
+private fun ensurePrepared(player: Player) {
     if (player.playbackState == Player.STATE_IDLE) {
         player.prepare()
         player.playWhenReady = true
@@ -153,7 +158,7 @@ private fun ensurePrepared(player: ExoPlayer) {
  * BUFFERING. Requires [hasRenderedFrame] so slow remote opens (buffered but not playing
  * yet) are not mistaken for stuck audio and "recovered" into silence.
  */
-private fun isPlaybackStuck(player: ExoPlayer, hasRenderedFrame: Boolean): Boolean {
+private fun isPlaybackStuck(player: Player, hasRenderedFrame: Boolean): Boolean {
     if (!hasRenderedFrame) return false
     if (player.trackSelectionParameters.disabledTrackTypes.contains(
             androidx.media3.common.C.TRACK_TYPE_AUDIO,
@@ -196,7 +201,8 @@ data class SubtitleTrack(
 )
 
 /**
- * Full-screen, landscape in-app video player backed by Media3 ExoPlayer.
+ * Full-screen, landscape in-app video player backed by Media3 ExoPlayer, or by mpv through
+ * [MpvMediaPlayer] when the Phone player setting asks for it or ExoPlayer can't play a format.
  *
  * Launched via [PlayerLauncher.start]. Handles HLS / DASH / progressive streams
  * (auto-detected by [DefaultMediaSourceFactory]), forwards request headers for
@@ -207,8 +213,17 @@ data class SubtitleTrack(
  */
 class PlayerActivity : ComponentActivity() {
 
-    private var player: ExoPlayer? = null
+    private var player: Player? = null
     private var attachedPageSessionId: String? = null
+
+    /** The player on screen; changing it rebuilds the player UI around the new one. */
+    private val playerState = mutableStateOf<Player?>(null)
+    private val engineState = mutableStateOf(PhonePlayerEngine.EXOPLAYER)
+    private var playerMode = PhonePlayerMode.AUTOMATIC
+    private var switchedToMpvAutomatically = false
+    private var requestHeaders: Map<String, String> = emptyMap()
+    /** Items of a single video or playlist; website queues are rebuilt by [PagePlayerSession]. */
+    private var queueItems: List<MediaItem> = emptyList()
 
     /**
      * Background-mode toggle, hoisted here (single source of truth shared with the
@@ -384,64 +399,58 @@ class PlayerActivity : ComponentActivity() {
                 "url=${redactUrlForLog(url)}",
         )
 
-        val exo = buildPlayer(this, headers)
-        this.player = exo
-
-        // Match the player orientation to the video: portrait content (e.g. phone
-        // recordings, shorts) rotates the activity to portrait as soon as its size is
-        // known; landscape content keeps the sensor-landscape default. The manual
-        // rotate button disables this so it can't fight a user choice.
-        exo.addListener(object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-                if (!autoOrientationEnabled) return
-                val w = videoSize.width
-                val h = videoSize.height
-                if (w <= 0 || h <= 0) return
-                // Some containers deliver a rotated frame + rotation metadata.
-                val swapped = videoSize.unappliedRotationDegrees % 180 != 0
-                val isPortraitVideo = if (swapped) w > h else h > w
-                requestedOrientation = if (isPortraitVideo) {
-                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                }
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                val sanitizedMsg = error.message?.let { com.playbridge.shared.logging.redactLogText(it) } ?: "unknown"
-                Log.e(PB_PLAYER, "error ${error.errorCodeName}: $sanitizedMsg")
-                recoverFromPlayerError(exo, error)
-            }
-        })
-
-        val initialTitle: String?
+        requestHeaders = headers
+        // DataStore is already loaded by the app that launched the player, so this read is immediate.
+        playerMode = get<SettingsRepository>().let { settings -> runBlocking { settings.phonePlayerMode.first() } }
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
+        val request = PhoneMediaRequest(headers)
+        val initialTitle: String?
+        val startIndex: Int
         if (pageSessionId != null) {
             attachedPageSessionId = pageSessionId
-            if (!PagePlayerSession.attach(pageSessionId, this, exo) { finish() }) { finish(); return }
             initialTitle = title
+            startIndex = 0
         } else if (isPlaylist) {
-            // Series auto-play: load every episode so ExoPlayer advances on its own.
+            // Series auto-play: load every episode so the player advances on its own.
             val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
-            val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
-            val items = playlistUrls!!.mapIndexed { i, u ->
-                buildMediaItem(u, null, titles.getOrNull(i), emptyList())
+            queueItems = playlistUrls!!.mapIndexed { i, u ->
+                buildMediaItem(u, null, titles.getOrNull(i), emptyList(), request)
             }
-            val safeStart = startIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0))
-            exo.setMediaItems(items, safeStart, startPositionMs)
-            initialTitle = titles.getOrNull(safeStart)
+            startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0).coerceIn(0, queueItems.lastIndex.coerceAtLeast(0))
+            initialTitle = titles.getOrNull(startIndex)
         } else {
-            exo.setMediaItem(buildMediaItem(url!!, contentType, title, subtitles), startPositionMs)
+            // ExoPlayer sends the video's headers with every request; mpv fetches subtitles separately,
+            // so it gives them only to subtitles on the video's own origin.
+            val subtitleRequest = request.copy(
+                subtitleHeaders = subtitles.filter { sameOrigin(it.url, url!!) }.associate { it.url to headers },
+            )
+            queueItems = listOf(buildMediaItem(url!!, contentType, title, subtitles, subtitleRequest))
+            startIndex = 0
             initialTitle = title
         }
-        // prepare() is deferred until PlayerView attaches (see ensurePrepared).
+
+        val initialEngine = playerMode.initialEngine.takeIf {
+            it == PhonePlayerEngine.EXOPLAYER || PhonePlayerFallback.canOpen(firstUrl(url, playlistUrls))
+        } ?: PhonePlayerEngine.EXOPLAYER
+        val first = createPlayer(initialEngine)
+        if (!loadQueue(first, startIndex, startPositionMs, initial = true)) {
+            first.release()
+            finish()
+            return
+        }
+        showPlayer(first, initialEngine)
 
         setContent {
             PlayBridgeTheme {
                 val waitingForWebsiteQueue by PagePlayerSession.waitingForNext.collectAsState()
                 val isInPip by isInPipModeState
-                PlayerScreen(
-                    player = exo,
+                val current = playerState.value ?: return@PlayBridgeTheme
+                val engine by engineState
+                // A new player starts the screen's state afresh; its surface moves to a new PlayerView.
+                key(current) { PlayerScreen(
+                    player = current,
+                    engine = engine,
+                    onSwitchEngine = { switchEngine(it, automatic = false) },
                     title = initialTitle,
                     externalHeaders = headers,
                     externalContentType = contentType,
@@ -456,8 +465,118 @@ class PlayerActivity : ComponentActivity() {
                         // synchronous) — onStop reads it to decide pause-vs-notify.
                         moveTaskToBack(true)
                     }
-                )
+                ) }
             }
+        }
+    }
+
+    private fun sameOrigin(first: String, second: String): Boolean {
+        val a = runCatching { java.net.URI(first) }.getOrNull() ?: return false
+        val b = runCatching { java.net.URI(second) }.getOrNull() ?: return false
+        return a.scheme.equals(b.scheme, ignoreCase = true) && a.host.equals(b.host, ignoreCase = true) && a.port == b.port
+    }
+
+    private fun firstUrl(url: String?, playlistUrls: List<String>?): String =
+        url ?: playlistUrls?.firstOrNull().orEmpty()
+
+    private fun createPlayer(engine: PhonePlayerEngine): Player = when (engine) {
+        PhonePlayerEngine.EXOPLAYER -> buildPlayer(this, requestHeaders)
+        PhonePlayerEngine.MPV -> MpvMediaPlayer(this)
+    }
+
+    /** Loads the video, playlist or website queue into [target]. False when the website session is gone. */
+    private fun loadQueue(target: Player, index: Int, positionMs: Long, initial: Boolean): Boolean {
+        val pageSessionId = attachedPageSessionId
+        if (pageSessionId != null) {
+            return PagePlayerSession.attach(
+                pageSessionId, this, target, onQueueFinished = { finish() },
+                startIndex = index.takeUnless { initial }, startPositionMs = positionMs.takeUnless { initial },
+            )
+        }
+        if (queueItems.size > 1) target.setMediaItems(queueItems, index, positionMs)
+        else target.setMediaItem(queueItems.first(), positionMs)
+        return true
+    }
+
+    private fun showPlayer(next: Player, engine: PhonePlayerEngine) {
+        next.addListener(playerListener)
+        if (backgroundSessionActive) next.addListener(backgroundStateListener)
+        player = next
+        engineState.value = engine
+        playerState.value = next
+        Log.i(PB_PLAYER, "player=${engine.label} mode=${playerMode.id}")
+        // prepare() is deferred until PlayerView attaches (see ensurePrepared).
+    }
+
+    /** Moves the current video, at its current position, to the other decoder. */
+    private fun switchEngine(target: PhonePlayerEngine, automatic: Boolean) {
+        val old = player ?: return
+        if (target == engineState.value) return
+        val url = old.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+        if (target == PhonePlayerEngine.MPV && !PhonePlayerFallback.canOpen(url)) {
+            if (!automatic) Toast.makeText(this, "mpv can't open this video", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val index = old.currentMediaItemIndex.coerceAtLeast(0)
+        val position = old.currentPosition.coerceAtLeast(0)
+        old.removeListener(playerListener)
+        old.removeListener(backgroundStateListener)
+        val next = createPlayer(target)
+        next.setPlaybackSpeed(old.playbackParameters.speed)
+        next.repeatMode = old.repeatMode
+        if (!loadQueue(next, index, position, initial = false)) {
+            next.release()
+            finish()
+            return
+        }
+        old.release()
+        Log.i(PB_PLAYER, "switch to ${target.label} automatic=$automatic at index=$index")
+        showPlayer(next, target)
+        if (automatic) Toast.makeText(this, "Playing with mpv", Toast.LENGTH_SHORT).show()
+    }
+
+    /** In Automatic mode, hands a format ExoPlayer can't play to mpv, once. */
+    private fun fallBackToMpv(reason: String): Boolean {
+        if (playerMode != PhonePlayerMode.AUTOMATIC || switchedToMpvAutomatically) return false
+        if (engineState.value != PhonePlayerEngine.EXOPLAYER) return false
+        val url = player?.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+        if (!PhonePlayerFallback.canOpen(url)) return false
+        switchedToMpvAutomatically = true
+        Log.w(PB_PLAYER, "ExoPlayer can't play this ($reason); switching to mpv")
+        // Listener callbacks run inside ExoPlayer; release it after they return.
+        window.decorView.post { switchEngine(PhonePlayerEngine.MPV, automatic = true) }
+        return true
+    }
+
+    // Match the player orientation to the video: portrait content (e.g. phone
+    // recordings, shorts) rotates the activity to portrait as soon as its size is
+    // known; landscape content keeps the sensor-landscape default. The manual
+    // rotate button disables this so it can't fight a user choice.
+    private val playerListener = object : Player.Listener {
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+            if (!autoOrientationEnabled) return
+            val w = videoSize.width
+            val h = videoSize.height
+            if (w <= 0 || h <= 0) return
+            // Some containers deliver a rotated frame + rotation metadata.
+            val swapped = videoSize.unappliedRotationDegrees % 180 != 0
+            val isPortraitVideo = if (swapped) w > h else h > w
+            requestedOrientation = if (isPortraitVideo) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            if (PhonePlayerFallback.hasUnplayableTrackType(tracks)) fallBackToMpv("no decoder for a track")
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            val sanitizedMsg = error.message?.let { com.playbridge.shared.logging.redactLogText(it) } ?: "unknown"
+            Log.e(PB_PLAYER, "error ${error.errorCodeName}: $sanitizedMsg")
+            if (PhonePlayerFallback.isFormatError(error.errorCode) && fallBackToMpv(error.errorCodeName)) return
+            (player as? ExoPlayer)?.let { recoverFromPlayerError(it, error) }
         }
     }
 
@@ -560,9 +679,10 @@ class PlayerActivity : ComponentActivity() {
             url: String,
             contentType: String?,
             title: String?,
-            subtitles: List<SubtitleTrack>
+            subtitles: List<SubtitleTrack>,
+            request: PhoneMediaRequest = PhoneMediaRequest(),
         ): MediaItem {
-            val builder = MediaItem.Builder().setUri(url)
+            val builder = MediaItem.Builder().setUri(url).setTag(request)
 
             // Only force mime when it changes MediaSource selection (HLS/DASH/TS).
             // Progressive containers are left unset so extractors sniff — matches
@@ -660,7 +780,9 @@ private const val SEEK_RANGE_MS = 120_000L
 
 @Composable
 private fun PlayerScreen(
-    player: ExoPlayer,
+    player: Player,
+    engine: PhonePlayerEngine,
+    onSwitchEngine: (PhonePlayerEngine) -> Unit,
     title: String?,
     externalHeaders: Map<String, String>,
     externalContentType: String?,
@@ -702,6 +824,7 @@ private fun PlayerScreen(
     var currentTitle by remember { mutableStateOf(title) }
     var aspectLabel by remember { mutableStateOf<String?>(null) }
     var showStats by remember { mutableStateOf(false) }
+    var showEngineSheet by remember { mutableStateOf(false) }
 
     val activeVideoFormat = remember(currentTracks) {
         currentTracks.groups.find { it.type == C.TRACK_TYPE_VIDEO }?.let { group ->
@@ -826,9 +949,9 @@ private fun PlayerScreen(
                 // On media item transition (seeking to previous/next or auto-advance), certain hardware
                 // decoders fail to hand off the surface correctly, causing a black screen.
                 // Re-preparing the player forces codec recreation and clean rendering.
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
+                if (player is ExoPlayer && (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
                     reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
-                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                    reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)) {
                     player.prepare()
                 }
             }
@@ -864,20 +987,21 @@ private fun PlayerScreen(
     // available — silent video was the bug FFmpeg fixed; muting would reintroduce it.
     // Drop-audio is a last resort only if the extension AAR failed to load.
     LaunchedEffect(player, hasRenderedFrame) {
+        val exo = player as? ExoPlayer ?: return@LaunchedEffect
         if (!hasRenderedFrame) return@LaunchedEffect
         delay(1_500)
-        if (!isPlaybackStuck(player, hasRenderedFrame = true)) return@LaunchedEffect
+        if (!isPlaybackStuck(exo, hasRenderedFrame = true)) return@LaunchedEffect
         Log.w(PB_PLAYER, "stuck BUFFERING after first frame — reinit")
-        PhoneExoPlayerFactory.recoverAudio(player, "reinit")
+        PhoneExoPlayerFactory.recoverAudio(exo, "reinit")
         delay(2_000)
-        if (!isPlaybackStuck(player, hasRenderedFrame = true)) return@LaunchedEffect
+        if (!isPlaybackStuck(exo, hasRenderedFrame = true)) return@LaunchedEffect
         if (PhoneExoPlayerFactory.isFfmpegAvailable()) {
             // FFmpeg path is the fix for no-audio; clear overrides and re-prepare once more.
             Log.w(PB_PLAYER, "still stuck with FFmpeg — clear-override (not mute)")
-            PhoneExoPlayerFactory.recoverAudio(player, "clear-override")
+            PhoneExoPlayerFactory.recoverAudio(exo, "clear-override")
         } else {
             Log.w(PB_PLAYER, "still stuck, FFmpeg missing — drop audio last resort")
-            PhoneExoPlayerFactory.recoverAudio(player, "drop-audio")
+            PhoneExoPlayerFactory.recoverAudio(exo, "drop-audio")
         }
     }
 
@@ -1195,6 +1319,7 @@ private fun PlayerScreen(
             ) {
                 StatsOverlay(
                     player = player,
+                    engine = engine,
                     activeVideoFormat = activeVideoFormat,
                     activeAudioFormat = activeAudioFormat,
                     positionMs = playbackProgress.longValue,
@@ -1297,6 +1422,9 @@ private fun PlayerScreen(
                                         "Subtitles",
                                         tint = Color.White
                                     )
+                                }
+                                IconButton(onClick = { showEngineSheet = true; markInteraction() }) {
+                                    Icon(Icons.Filled.SwapHoriz, "Switch player", tint = Color.White)
                                 }
                                 IconButton(onClick = { showStats = !showStats; markInteraction() }) {
                                     Icon(
@@ -1692,6 +1820,20 @@ private fun PlayerScreen(
                         Icon(Icons.Filled.LockOpen, "Unlock", tint = Color.White, modifier = Modifier.size(26.dp))
                     }
                 }
+            }
+
+            if (showEngineSheet) {
+                SelectionSheet(
+                    header = "Player",
+                    rows = PhonePlayerEngine.entries.map { option ->
+                        SheetRow(option.label, option == engine, true) {
+                            showEngineSheet = false
+                            onSwitchEngine(option)
+                        }
+                    },
+                    emptyMessage = null,
+                    onDismiss = { showEngineSheet = false }
+                )
             }
 
             if (showEpisodes) {
@@ -2304,7 +2446,8 @@ private fun enterPip(activity: android.app.Activity) {
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 private fun StatsOverlay(
-    player: ExoPlayer,
+    player: Player,
+    engine: PhonePlayerEngine,
     activeVideoFormat: androidx.media3.common.Format?,
     activeAudioFormat: androidx.media3.common.Format?,
     positionMs: Long,
@@ -2325,7 +2468,7 @@ private fun StatsOverlay(
         }
     }
 
-    val counters = player.videoDecoderCounters
+    val counters = (player as? ExoPlayer)?.videoDecoderCounters
     val rendered = remember(tick) { counters?.renderedOutputBufferCount ?: 0 }
     val dropped = remember(tick) { counters?.droppedBufferCount ?: 0 }
     val skipped = remember(tick) { counters?.skippedOutputBufferCount ?: 0 }
@@ -2368,6 +2511,7 @@ private fun StatsOverlay(
 
             Spacer(Modifier.height(2.dp))
 
+            StatItem(label = "Player", value = engine.label)
             StatItem(label = "Source URL", value = streamUrl, isUrl = true)
             StatItem(
                 label = "Resolution",
@@ -2380,10 +2524,12 @@ private fun StatsOverlay(
                 value = "${String.format(Locale.US, "%.1f", (bufferedMs - positionMs).coerceAtLeast(0L) / 1000f)}s (Max: 300.0s)"
             )
             StatItem(label = "Playback Speed", value = "${speed}x")
-            StatItem(
-                label = "Decoder Performance",
-                value = "Rendered: $rendered / Dropped: $dropped / Skipped: $skipped"
-            )
+            if (counters != null) {
+                StatItem(
+                    label = "Decoder Performance",
+                    value = "Rendered: $rendered / Dropped: $dropped / Skipped: $skipped"
+                )
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ package com.playbridge.sender.player
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -27,7 +28,7 @@ object PagePlayerSession {
     val waitingForNext: StateFlow<Boolean> = _waitingForNext
     private class Session(val request: LinkedPageCastOpenRequest, val emit: (String, JSONObject) -> Unit) {
         val items = request.items.toMutableList()
-        var player: ExoPlayer? = null
+        var player: Player? = null
         var context: Context? = null
         val createdAtMillis = System.currentTimeMillis()
         var lastActivityAtMillis = createdAtMillis
@@ -64,12 +65,26 @@ object PagePlayerSession {
         active = Session(request, emit)
     }
 
-    fun attach(id: String, context: Context, player: ExoPlayer, onQueueFinished: () -> Unit): Boolean {
+    /**
+     * Binds the queue to [player]. Switching players mid-queue calls this again with the new
+     * player and the current [startIndex] and [startPositionMs]; the old player is unbound.
+     */
+    fun attach(
+        id: String,
+        context: Context,
+        player: Player,
+        onQueueFinished: () -> Unit,
+        startIndex: Int? = null,
+        startPositionMs: Long? = null,
+    ): Boolean {
         val session = active?.takeIf { it.request.sessionId == id } ?: return false
+        session.listener?.let { session.player?.removeListener(it) }
         session.onQueueFinished = onQueueFinished
         session.player = player; session.context = context.applicationContext
-        player.setMediaSources(session.items.map { source(context, it) }, session.request.startIndex,
-            session.items[session.request.startIndex].payload.start_position_ms ?: 0)
+        val index = (startIndex ?: session.request.startIndex).coerceIn(0, session.items.lastIndex)
+        val position = startPositionMs ?: session.items[session.request.startIndex].payload.start_position_ms ?: 0
+        if (player is ExoPlayer) player.setMediaSources(session.items.map { source(context, it) }, index, position)
+        else player.setMediaItems(session.items.map(::mediaItem), index, position)
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (active !== session) return
@@ -103,7 +118,8 @@ object PagePlayerSession {
             val wasEnded = player.playbackState == Player.STATE_ENDED
             val nextIndex = session.items.size
             session.items += items
-            player.addMediaSources(items.map { source(context, it) })
+            if (player is ExoPlayer) player.addMediaSources(items.map { source(context, it) })
+            else player.addMediaItems(items.map(::mediaItem))
             if (wasEnded) { player.seekTo(nextIndex, 0); player.prepare(); player.play() }
         }
         session.lastSupply = requestId; session.need = null; session.endOfList = endOfList
@@ -166,12 +182,21 @@ object PagePlayerSession {
         session.emit("needitems", JSONObject().put("requestId", id).put("count", 1))
     }
 
-    private fun source(context: Context, item: LinkedPageCastItem): MediaSource {
+    private fun mediaItem(item: LinkedPageCastItem): MediaItem {
         val payload = item.payload
         val subtitles = payload.subtitles.map { SubtitleTrack(it) } + payload.subtitle_resources.map {
             SubtitleTrack(it.url, it.label, it.language)
         }
-        val media = PlayerActivity.buildMediaItem(payload.url, payload.content_type, payload.title, subtitles)
+        val request = PhoneMediaRequest(
+            headers = payload.headers,
+            subtitleHeaders = payload.subtitle_resources.associate { it.url to it.headers },
+        )
+        return PlayerActivity.buildMediaItem(payload.url, payload.content_type, payload.title, subtitles, request)
+    }
+
+    private fun source(context: Context, item: LinkedPageCastItem): MediaSource {
+        val payload = item.payload
+        val media = mediaItem(item)
         // Subtitle credentials stay on their own resource; video headers apply to the video and its segments.
         val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(30_000).setReadTimeoutMs(30_000)
