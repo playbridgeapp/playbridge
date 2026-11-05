@@ -600,9 +600,9 @@ internal fun remoteWaveClock(): Float {
  * played wave easing into a round thumb, then chapter gaps cut through all of it.
  */
 /** Room around the track for the held thumb's halo (10 dp × 1.8). */
-private val TIMELINE_BLEED = 18.dp
+internal val TIMELINE_BLEED = 18.dp
 
-private fun DrawScope.drawRemoteTimeline(
+internal fun DrawScope.drawRemoteTimeline(
     fraction: Float, durationMs: Long, bufferedMs: Long?, chapters: List<RemoteChapter>, segments: List<RemoteSegment>,
     amplitudePx: Float, phase: Float, shimmer: Boolean, thumbRadiusPx: Float, held: Boolean,
     played: Color, ink: Color, segmentColor: Color,

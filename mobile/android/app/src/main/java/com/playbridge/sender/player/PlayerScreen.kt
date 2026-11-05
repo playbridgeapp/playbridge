@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.media3.common.Player
+import com.playbridge.sender.cast.openInExternalPlayer
 
 /** The full-screen phone player: video, gestures, overlays, controls and sheets. */
 @Composable
@@ -25,13 +26,20 @@ internal fun PlayerScreen(
     websiteQueue: Boolean = false,
     waitingForWebsiteQueue: Boolean = false,
     isInPip: Boolean,
-    /** Shared with the activity: onStop reads it, notification-return resets it. */
+    /** Shared with the activity: onStop reads it to keep playing with a media notification. */
     backgroundMode: MutableState<Boolean>,
-    /** Send the task home (background mode was just enabled synchronously). */
-    onEnterBackgroundMode: () -> Unit = {}
+    engineNotice: EngineNotice?,
+    onEngineNoticeAction: () -> Unit,
+    onEngineNoticeDismiss: () -> Unit,
 ) {
     val state = rememberPlayerScreenState(player, title, websiteQueue)
     PlayerScreenEffects(state, isInPip, onEnded)
+
+    fun openExternal() {
+        val uri = player.currentMediaItem?.localConfiguration?.uri?.toString() ?: return
+        player.pause()
+        openInExternalPlayer(state.context, uri, externalContentType, externalHeaders.takeIf { it.isNotEmpty() })
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
         Box(
@@ -44,19 +52,16 @@ internal fun PlayerScreen(
             BufferingIndicator(state, waitingForWebsiteQueue)
             DoubleTapIndicator(state)
             SwipeHuds(state)
-            StatusMessage(state)
             StatsPanel(state, engine)
-            PlaybackErrorOverlay(state, onClose)
-            PlayerControlsOverlay(
-                state = state,
-                externalHeaders = externalHeaders,
-                externalContentType = externalContentType,
-                onClose = onClose,
-                backgroundMode = backgroundMode,
-                onEnterBackgroundMode = onEnterBackgroundMode,
-            )
+            PlaybackErrorOverlay(state, engine, onClose)
+            PlayerControlsOverlay(state, engine, onClose)
+            StatusMessage(state)
             UnlockOverlay(state)
-            PlayerSheetsHost(state, engine, onSwitchEngine)
+            if (!isInPip) {
+                EngineNoticeCard(engineNotice, onEngineNoticeAction, onEngineNoticeDismiss)
+                CapturedFrameSnackbar(state)
+            }
+            PlayerSheetsHost(state, engine, onSwitchEngine, backgroundMode, ::openExternal)
         }
     }
 }

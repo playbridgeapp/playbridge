@@ -2,6 +2,8 @@ package com.playbridge.sender.player
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import android.media.AudioManager
 import android.view.Window
 import androidx.compose.runtime.Composable
@@ -23,8 +25,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 
 internal enum class DragMode { NONE, SEEK, VOLUME, BRIGHTNESS }
 
-/** Which track type the selection sheet is showing. */
-internal enum class TrackSheetMode { AUDIO, SUBTITLE }
+/** A frame saved to the gallery, shown briefly with a way to open it. */
+internal data class CapturedFrame(val preview: Bitmap, val uri: Uri)
 
 /** A full-width horizontal swipe scrubs this many milliseconds. */
 internal const val SEEK_RANGE_MS = 120_000L
@@ -49,6 +51,8 @@ internal class PlayerScreenState(
 
     // Playback
     var isPlaying by mutableStateOf(player.isPlaying)
+    /** True while playback should run, including while it buffers; drives the seek bar's motion. */
+    var playWhenReady by mutableStateOf(player.playWhenReady)
     var isBuffering by mutableStateOf(true)
     // Once a frame is on screen, hide the spinner even if ExoPlayer briefly
     // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
@@ -64,13 +68,16 @@ internal class PlayerScreenState(
     var speed by mutableFloatStateOf(1f)
     var locked by mutableStateOf(false)
     var showUnlock by mutableStateOf(false)
-    var trackSheet by mutableStateOf<TrackSheetMode?>(null)
+    var showTracks by mutableStateOf(false)
+    var showMore by mutableStateOf(false)
+    /** The seek bar's end label shows time remaining instead of the duration. */
+    var showRemaining by mutableStateOf(false)
+    var capturedFrame by mutableStateOf<CapturedFrame?>(null)
     var currentTracks by mutableStateOf(player.currentTracks)
     var currentTitle by mutableStateOf(initialTitle)
     /** A short confirmation shown mid-screen (speed, repeat, aspect…); clears itself. */
     var statusMessage by mutableStateOf<String?>(null)
     var showStats by mutableStateOf(false)
-    var showEngineSheet by mutableStateOf(false)
     var showEpisodes by mutableStateOf(false)
 
     val activeVideoFormat: Format? by derivedStateOf { selectedFormat(C.TRACK_TYPE_VIDEO) }
@@ -101,7 +108,7 @@ internal class PlayerScreenState(
 
     // Polled position/buffer/duration.
     // Perf: MutableLongState holders — Compose tracks .longValue reads per-composable,
-    // so the 400ms tick recomposes only readers (SeekProgressRow, HUDs, stats).
+    // so the 400ms tick recomposes only readers (the seek bar, HUDs, stats).
     val playbackProgress = mutableLongStateOf(0L)
     val playbackBuffered = mutableLongStateOf(0L)
     val playbackDuration = mutableLongStateOf(0L)
@@ -127,6 +134,90 @@ internal class PlayerScreenState(
         val target = (player.currentPosition + deltaMs).coerceIn(0, if (d > 0) d else Long.MAX_VALUE)
         player.seekTo(target)
         playbackProgress.longValue = target
+    }
+
+    /** Seeks to a fraction of the duration and ends any scrub. */
+    fun seekToFraction(fraction: Float) {
+        val duration = playbackDuration.longValue
+        if (duration > 0) {
+            val target = (fraction.coerceIn(0f, 1f) * duration).toLong()
+            player.seekTo(target)
+            playbackProgress.longValue = target
+        }
+        isScrubbing = false
+    }
+
+    /** Sets A, then B, then clears the loop. */
+    fun stepAbLoop() {
+        val currentPos = player.currentPosition
+        val start = abStartMs
+        if (start == null) {
+            abStartMs = currentPos
+            statusMessage = "Loop start [A] set"
+        } else if (abEndMs == null) {
+            if (currentPos > start) {
+                abEndMs = currentPos
+                statusMessage = "Loop end [B] set: A-B active"
+            } else {
+                statusMessage = "End must be after start"
+            }
+        } else {
+            clearAbLoop()
+        }
+    }
+
+    fun clearAbLoop() {
+        abStartMs = null
+        abEndMs = null
+        statusMessage = "A-B loop cleared"
+    }
+
+    fun applySpeed(value: Float) {
+        speed = value
+        player.setPlaybackSpeed(value)
+        statusMessage = "Speed: ${speedLabel(value)}"
+    }
+
+    fun setRepeat(mode: Int) {
+        player.repeatMode = mode
+        repeatMode = mode
+        statusMessage = when (mode) {
+            Player.REPEAT_MODE_ONE -> "Repeat: One"
+            Player.REPEAT_MODE_ALL -> "Repeat: All"
+            else -> "Repeat: Off"
+        }
+    }
+
+    fun setAspect(mode: Int) {
+        resizeMode = mode
+        statusMessage = when (mode) {
+            AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoomed to fill"
+            AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretched"
+            else -> "Fit to screen"
+        }
+    }
+
+    fun togglePanZoom() {
+        isPanZoomEnabled = !isPanZoomEnabled
+        if (!isPanZoomEnabled) resetZoom()
+        statusMessage = if (isPanZoomEnabled) "Pinch to zoom, drag to pan" else "Zoom and pan off"
+    }
+
+    /** Saves the frame on screen to the gallery and offers to open it. */
+    fun captureFrame() {
+        val playerView = activity?.findViewById<androidx.media3.ui.PlayerView>(com.playbridge.sender.R.id.player_view) ?: return
+        captureFrame(playerView) { bitmap ->
+            activity?.runOnUiThread {
+                val uri = bitmap?.let { saveBitmapToGallery(context, it, currentTitle ?: "PlayBridge") }
+                if (bitmap != null && uri != null) capturedFrame = CapturedFrame(bitmap, uri)
+                else statusMessage = "Couldn't save the frame"
+            }
+        }
+    }
+
+    fun resetZoom() {
+        scale = 1f
+        panOffset = Offset.Zero
     }
 
     fun togglePlay() {

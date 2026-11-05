@@ -6,13 +6,13 @@ import androidx.core.graphics.createBitmap
 import android.provider.Settings
 import android.view.Window
 import android.graphics.Bitmap
+import android.net.Uri
 import android.view.PixelCopy
 import android.os.Handler
 import android.os.HandlerThread
 import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.Environment
-import android.widget.Toast
 import android.os.Build
 import android.app.PictureInPictureParams
 import android.util.Rational
@@ -104,7 +104,8 @@ internal fun findTextureView(view: View): android.view.TextureView? {
     return null
 }
 
-internal fun saveBitmapToGallery(context: Context, bitmap: Bitmap, title: String) {
+/** Saves [bitmap] to Pictures/PlayBridge; returns its gallery URI, or null if saving failed. */
+internal fun saveBitmapToGallery(context: Context, bitmap: Bitmap, title: String): Uri? {
     val filename = "${title.replace(Regex("[^a-zA-Z0-9]"), "_")}_${System.currentTimeMillis()}.jpg"
     val contentValues = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
@@ -116,24 +117,20 @@ internal fun saveBitmapToGallery(context: Context, bitmap: Bitmap, title: String
     }
 
     val resolver = context.contentResolver
-    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-
-    if (uri != null) {
-        try {
-            resolver.openOutputStream(uri)?.use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                contentValues.clear()
-                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                resolver.update(uri, contentValues, null, null)
-            }
-            Toast.makeText(context, "Frame saved to Gallery!", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Failed to save frame: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return null
+    return try {
+        resolver.openOutputStream(uri)?.use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+        } ?: error("No output stream")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear()
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
         }
-    } else {
-        Toast.makeText(context, "Failed to capture frame", Toast.LENGTH_SHORT).show()
+        uri
+    } catch (e: Exception) {
+        runCatching { resolver.delete(uri, null, null) }
+        null
     }
 }
 

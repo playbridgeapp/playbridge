@@ -60,6 +60,9 @@ internal fun PlayerScreenEffects(state: PlayerScreenState, isInPip: Boolean, onE
                 state.currentIndex = player.currentMediaItemIndex
             }
             override fun onIsPlayingChanged(playing: Boolean) { state.isPlaying = playing }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                state.playWhenReady = playWhenReady
+            }
             override fun onTracksChanged(tracks: Tracks) {
                 state.currentTracks = tracks
             }

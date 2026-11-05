@@ -10,7 +10,6 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
-import android.widget.Toast
 import android.util.Log
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,7 +28,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.data.settings.SettingsRepository
-import com.playbridge.sender.ui.theme.PlayBridgeTheme
+import com.playbridge.sender.ui.theme.PlayBridgePlayerTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -116,6 +115,8 @@ class PlayerActivity : ComponentActivity() {
     /** The player on screen; changing it rebuilds the player UI around the new one. */
     private val playerState = mutableStateOf<Player?>(null)
     private val engineState = mutableStateOf(PhonePlayerEngine.EXOPLAYER)
+    /** Shown over the player after an automatic switch or a switch mpv can't make. */
+    private val engineNoticeState = mutableStateOf<EngineNotice?>(null)
     private var playerMode = PhonePlayerMode.AUTOMATIC
     private var switchedToMpvAutomatically = false
     private var requestHeaders: Map<String, String> = emptyMap()
@@ -123,8 +124,8 @@ class PlayerActivity : ComponentActivity() {
     private var queueItems: List<MediaItem> = emptyList()
 
     /**
-     * Background-mode toggle, hoisted here (single source of truth shared with the
-     * composable) so returning from the notification can reset the button state.
+     * The More sheet's "Keep playing in the background" switch, hoisted here (single source
+     * of truth shared with the composable) because onStop reads it.
      */
     private val backgroundModeState = mutableStateOf(false)
     private val isInPipModeState = mutableStateOf(false)
@@ -338,10 +339,10 @@ class PlayerActivity : ComponentActivity() {
         showPlayer(first, initialEngine)
 
         setContent {
-            PlayBridgeTheme {
+            PlayBridgePlayerTheme {
                 val waitingForWebsiteQueue by PagePlayerSession.waitingForNext.collectAsState()
                 val isInPip by isInPipModeState
-                val current = playerState.value ?: return@PlayBridgeTheme
+                val current = playerState.value ?: return@PlayBridgePlayerTheme
                 val engine by engineState
                 // A new player starts the screen's state afresh; its surface moves to a new PlayerView.
                 key(current) { PlayerScreen(
@@ -357,11 +358,12 @@ class PlayerActivity : ComponentActivity() {
                     onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
                     isInPip = isInPip,
                     backgroundMode = backgroundModeState,
-                    onEnterBackgroundMode = {
-                        // The composable already flipped backgroundModeState (shared,
-                        // synchronous) — onStop reads it to decide pause-vs-notify.
-                        moveTaskToBack(true)
-                    }
+                    engineNotice = engineNoticeState.value,
+                    onEngineNoticeAction = {
+                        engineNoticeState.value = null
+                        switchEngine(PhonePlayerEngine.EXOPLAYER, automatic = false)
+                    },
+                    onEngineNoticeDismiss = { engineNoticeState.value = null },
                 ) }
             }
         }
@@ -411,7 +413,7 @@ class PlayerActivity : ComponentActivity() {
         if (target == engineState.value) return
         val url = old.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
         if (target == PhonePlayerEngine.MPV && !PhonePlayerFallback.canOpen(url)) {
-            if (!automatic) Toast.makeText(this, "mpv can't open this video", Toast.LENGTH_SHORT).show()
+            if (!automatic) engineNoticeState.value = EngineNotice("mpv can't open this video")
             return
         }
         val index = old.currentMediaItemIndex.coerceAtLeast(0)
@@ -429,7 +431,9 @@ class PlayerActivity : ComponentActivity() {
         old.release()
         Log.i(PB_PLAYER, "switch to ${target.label} automatic=$automatic at index=$index")
         showPlayer(next, target)
-        if (automatic) Toast.makeText(this, "Playing with mpv", Toast.LENGTH_SHORT).show()
+        engineNoticeState.value = if (automatic) {
+            EngineNotice("Playing with mpv", "ExoPlayer can't decode this format.", "Use ExoPlayer")
+        } else null
     }
 
     /** In Automatic mode, hands a format ExoPlayer can't play to mpv, once. */
@@ -489,11 +493,9 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Back in the foreground (e.g. via the notification): the on-screen controls
-        // take over again, and the background toggle resets so the next departure is
-        // a deliberate choice rather than a sticky leftover.
+        // Back in the foreground (e.g. via the notification): the on-screen controls take
+        // over again. Background play stays on until it's switched off in More.
         stopBackgroundMediaSession()
-        backgroundModeState.value = false
         // Resume if the user returned while content was ready (onStop pauses).
         player?.let { p ->
             if (p.playbackState != Player.STATE_IDLE && p.playbackState != Player.STATE_ENDED) {

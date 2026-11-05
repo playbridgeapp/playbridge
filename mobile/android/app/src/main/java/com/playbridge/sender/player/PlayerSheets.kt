@@ -17,12 +17,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Format
@@ -31,10 +32,11 @@ import androidx.media3.common.Tracks
 import java.util.Locale
 
 /**
- * Custom bottom sheet rendered inside the player's own (immersive) window, so the
- * system bars stay hidden — unlike [androidx.compose.material3.ModalBottomSheet], which
- * spawns a separate window that drops out of immersive mode. Tap the scrim or press back
- * to dismiss; [content] gets the scroll state so it can scroll the selected row into view.
+ * A sheet drawn inside the player's own (immersive) window, so the system bars stay hidden —
+ * unlike [androidx.compose.material3.ModalBottomSheet], which spawns a separate window that
+ * drops out of immersive mode. Portrait slides it up from the bottom; landscape docks it to
+ * the right. Tap the scrim or press back to dismiss; [content] gets the scroll state so it
+ * can scroll the selected row into view.
  */
 @Composable
 internal fun PlayerSheet(
@@ -43,32 +45,49 @@ internal fun PlayerSheet(
 ) {
     BackHandler(onBack = onDismiss)
     val scrollState = rememberScrollState()
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.8f).dp
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.55f))
             .pointerInput(Unit) { detectTapGestures { onDismiss() } }
     ) {
-        // Floating, width-constrained card anchored bottom-center (not a full-width slab).
+        val landscape = maxWidth > maxHeight
         Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(16.dp)
-                .fillMaxWidth()
-                .widthIn(max = 460.dp)
-                .heightIn(max = maxHeight)
+            modifier = (if (landscape) {
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(360.dp)
+            } else {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .heightIn(max = maxHeight * 0.75f)
+            })
                 .pointerInput(Unit) { detectTapGestures { } }, // swallow taps so they don't dismiss
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(24.dp),
-            tonalElevation = 4.dp,
-            shadowElevation = 16.dp
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = if (landscape) RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
+            else RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(scrollState)
+                    .windowInsetsPadding(
+                        if (landscape) WindowInsets.navigationBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.End + WindowInsetsSides.Vertical)
+                        else WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+                    )
                     .padding(vertical = 8.dp)
             ) {
+                if (!landscape) {
+                    Box(
+                        Modifier
+                            .padding(top = 4.dp, bottom = 4.dp)
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(MaterialTheme.colorScheme.outline)
+                            .align(Alignment.CenterHorizontally)
+                    )
+                }
                 content(scrollState)
             }
         }
@@ -110,47 +129,36 @@ internal fun SelectionSheet(
     }
 }
 
-/** Bottom sheet to pick the active audio *or* subtitle track from what the stream exposes. */
+/** One sheet for both the audio track and the subtitles the stream exposes. */
 @Composable
-internal fun TrackSelectionSheet(
-    mode: TrackSheetMode,
+internal fun TracksSheet(
     tracks: Tracks,
     onDismiss: () -> Unit,
     onSelectAudio: (TrackGroup, Int) -> Unit,
     onSelectText: (TrackGroup, Int) -> Unit,
     onDisableText: () -> Unit
 ) {
-    val type = if (mode == TrackSheetMode.AUDIO) C.TRACK_TYPE_AUDIO else C.TRACK_TYPE_TEXT
-    val groups = tracks.groups.filter { it.type == type }
-
-    val rows = buildList {
-        if (mode == TrackSheetMode.AUDIO) {
-            groups.forEach { g ->
-                for (i in 0 until g.length) {
-                    add(SheetRow(audioTrackLabel(g.getTrackFormat(i), i), g.isTrackSelected(i), g.isTrackSupported(i)) {
-                        onSelectAudio(g.mediaTrackGroup, i); onDismiss()
-                    })
-                }
+    val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+    val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+    PlayerSheet(onDismiss = onDismiss) {
+        TrackSectionHeader("Audio")
+        if (audioGroups.sumOf { it.length } <= 1) EmptyTracksMessage("This stream has only one audio track.")
+        audioGroups.forEach { g ->
+            for (i in 0 until g.length) {
+                TrackRow(audioTrackLabel(g.getTrackFormat(i), i), g.isTrackSelected(i), g.isTrackSupported(i),
+                    onClick = { onSelectAudio(g.mediaTrackGroup, i); onDismiss() })
             }
-        } else {
-            val anyTextSelected = groups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
-            add(SheetRow("Off", !anyTextSelected, true) { onDisableText(); onDismiss() })
-            groups.forEach { g ->
-                for (i in 0 until g.length) {
-                    add(SheetRow(textTrackLabel(g.getTrackFormat(i), i), g.isTrackSelected(i), g.isTrackSupported(i)) {
-                        onSelectText(g.mediaTrackGroup, i); onDismiss()
-                    })
-                }
+        }
+        TrackSectionHeader("Subtitles")
+        val anyTextSelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
+        TrackRow("Off", !anyTextSelected, true, onClick = { onDisableText(); onDismiss() })
+        textGroups.forEach { g ->
+            for (i in 0 until g.length) {
+                TrackRow(textTrackLabel(g.getTrackFormat(i), i), g.isTrackSelected(i), g.isTrackSupported(i),
+                    onClick = { onSelectText(g.mediaTrackGroup, i); onDismiss() })
             }
         }
     }
-
-    SelectionSheet(
-        header = if (mode == TrackSheetMode.AUDIO) "Audio" else "Subtitles",
-        rows = rows,
-        emptyMessage = if (mode == TrackSheetMode.AUDIO) "This stream has only one audio track." else null,
-        onDismiss = onDismiss
-    )
 }
 
 @Composable
@@ -181,10 +189,12 @@ internal fun EpisodeSheet(
 @Composable
 internal fun TrackSectionHeader(text: String) {
     Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
+        text = text.uppercase(Locale.getDefault()),
+        style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 6.dp)
+        letterSpacing = 0.8.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 6.dp)
     )
 }
 
@@ -252,26 +262,18 @@ internal fun trackLanguageName(lang: String?): String? {
     }
 }
 
-/** Whichever sheet is open: player choice, episodes or queue, or audio and subtitle tracks. */
+/** Whichever sheet is open: More, episodes or queue, or audio and subtitles. */
 @Composable
 internal fun PlayerSheetsHost(
     state: PlayerScreenState,
     engine: PhonePlayerEngine,
     onSwitchEngine: (PhonePlayerEngine) -> Unit,
+    backgroundMode: MutableState<Boolean>,
+    onOpenExternal: () -> Unit,
 ) {
     val player = state.player
-    if (state.showEngineSheet) {
-        SelectionSheet(
-            header = "Player",
-            rows = PhonePlayerEngine.entries.map { option ->
-                SheetRow(option.label, option == engine, true) {
-                    state.showEngineSheet = false
-                    onSwitchEngine(option)
-                }
-            },
-            emptyMessage = null,
-            onDismiss = { state.showEngineSheet = false }
-        )
+    if (state.showMore) {
+        MoreSheet(state, engine, onSwitchEngine, backgroundMode, onOpenExternal)
     }
 
     if (state.showEpisodes) {
@@ -284,11 +286,10 @@ internal fun PlayerSheetsHost(
         )
     }
 
-    state.trackSheet?.let { mode ->
-        TrackSelectionSheet(
-            mode = mode,
+    if (state.showTracks) {
+        TracksSheet(
             tracks = state.currentTracks,
-            onDismiss = { state.trackSheet = null },
+            onDismiss = { state.showTracks = false },
             onSelectAudio = { group, idx ->
                 player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                     .setOverrideForType(TrackSelectionOverride(group, idx))
