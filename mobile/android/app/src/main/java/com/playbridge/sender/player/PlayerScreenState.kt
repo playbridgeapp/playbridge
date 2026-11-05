@@ -1,0 +1,156 @@
+package com.playbridge.sender.player
+
+import android.app.Activity
+import android.content.Context
+import android.media.AudioManager
+import android.view.Window
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
+import androidx.media3.common.C
+import androidx.media3.common.Format
+import androidx.media3.common.Player
+import androidx.media3.ui.AspectRatioFrameLayout
+
+internal enum class DragMode { NONE, SEEK, VOLUME, BRIGHTNESS }
+
+/** Which track type the selection sheet is showing. */
+internal enum class TrackSheetMode { AUDIO, SUBTITLE }
+
+/** A full-width horizontal swipe scrubs this many milliseconds. */
+internal const val SEEK_RANGE_MS = 120_000L
+
+/**
+ * Everything the phone player screen shows or changes besides the [Player] itself: control
+ * visibility, sheets, gestures, loops and the position the seek bar draws. The controls,
+ * overlays and effects all read and write this one holder.
+ */
+@Stable
+internal class PlayerScreenState(
+    val player: Player,
+    /** The title the screen opened with; a media item without one falls back to it. */
+    val initialTitle: String?,
+    /** A website queue shows the queue controls even while it holds a single item. */
+    val websiteQueue: Boolean,
+    val context: Context,
+    val window: Window?,
+) {
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+
+    // Playback
+    var isPlaying by mutableStateOf(player.isPlaying)
+    var isBuffering by mutableStateOf(true)
+    // Once a frame is on screen, hide the spinner even if ExoPlayer briefly
+    // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
+    var hasRenderedFrame by mutableStateOf(false)
+    var errorMessage by mutableStateOf<String?>(null)
+
+    // Controls / scrubbing
+    var controlsVisible by mutableStateOf(true)
+    var interactionTick by mutableIntStateOf(0)
+    var isScrubbing by mutableStateOf(false)
+    var scrubFraction by mutableFloatStateOf(0f)
+    var resizeMode by mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT)
+    var speed by mutableFloatStateOf(1f)
+    var locked by mutableStateOf(false)
+    var showUnlock by mutableStateOf(false)
+    var trackSheet by mutableStateOf<TrackSheetMode?>(null)
+    var currentTracks by mutableStateOf(player.currentTracks)
+    var currentTitle by mutableStateOf(initialTitle)
+    /** A short confirmation shown mid-screen (speed, repeat, aspect…); clears itself. */
+    var statusMessage by mutableStateOf<String?>(null)
+    var showStats by mutableStateOf(false)
+    var showEngineSheet by mutableStateOf(false)
+    var showEpisodes by mutableStateOf(false)
+
+    val activeVideoFormat: Format? by derivedStateOf { selectedFormat(C.TRACK_TYPE_VIDEO) }
+    val activeAudioFormat: Format? by derivedStateOf { selectedFormat(C.TRACK_TYPE_AUDIO) }
+
+    // Repeat, A-B loop and pan & zoom
+    var repeatMode by mutableIntStateOf(player.repeatMode)
+    var abStartMs by mutableStateOf<Long?>(null)
+    var abEndMs by mutableStateOf<Long?>(null)
+    var isPanZoomEnabled by mutableStateOf(false)
+    var scale by mutableFloatStateOf(1f)
+    var panOffset by mutableStateOf(Offset.Zero)
+
+    // Website queues start with one item and grow as Streams supplies episodes.
+    // Follow timeline changes rather than retaining the initial single-item list.
+    var episodeTitles by mutableStateOf(readQueueTitles())
+    var currentIndex by mutableIntStateOf(player.currentMediaItemIndex)
+    val isPlaylist: Boolean get() = websiteQueue || episodeTitles.size > 1
+
+    // Gesture HUD state
+    var dragMode by mutableStateOf(DragMode.NONE)
+    var volume by mutableFloatStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat())
+    var brightness by mutableFloatStateOf(initialBrightness(window, context))
+    var seekPreviewMs by mutableLongStateOf(0L)
+    var seekDeltaMs by mutableLongStateOf(0L)
+    var doubleTapSide by mutableIntStateOf(0)    // -1 = rewind, +1 = forward, 0 = none
+    var doubleTapSeconds by mutableIntStateOf(0) // cumulative skip amount shown in the indicator
+
+    // Polled position/buffer/duration.
+    // Perf: MutableLongState holders — Compose tracks .longValue reads per-composable,
+    // so the 400ms tick recomposes only readers (SeekProgressRow, HUDs, stats).
+    val playbackProgress = mutableLongStateOf(0L)
+    val playbackBuffered = mutableLongStateOf(0L)
+    val playbackDuration = mutableLongStateOf(0L)
+
+    val activity: Activity? get() = context as? Activity
+
+    fun readQueueTitles(): List<String> = (0 until player.mediaItemCount).map {
+        player.getMediaItemAt(it).mediaMetadata.title?.toString() ?: "Episode ${it + 1}"
+    }
+
+    fun markInteraction() { interactionTick++ }
+
+    /** Navigate to an episode: lazy resolve-and-swap, or a native timeline seek. */
+    fun goToEpisode(index: Int) {
+        if (index < 0 || index >= episodeTitles.size) return
+        errorMessage = null
+        player.seekTo(index, 0L)
+        player.play()
+    }
+
+    fun seekBy(deltaMs: Long) {
+        val d = player.duration.coerceAtLeast(0)
+        val target = (player.currentPosition + deltaMs).coerceIn(0, if (d > 0) d else Long.MAX_VALUE)
+        player.seekTo(target)
+        playbackProgress.longValue = target
+    }
+
+    fun togglePlay() {
+        if (player.isPlaying) {
+            player.pause()
+        } else {
+            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+            player.play()
+        }
+        markInteraction()
+    }
+
+    private fun selectedFormat(type: Int): Format? =
+        currentTracks.groups.find { it.type == type }?.let { group ->
+            (0 until group.length).find { group.isTrackSelected(it) }?.let { index ->
+                group.getTrackFormat(index)
+            }
+        }
+}
+
+@Composable
+internal fun rememberPlayerScreenState(player: Player, title: String?, websiteQueue: Boolean): PlayerScreenState {
+    val context = LocalContext.current
+    return remember(player) {
+        PlayerScreenState(player, title, websiteQueue, context, (context as? Activity)?.window)
+    }
+}

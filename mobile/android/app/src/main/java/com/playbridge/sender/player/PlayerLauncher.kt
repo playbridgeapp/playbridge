@@ -1,0 +1,58 @@
+package com.playbridge.sender.player
+
+import android.content.Context
+import android.content.Intent
+
+/**
+ * Launches [PlayerActivity] for the given stream. Safe to call from any [Context];
+ * [headers] are only attached when non-empty (resolved addon URLs usually carry none).
+ */
+object PlayerLauncher {
+    fun start(
+        context: Context,
+        url: String,
+        title: String? = null,
+        contentType: String? = null,
+        headers: Map<String, String>? = null,
+        subtitles: List<SubtitleTrack> = emptyList(),
+        // Watch-progress identity (movies / single episodes). Omit for untracked playback.
+        startPositionMs: Long = 0L,
+    ) {
+        val intent = Intent(context, PlayerActivity::class.java).apply {
+            putExtra(PlayerActivity.EXTRA_URL, url)
+            putExtra(PlayerActivity.EXTRA_TITLE, title)
+            putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, contentType)
+            if (!headers.isNullOrEmpty()) putExtra(PlayerActivity.EXTRA_HEADERS, HashMap(headers))
+            if (subtitles.isNotEmpty()) {
+                putStringArrayListExtra(PlayerActivity.EXTRA_SUB_URLS, ArrayList(subtitles.map { it.url }))
+                putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LABELS, ArrayList(subtitles.map { it.label ?: "" }))
+                putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
+            }
+            if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
+        }
+        context.startActivity(intent)
+    }
+
+    /**
+     * Launches [PlayerActivity] with a playlist of episodes; ExoPlayer auto-advances
+     * through them and the player exits when the last one ends. Used for series.
+     */
+    fun startPlaylist(
+        context: Context,
+        urls: List<String>,
+        titles: List<String>,
+        startIndex: Int,
+        // Watch-progress identity (series). seasons/episodes are parallel to urls.
+        startPositionMs: Long = 0L,
+    ) {
+        if (urls.isEmpty()) return
+        val intent = Intent(context, PlayerActivity::class.java).apply {
+            putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_URLS, ArrayList(urls))
+            putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
+            putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
+        }
+        context.startActivity(intent)
+    }
+
+
+}
