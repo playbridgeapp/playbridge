@@ -32,6 +32,8 @@ included in settings export and import.
 - TLS certificates are verified against the CA bundle in the mpv AAR.
 - mpv opens a file only once PlayerView has given it a surface; opening without one drops the
   video track. Without a surface after 1.5 s it opens audio only.
+- A TextureView resize reaches mpv one frame late; after a resize while paused, mpv re-seeks to
+  the current position so the frame is drawn again at the new size.
 - Only one mpv core exists per process. A new player waits for a previous one to finish
   releasing.
 

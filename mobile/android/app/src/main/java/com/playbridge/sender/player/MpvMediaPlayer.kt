@@ -55,6 +55,8 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
         const val ENGINE_RETRY_MS = 200L
         /** Open without a picture (audio only) if no surface arrives, e.g. while backgrounded. */
         const val SURFACE_WAIT_MS = 1_500L
+        /** Rotation resizes the view several times; redraw once it settles. */
+        const val RESIZE_REDRAW_MS = 150L
 
         val COMMANDS: Player.Commands = Player.Commands.Builder().addAll(
             Player.COMMAND_PLAY_PAUSE,
@@ -606,6 +608,19 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
         surfaceWidth = width
         surfaceHeight = height
         if (surface != null && width > 0 && height > 0) engine?.setSurfaceSize(width, height)
+        main.removeCallbacks(redrawAfterResize)
+        main.postDelayed(redrawAfterResize, RESIZE_REDRAW_MS)
+    }
+
+    /**
+     * A TextureView's new buffer size reaches mpv one frame late, so the first frame after a
+     * resize is drawn at the old size. While playing the next frame fixes it; while paused,
+     * re-seeking to the current position draws the frame again at the new size.
+     */
+    private val redrawAfterResize = Runnable {
+        val engine = engine ?: return@Runnable
+        val playing = playWhenReady && playbackState == Player.STATE_READY
+        if (loadedIndex != C.INDEX_UNSET && pendingSeekMs == null && !playing) engine.seek(currentMpvPositionMs())
     }
 
     private val textureListener = object : TextureView.SurfaceTextureListener {

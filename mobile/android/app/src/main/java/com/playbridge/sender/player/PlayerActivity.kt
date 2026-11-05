@@ -866,6 +866,16 @@ private fun PlayerScreen(
     }
 
     // Force hide controls in PiP mode
+    // The navigation bar shows with the controls and hides with them, so the gesture bar is
+    // reachable whenever the controls are.
+    val controlsShown = controlsVisible && !locked && errorMessage == null && !isInPip
+    LaunchedEffect(controlsShown) {
+        val w = window ?: return@LaunchedEffect
+        val bars = WindowInsetsControllerCompat(w, w.decorView)
+        if (controlsShown) bars.show(WindowInsetsCompat.Type.navigationBars())
+        else bars.hide(WindowInsetsCompat.Type.navigationBars())
+    }
+
     LaunchedEffect(isInPip) {
         if (isInPip) {
             controlsVisible = false
@@ -1313,7 +1323,7 @@ private fun PlayerScreen(
                 visible = showStats && errorMessage == null,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .windowInsetsPadding(WindowInsets.statusBars),
+                    .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout)),
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
@@ -1388,7 +1398,8 @@ private fun PlayerScreen(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.statusBars)
+                            // The camera cutout stays clear even while the status bar is hidden.
+                            .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
                             .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1501,7 +1512,7 @@ private fun PlayerScreen(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.displayCutout))
                             .padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
                         // The 11 fixed-size buttons total ~550dp with spacing — far wider
