@@ -179,7 +179,7 @@ class PagePlaybackCoordinator(
             if (!adoptLeases(request, leases, items != null)) return
             val item = items!![request.startIndex]
             PagePlayerSession.open(request.copy(items = items)) { name, detail -> if (active === request) event(name, detail) }
-            val intent = Intent(context, PlayerActivity::class.java)
+            val intent = Intent(context, PlayerActivity.activityClass(request.initialOrientation))
                 .putExtra(PlayerActivity.EXTRA_URL, item.payload.url)
                 .putExtra(PlayerActivity.EXTRA_TITLE, item.payload.title)
                 .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, item.payload.content_type)

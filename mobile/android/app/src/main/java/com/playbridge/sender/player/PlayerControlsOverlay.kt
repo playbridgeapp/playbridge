@@ -1,6 +1,5 @@
 package com.playbridge.sender.player
 
-import android.content.pm.ActivityInfo
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -232,17 +231,8 @@ private fun BoxScope.PlayerBottomBar(state: PlayerScreenState) {
                 Icon(Icons.Filled.Lock, "Lock controls", tint = Color.White)
             }
             IconButton(onClick = {
-                state.activity?.let { activity ->
-                    // Manual choice — stop auto-following the video aspect.
-                    (activity as? PlayerActivity)?.disableAutoOrientation()
-                    val isLandscapeNow =
-                        activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    activity.requestedOrientation = if (isLandscapeNow) {
-                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                    } else {
-                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    }
-                }
+                // A manual choice: stops following the video's shape.
+                (state.activity as? PlayerActivity)?.toggleRotation()
                 state.markInteraction()
             }) {
                 Icon(Icons.Filled.ScreenRotation, "Rotate screen", tint = Color.White)

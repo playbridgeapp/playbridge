@@ -111,7 +111,7 @@ data class SubtitleTrack(
  * Used for local phone playback and the cast sheet's
  * "Play on phone" menu item — neither casts to the TV.
  */
-class PlayerActivity : ComponentActivity() {
+open class PlayerActivity : ComponentActivity() {
 
     private var player: Player? = null
     private var attachedPageSessionId: String? = null
@@ -138,11 +138,6 @@ class PlayerActivity : ComponentActivity() {
     /** Follow the video's aspect for orientation until the user rotates manually. */
     private var autoOrientationEnabled = true
 
-    /** Called by the manual rotate control: the user's choice wins from now on. */
-    fun disableAutoOrientation() {
-        autoOrientationEnabled = false
-    }
-
     /**
      * Portrait first: the screen follows how the phone is held. After the fullscreen button
      * forces an orientation, it follows the phone again once the phone is turned to match.
@@ -157,12 +152,23 @@ class PlayerActivity : ComponentActivity() {
                 val heldLandscape = degrees in 60..120 || degrees in 240..300
                 val heldPortrait = degrees <= 30 || degrees >= 330 || degrees in 150..210
                 val matches = if (forced == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) heldLandscape else heldPortrait
-                if (matches) {
+                // With auto-rotate off, following the phone would snap straight back, so the
+                // button's choice stays until the player's own controls change it.
+                if (matches && autoRotateOn()) {
                     forcedOrientation = null
                     requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
                 }
             }
         }
+    }
+
+    private fun autoRotateOn(): Boolean =
+        android.provider.Settings.System.getInt(contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) == 1
+
+    /** The rotate button: landscape to portrait or back, by the same rules as the fullscreen button. */
+    fun toggleRotation() {
+        val landscapeNow = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        setFullscreen(!landscapeNow)
     }
 
     /** Fullscreen in landscape, or back to portrait, from the player's own buttons. */
@@ -171,7 +177,7 @@ class PlayerActivity : ComponentActivity() {
         else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         autoOrientationEnabled = false
         requestedOrientation = target
-        if (followPhone) {
+        if (followPhone && autoRotateOn()) {
             forcedOrientation = target
             if (orientationWatcher.canDetectOrientation()) orientationWatcher.enable()
         }
@@ -220,7 +226,7 @@ class PlayerActivity : ComponentActivity() {
         // Notification taps should land back HERE (singleTask brings this instance
         // forward), not in the browser.
         service.setContentIntent(
-            Intent(this, PlayerActivity::class.java).apply {
+            Intent(this, javaClass).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
         )
@@ -319,9 +325,10 @@ class PlayerActivity : ComponentActivity() {
         // Without one, the Landscape videos setting decides: fullscreen at once, or follow the
         // phone. Vertical videos turn to portrait either way.
         val requestedByWebsite = PhonePlayerOpeningOrientation.parse(intent.getStringExtra(EXTRA_INITIAL_ORIENTATION))
-        // DataStore is already loaded by the app that launched the player, so these reads are immediate.
+        // The launcher picked the activity from the setting (see activityClass), so the class says
+        // which way this player opens. DataStore is already loaded, so the read below is immediate.
         val settings = get<SettingsRepository>()
-        val landscapeOpen = runBlocking { settings.phoneLandscapeOpen.first() }
+        val landscapeOpen = if (this is PortraitFirstPlayerActivity) PhoneLandscapeOpen.PORTRAIT_FIRST else PhoneLandscapeOpen.FULLSCREEN
         val opening = playerOpening(requestedByWebsite, landscapeOpen)
         followPhone = opening.followPhone
         autoOrientationEnabled = opening.automatic
@@ -595,6 +602,20 @@ class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        /**
+         * The player to launch: [PortraitFirstPlayerActivity] when landscape videos open portrait
+         * first and the website hasn't asked for an orientation, so the window opens however the
+         * phone is held rather than in landscape.
+         */
+        fun activityClass(websiteOrientation: PhonePlayerOpeningOrientation? = null): Class<out PlayerActivity> {
+            if (websiteOrientation != null) return PlayerActivity::class.java
+            val settings = org.koin.core.context.GlobalContext.getOrNull()?.getOrNull<SettingsRepository>()
+                ?: return PlayerActivity::class.java
+            val open = runBlocking { settings.phoneLandscapeOpen.first() }
+            return if (open == PhoneLandscapeOpen.PORTRAIT_FIRST) PortraitFirstPlayerActivity::class.java
+            else PlayerActivity::class.java
+        }
+
         const val EXTRA_PAGE_SESSION_ID = "page_session_id"
         const val EXTRA_INITIAL_ORIENTATION = "initial_orientation"
         const val EXTRA_URL = "url"
