@@ -2064,6 +2064,25 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            // Check each subtitle as soon as it's detected: is it really subtitles, and in which
+            // language. The cast sheet then opens with both known instead of fetching per row.
+            LaunchedEffect(selectedTabId) {
+                val tabId = selectedTabId ?: return@LaunchedEffect
+                snapshotFlow {
+                    @Suppress("UNUSED_EXPRESSION")
+                    VideoDetector.processingVersion
+                    VideoDetector.getVideosForTab(tabId)
+                        .filter { it.isSubtitle && !it.subtitlePreviewChecked }
+                        .map { it.url }
+                }.distinctUntilChanged().collect { urls ->
+                    for (url in urls) {
+                        val subtitle = VideoDetector.getVideosForTab(tabId)
+                            .firstOrNull { it.url == url && it.isSubtitle && !it.subtitlePreviewChecked }
+                            ?: continue
+                        VideoDetector.fetchSubtitlePreview(subtitle)
+                    }
+                }
+            }
 
             // Find in Page state
             var showFindBar by remember { mutableStateOf(false) }

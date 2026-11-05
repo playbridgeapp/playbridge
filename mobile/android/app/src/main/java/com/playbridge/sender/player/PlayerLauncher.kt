@@ -21,6 +21,8 @@ object PlayerLauncher {
         origin: PlayerLaunchOrigin? = null,
         /** A cached detector thumbnail (by media URL) to show until the first frame. */
         thumbnailKey: String? = null,
+        /** The website's icon, pulsing in place of the spinner while the video loads. */
+        siteIconUrl: String? = null,
     ) {
         val intent = Intent(context, PlayerActivity.activityClass()).apply {
             putExtra(PlayerActivity.EXTRA_URL, url)
@@ -31,9 +33,12 @@ object PlayerLauncher {
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_URLS, ArrayList(subtitles.map { it.url }))
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LABELS, ArrayList(subtitles.map { it.label ?: "" }))
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
+                putStringArrayListExtra(PlayerActivity.EXTRA_SUB_FORMATS, ArrayList(subtitles.map { it.format ?: "" }))
+                putExtra(PlayerActivity.EXTRA_SUB_HEADERS, ArrayList(subtitles.map { HashMap(it.headers) }))
             }
             if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             thumbnailKey?.let { putExtra(PlayerActivity.EXTRA_THUMBNAIL_KEY, it) }
+            siteIconUrl?.let { putExtra(PlayerActivity.EXTRA_SITE_ICON_URL, it) }
             origin?.putInto(this)
         }
         context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, origin))

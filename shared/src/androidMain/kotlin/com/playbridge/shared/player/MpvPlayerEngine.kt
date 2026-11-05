@@ -699,6 +699,18 @@ class MpvPlayerEngine(
 
     fun getVideoScale(): String = "Fit"
 
+    /**
+     * Pinch-zoom done by mpv: [scale] 1 is the fitted picture, and the pan is in fractions of the
+     * zoomed picture's size. mpv keeps its subtitles on screen, unlike scaling the whole surface.
+     */
+    fun setVideoZoom(scale: Double, panX: Double, panY: Double) {
+        enqueueControl("setVideoZoom", watchForStall = false) {
+            MPVLib.setPropertyDouble("video-zoom", kotlin.math.log2(scale.coerceAtLeast(0.01)))
+            MPVLib.setPropertyDouble("video-pan-x", panX)
+            MPVLib.setPropertyDouble("video-pan-y", panY)
+        }
+    }
+
     fun setLooping(enabled: Boolean) {
         logger.i(TAG, "setLooping($enabled) queued")
         enqueueControl("setLooping") {
@@ -725,6 +737,19 @@ class MpvPlayerEngine(
         logger.i(TAG, "attachExternalSubtitle(${redactUrlForLog(url)}) queued")
         enqueueControl("attachExternalSubtitle") {
             MPVLib.command("sub-add", url, "select", language ?: "External Subtitle")
+        }
+    }
+
+    /**
+     * Audio and subtitle languages for the next file, in mpv's own spellings (`en,eng`). mpv picks
+     * matching tracks itself. Without a subtitle match, subtitles stay off unless [subtitleFallback]
+     * lets a stream's default subtitle on; forced subtitles show either way.
+     */
+    fun setLanguagePreferences(audio: List<String>, subtitles: List<String>, subtitleFallback: Boolean) {
+        enqueueControl("setLanguagePreferences") {
+            MPVLib.setOptionString("alang", audio.joinToString(","))
+            MPVLib.setOptionString("slang", subtitles.joinToString(","))
+            MPVLib.setOptionString("subs-fallback", if (subtitleFallback) "default" else "no")
         }
     }
 

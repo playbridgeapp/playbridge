@@ -22,7 +22,9 @@ import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.shared.logging.redactLogText
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +92,14 @@ data class DetectedVideo(
     var subtitlePreviewChecked: Boolean = false,
     @kotlinx.serialization.Transient
     var subtitleLanguage: String? = null,
+    /** The detected language's code (`pl`), alongside its display name in [subtitleLanguage]. */
+    @kotlinx.serialization.Transient
+    var subtitleLanguageCode: String? = null,
+    /** The format found in the file itself (`vtt`, `srt`, `ass`, `ttml`, `m3u8`); null until checked. */
+    @kotlinx.serialization.Transient
+    var subtitleFormat: String? = null,
+    /** From the file's opening bytes: false when it isn't subtitles (an error page, JSON…); null until checked. */
+    var subtitleContentValid: Boolean? = null,
     var isPlayable: Boolean? = null,
     @kotlinx.serialization.Transient
     val playlistPayload: List<playbridge.PlayPayload>? = null,
@@ -135,6 +145,10 @@ data class DetectedVideo(
                 contentType?.contains("subrip", ignoreCase = true) == true ||
                 url.endsWith(".vtt", ignoreCase = true) ||
                 url.endsWith(".srt", ignoreCase = true)
+
+    /** A subtitle that hasn't been found to be something else once its content was checked. */
+    val isUsableSubtitle: Boolean
+        get() = isSubtitle && subtitleContentValid != false
 
     /**
      * True when detection captured a synthetic/exclusive handoff that should be cast
@@ -397,7 +411,50 @@ fun buildCastSheetImages(videos: List<DetectedVideo>): List<DetectedVideo> =
 
 /** First detection is stable across routine repeat observations on SPA pages. */
 fun newestSubtitlesFirst(videos: List<DetectedVideo>): List<DetectedVideo> =
-    videos.filter { it.isSubtitle }.sortedByDescending { it.timestamp }
+    videos.filter { it.isUsableSubtitle }.sortedByDescending { it.timestamp }
+
+private val SUBTITLE_TIMING = Regex("""(\d{1,2}:)?\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*(\d{1,2}:)?\d{2}:\d{2}[,.]\d{1,3}""")
+
+/**
+ * Whether the opening of a fetched file is subtitles: WebVTT, SRT cue timings, ASS/SSA, TTML or
+ * an HLS subtitle playlist. Error pages, JSON and other data served at a subtitle-looking URL
+ * are not.
+ */
+internal fun looksLikeSubtitles(head: String): Boolean {
+    val text = head.removePrefix("\uFEFF").trimStart()
+    return text.startsWith("WEBVTT") ||
+        text.startsWith("#EXTM3U") ||
+        text.startsWith("[Script Info]", ignoreCase = true) ||
+        ((text.startsWith("<?xml") || text.startsWith("<tt")) && "<tt" in text) ||
+        SUBTITLE_TIMING.containsMatchIn(text)
+}
+
+private val IMAGE_CUE = Regex("""^\S+\.(jpe?g|png|webp|gif|avif)(\?\S*)?(#xywh=\S*)?$|#xywh=""", RegexOption.IGNORE_CASE)
+
+/** A WebVTT thumbnail track: most cues point at images (`sprite.jpg#xywh=…`) rather than dialogue. */
+internal fun isImageTrack(cueTexts: List<String>): Boolean =
+    cueTexts.isNotEmpty() && cueTexts.count { IMAGE_CUE.containsMatchIn(it) } * 2 > cueTexts.size
+
+/** The format named by a subtitle file's opening; [looksLikeSubtitles] must already hold. */
+internal fun subtitleFormatOf(head: String): String {
+    val text = head.removePrefix("\uFEFF").trimStart()
+    return when {
+        text.startsWith("WEBVTT") -> "vtt"
+        text.startsWith("#EXTM3U") -> "m3u8"
+        text.startsWith("[Script Info]", ignoreCase = true) -> "ass"
+        text.startsWith("<") -> "ttml"
+        else -> "srt"
+    }
+}
+
+/** Decodes a subtitle file's opening bytes, honouring a UTF-16 byte order mark. */
+internal fun decodeSubtitleHead(bytes: ByteArray): String = when {
+    bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() ->
+        String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+    bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() ->
+        String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+    else -> String(bytes, Charsets.UTF_8)
+}
 
 /**
  * Every viable video that should be enriched before the cast sheet opens.
@@ -711,6 +768,9 @@ object VideoDetector {
                     tracked.subtitlePreview = source.subtitlePreview
                     tracked.subtitlePreviewChecked = source.subtitlePreviewChecked
                     tracked.subtitleLanguage = source.subtitleLanguage
+                    tracked.subtitleLanguageCode = source.subtitleLanguageCode
+                    tracked.subtitleFormat = source.subtitleFormat
+                    tracked.subtitleContentValid = source.subtitleContentValid
                 }
                 if (manifest && shouldApplyManifestProbe(source, tracked)) {
                     tracked.qualities = source.qualities
@@ -1167,10 +1227,33 @@ object VideoDetector {
         }
     }
 
+    /** In-flight subtitle checks by URL, so the browser and the cast sheet share one request. Main thread only. */
+    private val subtitleProbes = mutableMapOf<String, Deferred<String?>>()
+
     /**
-     * Fetch a small preview of a subtitle file to help identify language
+     * Checks a subtitle from its first few KB: whether it really is subtitles, a short preview of
+     * its dialogue, and its language. Runs as soon as the subtitle is detected and again on demand
+     * from the sheets; concurrent calls for one URL share a single request.
      */
     suspend fun fetchSubtitlePreview(video: DetectedVideo): String? {
+        if (video.subtitlePreviewChecked) {
+            return video.subtitlePreview
+        }
+        val probe = withContext(Dispatchers.Main) {
+            subtitleProbes.getOrPut(video.url) {
+                subtitleScope.async {
+                    try {
+                        probeSubtitle(video)
+                    } finally {
+                        subtitleProbes.remove(video.url)
+                    }
+                }
+            }
+        }
+        return probe.await()
+    }
+
+    private suspend fun probeSubtitle(video: DetectedVideo): String? {
         if (video.subtitlePreviewChecked) {
             return video.subtitlePreview
         }
@@ -1212,13 +1295,20 @@ object VideoDetector {
                             if (count <= 0) break
                             output.write(buffer, 0, count)
                         }
-                        output.toString(Charsets.UTF_8.name())
+                        decodeSubtitleHead(output.toByteArray())
                     }
                     connection.disconnect()
 
-                    if (content.isNotEmpty()) {
+                    if (content.isNotEmpty() && !looksLikeSubtitles(content)) {
+                        video.subtitleContentValid = false
+                        video.subtitlePreviewChecked = true
+                        debugLog("Detected subtitle is not subtitle content; hiding it")
+                        null
+                    } else if (content.isNotEmpty()) {
+                        video.subtitleFormat = subtitleFormatOf(content)
                         val cues = if (video.url.endsWith(".vtt", ignoreCase = true) ||
-                                     video.contentType?.contains("vtt", ignoreCase = true) == true) {
+                                     video.contentType?.contains("vtt", ignoreCase = true) == true ||
+                                     content.removePrefix("\uFEFF").trimStart().startsWith("WEBVTT")) {
                             parseVtt(content)
                         } else {
                             parseSrt(content)
@@ -1228,6 +1318,8 @@ object VideoDetector {
                             cue.text.replace(Regex("<[^>]+>"), "")
                                 .replace("\n", " ").trim()
                         }.filter { it.isNotEmpty() }
+                        // WebVTT also carries seek-bar thumbnail sprites; those aren't subtitles.
+                        video.subtitleContentValid = !isImageTrack(cueText)
                         val previewText = cueText.take(3).joinToString(" • ")
 
                         if (previewText.isNotEmpty()) {
@@ -1248,7 +1340,9 @@ object VideoDetector {
                         } else {
                             video.subtitlePreview.orEmpty()
                         }).take(200)
-                        video.subtitleLanguage = SubtitleLanguageDetector.detect(languageText)
+                        val language = SubtitleLanguageDetector.detect(languageText)
+                        video.subtitleLanguage = language?.name
+                        video.subtitleLanguageCode = language?.code
                         video.subtitlePreviewChecked = true
                         debugLog("Subtitle preview loaded")
                         video.subtitlePreview

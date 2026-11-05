@@ -12,6 +12,6 @@ internal fun subtitleResourceForDetected(subtitle: DetectedVideo): SubtitleResou
         url = subtitle.url,
         headers = headers,
         label = subtitle.title ?: subtitle.url.substringBefore('?').substringAfterLast('/'),
-        language = subtitle.subtitleLanguage,
+        language = subtitleLanguageHint(subtitle) ?: subtitle.subtitleLanguage,
     )
 }

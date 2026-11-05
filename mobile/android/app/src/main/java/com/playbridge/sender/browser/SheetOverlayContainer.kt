@@ -229,6 +229,9 @@ fun SheetOverlayContainer(
             CastSheet(
                 videos = detectedVideos,
                 mediaRevision = detectedMediaRevision,
+                page = Components.store.state.selectedTabId
+                    ?.let { id -> Components.store.state.tabs.firstOrNull { it.id == id } }
+                    ?.content?.let { com.playbridge.sender.cast.CastSheetPage(it.title, it.url) },
                 onDismiss = onDismissVideoSheet,
                 onSaveToCollection = { video ->
                     saveToCollectionDraft = com.playbridge.sender.data.collection.CollectionItemDraft(

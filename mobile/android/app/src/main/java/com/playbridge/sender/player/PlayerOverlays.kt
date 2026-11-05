@@ -62,24 +62,70 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.FastOutSlowInEasing
+import coil.compose.AsyncImage
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.media3.common.Player
+import androidx.media3.common.text.CueGroup
+import androidx.media3.ui.SubtitleView
+import androidx.media3.ui.CaptionStyleCompat
 import com.playbridge.sender.R
 import kotlin.math.roundToInt
 
-/** The video itself, in a TextureView-backed PlayerView, with pinch-zoom applied on top. */
+/**
+ * The video itself, in a TextureView-backed PlayerView, with pinch-zoom applied on top. Subtitles
+ * sit in their own layer over the visible area, so zooming or filling the screen never pushes
+ * them out of view.
+ */
 @Composable
 internal fun VideoSurface(state: PlayerScreenState) {
+    Box(Modifier.fillMaxSize()) {
+        ZoomedVideo(state)
+        SubtitleLayer(state.player)
+    }
+}
+
+@Composable
+private fun ZoomedVideo(state: PlayerScreenState) {
     val player = state.player
+    // mpv draws subtitles into the picture, so it zooms and fills itself rather than being scaled.
+    val mpv = player as? MpvMediaPlayer
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(mpv, state.resizeMode) { mpv?.setScaleMode(mpvScaleMode(state.resizeMode)) }
+    LaunchedEffect(mpv) {
+        if (mpv == null) return@LaunchedEffect
+        snapshotFlow { Triple(state.scale, state.panOffset, size) }.collect { (scale, pan, area) ->
+            if (area.width == 0 || area.height == 0) return@collect
+            mpv.setZoom(scale.toDouble(), pan.x / (area.width * scale).toDouble(), pan.y / (area.height * scale).toDouble())
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onSizeChanged { size = it }
             // Perf: pinch-zoom transform on the outer Box, not the AndroidView —
             // per-gesture-frame TextureView re-layout dropped frames. Lambda
             // overload applies values at draw time without recomposing.
             .graphicsLayer {
-                scaleX = state.scale
-                scaleY = state.scale
-                translationX = state.panOffset.x
-                translationY = state.panOffset.y
+                if (mpv == null) {
+                    scaleX = state.scale
+                    scaleY = state.scale
+                    translationX = state.panOffset.x
+                    translationY = state.panOffset.y
+                }
             }
             .panZoomGestures(state)
     ) {
@@ -89,29 +135,17 @@ internal fun VideoSurface(state: PlayerScreenState) {
                 // (SurfaceView is async and left Compose in permanent BUFFERING).
                 (LayoutInflater.from(ctx).inflate(R.layout.player_view, FrameLayout(ctx), false) as PlayerView).apply {
                     this.player = player
-                    this.resizeMode = state.resizeMode
+                    this.resizeMode = viewResizeMode(player, state.resizeMode)
                     ensurePrepared(player)
                     post { ensurePrepared(player) }
 
-                    // Remove ugly dark background boxes from subtitles and use a high-contrast text outline
-                    subtitleView?.apply {
-                        setApplyEmbeddedStyles(false)
-                        setApplyEmbeddedFontSizes(false)
-                        val customStyle = androidx.media3.ui.CaptionStyleCompat(
-                            android.graphics.Color.WHITE,
-                            android.graphics.Color.TRANSPARENT,
-                            android.graphics.Color.TRANSPARENT,
-                            androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                            android.graphics.Color.BLACK,
-                            android.graphics.Typeface.DEFAULT_BOLD
-                        )
-                        setStyle(customStyle)
-                        setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f)
-                    }
+                    // SubtitleLayer draws subtitles outside the zoomed frame.
+                    subtitleView?.visibility = android.view.View.GONE
                 }
             },
             update = { view ->
-                if (view.resizeMode != state.resizeMode) view.resizeMode = state.resizeMode
+                val resizeMode = viewResizeMode(player, state.resizeMode)
+                if (view.resizeMode != resizeMode) view.resizeMode = resizeMode
                 if (view.player !== player) {
                     view.player = player
                     ensurePrepared(player)
@@ -123,12 +157,59 @@ internal fun VideoSurface(state: PlayerScreenState) {
     }
 }
 
+/** mpv's picture fills the view; mpv letterboxes, zooms or stretches it inside. */
+private fun viewResizeMode(player: Player, mode: Int): Int =
+    if (player is MpvMediaPlayer) AspectRatioFrameLayout.RESIZE_MODE_FILL else mode
+
+private fun mpvScaleMode(mode: Int): String = when (mode) {
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
+    AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Fill"
+    else -> "Fit"
+}
+
+/** ExoPlayer's subtitles, unzoomed, over the whole video area; mpv draws its own into the picture. */
+@Composable
+private fun SubtitleLayer(player: Player) {
+    var cues by remember(player) { mutableStateOf(player.currentCues.cues) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onCues(cueGroup: CueGroup) {
+                cues = cueGroup.cues
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    AndroidView(
+        factory = { ctx ->
+            SubtitleView(ctx).apply {
+                // No dark background boxes: white text with a high-contrast outline.
+                setApplyEmbeddedStyles(false)
+                setApplyEmbeddedFontSizes(false)
+                setStyle(
+                    CaptionStyleCompat(
+                        android.graphics.Color.WHITE,
+                        android.graphics.Color.TRANSPARENT,
+                        android.graphics.Color.TRANSPARENT,
+                        CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                        android.graphics.Color.BLACK,
+                        android.graphics.Typeface.DEFAULT_BOLD,
+                    )
+                )
+                setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f)
+            }
+        },
+        update = { view -> view.setCues(cues) },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
 /**
  * Buffering spinner — hidden once a frame has painted even if ExoPlayer still reports
  * BUFFERING (local content:// edge case). Also shown while a website supplies the next item.
  */
 @Composable
-internal fun BoxScope.BufferingIndicator(state: PlayerScreenState, waitingForWebsiteQueue: Boolean) {
+internal fun BoxScope.BufferingIndicator(state: PlayerScreenState, waitingForWebsiteQueue: Boolean, siteIconUrl: String?) {
     if ((state.isBuffering && !state.hasRenderedFrame || waitingForWebsiteQueue) &&
         state.dragMode == DragMode.NONE &&
         state.errorMessage == null
@@ -138,11 +219,45 @@ internal fun BoxScope.BufferingIndicator(state: PlayerScreenState, waitingForWeb
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            CircularProgressIndicator(color = Color.White)
+            LoadingMark(siteIconUrl)
             if (waitingForWebsiteQueue) {
                 OverlayPill("Getting the next episode from the website…")
             }
         }
+    }
+}
+
+/**
+ * The website's icon gently pulsing while the video loads; the spinner shows until the icon
+ * arrives, and stays if the site has none.
+ */
+@Composable
+private fun LoadingMark(siteIconUrl: String?) {
+    if (siteIconUrl == null) {
+        CircularProgressIndicator(color = Color.White)
+        return
+    }
+    var iconShown by remember(siteIconUrl) { mutableStateOf(false) }
+    val pulse = rememberInfiniteTransition(label = "SiteIconPulse")
+    val pulseSpec = infiniteRepeatable<Float>(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse)
+    val alpha by pulse.animateFloat(0.35f, 1f, pulseSpec, label = "SiteIconAlpha")
+    val scale by pulse.animateFloat(0.9f, 1f, pulseSpec, label = "SiteIconScale")
+    Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+        if (!iconShown) CircularProgressIndicator(color = Color.White)
+        AsyncImage(
+            model = siteIconUrl,
+            contentDescription = null,
+            onSuccess = { iconShown = true },
+            onError = { iconShown = false },
+            modifier = Modifier
+                .size(48.dp)
+                .graphicsLayer {
+                    this.alpha = if (iconShown) alpha else 0f
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .clip(RoundedCornerShape(12.dp)),
+        )
     }
 }
 

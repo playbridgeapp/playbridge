@@ -105,6 +105,9 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
     private var videoWidth = 0
     private var videoHeight = 0
     private var durationMs = C.TIME_UNSET
+    /** Fit, Zoom or Fill, and the pinch zoom; mpv applies them itself so its subtitles stay on screen. */
+    private var scaleMode = "Fit"
+    private var zoom = Triple(1.0, 0.0, 0.0)
 
     /** Index of the item mpv has open, or [C.INDEX_UNSET] when nothing is loaded. */
     private var loadedIndex = C.INDEX_UNSET
@@ -231,6 +234,13 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
         val open = Runnable {
             loadAwaitingSurface = null
             scope.launch {
+                engine.setVideoScale(scaleMode)
+                engine.setVideoZoom(zoom.first, zoom.second, zoom.third)
+                engine.setLanguagePreferences(
+                    audio = trackParameters.preferredAudioLanguages.flatMap(::languageSpellings),
+                    subtitles = trackParameters.preferredTextLanguages.flatMap(::languageSpellings),
+                    subtitleFallback = trackParameters.ignoredTextSelectionFlags and C.SELECTION_FLAG_DEFAULT == 0,
+                )
                 engine.load(payload)
                 if (playWhenReady) engine.play() else engine.pause()
             }
@@ -552,6 +562,21 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
             val frame = holder.surfaceFrame
             useSurface(it, owned = false, frame.width(), frame.height())
         }
+    }
+
+    /** Fit, Zoom (fill the screen) or Fill (stretch), as in [androidx.media3.ui.AspectRatioFrameLayout]. */
+    fun setScaleMode(mode: String) {
+        if (mode == scaleMode) return
+        scaleMode = mode
+        engine?.setVideoScale(mode)
+    }
+
+    /** Pinch-zoom: [scale] 1 is the fitted picture; the pan is in fractions of the zoomed picture. */
+    fun setZoom(scale: Double, panX: Double, panY: Double) {
+        val next = Triple(scale, panX, panY)
+        if (next == zoom) return
+        zoom = next
+        engine?.setVideoZoom(scale, panX, panY)
     }
 
     private fun clearVideoOutput() {
