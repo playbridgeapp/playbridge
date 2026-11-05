@@ -43,6 +43,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -100,6 +101,11 @@ internal fun PortraitPanel(
     val rotationLocked = remember {
         Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, 1) == 0
     }
+    // The panel sits on black, not a theme surface, so icons are tinted explicitly.
+    val transportColors = IconButtonDefaults.iconButtonColors(
+        contentColor = Color.White,
+        disabledContentColor = Color.White.copy(alpha = 0.35f),
+    )
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -126,7 +132,11 @@ internal fun PortraitPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (state.isPlaylist) {
-                IconButton(onClick = { state.goToEpisode(state.currentIndex - 1) }, enabled = state.currentIndex > 0) {
+                IconButton(
+                    onClick = { state.goToEpisode(state.currentIndex - 1) },
+                    enabled = state.currentIndex > 0,
+                    colors = transportColors,
+                ) {
                     Icon(Icons.Filled.SkipPrevious, "Previous", modifier = Modifier.size(30.dp))
                 }
             }
@@ -147,6 +157,7 @@ internal fun PortraitPanel(
                 IconButton(
                     onClick = { state.goToEpisode(state.currentIndex + 1) },
                     enabled = state.currentIndex < state.episodeTitles.size - 1,
+                    colors = transportColors,
                 ) {
                     Icon(Icons.Filled.SkipNext, "Next", modifier = Modifier.size(30.dp))
                 }
@@ -191,11 +202,15 @@ internal fun PortraitPanel(
     }
 }
 
-/** The rest of a playlist or website queue after the current item; tap one to play it. */
+/**
+ * The next few items of a playlist or website queue; tap one to play it. Long queues end with
+ * a link to the whole list in the Queue sheet.
+ */
 @Composable
 private fun UpNext(state: PlayerScreenState) {
-    val upcoming = state.episodeTitles.withIndex().drop(state.currentIndex + 1)
-    if (!state.isPlaylist || upcoming.isEmpty()) return
+    val remaining = state.episodeTitles.withIndex().drop(state.currentIndex + 1)
+    if (!state.isPlaylist || remaining.isEmpty()) return
+    val upcoming = remaining.take(UP_NEXT_COUNT)
     HorizontalDivider(Modifier.padding(top = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
     Text(
         "UP NEXT",
@@ -222,6 +237,13 @@ private fun UpNext(state: PlayerScreenState) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
+    if (remaining.size > upcoming.size) {
+        TextButton(onClick = { state.showEpisodes = true }, modifier = Modifier.padding(start = 8.dp)) {
+            Text("Show all ${state.episodeTitles.size}")
+        }
+    }
 }
+
+private const val UP_NEXT_COUNT = 5
 
 internal val PORTRAIT_TOP_BAR_HEIGHT = 56.dp
