@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.playbridge.sender.player.PhoneLandscapeOpen
 import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.serialization.Serializable
 import mozilla.components.browser.state.state.ContentState
@@ -86,6 +87,7 @@ object BackupUtils {
             iptvActiveFirst = settingsRepository.iptvActiveFirst.first(),
             hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
             phonePlayerMode = settingsRepository.phonePlayerMode.first().id,
+            phoneLandscapeOpen = settingsRepository.phoneLandscapeOpen.first().id,
         )
 
         val exported = ExportedSettings(
@@ -175,6 +177,7 @@ object BackupUtils {
                 s.iptvActiveFirst?.let { settingsRepository.setIptvActiveFirst(it) }
                 s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
                 s.phonePlayerMode?.let { settingsRepository.setPhonePlayerMode(PhonePlayerMode.fromId(it)) }
+                s.phoneLandscapeOpen?.let { settingsRepository.setPhoneLandscapeOpen(PhoneLandscapeOpen.fromId(it)) }
             }
 
 

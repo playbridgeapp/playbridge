@@ -11,6 +11,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.delay
 
@@ -96,6 +97,15 @@ internal fun PlayerScreenEffects(state: PlayerScreenState, isInPip: Boolean, onE
             override fun onPlayerError(error: PlaybackException) {
                 state.errorMessage = error.message ?: "Playback error"
                 state.isBuffering = false
+            }
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (videoSize.width <= 0 || videoSize.height <= 0) return
+                // Some containers deliver a rotated frame + rotation metadata.
+                @Suppress("DEPRECATION")
+                val swapped = videoSize.unappliedRotationDegrees % 180 != 0
+                val width = videoSize.width * videoSize.pixelWidthHeightRatio
+                val height = videoSize.height.toFloat()
+                state.videoAspect = if (swapped) height / width else width / height
             }
             override fun onRenderedFirstFrame() {
                 state.hasRenderedFrame = true

@@ -1,5 +1,10 @@
 package com.playbridge.sender.cast
 
+import android.graphics.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.toSize
+import com.playbridge.sender.player.PlayerLaunchOrigin
 import com.playbridge.sender.downloads.DownloadUtils
 import android.content.ClipData
 import androidx.core.net.toUri
@@ -229,7 +234,7 @@ internal fun VideoItemDetailed(
     onCopyClick: () -> Unit,
     onOpenWithClick: () -> Unit,
     onPreviewClick: () -> Unit,
-    onPlayPhoneClick: () -> Unit,
+    onPlayPhoneClick: (PlayerLaunchOrigin?) -> Unit,
     onSaveToCollection: (() -> Unit)? = null
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
@@ -242,6 +247,7 @@ internal fun VideoItemDetailed(
     var isLoadingSize by remember { mutableStateOf(!video.fileSizeChecked) }
     var showRawDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
+    var thumbnailBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
 
     // HLS Qualities state
     val isStream = remember(videoType) { videoType == "HLS" || videoType == "DASH" }
@@ -362,11 +368,15 @@ internal fun VideoItemDetailed(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Thumbnail — always shown for all video types
+            // Thumbnail — always shown for all video types. Its bounds let the player grow out of it.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
+                    .onGloballyPositioned { coordinates ->
+                        val topLeft = coordinates.positionOnScreen()
+                        thumbnailBounds = androidx.compose.ui.geometry.Rect(topLeft, coordinates.size.toSize())
+                    }
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -570,7 +580,12 @@ internal fun VideoItemDetailed(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                    IconButton(onClick = onPlayPhoneClick) {
+                    IconButton(onClick = {
+                        val bounds = thumbnailBounds
+                        onPlayPhoneClick(bounds?.let { b ->
+                            PlayerLaunchOrigin(Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()))
+                        })
+                    }) {
                         Icon(
                             Icons.Default.PlayArrow,
                             contentDescription = "Play on Phone",

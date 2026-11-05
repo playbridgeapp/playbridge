@@ -90,6 +90,16 @@
             android:launchMode="singleTask"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
+        <!-- The same player for "Landscape videos open in: Portrait first": it opens however the
+             phone is held, instead of opening in landscape and then turning. -->
+        <activity
+            android:name=".player.PortraitFirstPlayerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PlayBridge.Player"
+            android:screenOrientation="fullUser"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
         <service
             android:name=".cast.MediaPlaybackService"
             android:exported="false"

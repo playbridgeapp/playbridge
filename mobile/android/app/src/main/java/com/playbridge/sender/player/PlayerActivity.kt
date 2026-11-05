@@ -1,5 +1,9 @@
 package com.playbridge.sender.player
 
+import android.os.Build
+import android.view.OrientationEventListener
+import com.playbridge.sender.R
+import com.playbridge.sender.cast.VideoDetector
 import android.content.Context
 import com.playbridge.shared.logging.redactUrlForLog
 import androidx.core.net.toUri
@@ -107,7 +111,7 @@ data class SubtitleTrack(
  * Used for local phone playback and the cast sheet's
  * "Play on phone" menu item — neither casts to the TV.
  */
-class PlayerActivity : ComponentActivity() {
+open class PlayerActivity : ComponentActivity() {
 
     private var player: Player? = null
     private var attachedPageSessionId: String? = null
@@ -117,6 +121,8 @@ class PlayerActivity : ComponentActivity() {
     private val engineState = mutableStateOf(PhonePlayerEngine.EXOPLAYER)
     /** Shown over the player after an automatic switch or a switch mpv can't make. */
     private val engineNoticeState = mutableStateOf<EngineNotice?>(null)
+    /** The tapped thumbnail's screen bounds, until the opening animation has run. */
+    private val growFromState = mutableStateOf<android.graphics.Rect?>(null)
     private var playerMode = PhonePlayerMode.AUTOMATIC
     private var switchedToMpvAutomatically = false
     private var requestHeaders: Map<String, String> = emptyMap()
@@ -134,9 +140,49 @@ class PlayerActivity : ComponentActivity() {
     /** Follow the video's aspect for orientation until the user rotates manually. */
     private var autoOrientationEnabled = true
 
-    /** Called by the manual rotate control: the user's choice wins from now on. */
-    fun disableAutoOrientation() {
+    /**
+     * Portrait first: the screen follows how the phone is held. After the fullscreen button
+     * forces an orientation, it follows the phone again once the phone is turned to match.
+     */
+    private var followPhone = false
+    private var forcedOrientation: Int? = null
+    private val orientationWatcher by lazy {
+        object : OrientationEventListener(this) {
+            override fun onOrientationChanged(degrees: Int) {
+                val forced = forcedOrientation ?: return
+                if (degrees == ORIENTATION_UNKNOWN) return
+                val heldLandscape = degrees in 60..120 || degrees in 240..300
+                val heldPortrait = degrees <= 30 || degrees >= 330 || degrees in 150..210
+                val matches = if (forced == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) heldLandscape else heldPortrait
+                // With auto-rotate off, following the phone would snap straight back, so the
+                // button's choice stays until the player's own controls change it.
+                if (matches && autoRotateOn()) {
+                    forcedOrientation = null
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+                }
+            }
+        }
+    }
+
+    private fun autoRotateOn(): Boolean =
+        android.provider.Settings.System.getInt(contentResolver, android.provider.Settings.System.ACCELEROMETER_ROTATION, 1) == 1
+
+    /** The rotate button: landscape to portrait or back, by the same rules as the fullscreen button. */
+    fun toggleRotation() {
+        val landscapeNow = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        setFullscreen(!landscapeNow)
+    }
+
+    /** Fullscreen in landscape, or back to portrait, from the player's own buttons. */
+    private fun setFullscreen(fullscreen: Boolean) {
+        val target = if (fullscreen) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         autoOrientationEnabled = false
+        requestedOrientation = target
+        if (followPhone && autoRotateOn()) {
+            forcedOrientation = target
+            if (orientationWatcher.canDetectOrientation()) orientationWatcher.enable()
+        }
     }
 
     // ── Background-mode media session ────────────────────────────────────────
@@ -182,7 +228,7 @@ class PlayerActivity : ComponentActivity() {
         // Notification taps should land back HERE (singleTask brings this instance
         // forward), not in the browser.
         service.setContentIntent(
-            Intent(this, PlayerActivity::class.java).apply {
+            Intent(this, javaClass).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
         )
@@ -278,10 +324,24 @@ class PlayerActivity : ComponentActivity() {
         }
 
         // Website preferences affect only the opening policy, not the manual rotate control.
-        val openingOrientation = PhonePlayerOpeningOrientation.parse(intent.getStringExtra(EXTRA_INITIAL_ORIENTATION))
-            ?: PhonePlayerOpeningOrientation.AUTOMATIC
-        autoOrientationEnabled = openingOrientation.automatic
-        requestedOrientation = openingOrientation.requestedOrientation
+        // Without one, the Landscape videos setting decides: fullscreen at once, or follow the
+        // phone. Vertical videos turn to portrait either way.
+        val requestedByWebsite = PhonePlayerOpeningOrientation.parse(intent.getStringExtra(EXTRA_INITIAL_ORIENTATION))
+        // The launcher picked the activity from the setting (see activityClass), so the class says
+        // which way this player opens. DataStore is already loaded, so the read below is immediate.
+        val settings = get<SettingsRepository>()
+        val landscapeOpen = if (this is PortraitFirstPlayerActivity) PhoneLandscapeOpen.PORTRAIT_FIRST else PhoneLandscapeOpen.FULLSCREEN
+        val opening = playerOpening(requestedByWebsite, landscapeOpen)
+        followPhone = opening.followPhone
+        autoOrientationEnabled = opening.automatic
+        requestedOrientation = opening.requestedOrientation
+        // Rotate in place rather than with the system's cross-screen jump.
+        window.attributes = window.attributes.apply {
+            rotationAnimation = WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, R.anim.player_close)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -298,8 +358,7 @@ class PlayerActivity : ComponentActivity() {
         )
 
         requestHeaders = headers
-        // DataStore is already loaded by the app that launched the player, so this read is immediate.
-        playerMode = get<SettingsRepository>().let { settings -> runBlocking { settings.phonePlayerMode.first() } }
+        playerMode = runBlocking { settings.phonePlayerMode.first() }
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
         val request = PhoneMediaRequest(headers)
         val initialTitle: String?
@@ -337,6 +396,14 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         showPlayer(first, initialEngine)
+        // Grow the video out of the tapped thumbnail on a fresh open, not on recreation.
+        growFromState.value = if (savedInstanceState == null) {
+            androidx.core.content.IntentCompat.getParcelableExtra(intent, PlayerLaunchOrigin.EXTRA_ORIGIN_BOUNDS, android.graphics.Rect::class.java)
+        } else null
+        val poster = PlayerPoster(
+            bitmap = intent.getStringExtra(EXTRA_THUMBNAIL_KEY)?.let(VideoDetector::getCachedThumbnail),
+            url = intent.getStringExtra(EXTRA_POSTER_URL),
+        )
 
         setContent {
             PlayBridgePlayerTheme {
@@ -357,6 +424,10 @@ class PlayerActivity : ComponentActivity() {
                     onClose = { finish() },
                     onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
                     isInPip = isInPip,
+                    poster = poster,
+                    growFrom = growFromState.value,
+                    onGrown = { growFromState.value = null },
+                    onFullscreen = ::setFullscreen,
                     backgroundMode = backgroundModeState,
                     engineNotice = engineNoticeState.value,
                     onEngineNoticeAction = {
@@ -462,6 +533,8 @@ class PlayerActivity : ComponentActivity() {
             // Some containers deliver a rotated frame + rotation metadata.
             val swapped = videoSize.unappliedRotationDegrees % 180 != 0
             val isPortraitVideo = if (swapped) w > h else h > w
+            // Portrait first leaves landscape videos however the phone is held.
+            if (followPhone && !isPortraitVideo) return
             requestedOrientation = if (isPortraitVideo) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             } else {
@@ -516,8 +589,17 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    override fun finish() {
+        super.finish()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, R.anim.player_close)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        orientationWatcher.disable()
         stopBackgroundMediaSession()
         // Flush a final resume point and clear the in-app leg (the polling loop is already
         // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
@@ -528,6 +610,20 @@ class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        /**
+         * The player to launch: [PortraitFirstPlayerActivity] when landscape videos open portrait
+         * first and the website hasn't asked for an orientation, so the window opens however the
+         * phone is held rather than in landscape.
+         */
+        fun activityClass(websiteOrientation: PhonePlayerOpeningOrientation? = null): Class<out PlayerActivity> {
+            if (websiteOrientation != null) return PlayerActivity::class.java
+            val settings = org.koin.core.context.GlobalContext.getOrNull()?.getOrNull<SettingsRepository>()
+                ?: return PlayerActivity::class.java
+            val open = runBlocking { settings.phoneLandscapeOpen.first() }
+            return if (open == PhoneLandscapeOpen.PORTRAIT_FIRST) PortraitFirstPlayerActivity::class.java
+            else PlayerActivity::class.java
+        }
+
         const val EXTRA_PAGE_SESSION_ID = "page_session_id"
         const val EXTRA_INITIAL_ORIENTATION = "initial_orientation"
         const val EXTRA_URL = "url"
@@ -542,6 +638,10 @@ class PlayerActivity : ComponentActivity() {
         const val EXTRA_START_INDEX = "start_index"
 
         const val EXTRA_START_POSITION_MS = "start_position_ms"
+        /** A detector thumbnail's cache key (the media URL), shown until the first frame. */
+        const val EXTRA_THUMBNAIL_KEY = "thumbnail_key"
+        /** A website poster or backdrop URL, shown until the first frame. */
+        const val EXTRA_POSTER_URL = "poster_url"
 
 
         private const val DEFAULT_UA =

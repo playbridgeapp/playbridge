@@ -1,6 +1,5 @@
 package com.playbridge.sender.player
 
-import android.content.pm.ActivityInfo
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -140,7 +139,7 @@ private fun BoxScope.PlayerTopBar(
 
 /** "Queue · 3 of 12 · ExoPlayer", plus a tag while repeat is on. */
 @Composable
-private fun TitleMeta(state: PlayerScreenState, engine: PhonePlayerEngine) {
+internal fun TitleMeta(state: PlayerScreenState, engine: PhonePlayerEngine) {
     val position = if (state.isPlaylist && state.episodeTitles.isNotEmpty()) {
         val noun = if (state.websiteQueue) "Queue" else "Episode"
         "$noun · ${state.currentIndex + 1} of ${state.episodeTitles.size} · "
@@ -232,17 +231,8 @@ private fun BoxScope.PlayerBottomBar(state: PlayerScreenState) {
                 Icon(Icons.Filled.Lock, "Lock controls", tint = Color.White)
             }
             IconButton(onClick = {
-                state.activity?.let { activity ->
-                    // Manual choice — stop auto-following the video aspect.
-                    (activity as? PlayerActivity)?.disableAutoOrientation()
-                    val isLandscapeNow =
-                        activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    activity.requestedOrientation = if (isLandscapeNow) {
-                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                    } else {
-                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                    }
-                }
+                // A manual choice: stops following the video's shape.
+                (state.activity as? PlayerActivity)?.toggleRotation()
                 state.markInteraction()
             }) {
                 Icon(Icons.Filled.ScreenRotation, "Rotate screen", tint = Color.White)
@@ -264,7 +254,7 @@ private fun BoxScope.PlayerBottomBar(state: PlayerScreenState) {
 
 /** Elapsed time, the seek bar, and the duration (tap for time remaining). */
 @Composable
-private fun TimelineRow(state: PlayerScreenState) {
+internal fun TimelineRow(state: PlayerScreenState) {
     val duration = state.playbackDuration.longValue
     val shown = if (state.isScrubbing) (state.scrubFraction * duration).toLong() else state.playbackProgress.longValue
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -291,7 +281,7 @@ private fun TimelineRow(state: PlayerScreenState) {
 
 /** While an A-B loop is set: its range, and an × to clear it. */
 @Composable
-private fun AbLoopChip(state: PlayerScreenState) {
+internal fun AbLoopChip(state: PlayerScreenState) {
     val start = state.abStartMs ?: return
     val end = state.abEndMs
     val text = if (end == null) "A ${formatTime(start)}" else "A-B ${formatTime(start)}–${formatTime(end)}"
@@ -300,7 +290,7 @@ private fun AbLoopChip(state: PlayerScreenState) {
 
 /** While zoomed in: the zoom level and Reset. */
 @Composable
-private fun ZoomChip(state: PlayerScreenState) {
+internal fun ZoomChip(state: PlayerScreenState) {
     if (state.scale <= 1.01f) return
     OverlayChip(
         text = "${(state.scale * 100).toInt()}% · Reset",
@@ -310,7 +300,7 @@ private fun ZoomChip(state: PlayerScreenState) {
 }
 
 @Composable
-private fun OverlayChip(
+internal fun OverlayChip(
     text: String,
     highlighted: Boolean,
     onClick: (() -> Unit)? = null,

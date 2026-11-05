@@ -4,6 +4,7 @@ import androidx.core.content.edit
 import android.content.Context
 import org.koin.compose.koinInject
 import com.playbridge.sender.data.settings.SettingsRepository
+import com.playbridge.sender.player.PhoneLandscapeOpen
 import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
@@ -51,6 +52,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
 
     val queueWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
     val phonePlayerMode by settingsRepository.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
+    val landscapeOpen by settingsRepository.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
     val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
     var maxBitrateText by remember { mutableStateOf("") }
 
@@ -168,6 +170,28 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                         ),
                     )
                 }
+            }
+
+            Text("Landscape videos open in", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Column(Modifier.selectableGroup()) {
+                PhoneLandscapeOpen.entries.forEach { option ->
+                    ListItem(
+                        headlineContent = { Text(option.label) },
+                        supportingContent = { Text(option.description) },
+                        leadingContent = { RadioButton(selected = landscapeOpen == option, onClick = null) },
+                        modifier = Modifier.selectable(
+                            selected = landscapeOpen == option,
+                            role = Role.RadioButton,
+                            onClick = { scope.launch { settingsRepository.setPhoneLandscapeOpen(option) } },
+                        ),
+                    )
+                }
+                Text(
+                    "Vertical videos always open in portrait. Websites can still ask for an orientation.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
             }
 
             Text("Website queue", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)

@@ -12,6 +12,7 @@ import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.player.PagePlayerSession
 import com.playbridge.sender.player.PlayerActivity
+import com.playbridge.sender.player.PlayerLaunchOrigin
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -178,14 +179,15 @@ class PagePlaybackCoordinator(
             if (!adoptLeases(request, leases, items != null)) return
             val item = items!![request.startIndex]
             PagePlayerSession.open(request.copy(items = items)) { name, detail -> if (active === request) event(name, detail) }
-            val intent = Intent(context, PlayerActivity::class.java)
+            val intent = Intent(context, PlayerActivity.activityClass(request.initialOrientation))
                 .putExtra(PlayerActivity.EXTRA_URL, item.payload.url)
                 .putExtra(PlayerActivity.EXTRA_TITLE, item.payload.title)
                 .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, item.payload.content_type)
                 .putExtra(PlayerActivity.EXTRA_HEADERS, JSONObject(item.payload.headers).toString())
                 .putExtra(PlayerActivity.EXTRA_PAGE_SESSION_ID, request.sessionId)
                 .putExtra(PlayerActivity.EXTRA_INITIAL_ORIENTATION, request.initialOrientation?.wireValue)
-            try { context.startActivity(intent); replyRequest(request) }
+                .putExtra(PlayerActivity.EXTRA_POSTER_URL, item.payload.visual_metadata?.let { it.backdrop_url ?: it.poster_url })
+            try { context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, null)); replyRequest(request) }
             catch (_: Exception) { reject(request, "playback_failed"); end("playback_failed") }
         } else {
             if (request.items.size > 1) { reject(request, "unsupported_queue"); end("unsupported_queue"); return }

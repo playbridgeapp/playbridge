@@ -41,7 +41,7 @@ internal class PlayerScreenState(
     val player: Player,
     /** The title the screen opened with; a media item without one falls back to it. */
     val initialTitle: String?,
-    /** A website queue shows the queue controls even while it holds a single item. */
+    /** Played from a website's queue: the sheet says Queue rather than Episodes. */
     val websiteQueue: Boolean,
     val context: Context,
     val window: Window?,
@@ -57,6 +57,12 @@ internal class PlayerScreenState(
     // Once a frame is on screen, hide the spinner even if ExoPlayer briefly
     // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
     var hasRenderedFrame by mutableStateOf(false)
+    /** Width over height of the picture as displayed; 0 until the video reports its size. */
+    var videoAspect by mutableFloatStateOf(0f)
+    /** The shape to lay out for: 16:9 until the video reports its size, so opening doesn't jump. */
+    val layoutAspect: Float get() = if (videoAspect > 0f) videoAspect else 16f / 9f
+    /** A landscape video is shown in the portrait layout when the phone is upright. */
+    val isLandscapeVideo: Boolean get() = layoutAspect > 1.1f
     var errorMessage by mutableStateOf<String?>(null)
 
     // Controls / scrubbing
@@ -95,7 +101,12 @@ internal class PlayerScreenState(
     // Follow timeline changes rather than retaining the initial single-item list.
     var episodeTitles by mutableStateOf(readQueueTitles())
     var currentIndex by mutableIntStateOf(player.currentMediaItemIndex)
-    val isPlaylist: Boolean get() = websiteQueue || episodeTitles.size > 1
+    /**
+     * Queue controls (Queue, Previous/Next, Up next, "3 of 12") appear once there are at least two
+     * items; a website queue that has supplied only one item looks like a single video until
+     * its next item arrives.
+     */
+    val isPlaylist: Boolean get() = episodeTitles.size > 1
 
     // Gesture HUD state
     var dragMode by mutableStateOf(DragMode.NONE)
@@ -126,6 +137,8 @@ internal class PlayerScreenState(
         if (index < 0 || index >= episodeTitles.size) return
         errorMessage = null
         player.seekTo(index, 0L)
+        // After an error the player is idle: it must be prepared again to load the new item.
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
         player.play()
     }
 

@@ -64,3 +64,14 @@ object PhonePlayerFallback {
         return scheme in setOf("http", "https", "file", "content") || url.startsWith("/")
     }
 }
+
+/** How a landscape video opens on the phone when the website doesn't ask for an orientation. */
+enum class PhoneLandscapeOpen(val id: String, val label: String, val description: String) {
+    FULLSCREEN("fullscreen", "Fullscreen", "Turn into landscape fullscreen as soon as the video opens"),
+    PORTRAIT_FIRST("portrait", "Portrait first", "Stay in portrait until you turn the phone or tap fullscreen"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): PhoneLandscapeOpen = entries.firstOrNull { it.id == id } ?: FULLSCREEN
+    }
+}
