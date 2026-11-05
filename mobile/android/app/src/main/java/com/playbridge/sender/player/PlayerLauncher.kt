@@ -17,6 +17,10 @@ object PlayerLauncher {
         subtitles: List<SubtitleTrack> = emptyList(),
         // Watch-progress identity (movies / single episodes). Omit for untracked playback.
         startPositionMs: Long = 0L,
+        /** The tapped thumbnail, to grow the player out of it. */
+        origin: PlayerLaunchOrigin? = null,
+        /** A cached detector thumbnail (by media URL) to show until the first frame. */
+        thumbnailKey: String? = null,
     ) {
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra(PlayerActivity.EXTRA_URL, url)
@@ -29,8 +33,9 @@ object PlayerLauncher {
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
             }
             if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
+            thumbnailKey?.let { putExtra(PlayerActivity.EXTRA_THUMBNAIL_KEY, it) }
         }
-        context.startActivity(intent)
+        context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, origin))
     }
 
     /**

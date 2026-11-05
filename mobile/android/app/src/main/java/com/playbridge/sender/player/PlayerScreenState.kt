@@ -57,6 +57,10 @@ internal class PlayerScreenState(
     // Once a frame is on screen, hide the spinner even if ExoPlayer briefly
     // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
     var hasRenderedFrame by mutableStateOf(false)
+    /** Width over height of the picture as displayed; 0 until the video reports its size. */
+    var videoAspect by mutableFloatStateOf(0f)
+    /** A landscape video is shown in the portrait layout when the phone is upright. */
+    val isLandscapeVideo: Boolean get() = videoAspect > 1.1f
     var errorMessage by mutableStateOf<String?>(null)
 
     // Controls / scrubbing

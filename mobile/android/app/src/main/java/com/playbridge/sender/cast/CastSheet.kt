@@ -398,7 +398,7 @@ fun CastSheet(
     // Play the given video on this phone via the in-app PlayerActivity.
     // Skips proxy rewriting (that's only for TV hand-off) — ExoPlayer applies
     // the request headers directly.
-    fun dispatchPhoneForVideo(video: DetectedVideo) {
+    fun dispatchPhoneForVideo(video: DetectedVideo, origin: com.playbridge.sender.player.PlayerLaunchOrigin? = null) {
         val specificUrl = if (selectedVideo?.url == video.url) selectedQualityUrl else null
         val resolved = if (specificUrl != null) {
             val selectedQuality = video.qualities.find { it.url == specificUrl }
@@ -417,7 +417,9 @@ fun CastSheet(
             title = resolved.title,
             contentType = resolved.contentType,
             headers = VideoDetector.mediaHeaders(resolved),
-            subtitles = phoneSubtitleTracks()
+            subtitles = phoneSubtitleTracks(),
+            origin = origin,
+            thumbnailKey = video.url,
         )
         onDismiss()
     }
@@ -1274,7 +1276,7 @@ fun CastSheet(
                                     dispatchExternalPlayerForVideo(video)
                                 },
                                 onPreviewClick = { previewVideo = video },
-                                onPlayPhoneClick = { dispatchPhoneForVideo(video) },
+                                onPlayPhoneClick = { origin -> dispatchPhoneForVideo(video, origin) },
                                 onSaveToCollection = onSaveToCollection?.let { cb -> { cb(video) } }
                             )
                         }
@@ -1335,7 +1337,7 @@ fun CastSheet(
                                         dispatchExternalPlayerForVideo(video)
                                     },
                                     onPreviewClick = { previewVideo = video },
-                                    onPlayPhoneClick = { dispatchPhoneForVideo(video) },
+                                    onPlayPhoneClick = { origin -> dispatchPhoneForVideo(video, origin) },
                                     onSaveToCollection = onSaveToCollection?.let { cb ->
                                         { cb(video) }
                                     },
