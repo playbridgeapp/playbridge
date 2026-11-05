@@ -1,5 +1,19 @@
 package com.playbridge.sender.player
 
+import android.content.Intent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.delay
 import android.view.LayoutInflater
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
@@ -119,10 +133,16 @@ internal fun BoxScope.BufferingIndicator(state: PlayerScreenState, waitingForWeb
         state.dragMode == DragMode.NONE &&
         state.errorMessage == null
     ) {
-        CircularProgressIndicator(
+        Column(
             modifier = Modifier.align(Alignment.Center),
-            color = Color.White
-        )
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            CircularProgressIndicator(color = Color.White)
+            if (waitingForWebsiteQueue) {
+                OverlayPill("Getting the next episode from the website…")
+            }
+        }
     }
 }
 
@@ -194,18 +214,7 @@ internal fun BoxScope.StatusMessage(state: PlayerScreenState) {
         enter = fadeIn(),
         exit = fadeOut()
     ) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.65f),
-            shape = RoundedCornerShape(50)
-        ) {
-            Text(
-                text = state.statusMessage ?: "",
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-        }
+        OverlayPill(state.statusMessage ?: "", bold = true)
     }
 }
 
@@ -234,29 +243,42 @@ internal fun BoxScope.StatsPanel(state: PlayerScreenState, engine: PhonePlayerEn
 
 /** Error overlay with recovery actions (transient timeouts shouldn't dead-end). */
 @Composable
-internal fun PlaybackErrorOverlay(state: PlayerScreenState, onClose: () -> Unit) {
+internal fun PlaybackErrorOverlay(state: PlayerScreenState, engine: PhonePlayerEngine, onClose: () -> Unit) {
     val errorMessage = state.errorMessage ?: return
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp),
+        ) {
+            Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(40.dp))
+            Spacer(Modifier.height(10.dp))
             Text("Playback failed", style = MaterialTheme.typography.titleMedium, color = Color.White)
             Spacer(Modifier.height(6.dp))
             Text(
                 text = errorMessage,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.75f),
+                textAlign = TextAlign.Center,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 32.dp)
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = listOfNotNull(engine.label, state.currentTitle).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.55f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onClose) { Text("Close", color = Color.White.copy(alpha = 0.8f)) }
+                TextButton(onClick = onClose) { Text("Close", color = Color.White.copy(alpha = 0.85f)) }
                 if (state.isPlaylist && state.currentIndex < state.episodeTitles.size - 1) {
-                    TextButton(onClick = { state.goToEpisode(state.currentIndex + 1) }) {
-                        Text("Next episode", color = Color.White)
+                    FilledTonalButton(onClick = { state.goToEpisode(state.currentIndex + 1) }) {
+                        Text("Next episode")
                     }
                 }
                 Button(onClick = {
@@ -277,18 +299,126 @@ internal fun UnlockOverlay(state: PlayerScreenState) {
         exit = fadeOut()
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            GlassControl(
-                onClick = {
-                    state.locked = false
-                    state.showUnlock = false
-                    state.controlsVisible = true
-                    state.markInteraction()
-                },
-                diameter = 56.dp,
-                background = Color.Black.copy(alpha = 0.5f)
-            ) {
-                Icon(Icons.Filled.LockOpen, "Unlock", tint = Color.White, modifier = Modifier.size(26.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GlassControl(
+                    onClick = {
+                        state.locked = false
+                        state.showUnlock = false
+                        state.controlsVisible = true
+                        state.markInteraction()
+                    },
+                    diameter = 56.dp,
+                    background = Color.Black.copy(alpha = 0.6f)
+                ) {
+                    Icon(Icons.Filled.LockOpen, "Unlock", tint = Color.White, modifier = Modifier.size(26.dp))
+                }
+                OverlayPill("Controls locked · tap to unlock")
             }
         }
+    }
+}
+
+/** A dark rounded label floating over video. */
+@Composable
+internal fun OverlayPill(text: String, bold: Boolean = false) {
+    Surface(color = Color.Black.copy(alpha = 0.72f), shape = RoundedCornerShape(50)) {
+        Text(
+            text = text,
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+    }
+}
+
+/** A notice about which decoder is playing, with an optional action (e.g. Use ExoPlayer). */
+internal data class EngineNotice(val title: String, val detail: String? = null, val actionLabel: String? = null)
+
+@Composable
+internal fun BoxScope.EngineNoticeCard(notice: EngineNotice?, onAction: () -> Unit, onDismiss: () -> Unit) {
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(6_000)
+            onDismiss()
+        }
+    }
+    AnimatedVisibility(
+        visible = notice != null,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.displayCutout))
+            .padding(start = 16.dp, end = 16.dp, bottom = 120.dp),
+        enter = fadeIn(),
+        exit = fadeOut(),
+    ) {
+        val shown = notice ?: return@AnimatedVisibility
+        SnackCard {
+            Icon(Icons.Filled.SwapHoriz, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface)
+            Column(Modifier.weight(1f)) {
+                Text(shown.title, style = MaterialTheme.typography.titleSmall)
+                shown.detail?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            shown.actionLabel?.let { TextButton(onClick = onAction) { Text(it) } }
+        }
+    }
+}
+
+/** "Frame saved to Gallery", with a thumbnail and View. */
+@Composable
+internal fun BoxScope.CapturedFrameSnackbar(state: PlayerScreenState) {
+    val frame = state.capturedFrame
+    LaunchedEffect(frame) {
+        if (frame != null) {
+            delay(4_000)
+            state.capturedFrame = null
+        }
+    }
+    AnimatedVisibility(
+        visible = frame != null,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.displayCutout))
+            .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        enter = fadeIn(),
+        exit = fadeOut(),
+    ) {
+        val shown = frame ?: return@AnimatedVisibility
+        SnackCard {
+            Image(
+                bitmap = shown.preview.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(width = 64.dp, height = 36.dp).clip(RoundedCornerShape(6.dp)),
+            )
+            Text("Frame saved to Gallery", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = {
+                state.capturedFrame = null
+                runCatching {
+                    state.context.startActivity(
+                        Intent(Intent.ACTION_VIEW, shown.uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    )
+                }
+            }) { Text("View") }
+        }
+    }
+}
+
+@Composable
+private fun SnackCard(content: @Composable RowScope.() -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.widthIn(max = 460.dp).fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            content = content,
+        )
     }
 }
