@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.C
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Format
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
@@ -248,5 +249,63 @@ internal fun trackLanguageName(lang: String?): String? {
         Locale.forLanguageTag(lang).displayLanguage.ifBlank { lang }
     } catch (e: Exception) {
         lang
+    }
+}
+
+/** Whichever sheet is open: player choice, episodes or queue, or audio and subtitle tracks. */
+@Composable
+internal fun PlayerSheetsHost(
+    state: PlayerScreenState,
+    engine: PhonePlayerEngine,
+    onSwitchEngine: (PhonePlayerEngine) -> Unit,
+) {
+    val player = state.player
+    if (state.showEngineSheet) {
+        SelectionSheet(
+            header = "Player",
+            rows = PhonePlayerEngine.entries.map { option ->
+                SheetRow(option.label, option == engine, true) {
+                    state.showEngineSheet = false
+                    onSwitchEngine(option)
+                }
+            },
+            emptyMessage = null,
+            onDismiss = { state.showEngineSheet = false }
+        )
+    }
+
+    if (state.showEpisodes) {
+        EpisodeSheet(
+            header = if (state.websiteQueue) "Queue" else "Episodes",
+            titles = state.episodeTitles,
+            currentIndex = state.currentIndex,
+            onSelect = { idx -> state.goToEpisode(idx) },
+            onDismiss = { state.showEpisodes = false }
+        )
+    }
+
+    state.trackSheet?.let { mode ->
+        TrackSelectionSheet(
+            mode = mode,
+            tracks = state.currentTracks,
+            onDismiss = { state.trackSheet = null },
+            onSelectAudio = { group, idx ->
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setOverrideForType(TrackSelectionOverride(group, idx))
+                    .build()
+            },
+            onSelectText = { group, idx ->
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setOverrideForType(TrackSelectionOverride(group, idx))
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .build()
+            },
+            onDisableText = {
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+            }
+        )
     }
 }
