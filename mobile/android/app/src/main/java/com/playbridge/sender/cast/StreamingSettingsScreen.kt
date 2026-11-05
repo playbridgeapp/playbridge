@@ -4,11 +4,14 @@ import androidx.core.content.edit
 import android.content.Context
 import org.koin.compose.koinInject
 import com.playbridge.sender.data.settings.SettingsRepository
+import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -21,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,6 +50,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     val hideEmptyCastSheetTabs by settingsRepository.hideEmptyCastSheetTabs.collectAsState(initial = true)
 
     val queueWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
+    val phonePlayerMode by settingsRepository.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
     val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
     var maxBitrateText by remember { mutableStateOf("") }
 
@@ -148,6 +153,22 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
+
+            Text("Phone player", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Column(Modifier.selectableGroup()) {
+                PhonePlayerMode.entries.forEach { mode ->
+                    ListItem(
+                        headlineContent = { Text(mode.label) },
+                        supportingContent = { Text(mode.description) },
+                        leadingContent = { RadioButton(selected = phonePlayerMode == mode, onClick = null) },
+                        modifier = Modifier.selectable(
+                            selected = phonePlayerMode == mode,
+                            role = Role.RadioButton,
+                            onClick = { scope.launch { settingsRepository.setPhonePlayerMode(mode) } },
+                        ),
+                    )
+                }
+            }
 
             Text("Website queue", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Row(verticalAlignment = Alignment.CenterVertically) {

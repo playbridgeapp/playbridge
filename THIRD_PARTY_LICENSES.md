@@ -20,7 +20,7 @@ notices, and make the corresponding source available — see *Source availabilit
 | **FFmpeg** | `mpv-android.aar`, `lib-decoder-ffmpeg-*.aar`, `nextlib`, desktop `media_kit` | LGPL-2.1-or-later (GPL-2.0-or-later if built with `--enable-gpl`) — https://ffmpeg.org |
 | **mpv / libmpv** | `mpv-android.aar`, desktop | LGPL-2.1-or-later — https://github.com/mpv-player/mpv |
 | **MPVKit 1.0.0** (standard product, libmpv / FFmpeg and supporting libraries) | iOS phone and Apple TV, Swift Package Manager | LGPL-3.0 for the standard bundle (`--enable-version3`, not `--enable-gpl`). `Licenses/GPL-3.0.txt` is bundled because LGPL-3.0 incorporates GPL-3.0. `Licenses/MPVKit-LICENSE.txt` is the LGPL-3.0 text. Component versions and permissive notices are in `Licenses/ThirdPartyComponents.txt`. Both apps open these files from Settings — https://github.com/mpvkit/MPVKit/tree/1.0.0 |
-| **mpv-android** (prebuilt AAR build) | `tv/.../libs/mpv-android.aar` | Upstream JNI/app wrapper: MIT; the native bundle has its own GPL/LGPL obligations — https://github.com/mpv-android/mpv-android · https://github.com/marlboro-advance/mpvEx |
+| **mpv-android** (prebuilt AAR build) | `tv/.../libs/mpv-android.aar`, bundled in the Android TV player and Android phone APKs | Upstream JNI/app wrapper: MIT; the native bundle has its own GPL/LGPL obligations — https://github.com/mpv-android/mpv-android · https://github.com/marlboro-advance/mpvEx |
 | **nextlib** | `nextlib-mediainfo-local.aar` | GPL-3.0 — https://github.com/anilbeesetti/nextlib |
 | **libgav1** (AV1) | `lib-decoder-av1-*.aar` | Apache-2.0 — https://chromium.googlesource.com/codecs/libgav1 |
 | **libiamf** | `lib-decoder-iamf-*.aar` | BSD / AOM — https://github.com/AOMediaCodec/libiamf |

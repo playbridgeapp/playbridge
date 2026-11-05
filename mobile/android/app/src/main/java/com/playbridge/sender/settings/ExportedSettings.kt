@@ -71,6 +71,7 @@ data class ExportedAppSettings(
     val iptvSortAscending: Boolean? = null,
     val iptvActiveFirst: Boolean? = null,
     val hideEmptyCastSheetTabs: Boolean? = null,
+    val phonePlayerMode: String? = null,
 )
 
 @Serializable

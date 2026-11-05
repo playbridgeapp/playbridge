@@ -374,6 +374,9 @@ dependencies {
     implementation(
         files("${rootProject.projectDir}/../../prebuilt/media3/lib-decoder-ffmpeg-release.aar"),
     )
+    // mpv, the second phone player (MpvMediaPlayer). Same pinned AAR as the TV; :shared
+    // compiles MpvPlayerEngine against it without packaging it.
+    implementation(files("${rootProject.projectDir}/../../tv/android/player/app/libs/mpv-android.aar"))
 
     // Koin Dependency Injection
     implementation(libs.koin.android)

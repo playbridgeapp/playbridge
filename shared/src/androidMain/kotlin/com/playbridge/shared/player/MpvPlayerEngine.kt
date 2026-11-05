@@ -18,8 +18,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Android implementation of [PlaybackEngine] using mpv-android (MPVLib).
+ *
+ * [verifyTls] checks server certificates against the CA bundle mpv-android copies into
+ * `filesDir`. The TV keeps it off for its existing LAN and self-signed sources; the phone
+ * turns it on so mpv matches ExoPlayer's system-trust behaviour.
  */
-class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.EventObserver {
+class MpvPlayerEngine(
+    private val context: Context,
+    private val verifyTls: Boolean = false,
+) : PlaybackEngine, MPVLib.EventObserver {
 
     private companion object {
         private const val TAG = "MpvPlayerEngine"
@@ -228,7 +235,12 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         MPVLib.setOptionString("hwdec", "auto-safe")
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
         MPVLib.setOptionString("ao", "audiotrack,opensles")
-        MPVLib.setOptionString("tls-verify", "no")
+        if (verifyTls) {
+            MPVLib.setOptionString("tls-verify", "yes")
+            MPVLib.setOptionString("tls-ca-file", File(filesDir, "cacert.pem").absolutePath)
+        } else {
+            MPVLib.setOptionString("tls-verify", "no")
+        }
         MPVLib.setOptionString("cache", "yes")
 
         // Keep the cache bounded for 32-bit Android TV processes. The old 250 MiB total
@@ -371,10 +383,15 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         }
     }
 
-    fun detachSurface() {
+    /**
+     * [onDetached] runs on the control thread once mpv no longer renders to the surface, so
+     * the caller can release it. It never runs if the control thread is unhealthy.
+     */
+    fun detachSurface(onDetached: () -> Unit = {}) {
         logger.i(TAG, "detachSurface() queued")
         enqueueControl("detachSurface") {
             detachSurfaceOnControlThread()
+            onDetached()
         }
     }
 
