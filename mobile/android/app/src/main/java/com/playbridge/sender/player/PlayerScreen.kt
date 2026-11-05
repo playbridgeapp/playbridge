@@ -80,7 +80,7 @@ internal fun PlayerScreen(
             ) {
                 VideoSurface(state)
                 PosterBackdrop(poster, state)
-                BufferingIndicator(state, waitingForWebsiteQueue)
+                BufferingIndicator(state, waitingForWebsiteQueue, poster.siteIconUrl)
                 DoubleTapIndicator(state)
                 SwipeHuds(state)
                 if (portraitLayout) FullscreenButton(onFullscreen)

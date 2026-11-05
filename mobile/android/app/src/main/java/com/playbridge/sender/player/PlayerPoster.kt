@@ -17,8 +17,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 
-/** What the player shows while it connects: the cast sheet's thumbnail or the website's poster. */
-internal data class PlayerPoster(val bitmap: Bitmap? = null, val url: String? = null) {
+/**
+ * What the player shows while it connects: the cast sheet's thumbnail or the website's poster,
+ * and the website's icon in place of the spinner.
+ */
+internal data class PlayerPoster(val bitmap: Bitmap? = null, val url: String? = null, val siteIconUrl: String? = null) {
     val isEmpty: Boolean get() = bitmap == null && url.isNullOrBlank()
 }
 
@@ -44,4 +47,13 @@ internal fun PosterBackdrop(poster: PlayerPoster, state: PlayerScreenState) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
         }
     }
+}
+
+/** A page's own icon at its site root (`https://host/favicon.ico`); null for non-web pages. */
+internal fun siteIconUrl(pageUrl: String?): String? {
+    val uri = pageUrl?.let { runCatching { java.net.URI(it) }.getOrNull() } ?: return null
+    val scheme = uri.scheme?.lowercase()
+    if (scheme != "http" && scheme != "https" || uri.host.isNullOrBlank()) return null
+    val port = if (uri.port > 0) ":${uri.port}" else ""
+    return "$scheme://${uri.host}$port/favicon.ico"
 }

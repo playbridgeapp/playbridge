@@ -1001,7 +1001,7 @@ fun AppNavHost(
                         subtitleSourceKey = Triple(remoteCastSourceTabId, remoteCastTitle, VideoDetector.processingVersion),
                         detectedSubtitles = { title ->
                             if (remoteCastSourceTabId != null && remoteCastTitle == title) {
-                                VideoDetector.getVideosForTab(remoteCastSourceTabId).filter { it.isSubtitle }
+                                VideoDetector.getVideosForTab(remoteCastSourceTabId).filter { it.isUsableSubtitle }
                             } else emptyList()
                         },
                         onEffect = { effect ->

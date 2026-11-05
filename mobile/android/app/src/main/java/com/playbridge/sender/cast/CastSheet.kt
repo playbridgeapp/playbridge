@@ -78,6 +78,9 @@ import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 import com.playbridge.shared.protocol.resolveMediaKind
 
+/** The browser page a cast sheet was opened on. */
+data class CastSheetPage(val title: String?, val url: String?)
+
 /**
  * Bottom sheet for casting media to a TV — pick a video or browse URL, choose a stream route, send.
  * Device selection lives on the global connection UI, not on this sheet.
@@ -105,7 +108,9 @@ fun CastSheet(
     detectionEnabled: Boolean = true,
     onEnableDetection: (() -> Unit)? = null,
     // When provided, each detected-video card's ⋮ menu gets a "Save to Collection" action.
-    onSaveToCollection: ((DetectedVideo) -> Unit)? = null
+    onSaveToCollection: ((DetectedVideo) -> Unit)? = null,
+    /** The page the media came from: its title names videos that have none, its icon shows while loading. */
+    page: CastSheetPage? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -176,9 +181,15 @@ fun CastSheet(
             castAction = "play"
         }
     }
-    val allSubtitles = remember(videos, mediaRevision) { videos.filter { it.isSubtitle } }
+    val allSubtitles = remember(videos, mediaRevision) { videos.filter { it.isUsableSubtitle } }
     // User-added subtitles can arrive after the sheet opens, just like SPA detections.
     var extraSubtitles by remember { mutableStateOf<List<DetectedVideo>>(emptyList()) }
+    val preferredSubtitleLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
+    // Subtitles you added stay on top; detected ones put the preferred language, then the phone's, first.
+    val orderedSubtitles = remember(allSubtitles, extraSubtitles, preferredSubtitleLang, mediaRevision) {
+        newestSubtitlesFirst(extraSubtitles) +
+            rankSubtitles(allSubtitles, preferredSubtitleLang, java.util.Locale.getDefault().language)
+    }
 
     val isPlaylistMode = remember(playableVideos) {
         playableVideos.firstOrNull()?.playlistPayload != null
@@ -267,6 +278,13 @@ fun CastSheet(
     }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Once the user ticks or unticks a subtitle, the preferred-language pick stops choosing for them.
+    var subtitlesChosenByUser by remember { mutableStateOf(false) }
+    // With a preferred subtitle language set, tick its best match until the user chooses.
+    LaunchedEffect(orderedSubtitles, preferredSubtitleLang) {
+        if (subtitlesChosenByUser || selectedSubtitles.isNotEmpty()) return@LaunchedEffect
+        preferredSubtitlePick(orderedSubtitles, preferredSubtitleLang)?.let { selectedSubtitles = setOf(it.url) }
+    }
 
     // Validation and thumbnail work can change the ordering after the sheet opens. Keep the
     // selection bound to the current object and offer a non-disruptive jump when a newly
@@ -383,7 +401,10 @@ fun CastSheet(
             val sub = combined.find { it.url == url }
             com.playbridge.sender.player.SubtitleTrack(
                 url = url,
-                label = sub?.title ?: parseUrlInfo(url).filename
+                label = sub?.title ?: parseUrlInfo(url).filename,
+                language = sub?.let(::subtitleLanguageHint),
+                headers = sub?.let { subtitleResourceForDetected(it).headers }.orEmpty(),
+                format = sub?.subtitleFormat,
             )
         }
     }
@@ -414,7 +435,9 @@ fun CastSheet(
         com.playbridge.sender.player.PlayerLauncher.start(
             context = context,
             url = resolved.url,
-            title = resolved.title,
+            // Like a TV cast, a video without its own title takes the page's.
+            title = resolved.title ?: page?.title?.takeIf { it.isNotBlank() },
+            siteIconUrl = com.playbridge.sender.player.siteIconUrl(page?.url ?: video.originUrl),
             contentType = resolved.contentType,
             headers = VideoDetector.mediaHeaders(resolved),
             subtitles = phoneSubtitleTracks(),
@@ -1438,9 +1461,7 @@ fun CastSheet(
             } else if (visibleSelectedTabKind == DetectedMediaKind.SUBTITLE) {
                 // Subtitles Tab
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    val combinedSubtitles = remember(allSubtitles, extraSubtitles) {
-                        newestSubtitlesFirst(allSubtitles + extraSubtitles)
-                    }
+                    val combinedSubtitles = orderedSubtitles
                     if (combinedSubtitles.isEmpty()) {
                         Column(
                             modifier = Modifier
@@ -1480,6 +1501,7 @@ fun CastSheet(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
+                                            subtitlesChosenByUser = true
                                             selectedSubtitles = if (isSelected) {
                                                 selectedSubtitles - subtitle.url
                                             } else {
@@ -1499,6 +1521,7 @@ fun CastSheet(
                                             Checkbox(
                                                 checked = isSelected,
                                                 onCheckedChange = { checked ->
+                                                    subtitlesChosenByUser = true
                                                     selectedSubtitles = if (checked) {
                                                         selectedSubtitles + subtitle.url
                                                     } else {
@@ -1597,7 +1620,10 @@ fun CastSheet(
         CastSheetAddSubtitleDialog(
             onAddSubtitles = { newSubs, autoSelect ->
                 extraSubtitles = extraSubtitles + newSubs
-                if (autoSelect) selectedSubtitles = selectedSubtitles + newSubs.map { it.url }
+                if (autoSelect) {
+                    subtitlesChosenByUser = true
+                    selectedSubtitles = selectedSubtitles + newSubs.map { it.url }
+                }
             },
             onDismiss = { showAddSubtitleDialog = false },
         )

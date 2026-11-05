@@ -15,11 +15,13 @@ class RemoteSubtitleResourceTest {
             title = "English captions",
         )
         subtitle.subtitleLanguage = "English"
+        subtitle.subtitleLanguageCode = "en"
         val resource = subtitleResourceForDetected(subtitle)
         assertEquals(subtitle.url, resource.url)
         assertEquals(subtitle.headers, resource.headers)
         assertEquals("English captions", resource.label)
-        assertEquals("English", resource.language)
+        // The TV matches languages by code; the label is what it shows.
+        assertEquals("en", resource.language)
     }
 
     @Test

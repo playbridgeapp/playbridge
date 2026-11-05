@@ -7,8 +7,11 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 /** Local, bundled-model identification of subtitle dialogue. Uncertain samples remain unlabeled. */
+/** A detected language: its code (`pl`) and its name in the phone's language (`Polish`). */
+data class DetectedLanguage(val code: String, val name: String)
+
 object SubtitleLanguageDetector {
-    suspend fun detect(text: String): String? {
+    suspend fun detect(text: String): DetectedLanguage? {
         val sample = text.take(200)
         if (sample.count { it.isLetter() } < 60) return null
         val candidates = try {
@@ -27,8 +30,9 @@ object SubtitleLanguageDetector {
         val code = likelySubtitleLanguageCode(candidates.map { it.languageTag to it.confidence })
             ?: return null
         val locale = Locale.forLanguageTag(code)
-        return locale.getDisplayLanguage(Locale.getDefault()).takeIf { it.isNotBlank() }
-            ?.replaceFirstChar { it.titlecase(Locale.getDefault()) }
+        val name = locale.getDisplayLanguage(Locale.getDefault()).takeIf { it.isNotBlank() }
+            ?.replaceFirstChar { it.titlecase(Locale.getDefault()) } ?: return null
+        return DetectedLanguage(code, name)
     }
 }
 

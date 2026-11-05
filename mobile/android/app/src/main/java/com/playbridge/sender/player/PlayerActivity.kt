@@ -97,7 +97,11 @@ private fun recoverFromPlayerError(player: ExoPlayer, error: PlaybackException) 
 data class SubtitleTrack(
     val url: String,
     val label: String? = null,
-    val language: String? = null
+    val language: String? = null,
+    /** The subtitle's own request headers, from the page that loaded it. */
+    val headers: Map<String, String> = emptyMap(),
+    /** The format found in the file (`vtt`, `srt`, `ass`, `ttml`); null guesses from the URL. */
+    val format: String? = null,
 )
 
 /**
@@ -126,6 +130,8 @@ open class PlayerActivity : ComponentActivity() {
     private var playerMode = PhonePlayerMode.AUTOMATIC
     private var switchedToMpvAutomatically = false
     private var requestHeaders: Map<String, String> = emptyMap()
+    /** Opening audio and subtitle languages, applied to each player this activity creates. */
+    private var trackLanguages = PhoneTrackLanguages(audio = null, subtitles = null, subtitlesOffUnlessPreferred = false)
     /** Items of a single video or playlist; website queues are rebuilt by [PagePlayerSession]. */
     private var queueItems: List<MediaItem> = emptyList()
 
@@ -315,11 +321,18 @@ open class PlayerActivity : ComponentActivity() {
         val subUrls = intent.getStringArrayListExtra(EXTRA_SUB_URLS).orEmpty()
         val subLabels = intent.getStringArrayListExtra(EXTRA_SUB_LABELS).orEmpty()
         val subLangs = intent.getStringArrayListExtra(EXTRA_SUB_LANGS).orEmpty()
+        val subFormats = intent.getStringArrayListExtra(EXTRA_SUB_FORMATS).orEmpty()
+        @Suppress("UNCHECKED_CAST")
+        val subHeaders = androidx.core.content.IntentCompat.getSerializableExtra(
+            intent, EXTRA_SUB_HEADERS, ArrayList::class.java,
+        ) as? ArrayList<HashMap<String, String>> ?: arrayListOf()
         val subtitles = subUrls.mapIndexed { i, u ->
             SubtitleTrack(
                 url = u,
                 label = subLabels.getOrNull(i)?.takeIf { it.isNotBlank() },
-                language = subLangs.getOrNull(i)?.takeIf { it.isNotBlank() }
+                language = subLangs.getOrNull(i)?.takeIf { it.isNotBlank() },
+                headers = subHeaders.getOrNull(i).orEmpty(),
+                format = subFormats.getOrNull(i)?.takeIf { it.isNotBlank() },
             )
         }
 
@@ -360,6 +373,12 @@ open class PlayerActivity : ComponentActivity() {
         requestHeaders = headers
         playerMode = runBlocking { settings.phonePlayerMode.first() }
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
+        // Subtitles ticked in the cast sheet, or sent by a website, override the subtitle preference.
+        trackLanguages = PhoneTrackLanguages.of(
+            audioSetting = runBlocking { settings.preferredAudioLang.first() },
+            subtitleSetting = runBlocking { settings.preferredSubtitleLang.first() },
+            chosenSubtitles = subtitles.isNotEmpty() || pageSessionId != null,
+        )
         val request = PhoneMediaRequest(headers)
         val initialTitle: String?
         val startIndex: Int
@@ -377,9 +396,16 @@ open class PlayerActivity : ComponentActivity() {
             initialTitle = titles.getOrNull(startIndex)
         } else {
             // ExoPlayer sends the video's headers with every request; mpv fetches subtitles separately,
-            // so it gives them only to subtitles on the video's own origin.
+            // with the headers the page used for each subtitle, or else the video's headers when the
+            // subtitle is on the video's own origin.
             val subtitleRequest = request.copy(
-                subtitleHeaders = subtitles.filter { sameOrigin(it.url, url!!) }.associate { it.url to headers },
+                subtitleHeaders = subtitles.mapNotNull { sub ->
+                    when {
+                        sub.headers.isNotEmpty() -> sub.url to sub.headers
+                        sameOrigin(sub.url, url!!) -> sub.url to headers
+                        else -> null
+                    }
+                }.toMap(),
             )
             queueItems = listOf(buildMediaItem(url!!, contentType, title, subtitles, subtitleRequest))
             startIndex = 0
@@ -403,6 +429,7 @@ open class PlayerActivity : ComponentActivity() {
         val poster = PlayerPoster(
             bitmap = intent.getStringExtra(EXTRA_THUMBNAIL_KEY)?.let(VideoDetector::getCachedThumbnail),
             url = intent.getStringExtra(EXTRA_POSTER_URL),
+            siteIconUrl = intent.getStringExtra(EXTRA_SITE_ICON_URL),
         )
 
         setContent {
@@ -452,7 +479,7 @@ open class PlayerActivity : ComponentActivity() {
     private fun createPlayer(engine: PhonePlayerEngine): Player = when (engine) {
         PhonePlayerEngine.EXOPLAYER -> buildPlayer(this, requestHeaders)
         PhonePlayerEngine.MPV -> MpvMediaPlayer(this)
-    }
+    }.also { it.trackSelectionParameters = trackLanguages.applyTo(it.trackSelectionParameters) }
 
     /** Loads the video, playlist or website queue into [target]. False when the website session is gone. */
     private fun loadQueue(target: Player, index: Int, positionMs: Long, initial: Boolean): Boolean {
@@ -631,6 +658,8 @@ open class PlayerActivity : ComponentActivity() {
         const val EXTRA_CONTENT_TYPE = "content_type"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_SUB_URLS = "sub_urls"
+        const val EXTRA_SUB_HEADERS = "sub_headers"
+        const val EXTRA_SUB_FORMATS = "sub_formats"
         const val EXTRA_SUB_LABELS = "sub_labels"
         const val EXTRA_SUB_LANGS = "sub_langs"
         const val EXTRA_PLAYLIST_URLS = "playlist_urls"
@@ -642,6 +671,7 @@ open class PlayerActivity : ComponentActivity() {
         const val EXTRA_THUMBNAIL_KEY = "thumbnail_key"
         /** A website poster or backdrop URL, shown until the first frame. */
         const val EXTRA_POSTER_URL = "poster_url"
+        const val EXTRA_SITE_ICON_URL = "site_icon_url"
 
 
         private const val DEFAULT_UA =
@@ -698,8 +728,14 @@ open class PlayerActivity : ComponentActivity() {
             if (subtitles.isNotEmpty()) {
                 builder.setSubtitleConfigurations(
                     subtitles.mapIndexed { index, sub ->
-                        val subMime = if (sub.url.endsWith(".srt", ignoreCase = true))
-                            MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
+                        val subMime = when (sub.format) {
+                            "srt" -> MimeTypes.APPLICATION_SUBRIP
+                            "ass" -> MimeTypes.TEXT_SSA
+                            "ttml" -> MimeTypes.APPLICATION_TTML
+                            "vtt" -> MimeTypes.TEXT_VTT
+                            else -> if (sub.url.endsWith(".srt", ignoreCase = true))
+                                MimeTypes.APPLICATION_SUBRIP else MimeTypes.TEXT_VTT
+                        }
                         MediaItem.SubtitleConfiguration.Builder(sub.url.toUri())
                             .setMimeType(subMime)
                             .setLanguage(sub.language)
