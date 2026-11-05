@@ -135,6 +135,8 @@ internal class PlayerScreenState(
         if (index < 0 || index >= episodeTitles.size) return
         errorMessage = null
         player.seekTo(index, 0L)
+        // After an error the player is idle: it must be prepared again to load the new item.
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
         player.play()
     }
 
