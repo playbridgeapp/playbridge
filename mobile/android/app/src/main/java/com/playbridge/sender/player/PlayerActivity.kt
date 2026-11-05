@@ -121,6 +121,8 @@ open class PlayerActivity : ComponentActivity() {
     private val engineState = mutableStateOf(PhonePlayerEngine.EXOPLAYER)
     /** Shown over the player after an automatic switch or a switch mpv can't make. */
     private val engineNoticeState = mutableStateOf<EngineNotice?>(null)
+    /** The tapped thumbnail's screen bounds, until the opening animation has run. */
+    private val growFromState = mutableStateOf<android.graphics.Rect?>(null)
     private var playerMode = PhonePlayerMode.AUTOMATIC
     private var switchedToMpvAutomatically = false
     private var requestHeaders: Map<String, String> = emptyMap()
@@ -394,6 +396,10 @@ open class PlayerActivity : ComponentActivity() {
             return
         }
         showPlayer(first, initialEngine)
+        // Grow the video out of the tapped thumbnail on a fresh open, not on recreation.
+        growFromState.value = if (savedInstanceState == null) {
+            androidx.core.content.IntentCompat.getParcelableExtra(intent, PlayerLaunchOrigin.EXTRA_ORIGIN_BOUNDS, android.graphics.Rect::class.java)
+        } else null
         val poster = PlayerPoster(
             bitmap = intent.getStringExtra(EXTRA_THUMBNAIL_KEY)?.let(VideoDetector::getCachedThumbnail),
             url = intent.getStringExtra(EXTRA_POSTER_URL),
@@ -419,6 +425,8 @@ open class PlayerActivity : ComponentActivity() {
                     onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
                     isInPip = isInPip,
                     poster = poster,
+                    growFrom = growFromState.value,
+                    onGrown = { growFromState.value = null },
                     onFullscreen = ::setFullscreen,
                     backgroundMode = backgroundModeState,
                     engineNotice = engineNoticeState.value,

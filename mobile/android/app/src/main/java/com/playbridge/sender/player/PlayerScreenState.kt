@@ -59,8 +59,10 @@ internal class PlayerScreenState(
     var hasRenderedFrame by mutableStateOf(false)
     /** Width over height of the picture as displayed; 0 until the video reports its size. */
     var videoAspect by mutableFloatStateOf(0f)
+    /** The shape to lay out for: 16:9 until the video reports its size, so opening doesn't jump. */
+    val layoutAspect: Float get() = if (videoAspect > 0f) videoAspect else 16f / 9f
     /** A landscape video is shown in the portrait layout when the phone is upright. */
-    val isLandscapeVideo: Boolean get() = videoAspect > 1.1f
+    val isLandscapeVideo: Boolean get() = layoutAspect > 1.1f
     var errorMessage by mutableStateOf<String?>(null)
 
     // Controls / scrubbing

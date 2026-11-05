@@ -40,6 +40,9 @@ internal fun PlayerScreen(
     waitingForWebsiteQueue: Boolean = false,
     isInPip: Boolean,
     poster: PlayerPoster,
+    /** The tapped thumbnail's screen bounds: the video frame grows out of it once. */
+    growFrom: android.graphics.Rect?,
+    onGrown: () -> Unit,
     /** Fullscreen (landscape) when true, back to portrait when false. */
     onFullscreen: (Boolean) -> Unit,
     /** Shared with the activity: onStop reads it to keep playing with a media notification. */
@@ -62,16 +65,18 @@ internal fun PlayerScreen(
             val portraitLayout = maxHeight > maxWidth && state.isLandscapeVideo && !isInPip
             val videoTop = WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding() +
                 PORTRAIT_TOP_BAR_HEIGHT
-            val videoHeight = if (portraitLayout) maxWidth / state.videoAspect else maxHeight
+            val videoHeight = if (portraitLayout) maxWidth / state.layoutAspect else maxHeight
+            // Growing from a thumbnail only maps onto an upright screen; landscape just fades in.
+            val grow = rememberGrowFromThumbnail(growFrom.takeIf { maxHeight > maxWidth }, onGrown)
             val gestures = Modifier.playerGestures(state, isInPip, LocalHapticFeedback.current)
 
             // The video keeps its place in the tree across layouts, so its PlayerView survives rotation.
             Box(
-                modifier = if (portraitLayout) {
-                    Modifier.padding(top = videoTop).fillMaxWidth().height(videoHeight).then(gestures)
+                modifier = (if (portraitLayout) {
+                    Modifier.padding(top = videoTop).fillMaxWidth().height(videoHeight)
                 } else {
-                    Modifier.fillMaxSize().then(gestures)
-                }
+                    Modifier.fillMaxSize()
+                }).then(grow.videoModifier).then(gestures)
             ) {
                 VideoSurface(state)
                 PosterBackdrop(poster, state)
@@ -82,8 +87,8 @@ internal fun PlayerScreen(
                 else PlayerControlsOverlay(state, engine, onClose)
             }
             if (portraitLayout) {
-                PortraitTopBar(state, onClose)
-                PortraitPanel(state, engine, onFullscreen, Modifier.padding(top = videoTop + videoHeight))
+                Box(grow.surroundingModifier) { PortraitTopBar(state, onClose) }
+                PortraitPanel(state, engine, onFullscreen, Modifier.padding(top = videoTop + videoHeight).then(grow.surroundingModifier))
             }
             StatsPanel(state, engine)
             PlaybackErrorOverlay(state, engine, onClose)

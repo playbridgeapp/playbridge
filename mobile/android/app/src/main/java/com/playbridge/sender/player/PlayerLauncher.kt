@@ -34,6 +34,7 @@ object PlayerLauncher {
             }
             if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             thumbnailKey?.let { putExtra(PlayerActivity.EXTRA_THUMBNAIL_KEY, it) }
+            origin?.putInto(this)
         }
         context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, origin))
     }

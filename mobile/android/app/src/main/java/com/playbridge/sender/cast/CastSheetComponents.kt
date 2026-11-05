@@ -1,9 +1,9 @@
 package com.playbridge.sender.cast
 
 import android.graphics.Rect
-import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.toSize
 import com.playbridge.sender.player.PlayerLaunchOrigin
 import com.playbridge.sender.downloads.DownloadUtils
 import android.content.ClipData
@@ -248,7 +248,6 @@ internal fun VideoItemDetailed(
     var showRawDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var thumbnailBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    val rootView = LocalView.current
 
     // HLS Qualities state
     val isStream = remember(videoType) { videoType == "HLS" || videoType == "DASH" }
@@ -374,7 +373,10 @@ internal fun VideoItemDetailed(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
-                    .onGloballyPositioned { thumbnailBounds = it.boundsInWindow() }
+                    .onGloballyPositioned { coordinates ->
+                        val topLeft = coordinates.positionOnScreen()
+                        thumbnailBounds = androidx.compose.ui.geometry.Rect(topLeft, coordinates.size.toSize())
+                    }
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -581,7 +583,7 @@ internal fun VideoItemDetailed(
                     IconButton(onClick = {
                         val bounds = thumbnailBounds
                         onPlayPhoneClick(bounds?.let { b ->
-                            PlayerLaunchOrigin(rootView, Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()))
+                            PlayerLaunchOrigin(Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt()))
                         })
                     }) {
                         Icon(
