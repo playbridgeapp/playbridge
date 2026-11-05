@@ -56,7 +56,7 @@ object PlayerLauncher {
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
             putExtra(PlayerActivity.EXTRA_START_INDEX, startIndex)
         }
-        context.startActivity(intent)
+        context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, null))
     }
 
 
