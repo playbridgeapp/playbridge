@@ -41,7 +41,7 @@ internal class PlayerScreenState(
     val player: Player,
     /** The title the screen opened with; a media item without one falls back to it. */
     val initialTitle: String?,
-    /** A website queue shows the queue controls even while it holds a single item. */
+    /** Played from a website's queue: the sheet says Queue rather than Episodes. */
     val websiteQueue: Boolean,
     val context: Context,
     val window: Window?,
@@ -99,7 +99,12 @@ internal class PlayerScreenState(
     // Follow timeline changes rather than retaining the initial single-item list.
     var episodeTitles by mutableStateOf(readQueueTitles())
     var currentIndex by mutableIntStateOf(player.currentMediaItemIndex)
-    val isPlaylist: Boolean get() = websiteQueue || episodeTitles.size > 1
+    /**
+     * Queue controls (Queue, Previous/Next, Up next, "3 of 12") appear once there are at least two
+     * items; a website queue that has supplied only one item looks like a single video until
+     * its next item arrives.
+     */
+    val isPlaylist: Boolean get() = episodeTitles.size > 1
 
     // Gesture HUD state
     var dragMode by mutableStateOf(DragMode.NONE)
