@@ -58,7 +58,7 @@ import java.security.cert.X509Certificate
  *   `javascript:` location-hash injection hack)
  * - PermissionDelegate (autoplay/DRM) → onContentPermissionRequest
  * - ProgressDelegate (loading/security) → onLoadingStateChange / onSecurityChange
- * - PromptDelegate (alert/confirm/prompt/<select>) → onPromptRequest
+ * - PromptDelegate (alert/confirm/prompt/<select>/file inputs) → onPromptRequest
  * - MediaSession.Delegate → MediaSessionObserver (registered per tab by TabManager)
  */
 @Composable
@@ -93,6 +93,7 @@ fun SessionObserverSetup(
     val blacklistState = rememberUpdatedState(blacklist)
     val selectedTabState = rememberUpdatedState(selectedTab)
     val fullScreenCb = rememberUpdatedState(onFullScreenChange)
+    val pickFiles = rememberUpdatedState(rememberWebFilePicker())
 
     // Edge-swipe (system back/home gesture) touches reach GeckoView before the system
     // steals the stream; Gecko's ~500 ms long-press timer can fire first and pop link
@@ -462,6 +463,8 @@ fun SessionObserverSetup(
                             .show()
                     }
 
+                    is PromptRequest.File -> pickFiles.value(promptRequest)
+
                     is PromptRequest.BeforeUnload -> {
                         AlertDialog.Builder(context)
                             .setTitle(promptRequest.title.takeIf { it.isNotBlank() } ?: "Leave site?")
@@ -473,7 +476,7 @@ fun SessionObserverSetup(
                     }
 
                     else -> {
-                        // Unhandled prompt types (file pickers, auth, color, date,
+                        // Unhandled prompt types (auth, color, date,
                         // logins, …) — dismiss so the page doesn't hang waiting.
                         (promptRequest as? PromptRequest.Dismissible)?.onDismiss?.invoke()
                     }
