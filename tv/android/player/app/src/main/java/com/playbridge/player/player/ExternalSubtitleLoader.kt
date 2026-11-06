@@ -3,6 +3,8 @@ package com.playbridge.player.player
 import android.content.Context
 import android.net.Uri
 import com.playbridge.shared.network.MediaNetworkPolicy
+import com.playbridge.shared.player.ExternalSubtitleFormat
+import com.playbridge.shared.player.detectSubtitleFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -20,14 +22,6 @@ internal data class DownloadedSubtitle(
     val bytes: ByteArray,
     val format: ExternalSubtitleFormat,
 )
-
-internal enum class ExternalSubtitleFormat(val fileExtension: String) {
-    SUBRIP("srt"),
-    WEBVTT("vtt"),
-    ASS("ass"),
-    SSA("ssa"),
-    TTML("ttml"),
-}
 
 /** Header-aware subtitle download shared by the overlay and native renderer staging path. */
 internal object ExternalSubtitleLoader {
@@ -204,44 +198,5 @@ internal class ExternalSubtitleStager(context: Context) {
         const val CACHE_DIRECTORY = "external-subtitles"
         const val FILE_PREFIX = "subtitle-"
         const val MAX_CACHE_AGE_MS = 24L * 60L * 60L * 1_000L
-    }
-}
-
-internal fun detectSubtitleFormat(
-    url: String,
-    contentType: String?,
-    bytes: ByteArray,
-): ExternalSubtitleFormat {
-    val extension = url.substringBefore('#')
-        .substringBefore('?')
-        .substringAfterLast('/', missingDelimiterValue = "")
-        .substringAfterLast('.', missingDelimiterValue = "")
-        .lowercase()
-    when (extension) {
-        "vtt" -> return ExternalSubtitleFormat.WEBVTT
-        "ass" -> return ExternalSubtitleFormat.ASS
-        "ssa" -> return ExternalSubtitleFormat.SSA
-        "ttml", "dfxp", "xml" -> return ExternalSubtitleFormat.TTML
-        "srt" -> return ExternalSubtitleFormat.SUBRIP
-    }
-
-    val normalizedContentType = contentType.orEmpty().substringBefore(';').trim().lowercase()
-    when (normalizedContentType) {
-        "text/vtt" -> return ExternalSubtitleFormat.WEBVTT
-        "text/x-ass", "application/x-ass" -> return ExternalSubtitleFormat.ASS
-        "text/x-ssa", "application/x-ssa" -> return ExternalSubtitleFormat.SSA
-        "application/ttml+xml" -> return ExternalSubtitleFormat.TTML
-        "application/x-subrip", "application/srt", "text/srt" ->
-            return ExternalSubtitleFormat.SUBRIP
-    }
-
-    val prefix = SubtitleParser.decode(bytes.copyOfRange(0, minOf(bytes.size, 8_192))).trimStart()
-    return when {
-        prefix.startsWith("WEBVTT", ignoreCase = true) -> ExternalSubtitleFormat.WEBVTT
-        prefix.startsWith("[Script Info]", ignoreCase = true) ||
-            prefix.contains("[V4+ Styles]", ignoreCase = true) -> ExternalSubtitleFormat.ASS
-        prefix.startsWith("<tt", ignoreCase = true) ||
-            prefix.contains("<tt ", ignoreCase = true) -> ExternalSubtitleFormat.TTML
-        else -> ExternalSubtitleFormat.SUBRIP
     }
 }

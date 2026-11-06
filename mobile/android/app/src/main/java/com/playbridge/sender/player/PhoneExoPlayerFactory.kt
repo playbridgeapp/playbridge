@@ -1,7 +1,6 @@
 package com.playbridge.sender.player
 
 import android.content.Context
-import android.os.Handler
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -11,18 +10,12 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.decoder.ffmpeg.FfmpegLibrary
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.Renderer
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.playbridge.shared.player.AndroidBufferConfig
-import java.util.ArrayList
+import com.playbridge.shared.player.ExoPlayerSetup
 
 /**
  * Phone in-app [ExoPlayer] builder — aligned with TV
@@ -67,20 +60,9 @@ object PhoneExoPlayerFactory {
         val dataSourceFactory: DataSource.Factory =
             DefaultDataSource.Factory(context, httpFactory)
 
-        // Same memory-aware caps as TV ExoPlayerEngine — enough for progressive
-        // streams without the old fixed 300s / 128MB phone settings (heap pressure).
+        // Same memory-aware caps and decoder order as the TV.
         val bufCfg = AndroidBufferConfig.compute(context)
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs = */ 15_000,
-                /* maxBufferMs = */ bufCfg.maxBufferMs,
-                /* bufferForPlaybackMs = */ 2_500,
-                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
-            )
-            .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
-            .setBackBuffer(/* backBufferDurationMs = */ 0, /* retainBackBufferFromKeyframe = */ false)
-            .build()
+        val loadControl = ExoPlayerSetup.loadControl(context)
 
         val ffmpegOk = isFfmpegAvailable()
         val ffmpegVer = ffmpegVersionOrNull()
@@ -98,53 +80,12 @@ object PhoneExoPlayerFactory {
             )
         }
 
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            init {
-                // PREFER: FFmpeg audio first when available (TV pattern).
-                // This is the primary fix for "video plays, no audio" on phone.
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
-                setEnableDecoderFallback(true)
-                forceDisableMediaCodecAsynchronousQueueing()
-            }
-
-            override fun buildVideoRenderers(
-                context: Context,
-                extensionRendererMode: Int,
-                mediaCodecSelector: MediaCodecSelector,
-                enableDecoderFallback: Boolean,
-                eventHandler: Handler,
-                eventListener: VideoRendererEventListener,
-                allowedVideoJoiningTimeMs: Long,
-                out: ArrayList<Renderer>,
-            ) {
-                // Hardware MediaCodec first for video.
-                super.buildVideoRenderers(
-                    context,
-                    EXTENSION_RENDERER_MODE_ON,
-                    mediaCodecSelector,
-                    enableDecoderFallback,
-                    eventHandler,
-                    eventListener,
-                    allowedVideoJoiningTimeMs,
-                    out,
-                )
-            }
-
-            override fun buildTextRenderers(
-                context: Context,
-                output: TextOutput,
-                outputLooper: android.os.Looper,
-                extensionRendererMode: Int,
-                out: ArrayList<Renderer>,
-            ) {
-                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
-                out.forEach {
-                    if (it is TextRenderer) {
-                        @Suppress("DEPRECATION")
-                        it.experimentalSetLegacyDecodingEnabled(true)
-                    }
-                }
-            }
+        // FFmpeg audio first ("video plays, no audio" fix), hardware video first.
+        val renderersFactory = ExoPlayerSetup.renderersFactory(context, synchronousCodecs = true) { output, looper, out ->
+            out.add(TextRenderer(output, looper).apply {
+                @Suppress("DEPRECATION")
+                experimentalSetLegacyDecodingEnabled(true)
+            })
         }
 
         val trackSelector = DefaultTrackSelector(context).apply {

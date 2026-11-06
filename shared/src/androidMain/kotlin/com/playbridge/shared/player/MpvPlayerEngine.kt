@@ -506,77 +506,56 @@ class MpvPlayerEngine(
     }
 
     private fun updateTracks(json: String) {
-        try {
-            val arr = org.json.JSONArray(json)
-            val audio = mutableListOf<Track>()
-            val subtitles = mutableListOf<Track>()
-            val video = mutableListOf<Track>()
-
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                val id = obj.getInt("id").toString()
-                val type = obj.getString("type")
-                val title = obj.optString("title").takeIf { it.isNotBlank() }
-                val lang = if (obj.has("lang")) obj.getString("lang") else null
-                val selected = obj.optBoolean("selected", false)
-
-                when (type) {
-                    "audio" -> {
-                        val codec = obj.optString("codec").takeIf { it.isNotBlank() }
-                        val channels = obj.optInt("demux-channel-count", 0).takeIf { it > 0 }
-                        val channelLabel = when (channels) {
-                            1 -> "Mono"
-                            2 -> "Stereo"
-                            6 -> "5.1"
-                            8 -> "7.1"
-                            null -> null
-                            else -> "$channels channels"
-                        }
-                        audio += Track(
-                            id = id,
-                            label = listOfNotNull(
-                                title ?: lang ?: "Track $id",
-                                codec?.uppercase(),
-                                channelLabel,
-                            ).distinct().joinToString(" • "),
-                            language = lang,
-                            codec = codec,
-                            channelCount = channels,
-                            selected = selected,
-                        )
-                    }
-                    "sub" -> subtitles += Track(id, title ?: lang ?: "Track $id", lang)
-                    "video" -> {
-                        val width = obj.optInt("demux-w", 0)
-                        val height = obj.optInt("demux-h", 0)
-                        val bitrate = obj.optLong("demux-bitrate", 0L)
-                        val quality = if (height > 0) "${height}p" else title ?: "Video $id"
-                        val bitrateLabel = bitrate.takeIf { it > 0L }?.let {
-                            String.format(java.util.Locale.US, "%.1f Mbps", it / 1_000_000f)
-                        }
-                        video += Track(
-                            id = id,
-                            label = listOfNotNull(quality, bitrateLabel).joinToString(" • "),
-                            language = lang,
-                            width = width.takeIf { it > 0 },
-                            height = height.takeIf { it > 0 },
-                            bitrate = bitrate.takeIf { it > 0L },
-                            codec = obj.optString("codec").takeIf { it.isNotBlank() },
-                            selected = selected,
-                        )
-                    }
-                }
+        val parsed = parseMpvTrackList(json)
+        val video = parsed.filter { it.type == MpvTrackType.VIDEO }.map { track ->
+            val quality = if (track.height > 0) "${track.height}p" else track.title ?: "Video ${track.id}"
+            val bitrateLabel = track.bitrate.takeIf { it > 0L }?.let {
+                String.format(java.util.Locale.US, "%.1f Mbps", it / 1_000_000f)
             }
-            _audioTracks.value = audio
-            _subtitleTracks.value = subtitles
-            _videoTracks.value = video
-            logger.d(
-                TAG,
-                "Tracks updated: video=${video.size}, audio=${audio.size}, subtitles=${subtitles.size}",
+            Track(
+                id = track.id,
+                label = listOfNotNull(quality, bitrateLabel).joinToString(" • "),
+                language = track.language,
+                width = track.width.takeIf { it > 0 },
+                height = track.height.takeIf { it > 0 },
+                bitrate = track.bitrate.takeIf { it > 0L },
+                codec = track.codec,
+                selected = track.selected,
             )
-        } catch (e: Exception) {
-            logger.e(TAG, "Failed to parse track-list JSON", e)
         }
+        val audio = parsed.filter { it.type == MpvTrackType.AUDIO }.map { track ->
+            val channels = track.channelCount.takeIf { it > 0 }
+            val channelLabel = when (channels) {
+                1 -> "Mono"
+                2 -> "Stereo"
+                6 -> "5.1"
+                8 -> "7.1"
+                null -> null
+                else -> "$channels channels"
+            }
+            Track(
+                id = track.id,
+                label = listOfNotNull(
+                    track.title ?: track.language ?: "Track ${track.id}",
+                    track.codec?.uppercase(),
+                    channelLabel,
+                ).distinct().joinToString(" • "),
+                language = track.language,
+                codec = track.codec,
+                channelCount = channels,
+                selected = track.selected,
+            )
+        }
+        val subtitles = parsed.filter { it.type == MpvTrackType.SUBTITLE }.map { track ->
+            Track(track.id, track.title ?: track.language ?: "Track ${track.id}", track.language)
+        }
+        _audioTracks.value = audio
+        _subtitleTracks.value = subtitles
+        _videoTracks.value = video
+        logger.d(
+            TAG,
+            "Tracks updated: video=${video.size}, audio=${audio.size}, subtitles=${subtitles.size}",
+        )
     }
 
     override fun eventProperty(property: String, value: MPVNode) {}

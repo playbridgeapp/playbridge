@@ -12,8 +12,6 @@ import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -467,96 +465,19 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
         val perItem = buildPerItemSource(payload)
 
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                15_000, 
-                bufCfg.maxBufferMs, 
-                2_500, 
-                5_000 
-            )
-            .setTargetBufferBytes(bufCfg.targetBytes)
-            .setPrioritizeTimeOverSizeThresholds(bufCfg.prioritizeTime)
-            .setBackBuffer(0, false)
-            .build()
+        val loadControl = ExoPlayerSetup.loadControl(context)
 
-        val renderersFactory = object : DefaultRenderersFactory(context) {
-            init {
-                // PREFER exists for AUDIO: platform decoders frequently misdeclare or
-                // botch DTS/TrueHD/E-AC3, so the FFmpeg audio renderer goes first.
-                // Video is forced back to hardware-first in buildVideoRenderers below.
-                setExtensionRendererMode(EXTENSION_RENDERER_MODE_PREFER)
-                // If the primary decoder fails to initialize, let MediaCodecRenderer
-                // try the next capable decoder (alternate vendor codec, then software)
-                // instead of surfacing a fatal playback error.
-                setEnableDecoderFallback(true)
-                // "codec_async_blocked" is set by ExoRendererService after a fatal
-                // decoder error in async mode: some vendor decoders (MTK TV panels)
-                // crash when MediaCodec is operated asynchronously (the API 31+
-                // default) yet decode the same stream fine synchronously — observed
-                // directly: c2.mtk.avc.decoder dies under ExoPlayer/async but works
-                // under MPV/sync on the same file.
-                val enginePrefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                if (enginePrefs.getBoolean("codec_async_blocked", false)) {
-                    logger.i(TAG, "Async MediaCodec blocked on this device — using synchronous codec mode")
-                    forceDisableMediaCodecAsynchronousQueueing()
-                }
-                // "dv_decoders_blocked" is set by ExoRendererService after a Dolby Vision
-                // hardware decoder fatally failed (MTK DV decoders accept dvhe.08 then die
-                // with 0xfffffff4). Excluding DV decoders makes media3 select the HEVC/AVC
-                // BASE-LAYER decoders it already appends as compatibility fallbacks for DV
-                // profiles 8/9 — same content rendered as HDR10, the exact path MPV uses
-                // successfully on the same hardware.
-                if (enginePrefs.getBoolean("dv_decoders_blocked", false)) {
-                    logger.i(TAG, "Dolby Vision decoders blocked on this device — using HEVC/AVC base-layer decoders")
-                    setMediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-                        if (mimeType == MimeTypes.VIDEO_DOLBY_VISION) {
-                            emptyList()
-                        } else {
-                            androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
-                                .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
-                        }
-                    }
-                }
-            }
-
-            override fun buildVideoRenderers(
-                context: Context,
-                extensionRendererMode: Int,
-                mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
-                enableDecoderFallback: Boolean,
-                eventHandler: android.os.Handler,
-                eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
-                allowedVideoJoiningTimeMs: Long,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                // Hardware MediaCodec must stay first for video: with PREFER, the
-                // FFmpeg SOFTWARE video renderer would front-run the hardware decoder
-                // for any codec the FFmpeg build supports — software video decode is
-                // a stutter/thermal crash on TV silicon. ON keeps the extension
-                // renderer available strictly as a last-resort fallback.
-                super.buildVideoRenderers(
-                    context,
-                    EXTENSION_RENDERER_MODE_ON,
-                    mediaCodecSelector,
-                    enableDecoderFallback,
-                    eventHandler,
-                    eventListener,
-                    allowedVideoJoiningTimeMs,
-                    out
-                )
-            }
-
-            override fun buildTextRenderers(
-                context: Context,
-                output: androidx.media3.exoplayer.text.TextOutput,
-                outputLooper: android.os.Looper,
-                extensionRendererMode: Int,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                // OffsetTextRenderer wraps final TextRenderer so setSubtitleDelay can shift
-                // cue selection for embedded and sideloaded text tracks.
-                out.add(OffsetTextRenderer(output, outputLooper) { subtitleDelayMs })
-            }
+        // "codec_async_blocked" and "dv_decoders_blocked" are set by ExoRendererService after a
+        // fatal decoder error in async mode or in a Dolby Vision decoder on this device.
+        val enginePrefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val synchronousCodecs = enginePrefs.getBoolean("codec_async_blocked", false)
+        val blockDolbyVision = enginePrefs.getBoolean("dv_decoders_blocked", false)
+        if (synchronousCodecs) logger.i(TAG, "Async MediaCodec blocked on this device — using synchronous codec mode")
+        if (blockDolbyVision) logger.i(TAG, "Dolby Vision decoders blocked on this device — using HEVC/AVC base-layer decoders")
+        val renderersFactory = ExoPlayerSetup.renderersFactory(context, synchronousCodecs, blockDolbyVision) { output, looper, out ->
+            // OffsetTextRenderer wraps final TextRenderer so setSubtitleDelay can shift
+            // cue selection for embedded and sideloaded text tracks.
+            out.add(OffsetTextRenderer(output, looper) { subtitleDelayMs })
         }
 
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
