@@ -2286,7 +2286,7 @@ class BrowserActivity : ComponentActivity() {
                 // Bridged Apps, chrome-hidden browsing and an open keyboard hide this bar. The
                 // engine then takes the keyboard inset itself (see browserBottomSpace).
                 val browserBottomToolbarVisible =
-                    currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden && !isKeyboardOpen()
+                    !isFullscreen && !isBrowserChromeHidden && !isKeyboardOpen()
                 bookmarkRemovalUrl?.let { url ->
                     AlertDialog(
                         onDismissRequest = { bookmarkRemovalUrl = null },
@@ -2303,6 +2303,160 @@ class BrowserActivity : ComponentActivity() {
                         dismissButton = { TextButton(onClick = { bookmarkRemovalUrl = null }) { Text("Cancel") } },
                     )
                 }
+                // The browser bars belong to the Browser screen rather than the Scaffold, so they
+                // fade out with the page instead of vanishing first and letting the page jump.
+                val browserTopBar: @Composable () -> Unit = {
+                    if (!isFullscreen && !isBrowserChromeHidden) {
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                BrowserToolbar(
+                                    currentUrl = currentUrl,
+                                    isLoading = isLoading,
+                                    isEditing = isEditing,
+                                    isSecure = isSecureConnection,
+                                    onLogoClick = {
+                                        dashboardOrigin = currentScreen
+                                        dashboardOriginBridgedAppTabId = null
+                                        currentScreen = Screen.Dashboard
+                                    },
+                                    onSecurityIconClick = { showSiteInfoSheet = true },
+                                onEditingChange = { editing ->
+                                    isEditing = editing
+                                    if (editing) {
+                                        editUrl = currentUrl
+                                        browserViewModel.setEditUrl(currentUrl)
+                                    }
+                                },
+                                onUrlChange = { url ->
+                                    editUrl = url
+                                    browserViewModel.setEditUrl(url)
+                                    urlBarTapped = false
+                                },
+                                onNavigate = { url ->
+                                    session?.loadUrl(url)
+                                    isEditing = false
+                                },
+                                isTvConnected = activeExternalDevice != null ||
+                                    (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
+                                        connectionState is WebSocketClient.ConnectionState.Connected),
+                                onTvClick = { showBrowserConnectDialog = true },
+                                onRemoteClick = {
+                                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                    }
+                                    currentScreen = Screen.Remote
+                                },
+                                isPlayEnabled = currentUrl.isNotEmpty() && currentUrl != "about:blank",
+                                mediaCount = detectedMediaBadge?.count ?: 0,
+                                mediaKind = detectedMediaBadge?.kind,
+                                onPlayClick = { showVideoSheet = true },
+                                onPlayLongClick = { performQuickCast() }
+                            )
+
+                            // Find on Page Bar
+                             if (showFindBar) {
+                                FindOnPageBar(
+                                    onFind = { text -> tabManager.findInPage(session, text) },
+                                    onNext = { tabManager.findInPage(session, "", 0) },
+                                    onPrev = { tabManager.findInPage(session, "", 1) },
+                                    onClose = { showFindBar = false }
+                                )
+                            }
+                        }
+                    }
+                    }
+                }
+                val browserBottomBar: @Composable () -> Unit = {
+                    if (browserBottomToolbarVisible) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            tonalElevation = 0.dp,
+                            shadowElevation = 0.dp
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    // The bar hides while the keyboard is open, so only the nav bar applies.
+                                    .windowInsetsPadding(WindowInsets.navigationBars)
+                                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 1. Back Button
+                                IconButton(
+                                    onClick = { session?.goBack() },
+                                    enabled = browserCanGoBack
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                }
+
+                                // 2. Forward Button
+                                IconButton(
+                                    onClick = { session?.goForward() },
+                                    enabled = browserCanGoForward
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = "Forward",
+                                        tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                }
+
+                                 IconButton(
+                                     onClick = { if (isLoading) session?.stopLoading() else session?.reload() }
+                                 ) {
+                                     Icon(
+                                         imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                                         contentDescription = if (isLoading) "Stop" else "Refresh",
+                                         tint = MaterialTheme.colorScheme.onSurface,
+                                         modifier = Modifier.size(24.dp)
+                                     )
+                                 }
+
+                                // 4. Tab button with tab count outline box
+                                IconButton(
+                                    onClick = { currentScreen = Screen.Tabs }
+                                ) {
+                                    val tabCount = browserState.tabs.count { it.id !in bridgedAppTabIds }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .border(
+                                                width = 2.dp,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                shape = RoundedCornerShape(5.dp)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = tabCount.toString(),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = if (tabCount >= 100) 8.sp else if (tabCount >= 10) 10.sp else 12.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+
+                                // 5. Hamburger menu button
+                                IconButton(
+                                    onClick = { showMenuSheet = true }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Menu,
+                                        contentDescription = "Menu"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         snackbarHost = { SnackbarHost(notificationPermissionHost.snackbar) },
@@ -2310,65 +2464,8 @@ class BrowserActivity : ComponentActivity() {
                         if (isFullscreen || (currentScreen == Screen.Browser && isBrowserChromeHidden)) {
                             // Media fullscreen and chrome-hidden browsing both hide the toolbar.
                         } else when (currentScreen) {
-                            Screen.Browser -> {
-                                Box(modifier = Modifier.fillMaxWidth()) {
-                                    Column(modifier = Modifier.fillMaxWidth()) {
-                                        BrowserToolbar(
-                                            currentUrl = currentUrl,
-                                            isLoading = isLoading,
-                                            isEditing = isEditing,
-                                            isSecure = isSecureConnection,
-                                            onLogoClick = {
-                                                dashboardOrigin = currentScreen
-                                                dashboardOriginBridgedAppTabId = null
-                                                currentScreen = Screen.Dashboard
-                                            },
-                                            onSecurityIconClick = { showSiteInfoSheet = true },
-                                        onEditingChange = { editing ->
-                                            isEditing = editing
-                                            if (editing) {
-                                                editUrl = currentUrl
-                                                browserViewModel.setEditUrl(currentUrl)
-                                            }
-                                        },
-                                        onUrlChange = { url ->
-                                            editUrl = url
-                                            browserViewModel.setEditUrl(url)
-                                            urlBarTapped = false
-                                        },
-                                        onNavigate = { url ->
-                                            session?.loadUrl(url)
-                                            isEditing = false
-                                        },
-                                        isTvConnected = activeExternalDevice != null ||
-                                            (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
-                                                connectionState is WebSocketClient.ConnectionState.Connected),
-                                        onTvClick = { showBrowserConnectDialog = true },
-                                        onRemoteClick = {
-                                            if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                            }
-                                            currentScreen = Screen.Remote
-                                        },
-                                        isPlayEnabled = currentUrl.isNotEmpty() && currentUrl != "about:blank",
-                                        mediaCount = detectedMediaBadge?.count ?: 0,
-                                        mediaKind = detectedMediaBadge?.kind,
-                                        onPlayClick = { showVideoSheet = true },
-                                        onPlayLongClick = { performQuickCast() }
-                                    )
-
-                                    // Find on Page Bar
-                                     if (showFindBar) {
-                                        FindOnPageBar(
-                                            onFind = { text -> tabManager.findInPage(session, text) },
-                                            onNext = { tabManager.findInPage(session, "", 0) },
-                                            onPrev = { tabManager.findInPage(session, "", 1) },
-                                            onClose = { showFindBar = false }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                            // Browser draws its own bars; see browserTopBar.
+                            Screen.Browser -> {}
                             Screen.Tabs -> {
                                 @OptIn(ExperimentalMaterial3Api::class)
                                 TopAppBar(
@@ -2484,97 +2581,6 @@ class BrowserActivity : ComponentActivity() {
                             is Screen.CollectionDetail -> {}
                         }
                     },
-                        bottomBar = {
-                            if (browserBottomToolbarVisible) {
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.surfaceContainer,
-                                    tonalElevation = 0.dp,
-                                    shadowElevation = 0.dp
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            // The bar hides while the keyboard is open, so only the nav bar applies.
-                                            .windowInsetsPadding(WindowInsets.navigationBars)
-                                            .padding(horizontal = 16.dp, vertical = 2.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // 1. Back Button
-                                        IconButton(
-                                            onClick = { session?.goBack() },
-                                            enabled = browserCanGoBack
-                                        ) {
-                                            Icon(
-                                                Icons.AutoMirrored.Filled.ArrowBack,
-                                                contentDescription = "Back",
-                                                tint = if (browserCanGoBack) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                            )
-                                        }
-
-                                        // 2. Forward Button
-                                        IconButton(
-                                            onClick = { session?.goForward() },
-                                            enabled = browserCanGoForward
-                                        ) {
-                                            Icon(
-                                                Icons.AutoMirrored.Filled.ArrowForward,
-                                                contentDescription = "Forward",
-                                                tint = if (browserCanGoForward) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                            )
-                                        }
-
-                                         IconButton(
-                                             onClick = { if (isLoading) session?.stopLoading() else session?.reload() }
-                                         ) {
-                                             Icon(
-                                                 imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
-                                                 contentDescription = if (isLoading) "Stop" else "Refresh",
-                                                 tint = MaterialTheme.colorScheme.onSurface,
-                                                 modifier = Modifier.size(24.dp)
-                                             )
-                                         }
-
-                                        // 4. Tab button with tab count outline box
-                                        IconButton(
-                                            onClick = { currentScreen = Screen.Tabs }
-                                        ) {
-                                            val tabCount = browserState.tabs.count { it.id !in bridgedAppTabIds }
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(24.dp)
-                                                    .border(
-                                                        width = 2.dp,
-                                                        color = MaterialTheme.colorScheme.onSurface,
-                                                        shape = RoundedCornerShape(5.dp)
-                                                    ),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    text = tabCount.toString(),
-                                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = if (tabCount >= 100) 8.sp else if (tabCount >= 10) 10.sp else 12.sp
-                                                    ),
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-
-                                        // 5. Hamburger menu button
-                                        IconButton(
-                                            onClick = { showMenuSheet = true }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Menu,
-                                                contentDescription = "Menu"
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     ) { innerPadding ->
                     // content
                     AppNavHost(
@@ -2759,6 +2765,8 @@ class BrowserActivity : ComponentActivity() {
                         onContextMenuUrlChange = { contextMenuUrl = it },
                         suggestions = suggestions,
                         onHandleBookmarkClick = { handleBookmarkClick() },
+                        browserTopBar = browserTopBar,
+                        browserBottomBar = browserBottomBar,
                         browserViewContent = { s, onLongPress ->
                             BrowserView(
                                 session = s,

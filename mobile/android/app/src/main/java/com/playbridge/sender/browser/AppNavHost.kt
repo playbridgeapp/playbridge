@@ -159,6 +159,9 @@ fun AppNavHost(
     // Helper functions
     onHandleBookmarkClick: () -> Unit,
     browserViewContent: @Composable (EngineSession, (String) -> Unit) -> Unit,
+    // The browser's own toolbar and bottom bar, drawn inside the Browser screen.
+    browserTopBar: @Composable () -> Unit = {},
+    browserBottomBar: @Composable () -> Unit = {},
 
     // Hoisted Tabs screen states
     isTabsSearchVisible: Boolean = false,
@@ -388,8 +391,8 @@ fun AppNavHost(
             session?.exitFullScreenMode()
         }
     }
-    // Browser/Tabs/Extensions use the Activity's Scaffold toolbar; other screens own theirs.
-    val bannerTopPadding = if (currentScreen in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)) {
+    // Tabs/Extensions use the Activity's Scaffold toolbar; other screens own theirs.
+    val bannerTopPadding = if (currentScreen in listOf(Screen.Tabs, Screen.Extensions)) {
         innerPadding.calculateTopPadding()
     } else 0.dp
     Column(Modifier.fillMaxSize().padding(top = if (playbackFailure != null) bannerTopPadding else 0.dp)) {
@@ -411,8 +414,10 @@ fun AppNavHost(
             // Perf: heavy destinations (Gecko AndroidView, poster grids, blurred detail)
             // keep two full trees alive during the transition — fade only, no slide.
             val heavy = initialState.isHeavyScreen() || targetState.isHeavyScreen()
+            // Fade through: the old screen is gone before the new one appears, so the two
+            // never show through each other.
             if (heavy) {
-                fadeIn(animationSpec = tween(250)) togetherWith fadeOut(animationSpec = tween(250))
+                fadeIn(animationSpec = tween(125, delayMillis = 125)) togetherWith fadeOut(animationSpec = tween(125))
             } else if (targetState == Screen.Tabs && initialState == Screen.Browser) {
                 slideInVertically { height -> height } + fadeIn() togetherWith
                         slideOutVertically { height -> -height } + fadeOut()
@@ -431,7 +436,8 @@ fun AppNavHost(
         },
         label = "ScreenTransition"
     ) { targetScreen ->
-        val isOwnTopBar = targetScreen !in listOf(Screen.Browser, Screen.Tabs, Screen.Extensions)
+        // Browser draws its own bars inside its content, so it ignores the Scaffold padding too.
+        val isOwnTopBar = targetScreen !in listOf(Screen.Tabs, Screen.Extensions)
         val resolvedPadding = if (isOwnTopBar || playbackFailure != null) {
             PaddingValues(
                 start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
@@ -491,7 +497,9 @@ fun AppNavHost(
                     var chromeHandleYFraction by rememberSaveable { mutableFloatStateOf(0f) }
                     var chromeHandleDragOffset by remember { mutableStateOf<Offset?>(null) }
 
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                    browserTopBar()
+                    BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         if (targetScreen == Screen.Browser && session != null) {
                             browserViewContent(session) { url ->
                                 onContextMenuUrlChange(url)
@@ -784,6 +792,8 @@ fun AppNavHost(
                                 }
                             }
                         }
+                    }
+                    browserBottomBar()
                     }
                 }
                 Screen.History -> {
