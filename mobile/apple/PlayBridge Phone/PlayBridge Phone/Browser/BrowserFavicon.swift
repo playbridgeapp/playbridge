@@ -1,7 +1,8 @@
 import SwiftUI
 import ImageIO
 
-/// Android's favicon service, keyed only by hostname (never page paths or tokens).
+/// Each site's own `/favicon.ico`, keyed only by origin (never page paths or tokens), so open
+/// tabs aren't sent to a third-party favicon service.
 /// URLCache persists HTTP-cacheable icons across launches; decoded images and failures
 /// are bounded in memory. Concurrent rows for one site share a single request.
 actor BrowserFaviconCache {
@@ -30,9 +31,24 @@ actor BrowserFaviconCache {
               let host = url.host?.lowercased(), host.contains("."),
               !host.hasSuffix(".local"), !host.hasSuffix(".localhost"),
               !host.contains(":"), host.contains(where: { $0.isLetter }) else { return nil }
-        var target = URLComponents(string: "https://www.google.com/s2/favicons")!
-        target.queryItems = [URLQueryItem(name: "domain_url", value: host), URLQueryItem(name: "sz", value: "64")]
+        var target = URLComponents()
+        target.scheme = url.scheme?.lowercased()
+        target.host = host
+        target.port = url.port
+        target.path = "/favicon.ico"
         return target.url
+    }
+
+    /// `.ico` files hold several sizes, often smallest first; decode the sharpest one.
+    static func largestFrame(in source: CGImageSource) -> Int {
+        (0..<max(CGImageSourceGetCount(source), 1)).max { a, b in
+            frameWidth(source, a) < frameWidth(source, b)
+        } ?? 0
+    }
+
+    private static func frameWidth(_ source: CGImageSource, _ index: Int) -> Int {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        return properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
     }
 
     nonisolated func cachedImage(for url: URL) -> UIImage? { images.cache.object(forKey: url as NSURL) }
@@ -53,7 +69,7 @@ actor BrowserFaviconCache {
                     data.append(byte)
                 }
                 guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                      let image = CGImageSourceCreateThumbnailAtIndex(source, Self.largestFrame(in: source), [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceThumbnailMaxPixelSize: 84,
                         kCGImageSourceCreateThumbnailWithTransform: true

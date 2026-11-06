@@ -1,5 +1,6 @@
 package com.playbridge.sender.browser
 
+import com.playbridge.sender.player.siteIconUrl
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.core.net.toUri
@@ -65,24 +66,8 @@ data class TabDisplayState(
     val url: String,
     val lowercaseTitle: String = title.lowercase(),
     val lowercaseUrl: String = url.lowercase(),
-    val faviconUrl: String = run {
-        val isValid = (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true))
-                && !url.contains("about:", ignoreCase = true)
-        if (isValid) {
-            val domain = try {
-                url.toUri().host ?: ""
-            } catch (e: Exception) {
-                ""
-            }
-            if (domain.isNotEmpty()) {
-                "https://www.google.com/s2/favicons?domain_url=$domain&sz=64"
-            } else {
-                "https://www.google.com/s2/favicons?domain_url=$url&sz=64"
-            }
-        } else {
-            ""
-        }
-    }
+    /** The site's own icon, so open tabs aren't sent to a third-party favicon service. */
+    val faviconUrl: String = siteIconUrl(url).orEmpty()
 )
 
 /**
