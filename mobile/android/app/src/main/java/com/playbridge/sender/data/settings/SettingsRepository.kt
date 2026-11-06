@@ -32,6 +32,8 @@ class SettingsRepository(
         val PHONE_PLAYER_MODE = stringPreferencesKey("phone_player_mode")
         /** A [com.playbridge.sender.player.PhoneLandscapeOpen] id: "fullscreen" (default) or "portrait". */
         val PHONE_LANDSCAPE_OPEN = stringPreferencesKey("phone_landscape_open")
+        /** Whether the phone player starts with "Keep playing in the background" on. */
+        val PHONE_BACKGROUND_PLAY = booleanPreferencesKey("phone_background_play")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
         val MEDIA_DETECTION = stringPreferencesKey("media_detection")
@@ -67,6 +69,7 @@ class SettingsRepository(
         .map { PhonePlayerMode.fromId(it[Keys.PHONE_PLAYER_MODE]) }
     val phoneLandscapeOpen: Flow<PhoneLandscapeOpen> = dataStore.data.catch { handleException(it) }
         .map { PhoneLandscapeOpen.fromId(it[Keys.PHONE_LANDSCAPE_OPEN]) }
+    val phoneBackgroundPlay: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.PHONE_BACKGROUND_PLAY] ?: false }
     /** How many episodes to keep resolved & queued ahead on the TV for series without a play-endpoint addon. */
     val tvPrefetchWindow: Flow<Int> = dataStore.data.catch { handleException(it) }.map { (it[Keys.TV_PREFETCH_WINDOW] ?: 1).coerceIn(1, 10) }
     val detectVideos: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.DETECT_VIDEOS] ?: true }
@@ -103,6 +106,7 @@ class SettingsRepository(
     suspend fun setTvPlayerMode(value: String) = write { it[Keys.TV_PLAYER_MODE] = value }
     suspend fun setPhonePlayerMode(value: PhonePlayerMode) = write { it[Keys.PHONE_PLAYER_MODE] = value.id }
     suspend fun setPhoneLandscapeOpen(value: PhoneLandscapeOpen) = write { it[Keys.PHONE_LANDSCAPE_OPEN] = value.id }
+    suspend fun setPhoneBackgroundPlay(value: Boolean) = write { it[Keys.PHONE_BACKGROUND_PLAY] = value }
     suspend fun setTvPrefetchWindow(value: Int) = write { it[Keys.TV_PREFETCH_WINDOW] = value.coerceIn(1, 10) }
     suspend fun setDetectVideos(value: Boolean) = write { it[Keys.DETECT_VIDEOS] = value }
     suspend fun setMediaDetectionSettings(value: MediaDetectionSettings) = write {

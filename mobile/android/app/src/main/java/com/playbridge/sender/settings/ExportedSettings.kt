@@ -73,6 +73,7 @@ data class ExportedAppSettings(
     val hideEmptyCastSheetTabs: Boolean? = null,
     val phonePlayerMode: String? = null,
     val phoneLandscapeOpen: String? = null,
+    val phoneBackgroundPlay: Boolean? = null,
 )
 
 @Serializable

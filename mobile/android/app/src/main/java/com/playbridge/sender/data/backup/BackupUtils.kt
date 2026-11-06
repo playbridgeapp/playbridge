@@ -88,6 +88,7 @@ object BackupUtils {
             hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
             phonePlayerMode = settingsRepository.phonePlayerMode.first().id,
             phoneLandscapeOpen = settingsRepository.phoneLandscapeOpen.first().id,
+            phoneBackgroundPlay = settingsRepository.phoneBackgroundPlay.first(),
         )
 
         val exported = ExportedSettings(
@@ -178,6 +179,7 @@ object BackupUtils {
                 s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
                 s.phonePlayerMode?.let { settingsRepository.setPhonePlayerMode(PhonePlayerMode.fromId(it)) }
                 s.phoneLandscapeOpen?.let { settingsRepository.setPhoneLandscapeOpen(PhoneLandscapeOpen.fromId(it)) }
+                s.phoneBackgroundPlay?.let { settingsRepository.setPhoneBackgroundPlay(it) }
             }
 
 
