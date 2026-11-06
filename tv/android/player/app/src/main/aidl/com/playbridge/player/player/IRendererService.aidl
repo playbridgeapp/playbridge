@@ -24,4 +24,5 @@ oneway interface IRendererService {
     void addExternalSubtitle(String url, String language, long sessionId);
     void stop(long sessionId);
     void release(long sessionId);
+    void setSubtitleStyle(String styleJson, long sessionId);
 }

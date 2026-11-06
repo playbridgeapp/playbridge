@@ -34,6 +34,7 @@ import com.playbridge.player.model.PairedDevice
 import com.playbridge.player.userscript.UserScriptController
 import com.playbridge.player.userscript.UserScriptReview
 import com.playbridge.player.userscript.UserScriptRuntime
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -268,10 +269,14 @@ class ServerService : Service() {
             intent.getParcelableExtra(EXTRA_PLAYER_LAUNCH_INTENT)
         }
 
+    private val subtitleStyles by lazy { com.playbridge.player.player.SubtitleStyleStore.get(this) }
+
     override fun onCreate() {
         super.onCreate()
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
+        // Every paired phone sees a style change, whether it came from TV Settings or a phone.
+        scope.launch { subtitleStyles.style.drop(1).collect(::broadcastSubtitleStyle) }
         contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
         androidx.core.content.ContextCompat.registerReceiver(this, volumeReceiver, IntentFilter().apply {
             addAction("android.media.VOLUME_CHANGED_ACTION")
@@ -1006,6 +1011,10 @@ class ServerService : Service() {
                 }
             }
             is IncomingMessage.UserScriptQuery -> broadcastUserScripts()
+            // A change is announced by the observer in onCreate; an unchanged style still replies.
+            is IncomingMessage.SubtitleStyle ->
+                if (!subtitleStyles.set(msg.style)) broadcastSubtitleStyle(msg.style)
+            is IncomingMessage.SubtitleStyleQuery -> broadcastSubtitleStyle(subtitleStyles.style.value)
             is IncomingMessage.UserAgent -> {
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 when {
@@ -1086,6 +1095,12 @@ class ServerService : Service() {
     }
 
     /** Send the phone the names of installed user scripts (the *.js in external files dir). */
+    private fun broadcastSubtitleStyle(style: com.playbridge.shared.player.SubtitleStyle) {
+        scope.launch {
+            webSocketServer?.broadcastStatus(com.playbridge.shared.protocol.createSubtitleStyleJson(style))
+        }
+    }
+
     private fun broadcastUserScripts() {
         val names = try {
             getExternalFilesDir(null)?.listFiles { f -> f.isFile && f.name.endsWith(".js") }

@@ -40,7 +40,6 @@ import androidx.core.graphics.createBitmap
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.text.CueGroup
-import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.SubtitleView
 import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
@@ -60,6 +59,7 @@ import com.playbridge.player.ui.player.PlaybackCapabilities
 import com.playbridge.player.ui.player.SettingsTab
 import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
+import com.playbridge.shared.protocol.createSubtitleStyleJson
 import com.playbridge.shared.logging.runCatchingLogged
 import com.playbridge.shared.logging.suspendRunCatchingLogged
 import com.playbridge.shared.player.PlayerChapter
@@ -138,6 +138,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private val playbackRequestGate = PlaybackRequestGate()
     private var rendererService: IRendererService? = null
     private var preparedSessionId = 0L
+    private val subtitleStyles by lazy { SubtitleStyleStore.get(this) }
     private var rendererKind: RendererKind = RendererKind.EXO
     private var session: RendererSessionSnapshot? = null
     private var connection: ServiceConnection? = null
@@ -370,6 +371,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             addView(composeView, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(playerRoot)
+        lifecycleScope.launch {
+            // Settings or a phone changed the style: restyle ExoPlayer's cues and mpv live.
+            subtitleStyles.style.collect { style ->
+                subtitleView.applySubtitleStyle(style)
+                val currentSession = session ?: return@collect
+                runCatchingLogged(TAG, "Renderer subtitle style failed", ::logPlayerFailure) {
+                    rendererService?.setSubtitleStyle(createSubtitleStyleJson(style), currentSession.sessionId)
+                }
+            }
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBackPressed()
         })
@@ -513,6 +524,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     PlayerControlsOverlay(
                     state = state,
                     mediaKind = currentMediaKind.wireValue,
+                    subtitleStyle = subtitleStyles.style.collectAsState().value,
                     stillWatchingState = stillWatching,
                     onContinueWatching = stillWatchingController::continueWatching,
                     onTogglePlay = controlsViewModel::togglePlayPause,
@@ -609,19 +621,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun createSubtitleView(): SubtitleView = SubtitleView(this).apply {
         setViewType(SubtitleView.VIEW_TYPE_CANVAS)
-        setApplyEmbeddedStyles(true)
-        setApplyEmbeddedFontSizes(true)
         setBottomPaddingFraction(SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION)
-        setStyle(
-            CaptionStyleCompat(
-                Color.WHITE,
-                Color.TRANSPARENT,
-                Color.TRANSPARENT,
-                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                Color.BLACK,
-                null,
-            ),
-        )
+        applySubtitleStyle(subtitleStyles.style.value)
         isFocusable = false
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
@@ -1601,6 +1602,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         renderer.setLooping(state.isLooping, sessionId)
         renderer.setAudioBoost(state.isAudioBoostEnabled, sessionId)
         renderer.setSubtitleDelay(state.subtitleDelayMs, sessionId)
+        renderer.setSubtitleStyle(createSubtitleStyleJson(subtitleStyles.style.value), sessionId)
         renderer.setVideoQuality(state.videoQualityMaxHeight, sessionId)
     }
 

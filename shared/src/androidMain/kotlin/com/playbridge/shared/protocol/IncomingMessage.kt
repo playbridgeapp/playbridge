@@ -82,6 +82,10 @@ sealed class IncomingMessage {
     data class UserScript(val name: String, val content: String) : IncomingMessage()
     /** Phone asks the TV which user scripts are installed; TV replies with `user_scripts`. */
     data object UserScriptQuery : IncomingMessage()
+    /** A complete subtitle style: the phone setting it, or the TV reporting its current one. */
+    data class SubtitleStyle(val style: com.playbridge.shared.player.SubtitleStyle) : IncomingMessage()
+    /** Phone asks the TV for its subtitle style; the TV replies with `subtitle_style`. */
+    data object SubtitleStyleQuery : IncomingMessage()
     /**
      * Select (and optionally save) a TV browser User-Agent override. Mirrors [UserScript]'s
      * shape: [name] blank means "switch back to default" (clears the active override without
@@ -318,6 +322,30 @@ fun createUserScriptsJson(names: List<String>): String =
         put("names", buildJsonArray { names.forEach { add(it) } })
     }.toString()
 
+/** Either direction: a complete subtitle style (the phone sets it, the TV reports it). */
+fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle): String =
+    buildJsonObject {
+        put("type", "subtitle_style")
+        put("size", style.size.wire)
+        put("background", style.background.wire)
+        put("edge", style.edge.wire)
+        put("font", style.font.wire)
+        put("overrideStyled", style.overrideStyled)
+    }.toString()
+
+/** Phone → TV: ask for the current subtitle style. */
+fun createSubtitleStyleQueryJson(): String = """{"type":"subtitle_style_query"}"""
+
+/** Reads a `subtitle_style` object; unknown or missing values use the defaults. */
+fun parseSubtitleStyle(root: JsonObject): com.playbridge.shared.player.SubtitleStyle =
+    com.playbridge.shared.player.SubtitleStyle.fromWire(
+        size = root["size"]?.jsonPrimitive?.contentOrNull,
+        background = root["background"]?.jsonPrimitive?.contentOrNull,
+        edge = root["edge"]?.jsonPrimitive?.contentOrNull,
+        font = root["font"]?.jsonPrimitive?.contentOrNull,
+        overrideStyled = root["overrideStyled"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull(),
+    )
+
 /** Phone → TV: fetch the persisted diagnostic log over the paired channel. */
 fun createLogsQueryJson(requestId: String): String =
     buildJsonObject {
@@ -550,6 +578,8 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 content = root["content"]?.jsonPrimitive?.contentOrNull ?: ""
             )
             "user_script_query" -> IncomingMessage.UserScriptQuery
+            "subtitle_style" -> IncomingMessage.SubtitleStyle(parseSubtitleStyle(root))
+            "subtitle_style_query" -> IncomingMessage.SubtitleStyleQuery
             "user_agent" -> IncomingMessage.UserAgent(
                 name = root["name"]?.jsonPrimitive?.contentOrNull ?: "",
                 value = root["value"]?.jsonPrimitive?.contentOrNull ?: "",
