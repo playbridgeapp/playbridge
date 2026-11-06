@@ -43,6 +43,39 @@ class ConnectionMergeTest {
         assertEquals(pb.uuid, ConnectionMerge.playBridgeHistory(history).first().uuid)
     }
 
+    @Test
+    fun `pairing again drops the old token and pin and uses the reinstalled TV`() {
+        val stale = dev("192.168.1.22", 8765, uuid = "old-install", token = "t")
+            .copy(protocol = CastProtocol.PLAYBRIDGE, certFingerprint = "sha256/old")
+        val reinstalled = dev("192.168.1.22", 8765, uuid = "new-install", wssPort = 8766)
+            .copy(protocol = CastProtocol.PLAYBRIDGE, certFingerprint = "sha256/advertised")
+        val other = dev("192.168.1.30", 8765, uuid = "other-tv").copy(protocol = CastProtocol.PLAYBRIDGE)
+
+        val target = ConnectionMerge.forRepairing(stale, listOf(other, reinstalled))
+
+        assertEquals("new-install", target.uuid)
+        assertEquals(8766, target.wssPort)
+        assertEquals("", target.token)
+        // A discovered pin is never trusted; pairing delivers the real one.
+        assertNull(target.certFingerprint)
+    }
+
+    @Test
+    fun `pairing again without a discovered replacement keeps the address only`() {
+        val stale = dev("192.168.1.22", 8765, uuid = "old-install", token = "t")
+            .copy(protocol = CastProtocol.PLAYBRIDGE, certFingerprint = "sha256/old")
+        val sameTv = dev("192.168.1.22", 8765, uuid = "old-install").copy(protocol = CastProtocol.PLAYBRIDGE)
+        val elsewhere = dev("192.168.1.23", 8765, uuid = "new-install").copy(protocol = CastProtocol.PLAYBRIDGE)
+
+        assertNull(ConnectionMerge.reinstalledReplacement(stale, listOf(sameTv, elsewhere)))
+        val target = ConnectionMerge.forRepairing(stale, listOf(sameTv, elsewhere))
+
+        assertEquals("192.168.1.22", target.ip)
+        assertEquals("", target.uuid)
+        assertEquals("", target.token)
+        assertNull(target.certFingerprint)
+    }
+
     private fun dev(
         ip: String,
         port: Int,

@@ -412,6 +412,22 @@ class ConnectionViewModel(
         return true
     }
 
+    /**
+     * The user asked to pair [device] again after its certificate changed or its token was
+     * rejected (the TV was reset or reinstalled). Forgets the stale entry, then starts a
+     * code-verified pairing with the TV now at that address. Returns the device being paired.
+     */
+    suspend fun pairAgain(device: TvDevice): TvDevice {
+        val target = ConnectionMerge.forRepairing(device, discoveryRepository.devices.value)
+        deviceUpdateMutex.withLock {
+            connectionStore.removeFromHistory(device)
+            val saved = connectionStore.tvDevice.first()
+            if (saved != null && ConnectionMerge.isSameDevice(saved, device)) connectionStore.clearTvDevice()
+        }
+        connect(target)
+        return target
+    }
+
     suspend fun prepareIndependentRemote(onPickRequired: () -> Unit) {
         val revision = castSessionManager.selectionRevision
         val selected = castSessionManager.remoteDevice.value

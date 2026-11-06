@@ -138,4 +138,25 @@ object ConnectionMerge {
             target to AuthFailureAction.WIPE_FAILED_HISTORY_ONLY
         }
     }
+
+    /**
+     * A reinstalled or reset PlayBridge TV comes back with a new id and certificate at
+     * the same address. Returns the discovered receiver that replaced [stale], if any.
+     */
+    fun reinstalledReplacement(stale: TvDevice, discovered: List<TvDevice>): TvDevice? =
+        discovered.firstOrNull {
+            it.resolvedProtocol == CastProtocol.PLAYBRIDGE && stale.resolvedProtocol == CastProtocol.PLAYBRIDGE &&
+                it.ip == stale.ip && it.port == stale.port && hasOtherId(stale, it)
+        }
+
+    /**
+     * The device to pair with when the user asks to pair [stale] again. The old token
+     * and certificate pin are dropped, so trust comes only from the code-verified
+     * pairing; nothing is accepted from discovery. Without a discovered replacement the
+     * old id is dropped too, so the TV's new id can match by address.
+     */
+    fun forRepairing(stale: TvDevice, discovered: List<TvDevice>): TvDevice {
+        val replacement = reinstalledReplacement(stale, discovered)
+        return (replacement ?: stale.copy(uuid = "")).copy(token = "", certFingerprint = null)
+    }
 }
