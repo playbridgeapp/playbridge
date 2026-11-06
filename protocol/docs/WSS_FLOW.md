@@ -165,6 +165,12 @@ capability arrays. It must never contain the `token`. On failure the sender forg
 connection, and requires explicit re-pairing. A sender must not fall back from a pin mismatch to
 un-pinned trust.
 
+A reset or reinstalled receiver has a new id, certificate and tokens, so its saved pairing fails with
+a pin mismatch or a rejected token. The Android phone then says the TV was reset or reinstalled and
+offers **Pair again**. That user action drops the saved token and pin, replaces the stale entry with
+the receiver now discovered at the same address (by its new id), and runs the normal code-verified
+pairing. A pin or id advertised by discovery is never trusted on its own.
+
 After pairing or authentication the sender sends `context_query`. The receiver answers `context`
 and replays current `status`, `tracks`, `player_settings`, `timeline`, `volume_state`, and
 `playlist_status` where available, so a sender reconnecting during playback can reconstruct its

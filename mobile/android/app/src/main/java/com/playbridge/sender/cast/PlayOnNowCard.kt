@@ -55,6 +55,7 @@ internal fun PlayOnNowCard(
     onOpenPlayBridge: () -> Unit,
     onDisconnect: () -> Unit,
     onShareDiagnostics: (() -> Unit)?,
+    onPairAgain: (() -> Unit)? = null,
 ) {
     val status = if (external) when (castState.phase) {
         SessionPhase.CONNECTING -> "Connecting…"
@@ -68,6 +69,9 @@ internal fun PlayOnNowCard(
         nativeStatus == "TV remote only" -> "TV remote only"
         connection is WebSocketClient.ConnectionState.Connecting ||
             connection is WebSocketClient.ConnectionState.Retrying -> "Connecting…"
+        // The TV's certificate or token no longer matches: it was reset or reinstalled.
+        connection is WebSocketClient.ConnectionState.PinMismatch -> "Reset or reinstalled · Pair again"
+        connection is WebSocketClient.ConnectionState.AuthFailed -> "Needs pairing again"
         else -> "Couldn’t connect"
     }
     val live = (status.startsWith("Connected") || status.startsWith("Casting")) && (external || nativeSelected)
@@ -98,6 +102,11 @@ internal fun PlayOnNowCard(
                     }
                     if (!streamRoute.isNullOrBlank()) Text(streamRoute, style = MaterialTheme.typography.bodySmall)
                 }
+            }
+            if (onPairAgain != null) {
+                Text("This TV was reset or reinstalled. Pair it again to keep using it.",
+                    style = MaterialTheme.typography.bodyMedium)
+                FilledTonalButton(onClick = onPairAgain, modifier = Modifier.fillMaxWidth()) { Text("Pair again") }
             }
             if (!external && !nativeSelected && connection is WebSocketClient.ConnectionState.Connected) {
                 FilledTonalButton(onClick = onCastHere, modifier = Modifier.fillMaxWidth()) {

@@ -123,6 +123,10 @@ internal object PlayOnSheetPresence {
 
 internal enum class PlayOnPage { Devices, Pair, Add, Manual, Actions, Configure, Browser, Roku, Dlna, FullRemote }
 
+/** The saved pairing no longer matches the TV: its certificate changed or its token was rejected. */
+internal fun WebSocketClient.ConnectionState.needsRepairing(): Boolean =
+    this is WebSocketClient.ConnectionState.PinMismatch || this is WebSocketClient.ConnectionState.AuthFailed
+
 internal fun WebSocketClient.ConnectionState.needsPairingPage(): Boolean =
     this is WebSocketClient.ConnectionState.WaitingForCodeInput ||
         this is WebSocketClient.ConnectionState.VerifyingCode ||
@@ -244,6 +248,15 @@ fun PlayOnSheet(
             CastProtocol.DLNA -> if (viewModel.selectDlnaTarget(target)) finish(target)
             CastProtocol.ROKU -> { viewModel.selectRokuTarget(target); finish(target) }
             CastProtocol.WEB_BROWSER -> { viewModel.selectBrowserTarget(target); finish(target) }
+        }
+    }
+    /** Forget the stale pairing of a reset or reinstalled TV and pair it again with a code. */
+    fun pairAgain(device: TvDevice) {
+        notice = null
+        pendingGoogle = null
+        scope.launch {
+            pendingNative = viewModel.pairAgain(device)
+            page = PlayOnPage.Pair
         }
     }
     /** Pick another device, confirming first when leaving the current one would cost something. */
@@ -410,6 +423,9 @@ fun PlayOnSheet(
                                     onShareDiagnostics = recentFailure?.let { attempt ->
                                         { shareCastAttempt(context, diagnostics.report(attempt)) }
                                     },
+                                    onPairAgain = if (external == null && connection.needsRepairing()) {
+                                        { pairAgain(nowDevice) }
+                                    } else null,
                                 )
                             }
                             PlayOnSectionLabel("Devices")
@@ -463,7 +479,8 @@ fun PlayOnSheet(
                                 Icon(Icons.Default.Add, null); Text("Add a device", Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
                             }
                         }
-                        PlayOnPage.Pair -> PlayOnPairing(connection, (pendingNative ?: tv)?.playOnName ?: "TV", viewModel::submitPairingCode) { (pendingNative ?: tv)?.let(::pick) }
+                        PlayOnPage.Pair -> PlayOnPairing(connection, (pendingNative ?: tv)?.playOnName ?: "TV", viewModel::submitPairingCode,
+                            repair = { (pendingNative ?: tv)?.let(::pairAgain) }) { (pendingNative ?: tv)?.let(::pick) }
                         PlayOnPage.Add -> {
                             Text("TVs on your Wi-Fi show up automatically under Nearby. Use these when one doesn’t.")
                             if (!playBridgeOnly) PlayOnRow("Browser on a TV", "Any smart TV with a web browser — no app needed",
@@ -622,7 +639,13 @@ private fun PlayOnTip(title: String, body: String) {
 }
 
 @Composable
-private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, submit: (String) -> Unit, retry: () -> Unit) {
+private fun PlayOnPairing(
+    state: WebSocketClient.ConnectionState,
+    name: String,
+    submit: (String) -> Unit,
+    repair: () -> Unit,
+    retry: () -> Unit,
+) {
     var code by remember { mutableStateOf("") }
     LaunchedEffect(state) { if (state is WebSocketClient.ConnectionState.WaitingForCodeInput && state.lastCodeWrong) code = "" }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -661,10 +684,11 @@ private fun PlayOnPairing(state: WebSocketClient.ConnectionState, name: String, 
                 Button(onClick = retry) { Text("Try again") }
             }
             is WebSocketClient.ConnectionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-            is WebSocketClient.ConnectionState.PinMismatch -> Text("The TV’s certificate changed. Forget the device and pair again.",
-                color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-            WebSocketClient.ConnectionState.AuthFailed -> Text("Connection lost — tap the TV to reconnect",
-                color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            is WebSocketClient.ConnectionState.PinMismatch, WebSocketClient.ConnectionState.AuthFailed -> {
+                Text("$name was reset or reinstalled. Pair it again to keep using it.",
+                    color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                Button(onClick = repair) { Text("Pair again") }
+            }
             else -> {
                 CircularProgressIndicator(Modifier.size(24.dp))
                 Text(if (state is WebSocketClient.ConnectionState.VerifyingCode) "Verifying code…" else "Connecting to $name…")
