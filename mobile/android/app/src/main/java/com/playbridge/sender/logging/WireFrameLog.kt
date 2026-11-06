@@ -20,7 +20,8 @@ internal object WireFrameLog {
         "pairing_approved", "pairing_denied", "command", "command_result", "status", "context", "context_query",
         "tracks", "playlist_status", "player_settings", "volume_state", "ping", "pong", "screen_mirror_status",
         "screen_mirror_answer", "screen_mirror_candidate", "user_scripts", "user_scripts_query", "user_script",
-        "user_agent", "user_agent_query", "tv_logs", "tv_logs_query", "timeline",
+        "user_agent", "user_agent_query", "tv_logs", "tv_logs_query", "timeline", "subtitle_style",
+        "subtitle_style_query",
     )
 
     fun summary(frame: String): String {

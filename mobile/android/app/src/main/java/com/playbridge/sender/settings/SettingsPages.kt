@@ -229,6 +229,7 @@ fun AudioSubtitleSettingsScreen(onBack: () -> Unit) {
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val audio by settings.preferredAudioLang.collectAsState(initial = "")
     val subtitles by settings.preferredSubtitleLang.collectAsState(initial = "")
+    val phoneStyle by settings.phoneSubtitleStyle.collectAsState(initial = com.playbridge.shared.player.SubtitleStyle.DEFAULT)
 
     SettingsPage("Audio & subtitles", onBack) {
         Text(
@@ -244,6 +245,14 @@ fun AudioSubtitleSettingsScreen(onBack: () -> Unit) {
             scope.launch { settings.setPreferredSubtitleLang(code) }
             browserPrefs.edit { putString("preferred_subtitle_lang", code) }
         }
+
+        SettingsGroupTitle("Phone player subtitles")
+        SubtitleStyleEditor(phoneStyle, onChange = { scope.launch { settings.setPhoneSubtitleStyle(it) } })
+        Text(
+            "Your TV keeps its own style: change it in Settings → TV or Play on → Configure TV.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

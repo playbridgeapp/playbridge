@@ -137,6 +137,14 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
 
     // ── Engine ─────────────────────────────────────────────────────────────────────────────
 
+    private var subtitleStyle = com.playbridge.shared.player.SubtitleStyle.DEFAULT
+
+    /** mpv draws its own subtitles, so the player's style is passed straight to it. */
+    fun setSubtitleStyle(style: com.playbridge.shared.player.SubtitleStyle) {
+        subtitleStyle = style
+        engine?.setSubtitleStyle(style)
+    }
+
     /** Only one mpv core exists per process; a previous player may still be releasing it. */
     private fun createEngine() {
         val created = MpvPlayerEngine(appContext, verifyTls = true)
@@ -147,6 +155,7 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
             return
         }
         engine = created
+        created.setSubtitleStyle(subtitleStyle)
         created.registerObserver(this, mapOf("dwidth" to MPV_FORMAT_INT64, "dheight" to MPV_FORMAT_INT64))
         scope.launch { created.state.collect(::onEngineState) }
         scope.launch {

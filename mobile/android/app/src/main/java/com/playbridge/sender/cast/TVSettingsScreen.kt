@@ -42,6 +42,7 @@ fun TVSettingsScreen(onBack: () -> Unit) {
     val connectionViewModel: ConnectionViewModel = koinViewModel()
     val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
     val autoConnect by connectionViewModel.autoConnectEnabled.collectAsState()
+    val connectionState by connectionViewModel.connectionState.collectAsState()
 
     val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
     var browserMode by remember { mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv") }
@@ -103,6 +104,11 @@ fun TVSettingsScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        )
+
+        SettingsGroupTitle("Subtitles on the TV")
+        com.playbridge.sender.settings.TvSubtitleStyleSection(
+            connected = connectionState is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected,
         )
 
         SettingsGroupTitle("After casting")

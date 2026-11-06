@@ -50,6 +50,8 @@ data class TvUserAgentState(
     val entries: List<Pair<String, String>> = emptyList(),
 )
 
+private const val SUBTITLE_STYLE_FEATURE = "subtitle_style_v1"
+
 /**
  * Coordinates WebSocket connection state parsing, TV playback updates, and command execution.
  * Extracts message processing out of BrowserActivity for better separation of concerns.
@@ -98,6 +100,29 @@ class ConnectionCoordinator internal constructor(
     
     // Names of user scripts currently installed on the TV (for the management UI).
     val installedUserScripts = MutableStateFlow<List<String>>(emptyList())
+
+    /** The connected TV's subtitle style, as it last reported it; null until then. */
+    val tvSubtitleStyle = MutableStateFlow<com.playbridge.shared.player.SubtitleStyle?>(null)
+
+    /** Whether the connected TV keeps a subtitle style the phone can change. */
+    val tvSupportsSubtitleStyle: Boolean
+        get() = webSocketClient?.connectionState?.value is WebSocketClient.ConnectionState.Connected &&
+            SUBTITLE_STYLE_FEATURE in webSocketClient.tvCapabilitiesState.value.features
+
+    /** Asks the TV for its style; it answers with `subtitle_style`. */
+    fun queryTvSubtitleStyle() {
+        if (tvSupportsSubtitleStyle) {
+            webSocketClient?.send(com.playbridge.shared.protocol.createSubtitleStyleQueryJson())
+        }
+    }
+
+    /** Replaces the TV's style. The TV echoes what it applied to every connected phone. */
+    fun setTvSubtitleStyle(style: com.playbridge.shared.player.SubtitleStyle) {
+        if (!tvSupportsSubtitleStyle) return
+        if (webSocketClient?.send(com.playbridge.shared.protocol.createSubtitleStyleJson(style)) == true) {
+            tvSubtitleStyle.value = style
+        }
+    }
 
     // TV browser User-Agent: which one is active (name, blank = default) + which custom
     // ones are saved on the TV (for the management UI).
@@ -296,6 +321,15 @@ class ConnectionCoordinator internal constructor(
                                 tvTimeline.value = timeline
                                 logd("TV timeline chapters=${timeline.chapters.size} segments=${timeline.segments.size}")
                             }
+                        }
+                        "subtitle_style" -> {
+                            tvSubtitleStyle.value = com.playbridge.shared.player.SubtitleStyle.fromWire(
+                                size = json.optString("size"),
+                                background = json.optString("background"),
+                                edge = json.optString("edge"),
+                                font = json.optString("font"),
+                                overrideStyled = if (json.has("overrideStyled")) json.optBoolean("overrideStyled") else null,
+                            )
                         }
                         "user_scripts" -> {
                             val arr = json.optJSONArray("names")

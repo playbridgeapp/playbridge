@@ -74,6 +74,8 @@ data class ExportedAppSettings(
     val phonePlayerMode: String? = null,
     val phoneLandscapeOpen: String? = null,
     val phoneBackgroundPlay: Boolean? = null,
+    /** The phone player's subtitle style as its `subtitle_style` JSON. */
+    val phoneSubtitleStyle: String? = null,
 )
 
 @Serializable

@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.*
 import com.playbridge.sender.browser.CustomUserAgent
 import com.playbridge.sender.player.PhoneLandscapeOpen
 import com.playbridge.sender.player.PhonePlayerMode
+import com.playbridge.shared.player.SubtitleStyle
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
@@ -34,6 +36,7 @@ class SettingsRepository(
         val PHONE_LANDSCAPE_OPEN = stringPreferencesKey("phone_landscape_open")
         /** Whether the phone player starts with "Keep playing in the background" on. */
         val PHONE_BACKGROUND_PLAY = booleanPreferencesKey("phone_background_play")
+        val PHONE_SUBTITLE_STYLE = stringPreferencesKey("phone_subtitle_style")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
         val MEDIA_DETECTION = stringPreferencesKey("media_detection")
@@ -70,6 +73,16 @@ class SettingsRepository(
     val phoneLandscapeOpen: Flow<PhoneLandscapeOpen> = dataStore.data.catch { handleException(it) }
         .map { PhoneLandscapeOpen.fromId(it[Keys.PHONE_LANDSCAPE_OPEN]) }
     val phoneBackgroundPlay: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.PHONE_BACKGROUND_PLAY] ?: false }
+    /** How the phone player draws plain subtitles; a TV keeps its own (see `subtitle_style`). */
+    val phoneSubtitleStyle: Flow<SubtitleStyle> = dataStore.data.catch { handleException(it) }.map { prefs ->
+        prefs[Keys.PHONE_SUBTITLE_STYLE]?.let { json ->
+            runCatching {
+                com.playbridge.shared.protocol.parseSubtitleStyle(
+                    kotlinx.serialization.json.Json.parseToJsonElement(json).jsonObject,
+                )
+            }.getOrNull()
+        } ?: SubtitleStyle.DEFAULT
+    }
     /** How many episodes to keep resolved & queued ahead on the TV for series without a play-endpoint addon. */
     val tvPrefetchWindow: Flow<Int> = dataStore.data.catch { handleException(it) }.map { (it[Keys.TV_PREFETCH_WINDOW] ?: 1).coerceIn(1, 10) }
     val detectVideos: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.DETECT_VIDEOS] ?: true }
@@ -107,6 +120,9 @@ class SettingsRepository(
     suspend fun setPhonePlayerMode(value: PhonePlayerMode) = write { it[Keys.PHONE_PLAYER_MODE] = value.id }
     suspend fun setPhoneLandscapeOpen(value: PhoneLandscapeOpen) = write { it[Keys.PHONE_LANDSCAPE_OPEN] = value.id }
     suspend fun setPhoneBackgroundPlay(value: Boolean) = write { it[Keys.PHONE_BACKGROUND_PLAY] = value }
+    suspend fun setPhoneSubtitleStyle(value: SubtitleStyle) = write {
+        it[Keys.PHONE_SUBTITLE_STYLE] = com.playbridge.shared.protocol.createSubtitleStyleJson(value)
+    }
     suspend fun setTvPrefetchWindow(value: Int) = write { it[Keys.TV_PREFETCH_WINDOW] = value.coerceIn(1, 10) }
     suspend fun setDetectVideos(value: Boolean) = write { it[Keys.DETECT_VIDEOS] = value }
     suspend fun setMediaDetectionSettings(value: MediaDetectionSettings) = write {
