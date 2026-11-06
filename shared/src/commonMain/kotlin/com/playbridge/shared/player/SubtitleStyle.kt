@@ -12,6 +12,8 @@ data class SubtitleStyle(
     val font: Font = Font.DEFAULT,
     /** Also restyle subtitles that carry their own styling (ASS/SSA, styled WebVTT/TTML). */
     val overrideStyled: Boolean = false,
+    /** Family name of the installed custom font; set exactly when [font] is [Font.CUSTOM]. */
+    val customFont: String? = null,
 ) {
     enum class Size(val wire: String, val scale: Float) {
         SMALL("small", 0.8f),
@@ -36,6 +38,8 @@ data class SubtitleStyle(
     enum class Font(val wire: String) {
         /** The player's font, falling back to the device's fonts for other scripts. */
         DEFAULT("default"),
+        /** The font the user installed; characters it lacks still fall back to the device's fonts. */
+        CUSTOM("custom"),
     }
 
     companion object {
@@ -48,12 +52,20 @@ data class SubtitleStyle(
             edge: String?,
             font: String?,
             overrideStyled: Boolean?,
-        ) = SubtitleStyle(
-            size = Size.entries.firstOrNull { it.wire == size } ?: DEFAULT.size,
-            background = Background.entries.firstOrNull { it.wire == background } ?: DEFAULT.background,
-            edge = Edge.entries.firstOrNull { it.wire == edge } ?: DEFAULT.edge,
-            font = Font.entries.firstOrNull { it.wire == font } ?: DEFAULT.font,
-            overrideStyled = overrideStyled ?: DEFAULT.overrideStyled,
-        )
+            customFont: String? = null,
+        ): SubtitleStyle {
+            // A custom font without its name can't be drawn, so it reads as the default font.
+            val name = customFont?.trim()?.takeIf { it.isNotEmpty() }?.take(128)
+            val chosen = Font.entries.firstOrNull { it.wire == font }
+                ?.takeUnless { it == Font.CUSTOM && name == null } ?: DEFAULT.font
+            return SubtitleStyle(
+                size = Size.entries.firstOrNull { it.wire == size } ?: DEFAULT.size,
+                background = Background.entries.firstOrNull { it.wire == background } ?: DEFAULT.background,
+                edge = Edge.entries.firstOrNull { it.wire == edge } ?: DEFAULT.edge,
+                font = chosen,
+                overrideStyled = overrideStyled ?: DEFAULT.overrideStyled,
+                customFont = name.takeIf { chosen == Font.CUSTOM },
+            )
+        }
     }
 }

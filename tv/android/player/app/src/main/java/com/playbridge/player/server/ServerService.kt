@@ -270,6 +270,7 @@ class ServerService : Service() {
         }
 
     private val subtitleStyles by lazy { com.playbridge.player.player.SubtitleStyleStore.get(this) }
+    private val subtitleFonts by lazy { com.playbridge.shared.player.SubtitleFontReceiver(filesDir) }
 
     override fun onCreate() {
         super.onCreate()
@@ -1015,6 +1016,19 @@ class ServerService : Service() {
             is IncomingMessage.SubtitleStyle ->
                 if (!subtitleStyles.set(msg.style)) broadcastSubtitleStyle(msg.style)
             is IncomingMessage.SubtitleStyleQuery -> broadcastSubtitleStyle(subtitleStyles.style.value)
+            // A phone sends its custom font in ordered pieces and waits for each reply.
+            is IncomingMessage.SubtitleFontBegin ->
+                replyToFont(command, msg.transferId, subtitleFonts.begin(msg.transferId, msg.size, msg.sha256))
+            is IncomingMessage.SubtitleFontChunk ->
+                replyToFont(command, msg.transferId, subtitleFonts.chunk(msg.transferId, msg.offset, msg.data))
+            is IncomingMessage.SubtitleFontEnd -> scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val result = subtitleFonts.end(msg.transferId)
+                if (result is com.playbridge.shared.player.SubtitleFontReceiver.Result.Installed) {
+                    FileLogger.i(TAG, "Custom subtitle font installed")
+                    subtitleStyles.customFontInstalled(result.family)
+                }
+                replyToFont(command, msg.transferId, result)
+            }
             is IncomingMessage.UserAgent -> {
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 when {
@@ -1095,9 +1109,27 @@ class ServerService : Service() {
     }
 
     /** Send the phone the names of installed user scripts (the *.js in external files dir). */
+    private fun replyToFont(
+        command: WebSocketServer.RoutedCommand,
+        transferId: String,
+        result: com.playbridge.shared.player.SubtitleFontReceiver.Result,
+    ) {
+        val json = when (result) {
+            is com.playbridge.shared.player.SubtitleFontReceiver.Result.Ack ->
+                com.playbridge.shared.protocol.createSubtitleFontAckJson(transferId, result.received)
+            is com.playbridge.shared.player.SubtitleFontReceiver.Result.Installed ->
+                com.playbridge.shared.protocol.createSubtitleFontResultJson(transferId, result.family, null)
+            is com.playbridge.shared.player.SubtitleFontReceiver.Result.Failed ->
+                com.playbridge.shared.protocol.createSubtitleFontResultJson(transferId, null, result.code)
+        }
+        scope.launch { webSocketServer?.sendTo(command.connectionId, json) }
+    }
+
     private fun broadcastSubtitleStyle(style: com.playbridge.shared.player.SubtitleStyle) {
         scope.launch {
-            webSocketServer?.broadcastStatus(com.playbridge.shared.protocol.createSubtitleStyleJson(style))
+            webSocketServer?.broadcastStatus(
+                com.playbridge.shared.protocol.createSubtitleStyleJson(style, subtitleStyles.customFontFamily),
+            )
         }
     }
 

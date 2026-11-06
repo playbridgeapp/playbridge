@@ -367,6 +367,28 @@ fun SettingsScreen(
                                 },
                             )
                         }
+                        subtitleStyles.customFontFamily?.let { family ->
+                            item {
+                                SettingDropdownItem(
+                                    label = "Subtitle Font",
+                                    description = "Custom fonts are added from the PlayBridge phone app. Characters a font lacks use the TV's fonts.",
+                                    options = listOf(
+                                        SubtitleStyle.Font.DEFAULT.wire to "Default",
+                                        SubtitleStyle.Font.CUSTOM.wire to family,
+                                    ),
+                                    selected = subtitleStyle.font.wire,
+                                    onSelected = { wire ->
+                                        subtitleStyles.set(
+                                            if (wire == SubtitleStyle.Font.CUSTOM.wire) {
+                                                subtitleStyle.copy(font = SubtitleStyle.Font.CUSTOM, customFont = family)
+                                            } else {
+                                                subtitleStyle.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null)
+                                            },
+                                        )
+                                    },
+                                )
+                            }
+                        }
                         item {
                             SettingDropdownItem(
                                 label = "Subtitle Background",

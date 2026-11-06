@@ -51,6 +51,8 @@ data class TvUserAgentState(
 )
 
 private const val SUBTITLE_STYLE_FEATURE = "subtitle_style_v1"
+private const val SUBTITLE_FONT_FEATURE = "subtitle_font_v1"
+private const val FONT_REPLY_TIMEOUT_MS = 15_000L
 
 /**
  * Coordinates WebSocket connection state parsing, TV playback updates, and command execution.
@@ -121,6 +123,55 @@ class ConnectionCoordinator internal constructor(
         if (!tvSupportsSubtitleStyle) return
         if (webSocketClient?.send(com.playbridge.shared.protocol.createSubtitleStyleJson(style)) == true) {
             tvSubtitleStyle.value = style
+        }
+    }
+
+    /** The custom font installed on the TV, selected or not. */
+    val tvInstalledFont = MutableStateFlow<String?>(null)
+
+    /** Whether the connected TV accepts a custom subtitle font from the phone. */
+    val tvSupportsSubtitleFont: Boolean
+        get() = tvSupportsSubtitleStyle && SUBTITLE_FONT_FEATURE in webSocketClient!!.tvCapabilitiesState.value.features
+
+    /** Bytes of the font being sent to the TV so far, or null when no font is being sent. */
+    val tvFontUploadProgress = MutableStateFlow<Pair<Int, Int>?>(null)
+    @Volatile private var pendingFontReply: Pair<String, CompletableDeferred<org.json.JSONObject>>? = null
+
+    /**
+     * Sends [bytes] (an already checked font) to the TV in ordered pieces, waiting for each
+     * acknowledgement. On success the TV selects the font and reports its new style; returns
+     * the installed family, or the TV's error code as a failure.
+     */
+    suspend fun uploadTvSubtitleFont(bytes: ByteArray): Result<String> {
+        val client = webSocketClient
+        if (client == null || !tvSupportsSubtitleFont) return Result.failure(IllegalStateException("unsupported"))
+        val id = java.util.UUID.randomUUID().toString()
+        suspend fun exchange(frame: String): org.json.JSONObject? {
+            val reply = CompletableDeferred<org.json.JSONObject>()
+            pendingFontReply = id to reply
+            if (!client.send(frame)) return null
+            return withTimeoutOrNull(FONT_REPLY_TIMEOUT_MS) { reply.await() }
+        }
+        fun failed(reply: org.json.JSONObject?) =
+            Result.failure<String>(IllegalStateException(reply?.optString("error")?.takeIf { it.isNotEmpty() } ?: "no_reply"))
+        try {
+            tvFontUploadProgress.value = 0 to bytes.size
+            val sha = com.playbridge.shared.player.SubtitleFontReceiver.sha256(bytes)
+            var reply = exchange(com.playbridge.shared.protocol.createSubtitleFontBeginJson(id, bytes.size, sha))
+            var offset = 0
+            while (offset < bytes.size) {
+                if (reply?.optString("type") != "subtitle_font_ack" || reply.optInt("received") != offset) return failed(reply)
+                val end = minOf(offset + com.playbridge.shared.player.SUBTITLE_FONT_CHUNK_BYTES, bytes.size)
+                reply = exchange(com.playbridge.shared.protocol.createSubtitleFontChunkJson(id, offset, bytes.copyOfRange(offset, end)))
+                offset = end
+                tvFontUploadProgress.value = offset to bytes.size
+            }
+            if (reply?.optString("type") != "subtitle_font_ack" || reply.optInt("received") != bytes.size) return failed(reply)
+            reply = exchange(com.playbridge.shared.protocol.createSubtitleFontEndJson(id))
+            return if (reply?.optBoolean("ok") == true) Result.success(reply.optString("family")) else failed(reply)
+        } finally {
+            pendingFontReply = null
+            tvFontUploadProgress.value = null
         }
     }
 
@@ -322,6 +373,9 @@ class ConnectionCoordinator internal constructor(
                                 logd("TV timeline chapters=${timeline.chapters.size} segments=${timeline.segments.size}")
                             }
                         }
+                        "subtitle_font_ack", "subtitle_font_result" -> pendingFontReply
+                            ?.takeIf { it.first == json.optString("transferId") }
+                            ?.second?.complete(json)
                         "subtitle_style" -> {
                             tvSubtitleStyle.value = com.playbridge.shared.player.SubtitleStyle.fromWire(
                                 size = json.optString("size"),
@@ -329,7 +383,9 @@ class ConnectionCoordinator internal constructor(
                                 edge = json.optString("edge"),
                                 font = json.optString("font"),
                                 overrideStyled = if (json.has("overrideStyled")) json.optBoolean("overrideStyled") else null,
+                                customFont = json.optString("customFont").takeIf { it.isNotEmpty() },
                             )
+                            tvInstalledFont.value = json.optString("installedFont").takeIf { it.isNotEmpty() }
                         }
                         "user_scripts" -> {
                             val arr = json.optJSONArray("names")

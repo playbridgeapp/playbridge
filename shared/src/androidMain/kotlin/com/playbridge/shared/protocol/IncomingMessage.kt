@@ -86,6 +86,12 @@ sealed class IncomingMessage {
     data class SubtitleStyle(val style: com.playbridge.shared.player.SubtitleStyle) : IncomingMessage()
     /** Phone asks the TV for its subtitle style; the TV replies with `subtitle_style`. */
     data object SubtitleStyleQuery : IncomingMessage()
+    /** Phone starts sending a custom subtitle font. */
+    data class SubtitleFontBegin(val transferId: String, val size: Int, val sha256: String) : IncomingMessage()
+    /** One piece of a custom subtitle font; [data] is base64. */
+    data class SubtitleFontChunk(val transferId: String, val offset: Int, val data: String) : IncomingMessage()
+    /** Phone finished sending a custom subtitle font. */
+    data class SubtitleFontEnd(val transferId: String) : IncomingMessage()
     /**
      * Select (and optionally save) a TV browser User-Agent override. Mirrors [UserScript]'s
      * shape: [name] blank means "switch back to default" (clears the active override without
@@ -322,8 +328,11 @@ fun createUserScriptsJson(names: List<String>): String =
         put("names", buildJsonArray { names.forEach { add(it) } })
     }.toString()
 
-/** Either direction: a complete subtitle style (the phone sets it, the TV reports it). */
-fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle): String =
+/**
+ * Either direction: a complete subtitle style (the phone sets it, the TV reports it). A TV's
+ * report also names its installed custom font in [installedFont], selected or not.
+ */
+fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle, installedFont: String? = null): String =
     buildJsonObject {
         put("type", "subtitle_style")
         put("size", style.size.wire)
@@ -331,6 +340,8 @@ fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle): 
         put("edge", style.edge.wire)
         put("font", style.font.wire)
         put("overrideStyled", style.overrideStyled)
+        style.customFont?.let { put("customFont", it) }
+        installedFont?.let { put("installedFont", it) }
     }.toString()
 
 /** Phone → TV: ask for the current subtitle style. */
@@ -344,7 +355,51 @@ fun parseSubtitleStyle(root: JsonObject): com.playbridge.shared.player.SubtitleS
         edge = root["edge"]?.jsonPrimitive?.contentOrNull,
         font = root["font"]?.jsonPrimitive?.contentOrNull,
         overrideStyled = root["overrideStyled"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull(),
+        customFont = root["customFont"]?.jsonPrimitive?.contentOrNull,
     )
+
+/** Phone → TV: start sending a custom subtitle font of [size] bytes with SHA-256 [sha256] (hex). */
+fun createSubtitleFontBeginJson(transferId: String, size: Int, sha256: String): String =
+    buildJsonObject {
+        put("type", "subtitle_font_begin")
+        put("transferId", transferId)
+        put("size", size)
+        put("sha256", sha256)
+    }.toString()
+
+/** Phone → TV: the font bytes at [offset], base64. The phone waits for each `subtitle_font_ack`. */
+fun createSubtitleFontChunkJson(transferId: String, offset: Int, data: ByteArray): String =
+    buildJsonObject {
+        put("type", "subtitle_font_chunk")
+        put("transferId", transferId)
+        put("offset", offset)
+        put("data", java.util.Base64.getEncoder().encodeToString(data))
+    }.toString()
+
+/** Phone → TV: all bytes sent; the TV checks and installs the font, then answers `subtitle_font_result`. */
+fun createSubtitleFontEndJson(transferId: String): String =
+    buildJsonObject {
+        put("type", "subtitle_font_end")
+        put("transferId", transferId)
+    }.toString()
+
+/** TV → phone: [received] bytes of the transfer are stored. */
+fun createSubtitleFontAckJson(transferId: String, received: Int): String =
+    buildJsonObject {
+        put("type", "subtitle_font_ack")
+        put("transferId", transferId)
+        put("received", received)
+    }.toString()
+
+/** TV → phone: the transfer ended, installing font [family], or failing with [error]. */
+fun createSubtitleFontResultJson(transferId: String, family: String?, error: String?): String =
+    buildJsonObject {
+        put("type", "subtitle_font_result")
+        put("transferId", transferId)
+        put("ok", family != null)
+        family?.let { put("family", it) }
+        error?.let { put("error", it) }
+    }.toString()
 
 /** Phone → TV: fetch the persisted diagnostic log over the paired channel. */
 fun createLogsQueryJson(requestId: String): String =
@@ -580,6 +635,23 @@ fun parseIncomingMessage(text: String): IncomingMessage {
             "user_script_query" -> IncomingMessage.UserScriptQuery
             "subtitle_style" -> IncomingMessage.SubtitleStyle(parseSubtitleStyle(root))
             "subtitle_style_query" -> IncomingMessage.SubtitleStyleQuery
+            "subtitle_font_begin" -> {
+                val id = root["transferId"]?.jsonPrimitive?.contentOrNull
+                val size = root["size"]?.jsonPrimitive?.intOrNull
+                val sha = root["sha256"]?.jsonPrimitive?.contentOrNull
+                if (id != null && size != null && sha != null) IncomingMessage.SubtitleFontBegin(id, size, sha)
+                else IncomingMessage.Unknown("subtitle_font_begin_parse_error", "")
+            }
+            "subtitle_font_chunk" -> {
+                val id = root["transferId"]?.jsonPrimitive?.contentOrNull
+                val offset = root["offset"]?.jsonPrimitive?.intOrNull
+                val data = root["data"]?.jsonPrimitive?.contentOrNull
+                if (id != null && offset != null && data != null) IncomingMessage.SubtitleFontChunk(id, offset, data)
+                else IncomingMessage.Unknown("subtitle_font_chunk_parse_error", "")
+            }
+            "subtitle_font_end" -> root["transferId"]?.jsonPrimitive?.contentOrNull
+                ?.let(IncomingMessage::SubtitleFontEnd)
+                ?: IncomingMessage.Unknown("subtitle_font_end_parse_error", "")
             "user_agent" -> IncomingMessage.UserAgent(
                 name = root["name"]?.jsonPrimitive?.contentOrNull ?: "",
                 value = root["value"]?.jsonPrimitive?.contentOrNull ?: "",

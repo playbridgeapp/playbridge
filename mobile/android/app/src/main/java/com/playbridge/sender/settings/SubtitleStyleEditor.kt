@@ -16,6 +16,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -40,9 +42,11 @@ internal fun SubtitleStyleEditor(
     style: SubtitleStyle,
     onChange: (SubtitleStyle) -> Unit,
     enabled: Boolean = true,
+    font: SubtitleFontControls? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SubtitleStylePreview(style)
+        SubtitleStylePreview(style, font?.typeface?.takeIf { style.font == SubtitleStyle.Font.CUSTOM })
+        if (font != null) FontChoice(style, onChange, enabled, font)
         StyleChoice(
             "Size", style.size, SubtitleStyle.Size.entries, enabled,
             label = { when (it) {
@@ -78,6 +82,41 @@ internal fun SubtitleStyleEditor(
     }
 }
 
+/** Default or the installed custom font, and a button to pick a font file. */
+@Composable
+private fun FontChoice(
+    style: SubtitleStyle,
+    onChange: (SubtitleStyle) -> Unit,
+    enabled: Boolean,
+    font: SubtitleFontControls,
+) {
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(font.onPick) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val installed = font.installed
+        if (installed != null) {
+            StyleChoice(
+                "Font", style.font, SubtitleStyle.Font.entries, enabled && !font.busy,
+                label = { if (it == SubtitleStyle.Font.CUSTOM) installed else "Default" },
+            ) {
+                onChange(style.copy(font = it, customFont = installed.takeIf { _ -> it == SubtitleStyle.Font.CUSTOM }))
+            }
+        } else {
+            Text("Font", style = MaterialTheme.typography.bodyLarge)
+        }
+        androidx.compose.material3.OutlinedButton(
+            onClick = { picker.launch(FONT_MIME_TYPES) },
+            enabled = enabled && !font.busy,
+        ) { Text(if (installed == null) "Add a font file…" else "Replace font file…") }
+        Text(
+            font.status ?: "A .ttf or .otf file up to 10 MB. Characters it lacks use the device's fonts.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun <T> StyleChoice(
     title: String,
@@ -105,11 +144,12 @@ private fun <T> StyleChoice(
 
 /** A sample line drawn the way the players draw plain subtitles, over a bright-to-dark scene. */
 @Composable
-private fun SubtitleStylePreview(style: SubtitleStyle) {
+private fun SubtitleStylePreview(style: SubtitleStyle, typeface: android.graphics.Typeface?) {
     val size = (18f * style.size.scale).sp
     val base = TextStyle(
         fontSize = size,
         fontWeight = FontWeight.Bold,
+        fontFamily = typeface?.let { androidx.compose.ui.text.font.FontFamily(it) },
         color = Color.White,
         textAlign = TextAlign.Center,
         shadow = if (style.edge == SubtitleStyle.Edge.SHADOW) {
@@ -170,6 +210,34 @@ internal fun TvSubtitleStyleSection(connected: Boolean) {
             style = reported ?: SubtitleStyle.DEFAULT,
             onChange = coordinator::setTvSubtitleStyle,
             enabled = reported != null,
+            font = if (coordinator.tvSupportsSubtitleFont) tvFontControls(coordinator) else null,
         )
     }
+}
+
+/** Sends a picked font to the TV, which installs and selects it. */
+@Composable
+private fun tvFontControls(coordinator: com.playbridge.sender.connection.ConnectionCoordinator): SubtitleFontControls {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val installed by coordinator.tvInstalledFont.collectAsState()
+    val progress by coordinator.tvFontUploadProgress.collectAsState()
+    var error by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val sending = progress?.let { (sent, total) -> "Sending the font to the TV… ${sent * 100 / total.coerceAtLeast(1)}%" }
+    return SubtitleFontControls(
+        installed = installed,
+        status = sending ?: error,
+        busy = progress != null,
+        typeface = null,
+        onPick = { uri ->
+            error = null
+            scope.launch {
+                when (val picked = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { readPickedFont(context, uri) }) {
+                    is PickedFont.Rejected -> error = picked.message
+                    is PickedFont.Font -> coordinator.uploadTvSubtitleFont(picked.bytes)
+                        .onFailure { error = fontErrorMessage(it.message) }
+                }
+            }
+        },
+    )
 }

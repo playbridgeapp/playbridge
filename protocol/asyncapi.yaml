@@ -309,6 +309,9 @@ components:
         - $ref: '#/components/schemas/UserAgentQuery'
         - $ref: '#/components/schemas/SubtitleStyle'
         - $ref: '#/components/schemas/SubtitleStyleQuery'
+        - $ref: '#/components/schemas/SubtitleFontBegin'
+        - $ref: '#/components/schemas/SubtitleFontChunk'
+        - $ref: '#/components/schemas/SubtitleFontEnd'
         - $ref: '#/components/schemas/LogsQuery'
         - $ref: '#/components/schemas/LogsClear'
     ReceiverFrame:
@@ -330,6 +333,8 @@ components:
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
         - $ref: '#/components/schemas/SubtitleStyle'
+        - $ref: '#/components/schemas/SubtitleFontAck'
+        - $ref: '#/components/schemas/SubtitleFontResult'
         - $ref: '#/components/schemas/Logs'
         - $ref: '#/components/schemas/ScreenMirrorReady'
         - $ref: '#/components/schemas/ScreenMirrorAnswer'
@@ -1127,10 +1132,76 @@ components:
         size: { type: string, description: 'Known: small, medium (default), large, extra_large.' }
         background: { type: string, description: 'Known: none (default), translucent, solid.' }
         edge: { type: string, description: 'Known: outline (default), shadow, none.' }
-        font: { type: string, description: 'Known: default.' }
+        font: { type: string, description: "Known: default, custom (the receiver's installed font, named in customFont)." }
+        customFont:
+          type: string
+          maxLength: 128
+          description: Family name of the installed custom font; present exactly when font is custom.
+        installedFont:
+          type: string
+          maxLength: 128
+          description: Receiver reports only. The installed custom font's family, selected or not.
         overrideStyled:
           type: boolean
           description: Also restyle subtitles that carry their own styling (ASS/SSA, styled WebVTT/TTML).
+      additionalProperties: false
+    SubtitleFontBegin:
+      type: object
+      description: >-
+        Starts sending a custom subtitle font (TrueType/OpenType, at most 10 MiB) to a receiver that
+        advertises subtitle_font_v1. The receiver answers subtitle_font_ack with received 0, or
+        subtitle_font_result with an error. A new begin abandons an unfinished transfer.
+      required: [type, transferId, size, sha256]
+      properties:
+        type: { const: subtitle_font_begin }
+        transferId: { type: string, maxLength: 128 }
+        size: { type: integer, minimum: 1, maximum: 10485760 }
+        sha256: { type: string, description: Lowercase hex SHA-256 of the whole font. }
+      additionalProperties: false
+    SubtitleFontChunk:
+      type: object
+      description: >-
+        The font bytes starting at offset, base64, at most 196608 bytes before encoding. Chunks are
+        sent in order, each after the previous subtitle_font_ack.
+      required: [type, transferId, offset, data]
+      properties:
+        type: { const: subtitle_font_chunk }
+        transferId: { type: string, maxLength: 128 }
+        offset: { type: integer, minimum: 0 }
+        data: { type: string, contentEncoding: base64 }
+      additionalProperties: false
+    SubtitleFontEnd:
+      type: object
+      description: >-
+        All bytes were sent. The receiver checks the size, checksum and that the bytes are a font,
+        installs it in its single custom-font slot, selects it, and answers subtitle_font_result;
+        on success it also sends subtitle_style to every authenticated sender.
+      required: [type, transferId]
+      properties:
+        type: { const: subtitle_font_end }
+        transferId: { type: string, maxLength: 128 }
+      additionalProperties: false
+    SubtitleFontAck:
+      type: object
+      description: Sent only to the sending connection.
+      required: [type, transferId, received]
+      properties:
+        type: { const: subtitle_font_ack }
+        transferId: { type: string }
+        received: { type: integer, minimum: 0 }
+      additionalProperties: false
+    SubtitleFontResult:
+      type: object
+      description: >-
+        Sent only to the sending connection. Errors: too_large, invalid_chunk, unknown_transfer,
+        checksum_mismatch, invalid_font. A failure leaves any installed font unchanged.
+      required: [type, transferId, ok]
+      properties:
+        type: { const: subtitle_font_result }
+        transferId: { type: string }
+        ok: { type: boolean }
+        family: { type: string }
+        error: { type: string }
       additionalProperties: false
     SubtitleStyleQuery:
       type: object

@@ -1,5 +1,6 @@
 package com.playbridge.sender.player
 
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.collectAsState
 import android.content.Intent
 import androidx.compose.foundation.Image
@@ -177,6 +178,15 @@ private fun SubtitleLayer(player: Player) {
     val settings: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
     val style by settings.phoneSubtitleStyle.collectAsState(initial = com.playbridge.shared.player.SubtitleStyle.DEFAULT)
     LaunchedEffect(player, style) { (player as? MpvMediaPlayer)?.setSubtitleStyle(style) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // The custom font, if chosen; Android falls back per character to the device's fonts.
+    val typeface by produceState<android.graphics.Typeface?>(null, style) {
+        value = if (style.font != com.playbridge.shared.player.SubtitleStyle.Font.CUSTOM) null
+        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.playbridge.shared.player.customSubtitleFontFile(context.filesDir)
+                ?.let { runCatching { android.graphics.Typeface.createFromFile(it) }.getOrNull() }
+        }
+    }
     var cues by remember(player) { mutableStateOf(player.currentCues.cues) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -208,7 +218,7 @@ private fun SubtitleLayer(player: Player) {
                         com.playbridge.shared.player.SubtitleStyle.Edge.NONE -> CaptionStyleCompat.EDGE_TYPE_NONE
                     },
                     android.graphics.Color.BLACK,
-                    android.graphics.Typeface.DEFAULT_BOLD,
+                    typeface ?: android.graphics.Typeface.DEFAULT_BOLD,
                 )
             )
             view.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f * style.size.scale)

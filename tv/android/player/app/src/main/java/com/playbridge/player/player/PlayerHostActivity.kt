@@ -139,6 +139,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var rendererService: IRendererService? = null
     private var preparedSessionId = 0L
     private val subtitleStyles by lazy { SubtitleStyleStore.get(this) }
+    /** The custom subtitle font, loaded off the main thread for ExoPlayer and the overlay. */
+    private var subtitleTypeface by androidx.compose.runtime.mutableStateOf<android.graphics.Typeface?>(null)
     private var rendererKind: RendererKind = RendererKind.EXO
     private var session: RendererSessionSnapshot? = null
     private var connection: ServiceConnection? = null
@@ -372,9 +374,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         setContentView(playerRoot)
         lifecycleScope.launch {
-            // Settings or a phone changed the style: restyle ExoPlayer's cues and mpv live.
-            subtitleStyles.style.collect { style ->
-                subtitleView.applySubtitleStyle(style)
+            // Settings or a phone changed the style or font: restyle ExoPlayer's cues and mpv live.
+            kotlinx.coroutines.flow.combine(subtitleStyles.style, subtitleStyles.fontRevision) { style, _ -> style }
+                .collect { style ->
+                val typeface = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    subtitleStyles.typeface(style)
+                }
+                subtitleTypeface = typeface
+                subtitleView.applySubtitleStyle(style, typeface)
                 val currentSession = session ?: return@collect
                 runCatchingLogged(TAG, "Renderer subtitle style failed", ::logPlayerFailure) {
                     rendererService?.setSubtitleStyle(createSubtitleStyleJson(style), currentSession.sessionId)
@@ -525,6 +532,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     state = state,
                     mediaKind = currentMediaKind.wireValue,
                     subtitleStyle = subtitleStyles.style.collectAsState().value,
+                    subtitleTypeface = subtitleTypeface,
                     stillWatchingState = stillWatching,
                     onContinueWatching = stillWatchingController::continueWatching,
                     onTogglePlay = controlsViewModel::togglePlayPause,

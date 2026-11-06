@@ -45,6 +45,7 @@ fun PlayerControlsOverlay(
     state: PlayerControlsState,
     mediaKind: String = "video",
     subtitleStyle: com.playbridge.shared.player.SubtitleStyle = com.playbridge.shared.player.SubtitleStyle.DEFAULT,
+    subtitleTypeface: android.graphics.Typeface? = null,
     stillWatchingState: StillWatchingState = StillWatchingState(),
     onContinueWatching: () -> Unit = {},
     onTogglePlay: () -> Unit,
@@ -297,6 +298,7 @@ fun PlayerControlsOverlay(
             SubtitleOverlay(
                 text = state.currentSubtitleText,
                 style = subtitleStyle,
+                typeface = subtitleTypeface,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -466,6 +468,7 @@ private fun PlaybackTransitionOverlay(
 private fun SubtitleOverlay(
     text: String,
     style: com.playbridge.shared.player.SubtitleStyle,
+    typeface: android.graphics.Typeface?,
     modifier: Modifier = Modifier,
 ) {
     val startSize = BASE_SUBTITLE_TEXT_SIZE_SP * style.size.scale
@@ -474,6 +477,8 @@ private fun SubtitleOverlay(
     val base = androidx.compose.ui.text.TextStyle(
         fontSize = fontSize,
         fontWeight = FontWeight.SemiBold,
+        // Android falls back to the device's fonts for characters the custom font lacks.
+        fontFamily = typeface?.let { androidx.compose.ui.text.font.FontFamily(it) },
         color = Color.White,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         shadow = if (style.edge == com.playbridge.shared.player.SubtitleStyle.Edge.SHADOW) {

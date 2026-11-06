@@ -214,6 +214,14 @@ the normalized style, applies it at once to current and later playback, and send
 to every authenticated sender, including after changes made on the receiver itself. Unknown values
 mean the default. Senders should not send these frames to receivers without the feature.
 
+Receivers that also advertise `subtitle_font_v1` accept one custom subtitle font from a sender:
+`subtitle_font_begin` (size up to 10 MiB and SHA-256), ordered base64 `subtitle_font_chunk`s, each
+sent after the previous `subtitle_font_ack`, then `subtitle_font_end`. The receiver checks the
+size, checksum and font structure, replaces its single custom font, selects it (`font: custom`,
+`customFont: <family>`) and answers `subtitle_font_result` to that sender only. Characters the font
+lacks are drawn with the receiver's own fonts. `subtitle_style` reports from such receivers name the
+installed font in `installedFont` even while the default font is selected.
+
 Late network subtitle attachment uses `control` with `payload.command = "add_subtitle"`
 and `payload.subtitleResource` (URL, resource-scoped headers, optional label/language).
 Receivers supporting it advertise `subtitle_resource_add_v1` in `auth_response.features`.
