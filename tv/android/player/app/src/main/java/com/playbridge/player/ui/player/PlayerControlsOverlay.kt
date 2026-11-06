@@ -44,6 +44,7 @@ import com.playbridge.player.ui.theme.TvExpressiveMotion
 fun PlayerControlsOverlay(
     state: PlayerControlsState,
     mediaKind: String = "video",
+    subtitleStyle: com.playbridge.shared.player.SubtitleStyle = com.playbridge.shared.player.SubtitleStyle.DEFAULT,
     stillWatchingState: StillWatchingState = StillWatchingState(),
     onContinueWatching: () -> Unit = {},
     onTogglePlay: () -> Unit,
@@ -295,6 +296,7 @@ fun PlayerControlsOverlay(
         if (state.currentSubtitleText != null && state.playbackTransitionMessage == null) {
             SubtitleOverlay(
                 text = state.currentSubtitleText,
+                style = subtitleStyle,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -463,9 +465,26 @@ private fun PlaybackTransitionOverlay(
 @Composable
 private fun SubtitleOverlay(
     text: String,
+    style: com.playbridge.shared.player.SubtitleStyle,
     modifier: Modifier = Modifier,
 ) {
-    var fontSize by remember(text) { mutableStateOf(30.sp) }
+    val startSize = BASE_SUBTITLE_TEXT_SIZE_SP * style.size.scale
+    var fontSize by remember(text, startSize) { mutableStateOf(startSize.sp) }
+    val box = Color.Black.copy(alpha = style.background.opacity)
+    val base = androidx.compose.ui.text.TextStyle(
+        fontSize = fontSize,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        shadow = if (style.edge == com.playbridge.shared.player.SubtitleStyle.Edge.SHADOW) {
+            androidx.compose.ui.graphics.Shadow(
+                color = Color.Black,
+                offset = androidx.compose.ui.geometry.Offset(2f, 3f),
+                blurRadius = 6f,
+            )
+        } else null,
+        lineHeight = (fontSize.value * 1.25f).sp,
+    )
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -473,38 +492,49 @@ private fun SubtitleOverlay(
             .padding(start = 96.dp, end = 96.dp, top = 8.dp, bottom = 72.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
-        Text(
-            text = text,
-            style = androidx.compose.ui.text.TextStyle(
-                fontSize = fontSize,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black,
-                    offset = androidx.compose.ui.geometry.Offset(0f, 2f),
-                    blurRadius = 5f,
-                ),
-                lineHeight = (fontSize.value * 1.25f).sp,
-            ),
-            softWrap = true,
-            maxLines = 14,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
-            onTextLayout = { result ->
-                if ((result.didOverflowHeight || result.didOverflowWidth) &&
-                    fontSize.value > MIN_SUBTITLE_TEXT_SIZE_SP
-                ) {
-                    fontSize = (fontSize.value - SUBTITLE_TEXT_SIZE_STEP_SP)
-                        .coerceAtLeast(MIN_SUBTITLE_TEXT_SIZE_SP)
-                        .sp
-                }
-            },
-            modifier = Modifier
+        Box(
+            Modifier
                 .widthIn(max = 1400.dp)
+                .background(box, RoundedCornerShape(6.dp))
                 .padding(horizontal = 12.dp, vertical = 4.dp),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            // An outline is a stroked copy of the text drawn underneath the fill.
+            if (style.edge == com.playbridge.shared.player.SubtitleStyle.Edge.OUTLINE) {
+                Text(
+                    text = text,
+                    style = base.copy(
+                        color = Color.Black,
+                        drawStyle = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = fontSize.value * 0.18f,
+                            join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                        ),
+                    ),
+                    softWrap = true,
+                    maxLines = 14,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+                )
+            }
+            Text(
+                text = text,
+                style = base,
+                softWrap = true,
+                maxLines = 14,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+                onTextLayout = { result ->
+                    if ((result.didOverflowHeight || result.didOverflowWidth) &&
+                        fontSize.value > MIN_SUBTITLE_TEXT_SIZE_SP
+                    ) {
+                        fontSize = (fontSize.value - SUBTITLE_TEXT_SIZE_STEP_SP)
+                            .coerceAtLeast(MIN_SUBTITLE_TEXT_SIZE_SP)
+                            .sp
+                    }
+                },
+            )
+        }
     }
 }
 
+private const val BASE_SUBTITLE_TEXT_SIZE_SP = 30f
 private const val MIN_SUBTITLE_TEXT_SIZE_SP = 18f
 private const val SUBTITLE_TEXT_SIZE_STEP_SP = 2f

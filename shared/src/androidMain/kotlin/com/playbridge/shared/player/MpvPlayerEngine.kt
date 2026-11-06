@@ -118,6 +118,8 @@ class MpvPlayerEngine(
     private val playbackSignals = MpvPlaybackSignals()
     @Volatile
     private var playbackSpeed = 1.0f
+    @Volatile
+    private var subtitleStyle = SubtitleStyle.DEFAULT
 
     init {
         if (claimProcessMpv()) {
@@ -218,6 +220,13 @@ class MpvPlayerEngine(
         }
 
         ensureSubtitleFallbackFont(filesDir)
+        writeSystemFontConfig(filesDir)?.let { config ->
+            try {
+                android.system.Os.setenv("FONTCONFIG_FILE", config.absolutePath, true)
+            } catch (e: Exception) {
+                logger.w(TAG, "Failed to setenv FONTCONFIG_FILE", e)
+            }
+        }
         Utils.copyAssets(context)
         MPVLib.create(context)
         mpvCreated = true
@@ -251,15 +260,9 @@ class MpvPlayerEngine(
         MPVLib.setOptionString("ytdl", "no") // No youtube-dl binary is bundled; URLs are resolved by senders.
         MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
-        // Subtitles (Nuvio-style styling for premium look)
+        // Subtitles: the chosen style, Roboto first and the device's fonts for other scripts.
         MPVLib.setOptionString("sub-fonts-dir", File(filesDir, "fonts").absolutePath)
-        MPVLib.setOptionString("sub-font", "Roboto")
-        MPVLib.setOptionString("sub-font-size", "45")
-        MPVLib.setOptionString("sub-color", "#FFFFFF")
-        MPVLib.setOptionString("sub-border-size", "2.0")
-        MPVLib.setOptionString("sub-border-color", "#000000")
-        MPVLib.setOptionString("sub-shadow-offset", "1.0")
-        MPVLib.setOptionString("sub-shadow-color", "#000000")
+        mpvSubtitleOptions(subtitleStyle).forEach { (name, value) -> MPVLib.setOptionString(name, value) }
         MPVLib.setOptionString("sub-margin-y", "36")
         MPVLib.setOptionString("sub-visibility", "yes")
         // Ensure external subtitles take precedence over embedded ones if explicitly added
@@ -735,6 +738,14 @@ class MpvPlayerEngine(
     fun setAudioFilter(filter: String) {
         enqueueControl("setAudioFilter") {
             MPVLib.setPropertyString("af", filter)
+        }
+    }
+
+    /** Applies [style] to plain subtitles now, and to any later initialisation. */
+    fun setSubtitleStyle(style: SubtitleStyle) {
+        subtitleStyle = style
+        enqueueControl("setSubtitleStyle") {
+            mpvSubtitleOptions(style).forEach { (name, value) -> MPVLib.setPropertyString(name, value) }
         }
     }
 

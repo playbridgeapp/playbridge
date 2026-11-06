@@ -66,6 +66,7 @@ class MpvRendererService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var engine: MpvPlayerEngine? = null
+    private var subtitleStyle = com.playbridge.shared.player.SubtitleStyle.DEFAULT
     private var callback: IRendererCallback? = null
     private var surface: Surface? = null
     private var sessionId = 0L
@@ -143,6 +144,7 @@ class MpvRendererService : Service() {
 
             val renderer = engine ?: MpvPlayerEngine(applicationContext).also {
                 engine = it
+                it.setSubtitleStyle(subtitleStyle)
                 observeState(it)
                 observeTracks(it)
                 it.registerObserver(frameRateObserver, mapOf("container-fps" to 5))
@@ -223,6 +225,12 @@ class MpvRendererService : Service() {
 
         override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = onMain {
             if (isCurrent(requestedSessionId)) engine?.setSubtitleDelay(delayMs)
+        }
+
+        override fun setSubtitleStyle(styleJson: String, requestedSessionId: Long) = onMain {
+            // A TV-wide setting rather than per session: keep it for later engines too.
+            subtitleStyle = parseSubtitleStyleJson(styleJson)
+            engine?.setSubtitleStyle(subtitleStyle)
         }
 
         override fun setVideoQuality(maxHeight: Int, requestedSessionId: Long) = onMain {

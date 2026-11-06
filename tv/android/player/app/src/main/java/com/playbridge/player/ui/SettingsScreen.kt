@@ -1,5 +1,7 @@
 package com.playbridge.player.ui
 
+import com.playbridge.player.player.SubtitleStyleStore
+import com.playbridge.shared.player.SubtitleStyle
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -57,6 +59,10 @@ fun SettingsScreen(
     var selectedCategory by androidx.compose.runtime.saveable.rememberSaveable {
         mutableStateOf(SettingsCategory.PLAYER)
     }
+
+    // Subtitle style: TV-wide, also changed by a paired phone.
+    val subtitleStyles = remember { SubtitleStyleStore.get(context) }
+    val subtitleStyle by subtitleStyles.style.collectAsState()
 
     // Settings States
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
@@ -344,6 +350,63 @@ fun SettingsScreen(
                     }
 
                     SettingsCategory.INTEGRATIONS -> {
+                        item {
+                            SettingDropdownItem(
+                                label = "Subtitle Size",
+                                description = "How large subtitles appear.",
+                                options = listOf(
+                                    SubtitleStyle.Size.SMALL.wire to "Small",
+                                    SubtitleStyle.Size.MEDIUM.wire to "Medium",
+                                    SubtitleStyle.Size.LARGE.wire to "Large",
+                                    SubtitleStyle.Size.EXTRA_LARGE.wire to "Extra Large",
+                                ),
+                                selected = subtitleStyle.size.wire,
+                                onSelected = { wire ->
+                                    SubtitleStyle.Size.entries.firstOrNull { it.wire == wire }
+                                        ?.let { subtitleStyles.set(subtitleStyle.copy(size = it)) }
+                                },
+                            )
+                        }
+                        item {
+                            SettingDropdownItem(
+                                label = "Subtitle Background",
+                                description = "A box behind subtitles keeps them readable on bright scenes.",
+                                options = listOf(
+                                    SubtitleStyle.Background.NONE.wire to "None",
+                                    SubtitleStyle.Background.TRANSLUCENT.wire to "Semi-transparent Black",
+                                    SubtitleStyle.Background.SOLID.wire to "Solid Black",
+                                ),
+                                selected = subtitleStyle.background.wire,
+                                onSelected = { wire ->
+                                    SubtitleStyle.Background.entries.firstOrNull { it.wire == wire }
+                                        ?.let { subtitleStyles.set(subtitleStyle.copy(background = it)) }
+                                },
+                            )
+                        }
+                        item {
+                            SettingDropdownItem(
+                                label = "Subtitle Edge",
+                                description = "The black edge around subtitle letters.",
+                                options = listOf(
+                                    SubtitleStyle.Edge.OUTLINE.wire to "Outline",
+                                    SubtitleStyle.Edge.SHADOW.wire to "Drop Shadow",
+                                    SubtitleStyle.Edge.NONE.wire to "None",
+                                ),
+                                selected = subtitleStyle.edge.wire,
+                                onSelected = { wire ->
+                                    SubtitleStyle.Edge.entries.firstOrNull { it.wire == wire }
+                                        ?.let { subtitleStyles.set(subtitleStyle.copy(edge = it)) }
+                                },
+                            )
+                        }
+                        item {
+                            SettingToggleItem(
+                                label = "Restyle Styled Subtitles",
+                                description = "Also apply this style to subtitles with their own styling, such as ASS. Off keeps their original look.",
+                                checked = subtitleStyle.overrideStyled,
+                                onCheckedChange = { subtitleStyles.set(subtitleStyle.copy(overrideStyled = it)) },
+                            )
+                        }
                         item {
                             SettingDropdownItem(
                                 label = "Subtitle Rendering",

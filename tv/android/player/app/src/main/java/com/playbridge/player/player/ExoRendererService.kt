@@ -196,6 +196,9 @@ class ExoRendererService : Service() {
             engine?.setSubtitleDelay(delayMs)
         }
 
+        // ExoPlayer cues are drawn by the host's SubtitleView, which applies the style itself.
+        override fun setSubtitleStyle(styleJson: String, requestedSessionId: Long) = Unit
+
         override fun setVideoQuality(maxHeight: Int, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             videoQualityMaxHeight = maxHeight.coerceAtLeast(0)

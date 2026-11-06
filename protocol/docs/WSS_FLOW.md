@@ -207,6 +207,13 @@ Android receiver browser administration also uses standalone `user_script`, `use
 messages. Capability arrays are the feature-negotiation mechanism; senders should not offer an
 engine/browser absent from those arrays.
 
+Receivers that advertise `subtitle_style_v1` keep one TV-wide subtitle style (size, background,
+edge, font and whether styled subtitles such as ASS are restyled). A sender reads it with
+`subtitle_style_query` and replaces it by sending a complete `subtitle_style`. The receiver stores
+the normalized style, applies it at once to current and later playback, and sends `subtitle_style`
+to every authenticated sender, including after changes made on the receiver itself. Unknown values
+mean the default. Senders should not send these frames to receivers without the feature.
+
 Late network subtitle attachment uses `control` with `payload.command = "add_subtitle"`
 and `payload.subtitleResource` (URL, resource-scoped headers, optional label/language).
 Receivers supporting it advertise `subtitle_resource_add_v1` in `auth_response.features`.

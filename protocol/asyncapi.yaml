@@ -307,6 +307,8 @@ components:
         - $ref: '#/components/schemas/UserScriptQuery'
         - $ref: '#/components/schemas/UserAgent'
         - $ref: '#/components/schemas/UserAgentQuery'
+        - $ref: '#/components/schemas/SubtitleStyle'
+        - $ref: '#/components/schemas/SubtitleStyleQuery'
         - $ref: '#/components/schemas/LogsQuery'
         - $ref: '#/components/schemas/LogsClear'
     ReceiverFrame:
@@ -327,6 +329,7 @@ components:
         - $ref: '#/components/schemas/ReceiverCapabilitiesFrame'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
+        - $ref: '#/components/schemas/SubtitleStyle'
         - $ref: '#/components/schemas/Logs'
         - $ref: '#/components/schemas/ScreenMirrorReady'
         - $ref: '#/components/schemas/ScreenMirrorAnswer'
@@ -1110,6 +1113,30 @@ components:
         name: { type: string }
         value: { type: string }
         save: { type: boolean }
+      additionalProperties: false
+    SubtitleStyle:
+      type: object
+      description: >-
+        A receiver's complete subtitle style. A sender replaces the style by sending all fields;
+        the receiver stores it and sends its normalized style to every authenticated sender, and
+        also answers subtitle_style_query. Receivers advertise subtitle_style_v1. Unknown or
+        missing values mean the default, so newer values degrade to the default on older receivers.
+      required: [type, size, background, edge, font, overrideStyled]
+      properties:
+        type: { const: subtitle_style }
+        size: { type: string, description: 'Known: small, medium (default), large, extra_large.' }
+        background: { type: string, description: 'Known: none (default), translucent, solid.' }
+        edge: { type: string, description: 'Known: outline (default), shadow, none.' }
+        font: { type: string, description: 'Known: default.' }
+        overrideStyled:
+          type: boolean
+          description: Also restyle subtitles that carry their own styling (ASS/SSA, styled WebVTT/TTML).
+      additionalProperties: false
+    SubtitleStyleQuery:
+      type: object
+      required: [type]
+      properties:
+        type: { const: subtitle_style_query }
       additionalProperties: false
     UserAgentQuery:
       type: object
