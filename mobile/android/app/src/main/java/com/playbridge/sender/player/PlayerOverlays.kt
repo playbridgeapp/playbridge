@@ -1,5 +1,6 @@
 package com.playbridge.sender.player
 
+import androidx.compose.runtime.collectAsState
 import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.RowScope
@@ -167,9 +168,15 @@ private fun mpvScaleMode(mode: Int): String = when (mode) {
     else -> "Fit"
 }
 
-/** ExoPlayer's subtitles, unzoomed, over the whole video area; mpv draws its own into the picture. */
+/**
+ * ExoPlayer's subtitles, unzoomed, over the whole video area, in the phone's subtitle style.
+ * mpv draws its own into the picture, so it gets the style passed instead.
+ */
 @Composable
 private fun SubtitleLayer(player: Player) {
+    val settings: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
+    val style by settings.phoneSubtitleStyle.collectAsState(initial = com.playbridge.shared.player.SubtitleStyle.DEFAULT)
+    LaunchedEffect(player, style) { (player as? MpvMediaPlayer)?.setSubtitleStyle(style) }
     var cues by remember(player) { mutableStateOf(player.currentCues.cues) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -183,23 +190,30 @@ private fun SubtitleLayer(player: Player) {
     AndroidView(
         factory = { ctx ->
             SubtitleView(ctx).apply {
-                // No dark background boxes: white text with a high-contrast outline.
+                // ExoPlayer has no ASS, and site WebVTT boxes clash with the chosen look, so the
+                // phone style always wins here; "Restyle styled subtitles" matters for mpv.
                 setApplyEmbeddedStyles(false)
                 setApplyEmbeddedFontSizes(false)
-                setStyle(
-                    CaptionStyleCompat(
-                        android.graphics.Color.WHITE,
-                        android.graphics.Color.TRANSPARENT,
-                        android.graphics.Color.TRANSPARENT,
-                        CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                        android.graphics.Color.BLACK,
-                        android.graphics.Typeface.DEFAULT_BOLD,
-                    )
-                )
-                setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f)
             }
         },
-        update = { view -> view.setCues(cues) },
+        update = { view ->
+            view.setStyle(
+                CaptionStyleCompat(
+                    android.graphics.Color.WHITE,
+                    android.graphics.Color.argb((style.background.opacity * 255).toInt(), 0, 0, 0),
+                    android.graphics.Color.TRANSPARENT,
+                    when (style.edge) {
+                        com.playbridge.shared.player.SubtitleStyle.Edge.OUTLINE -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+                        com.playbridge.shared.player.SubtitleStyle.Edge.SHADOW -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+                        com.playbridge.shared.player.SubtitleStyle.Edge.NONE -> CaptionStyleCompat.EDGE_TYPE_NONE
+                    },
+                    android.graphics.Color.BLACK,
+                    android.graphics.Typeface.DEFAULT_BOLD,
+                )
+            )
+            view.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 18f * style.size.scale)
+            view.setCues(cues)
+        },
         modifier = Modifier.fillMaxSize(),
     )
 }

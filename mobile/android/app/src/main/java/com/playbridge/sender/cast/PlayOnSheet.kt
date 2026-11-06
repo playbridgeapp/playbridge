@@ -165,6 +165,7 @@ fun PlayOnSheet(
     val attempts by diagnostics.attempts.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val coordinator: com.playbridge.sender.connection.ConnectionCoordinator = koinInject()
     val openRemote = LocalPlayOnRemote.current
     var page by remember { mutableStateOf(if (startPairing) PlayOnPage.Pair else PlayOnPage.Devices) }
     var managed by remember { mutableStateOf<PlayOnDevice?>(null) }
@@ -409,7 +410,7 @@ fun PlayOnSheet(
                                     streamRoute = streamRoute?.label,
                                     onRemote = openRemote?.let { { onDismiss(); it() } },
                                     onConfigure = if (nativeSelected && connected && external == null &&
-                                        TvCapabilityOptions.playerOptions(tv).size > 2) {
+                                        (TvCapabilityOptions.playerOptions(tv).size > 2 || coordinator.tvSupportsSubtitleStyle)) {
                                         { page = PlayOnPage.Configure }
                                     } else null,
                                     onCastHere = viewModel::selectNativeRoute,
@@ -740,6 +741,8 @@ private fun PlayOnConfigure(device: TvDevice?, enabled: Boolean) {
             })
     }
     Text("Changes apply on the TV right away.", style = MaterialTheme.typography.bodySmall)
+    PlayOnSectionLabel("Subtitles")
+    com.playbridge.sender.settings.TvSubtitleStyleSection(connected = enabled)
 }
 
 /** "<Protocol> · <ip>[:port] · Used …" for saved devices, "· Found nearby" for live ones. */

@@ -37,6 +37,17 @@ included in settings export and import.
 - Only one mpv core exists per process. A new player waits for a previous one to finish
   releasing.
 
+## Subtitle style
+
+Settings → Audio & subtitles → **Phone player subtitles** sets size, background, edge and
+whether styled subtitles (ASS) are restyled. It applies live to ExoPlayer's caption view and to
+mpv (`MpvMediaPlayer.setSubtitleStyle`). ExoPlayer always uses the phone style, since it has no
+ASS. mpv finds fonts for any script through fontconfig over the device's fonts.
+
+A TV keeps its own style. Play on → **Configure TV** and Settings → TV → **Subtitles on the TV**
+edit it over the connection (`subtitle_style_query` / `subtitle_style`) when the TV advertises
+`subtitle_style_v1`; older TVs show an update hint instead.
+
 ## Known limitations
 
 - After a seek, the position can briefly show the old time until mpv reports the new one.

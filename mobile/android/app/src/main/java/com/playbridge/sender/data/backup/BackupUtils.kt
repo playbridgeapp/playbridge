@@ -1,5 +1,6 @@
 package com.playbridge.sender.data.backup
 
+import kotlinx.serialization.json.jsonObject
 import android.content.Context
 import com.playbridge.sender.browser.Components
 import com.playbridge.sender.settings.ExportedAppSettings
@@ -89,6 +90,7 @@ object BackupUtils {
             phonePlayerMode = settingsRepository.phonePlayerMode.first().id,
             phoneLandscapeOpen = settingsRepository.phoneLandscapeOpen.first().id,
             phoneBackgroundPlay = settingsRepository.phoneBackgroundPlay.first(),
+            phoneSubtitleStyle = com.playbridge.shared.protocol.createSubtitleStyleJson(settingsRepository.phoneSubtitleStyle.first()),
         )
 
         val exported = ExportedSettings(
@@ -180,6 +182,13 @@ object BackupUtils {
                 s.phonePlayerMode?.let { settingsRepository.setPhonePlayerMode(PhonePlayerMode.fromId(it)) }
                 s.phoneLandscapeOpen?.let { settingsRepository.setPhoneLandscapeOpen(PhoneLandscapeOpen.fromId(it)) }
                 s.phoneBackgroundPlay?.let { settingsRepository.setPhoneBackgroundPlay(it) }
+                s.phoneSubtitleStyle?.let { json ->
+                    runCatching {
+                        com.playbridge.shared.protocol.parseSubtitleStyle(
+                            kotlinx.serialization.json.Json.parseToJsonElement(json).jsonObject,
+                        )
+                    }.getOrNull()?.let { settingsRepository.setPhoneSubtitleStyle(it) }
+                }
             }
 
 
