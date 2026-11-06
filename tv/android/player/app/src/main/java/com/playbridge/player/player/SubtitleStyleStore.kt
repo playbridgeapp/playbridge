@@ -51,6 +51,7 @@ internal fun parseSubtitleStyleJson(json: String): SubtitleStyle =
     runCatching { parseSubtitleStyle(Json.parseToJsonElement(json).jsonObject) }.getOrDefault(SubtitleStyle.DEFAULT)
 
 /** ExoPlayer's caption renderer: [style] for plain cues, embedded styles unless overridden. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal fun SubtitleView.applySubtitleStyle(style: SubtitleStyle) {
     setApplyEmbeddedStyles(!style.overrideStyled)
     setApplyEmbeddedFontSizes(!style.overrideStyled)
