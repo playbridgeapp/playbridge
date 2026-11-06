@@ -11,14 +11,25 @@ private const val MPV_BASE_FONT_SIZE = 45
  * mpv only applies them to plain subtitles unless `sub-ass-override` is `force`.
  */
 internal fun mpvSubtitleOptions(style: SubtitleStyle): List<Pair<String, String>> {
-    val box = style.background != SubtitleStyle.Background.NONE
-    return listOf(
+    val common = listOf(
         "sub-font" to "Roboto",
         "sub-font-size" to (MPV_BASE_FONT_SIZE * style.size.scale).roundToInt().toString(),
         "sub-color" to "#FFFFFFFF",
-        "sub-border-style" to if (box) "background-box" else "outline-and-shadow",
-        // mpv colours are #AARRGGBB.
-        "sub-back-color" to "#%02X000000".format((style.background.opacity * 255).roundToInt()),
+        "sub-ass-override" to if (style.overrideStyled) "force" else "scale",
+    )
+    if (style.background != SubtitleStyle.Background.NONE) {
+        // opaque-box draws each line's box in the outline colour, alpha included, padded by the
+        // outline size. Its shadow is a second box, so it stays off: stacked boxes made the
+        // see-through box as dark as the solid one. mpv colours are #AARRGGBB.
+        return common + listOf(
+            "sub-border-style" to "opaque-box",
+            "sub-outline-color" to "#%02X000000".format((style.background.opacity * 255).roundToInt()),
+            "sub-outline-size" to "3.0",
+            "sub-shadow-offset" to "0",
+        )
+    }
+    return common + listOf(
+        "sub-border-style" to "outline-and-shadow",
         "sub-outline-color" to "#FF000000",
         "sub-outline-size" to if (style.edge == SubtitleStyle.Edge.OUTLINE) "2.0" else "0",
         "sub-shadow-color" to "#B3000000",
@@ -27,7 +38,6 @@ internal fun mpvSubtitleOptions(style: SubtitleStyle): List<Pair<String, String>
             SubtitleStyle.Edge.SHADOW -> "2.5"
             SubtitleStyle.Edge.NONE -> "0"
         },
-        "sub-ass-override" to if (style.overrideStyled) "force" else "scale",
     )
 }
 

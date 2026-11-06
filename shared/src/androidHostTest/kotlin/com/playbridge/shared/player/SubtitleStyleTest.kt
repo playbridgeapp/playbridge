@@ -50,13 +50,13 @@ class SubtitleStyleTest {
             ),
         ).toMap()
         assertEquals("56", boxed["sub-font-size"])
-        assertEquals("background-box", boxed["sub-border-style"])
-        assertEquals("#FF000000", boxed["sub-back-color"])
+        assertEquals("opaque-box", boxed["sub-border-style"])
+        assertEquals("#FF000000", boxed["sub-outline-color"])
         assertEquals(
             "#80000000",
-            mpvSubtitleOptions(SubtitleStyle(background = SubtitleStyle.Background.TRANSLUCENT)).toMap()["sub-back-color"],
+            mpvSubtitleOptions(SubtitleStyle(background = SubtitleStyle.Background.TRANSLUCENT)).toMap()["sub-outline-color"],
         )
-        assertEquals("0", boxed["sub-outline-size"])
+        // A shadow would be a second box under the first and darken a see-through box.
         assertEquals("0", boxed["sub-shadow-offset"])
         assertEquals("force", boxed["sub-ass-override"])
     }
