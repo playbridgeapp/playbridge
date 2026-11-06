@@ -200,11 +200,7 @@ private fun SubtitleLayer(player: Player) {
             view.setStyle(
                 CaptionStyleCompat(
                     android.graphics.Color.WHITE,
-                    when (style.background) {
-                        com.playbridge.shared.player.SubtitleStyle.Background.NONE -> android.graphics.Color.TRANSPARENT
-                        com.playbridge.shared.player.SubtitleStyle.Background.TRANSLUCENT -> android.graphics.Color.argb(0xB3, 0, 0, 0)
-                        com.playbridge.shared.player.SubtitleStyle.Background.SOLID -> android.graphics.Color.BLACK
-                    },
+                    android.graphics.Color.argb((style.background.opacity * 255).toInt(), 0, 0, 0),
                     android.graphics.Color.TRANSPARENT,
                     when (style.edge) {
                         com.playbridge.shared.player.SubtitleStyle.Edge.OUTLINE -> CaptionStyleCompat.EDGE_TYPE_OUTLINE

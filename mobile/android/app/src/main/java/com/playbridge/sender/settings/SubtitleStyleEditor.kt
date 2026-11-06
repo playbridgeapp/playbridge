@@ -130,11 +130,7 @@ private fun SubtitleStylePreview(style: SubtitleStyle) {
         Box(
             Modifier
                 .background(
-                    when (style.background) {
-                        SubtitleStyle.Background.NONE -> Color.Transparent
-                        SubtitleStyle.Background.TRANSLUCENT -> Color.Black.copy(alpha = 0.7f)
-                        SubtitleStyle.Background.SOLID -> Color.Black
-                    },
+                    Color.Black.copy(alpha = style.background.opacity),
                     RoundedCornerShape(4.dp),
                 )
                 .padding(horizontal = 8.dp, vertical = 2.dp),
