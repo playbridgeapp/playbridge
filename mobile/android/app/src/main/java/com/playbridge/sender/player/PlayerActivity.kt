@@ -292,6 +292,15 @@ open class PlayerActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * Back: with "Keep playing in the background" on and the video playing, the player steps
+     * aside (its own task goes behind the browser) and keeps playing with a media notification;
+     * otherwise it closes.
+     */
+    private fun leave() {
+        if (backgroundModeState.value && player?.playWhenReady == true) moveTaskToBack(true) else finish()
+    }
+
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         isInPipModeState.value = isInPictureInPictureMode
@@ -299,6 +308,13 @@ open class PlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Only one player plays at a time: a video opened in the other player activity (portrait
+        // first or not) replaces one still playing in the background.
+        current?.get()?.takeIf { it !== this }?.finish()
+        current = java.lang.ref.WeakReference(this)
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = leave()
+        })
 
         val playlistUrls = intent.getStringArrayListExtra(EXTRA_PLAYLIST_URLS)
         val isPlaylist = !playlistUrls.isNullOrEmpty()
@@ -372,6 +388,7 @@ open class PlayerActivity : ComponentActivity() {
 
         requestHeaders = headers
         playerMode = runBlocking { settings.phonePlayerMode.first() }
+        backgroundModeState.value = runBlocking { settings.phoneBackgroundPlay.first() }
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
         // Subtitles ticked in the cast sheet, or sent by a website, override the subtitle preference.
         trackLanguages = PhoneTrackLanguages.of(
@@ -448,7 +465,7 @@ open class PlayerActivity : ComponentActivity() {
                     externalContentType = contentType,
                     websiteQueue = pageSessionId != null,
                     waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
-                    onClose = { finish() },
+                    onClose = ::leave,
                     onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
                     isInPip = isInPip,
                     poster = poster,
@@ -583,9 +600,12 @@ open class PlayerActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // singleTask notification returns keep playback; a new website session replaces it.
+        // singleTask: notification and dashboard returns keep playback; a new video or website
+        // session replaces it.
         val id = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
-        if (id != null && id != attachedPageSessionId) {
+        val replacesPlayback = if (id != null) id != attachedPageSessionId
+            else intent.hasExtra(EXTRA_URL) || intent.hasExtra(EXTRA_PLAYLIST_URLS)
+        if (replacesPlayback) {
             setIntent(intent)
             recreate()
         }
@@ -626,6 +646,7 @@ open class PlayerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (current?.get() === this) current = null
         orientationWatcher.disable()
         stopBackgroundMediaSession()
         // Flush a final resume point and clear the in-app leg (the polling loop is already
@@ -637,6 +658,14 @@ open class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
+
+        /** Brings back the player still playing in the background, or null when there's none. */
+        fun returnIntent(context: Context): Intent? {
+            val playing = current?.get()?.takeUnless { it.isFinishing || it.isDestroyed } ?: return null
+            return Intent(context, playing.javaClass).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
         /**
          * The player to launch: [PortraitFirstPlayerActivity] when landscape videos open portrait
          * first and the website hasn't asked for an orientation, so the window opens however the

@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsRemote
@@ -80,6 +81,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.playbridge.sender.player.PhonePlayerChooser
+import com.playbridge.sender.player.returnToPhonePlayer
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.drawscope.Stroke
 import com.playbridge.sender.R
@@ -362,6 +365,9 @@ private fun DashboardTopBar(
     onExit: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var choosingPlayback by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    if (choosingPlayback) PhonePlayerChooser(onDismiss = { choosingPlayback = false })
     Row(
         modifier = Modifier.fillMaxWidth().height(52.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -382,14 +388,24 @@ private fun DashboardTopBar(
         IconButton(onClick = onRemote) {
             Icon(Icons.Default.SettingsRemote, contentDescription = "Open remote")
         }
-        IconButton(onClick = onSettings) {
-            Icon(Icons.Default.Settings, contentDescription = "Settings")
-        }
         Box {
             IconButton(onClick = { menuOpen = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = "More")
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Settings") },
+                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    onClick = { menuOpen = false; onSettings() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Phone player") },
+                    leadingIcon = { Icon(Icons.Default.PlayCircle, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        if (!returnToPhonePlayer(context)) choosingPlayback = true
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.onboarding_open_guide)) },
                     leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },

@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -53,6 +54,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     val queueWindow by settingsRepository.tvPrefetchWindow.collectAsState(initial = 1)
     val phonePlayerMode by settingsRepository.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
     val landscapeOpen by settingsRepository.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
+    val backgroundPlay by settingsRepository.phoneBackgroundPlay.collectAsState(initial = false)
     val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
     var maxBitrateText by remember { mutableStateOf("") }
 
@@ -193,6 +195,17 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }
+
+            ListItem(
+                headlineContent = { Text("Keep playing in the background") },
+                supportingContent = { Text("Videos keep playing when you leave the player. Each video's More menu can still turn it off.") },
+                trailingContent = { Switch(checked = backgroundPlay, onCheckedChange = null) },
+                modifier = Modifier.toggleable(
+                    value = backgroundPlay,
+                    role = Role.Switch,
+                    onValueChange = { scope.launch { settingsRepository.setPhoneBackgroundPlay(it) } },
+                ),
+            )
 
             Text("Website queue", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
             Row(verticalAlignment = Alignment.CenterVertically) {

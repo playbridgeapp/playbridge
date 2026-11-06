@@ -82,9 +82,12 @@
                 <data android:scheme="https" />
             </intent-filter>
         </activity>
+        <!-- The player runs in its own task, so with background play on, Back can send it behind
+             the browser while it keeps playing (and a return brings it back as it was). -->
         <activity
             android:name=".player.PlayerActivity"
             android:exported="false"
+            android:taskAffinity="${applicationId}.player"
             android:theme="@style/Theme.PlayBridge.Player"
             android:screenOrientation="sensorLandscape"
             android:launchMode="singleTask"
@@ -95,6 +98,7 @@
         <activity
             android:name=".player.PortraitFirstPlayerActivity"
             android:exported="false"
+            android:taskAffinity="${applicationId}.player"
             android:theme="@style/Theme.PlayBridge.Player"
             android:screenOrientation="fullUser"
             android:launchMode="singleTask"
