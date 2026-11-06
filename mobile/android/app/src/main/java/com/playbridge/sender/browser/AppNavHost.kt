@@ -22,6 +22,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -534,6 +535,8 @@ fun AppNavHost(
                                                 y = displayedHandleOffset.y.roundToInt(),
                                             )
                                         }
+                                        // Keep edge taps and drags from being taken as Back.
+                                        .systemGestureExclusion()
                                         .pointerInput(maxHandleX, maxHandleY, restingHandleOffset) {
                                             detectDragGestures(
                                                 onDragStart = {
@@ -1216,13 +1219,11 @@ fun AppNavHost(
         }
     }
 
-        // Keep the browser menu outside AnimatedContent so it never slides/fades with a page.
-        // Bridged apps and chrome-hidden websites need access to PlayBridge's controls.
-        val browserMenu = currentScreen == Screen.Browser &&
-            (isBridgedAppMode || isBrowserChromeHidden || isFullscreen)
-        if (browserMenu) {
+        // Keep the bridged-app menu outside AnimatedContent so it never slides/fades with a page.
+        // Only bridged apps get it: ordinary browser pages keep their own controls.
+        if (currentScreen == Screen.Browser && isBridgedAppMode) {
             key(currentScreen, isFullscreen) {
-                PlayBridgeEdgeShortcut(
+                MovablePlayBridgeEdgeShortcut(
                     fullscreen = fullscreenBrowser,
                     fullscreenInteraction = fullscreenInteraction,
                     onDashboard = {
@@ -1249,7 +1250,7 @@ fun AppNavHost(
                         session?.reload()
                     },
                     modifier = Modifier
-                        .align(Alignment.CenterEnd)
+                        .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.safeDrawing),
                 )
             }
