@@ -1,5 +1,6 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.ExternalSubtitleFormat
 import android.util.Log
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CoroutineScope

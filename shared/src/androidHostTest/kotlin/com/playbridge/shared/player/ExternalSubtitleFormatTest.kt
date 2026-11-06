@@ -1,7 +1,7 @@
-package com.playbridge.player.player
+package com.playbridge.shared.player
 
-import org.junit.Assert.assertEquals
-import org.junit.Test
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
 class ExternalSubtitleFormatTest {
     @Test

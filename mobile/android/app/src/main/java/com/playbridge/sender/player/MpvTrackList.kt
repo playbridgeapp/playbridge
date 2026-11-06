@@ -5,7 +5,8 @@ import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
-import org.json.JSONArray
+import com.playbridge.shared.player.MpvTrackType
+import com.playbridge.shared.player.parseMpvTrackList
 
 /** One entry of mpv's `track-list` property. */
 internal data class MpvTrack(
@@ -28,30 +29,22 @@ internal data class MpvTrack(
  * and stats overlay work unchanged on mpv. Every track mpv lists is one it can decode.
  */
 internal object MpvTrackList {
-    fun parse(json: String): List<MpvTrack> {
-        val array = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
-        return (0 until array.length()).mapNotNull { index ->
-            val entry = array.optJSONObject(index) ?: return@mapNotNull null
-            val type = when (entry.optString("type")) {
-                "video" -> C.TRACK_TYPE_VIDEO
-                "audio" -> C.TRACK_TYPE_AUDIO
-                "sub" -> C.TRACK_TYPE_TEXT
-                else -> return@mapNotNull null
-            }
-            // Embedded cover art is a "video" track; it isn't a picture the viewer can select.
-            if (entry.optBoolean("albumart", false)) return@mapNotNull null
-            MpvTrack(
-                type = type,
-                mpvId = entry.opt("id")?.toString() ?: return@mapNotNull null,
-                language = entry.optString("lang").takeIf { it.isNotBlank() },
-                title = entry.optString("title").takeIf { it.isNotBlank() },
-                codec = entry.optString("codec").takeIf { it.isNotBlank() },
-                selected = entry.optBoolean("selected", false),
-                width = entry.optInt("demux-w", 0),
-                height = entry.optInt("demux-h", 0),
-                channelCount = entry.optInt("demux-channel-count", 0),
-            )
-        }
+    fun parse(json: String): List<MpvTrack> = parseMpvTrackList(json).map { track ->
+        MpvTrack(
+            type = when (track.type) {
+                MpvTrackType.VIDEO -> C.TRACK_TYPE_VIDEO
+                MpvTrackType.AUDIO -> C.TRACK_TYPE_AUDIO
+                MpvTrackType.SUBTITLE -> C.TRACK_TYPE_TEXT
+            },
+            mpvId = track.id,
+            language = track.language,
+            title = track.title,
+            codec = track.codec,
+            selected = track.selected,
+            width = track.width,
+            height = track.height,
+            channelCount = track.channelCount,
+        )
     }
 
     fun toTracks(tracks: List<MpvTrack>): Tracks = Tracks(

@@ -1,7 +1,9 @@
 package com.playbridge.player.player
 
+import com.playbridge.shared.player.ExternalSubtitleFormat
 import android.util.Log
 import com.playbridge.shared.logging.redactUrlForLog
+import com.playbridge.shared.player.decodeSubtitleText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
@@ -18,22 +20,7 @@ object SubtitleParser {
     fun parse(content: String, isVtt: Boolean): List<SubtitleCue> =
         if (isVtt) parseVtt(content) else parseSrt(content)
 
-    fun decode(bytes: ByteArray): String {
-        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
-            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
-        }
-        if (bytes.size >= 2) {
-            if (bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
-            if (bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
-        }
-        return try {
-            val utf8 = String(bytes, Charsets.UTF_8)
-            if (utf8.contains("�")) throw Exception("Invalid UTF-8")
-            utf8
-        } catch (e: Exception) {
-            String(bytes, java.nio.charset.Charset.forName("Windows-1252"))
-        }
-    }
+    fun decode(bytes: ByteArray): String = decodeSubtitleText(bytes)
 
     fun stripHtml(text: String): String = text.replace(Regex("<[^>]*>"), "").trim()
 
