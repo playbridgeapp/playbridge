@@ -58,7 +58,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Popup Blocker") },
+                title = { Text("Popup blocker") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -82,7 +82,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Block Popups", style = MaterialTheme.typography.bodyLarge)
+                        Text("Block popups", style = MaterialTheme.typography.bodyLarge)
                         Text(
                             "Block popup windows by default",
                             style = MaterialTheme.typography.bodyMedium,
@@ -248,7 +248,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                 showAddAllowedDialog = false
                 newHost = ""
             },
-            title = { Text("Always Allow Site") },
+            title = { Text("Always allow site") },
             text = {
                 OutlinedTextField(
                     value = newHost,
@@ -283,7 +283,7 @@ fun PopupBlockerSettingsScreen(onBack: () -> Unit) {
                 showAddBlockedDialog = false
                 newHost = ""
             },
-            title = { Text("Always Block Site") },
+            title = { Text("Always block site") },
             text = {
                 OutlinedTextField(
                     value = newHost,

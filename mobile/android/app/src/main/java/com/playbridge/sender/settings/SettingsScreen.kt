@@ -3,7 +3,6 @@ package com.playbridge.sender.settings
 import com.playbridge.sender.cast.proxy.StreamProxySettingsScreen
 import com.playbridge.sender.browser.PopupBlockerSettingsScreen
 import com.playbridge.sender.browser.PageCastConsentSettingsScreen
-import com.playbridge.sender.cast.StreamingSettingsScreen
 import com.playbridge.sender.cast.TVSettingsScreen
 import com.playbridge.sender.connection.TvLogsSource
 import com.playbridge.sender.diagnostics.LogsScreen
@@ -24,22 +23,27 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Subtitles
+import com.playbridge.sender.cast.SubtitlePreferences
+import com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore
+import com.playbridge.sender.data.settings.SettingsRepository
+import com.playbridge.sender.player.PhoneLandscapeOpen
+import com.playbridge.sender.player.PhonePlayerMode
+import org.koin.compose.koinInject
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.ListItem
 import com.playbridge.sender.connection.ConnectionViewModel
 import org.koin.androidx.compose.koinViewModel
 import androidx.compose.material3.Text
@@ -56,28 +60,18 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
-private sealed class SettingsSection {
-    data object Hub : SettingsSection()
-    data object Appearance : SettingsSection()
-    data object Proxy : SettingsSection()
-    data object Streaming : SettingsSection()
-    data object TV : SettingsSection()
-    data object ImportExport : SettingsSection()
-    data object PopupBlocker : SettingsSection()
-    data object PageCastConsent : SettingsSection()
-    data object Logs : SettingsSection()
+private enum class SettingsSection {
+    Hub, PhonePlayer, TV, AudioSubtitles, Casting, StreamProxy, WebsitePermissions,
+    Browser, PopupBlocker, Remote, Appearance, Backup, Logs,
 }
 
-/** One row or a category header in the settings hub list. */
-private sealed class SettingsHubRow {
-    data class Header(val title: String) : SettingsHubRow()
-    data class Item(
-        val icon: ImageVector,
-        val title: String,
-        val subtitle: String,
-        val onClick: () -> Unit,
-    ) : SettingsHubRow()
-}
+/** Pages opened from another page return there; the rest return to the hub. */
+private val SettingsSection.parent: SettingsSection
+    get() = when (this) {
+        SettingsSection.StreamProxy, SettingsSection.WebsitePermissions -> SettingsSection.Casting
+        SettingsSection.PopupBlocker -> SettingsSection.Browser
+        else -> SettingsSection.Hub
+    }
 
 @Composable
 fun SettingsScreen(
@@ -85,69 +79,102 @@ fun SettingsScreen(
     tvLogs: TvLogsSource? = null,
     showBack: Boolean = true,
 ) {
-    var section by remember { mutableStateOf<SettingsSection>(SettingsSection.Hub) }
+    var section by remember { mutableStateOf(SettingsSection.Hub) }
+    val up = { section = section.parent }
 
-    BackHandler(enabled = section != SettingsSection.Hub) {
-        section = SettingsSection.Hub
-    }
+    BackHandler(enabled = section != SettingsSection.Hub, onBack = up)
 
     when (section) {
-        SettingsSection.Hub -> SettingsHubContent(
-            onBack = onBack,
-            onAppearance = { section = SettingsSection.Appearance },
-            onProxy = { section = SettingsSection.Proxy },
-            onStreaming = { section = SettingsSection.Streaming },
-            onTV = { section = SettingsSection.TV },
-            onImportExport = { section = SettingsSection.ImportExport },
-            onPopupBlocker = { section = SettingsSection.PopupBlocker },
-            onPageCastConsent = { section = SettingsSection.PageCastConsent },
-            onLogs = { section = SettingsSection.Logs },
-            showBack = showBack,
+        SettingsSection.Hub -> SettingsHubContent(onBack = onBack, onOpen = { section = it }, showBack = showBack)
+        SettingsSection.PhonePlayer -> PhonePlayerSettingsScreen(onBack = up)
+        SettingsSection.TV -> TVSettingsScreen(onBack = up)
+        SettingsSection.AudioSubtitles -> AudioSubtitleSettingsScreen(onBack = up)
+        SettingsSection.Casting -> CastingSettingsScreen(
+            onBack = up,
+            onStreamProxy = { section = SettingsSection.StreamProxy },
+            onWebsitePermissions = { section = SettingsSection.WebsitePermissions },
         )
-        SettingsSection.Appearance -> AppearanceSettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.PageCastConsent -> PageCastConsentSettingsScreen(
-            onBack = { section = SettingsSection.Hub },
-        )
-        SettingsSection.Proxy -> StreamProxySettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.Streaming -> StreamingSettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.TV -> TVSettingsScreen(
-            onBack = { section = SettingsSection.Hub },
-            tvLogs = tvLogs
-        )
-        SettingsSection.ImportExport -> ImportExportSettingsScreen(
-            onBack = { section = SettingsSection.Hub }
-        )
-        SettingsSection.Logs -> LogsScreen(
-            onBack = { section = SettingsSection.Hub },
-            tvLogs = tvLogs
-        )
+        SettingsSection.StreamProxy -> StreamProxySettingsScreen(onBack = up)
+        SettingsSection.WebsitePermissions -> PageCastConsentSettingsScreen(onBack = up)
+        SettingsSection.Browser -> BrowserSettingsScreen(onBack = up, onPopupBlocker = { section = SettingsSection.PopupBlocker })
+        SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(onBack = up)
+        SettingsSection.Remote -> RemoteSettingsScreen(onBack = up)
+        SettingsSection.Appearance -> AppearanceSettingsScreen(onBack = up)
+        SettingsSection.Backup -> ImportExportSettingsScreen(onBack = up)
+        SettingsSection.Logs -> LogsScreen(onBack = up, tvLogs = tvLogs)
     }
 }
+
+/** One row of the hub, with a summary of the page's current values. */
+private data class SettingsHubItem(
+    val icon: ImageVector,
+    val title: String,
+    val summary: String,
+    val section: SettingsSection,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsHubContent(
     onBack: () -> Unit,
-    onAppearance: () -> Unit,
-    onProxy: () -> Unit,
-    onStreaming: () -> Unit,
-    onTV: () -> Unit,
-    onImportExport: () -> Unit,
-    onPopupBlocker: () -> Unit,
-    onPageCastConsent: () -> Unit,
-    onLogs: () -> Unit,
+    onOpen: (SettingsSection) -> Unit,
     showBack: Boolean = true,
 ) {
     val context = LocalContext.current
+    val settings: SettingsRepository = koinInject()
+    val connections: ConnectionViewModel = koinViewModel()
+    val remotePreferences: RemotePresentationPreferenceStore = koinInject()
+
+    val phoneMode by settings.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
+    val landscapeOpen by settings.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
+    val backgroundPlay by settings.phoneBackgroundPlay.collectAsState(initial = false)
+    val autoConnect by connections.autoConnectEnabled.collectAsState()
+    val resolution by settings.defaultVideoQuality.collectAsState(initial = "Auto")
+    val audio by settings.preferredAudioLang.collectAsState(initial = "")
+    val subtitles by settings.preferredSubtitleLang.collectAsState(initial = "")
+    val queueWindow by settings.tvPrefetchWindow.collectAsState(initial = 1)
+    val blockPopups by settings.blockPopups.collectAsState(initial = true)
+    val maxTabs by settings.maxAliveTabs.collectAsState(initial = 5)
+    val remote by remotePreferences.state.collectAsState()
+    val themeLabel = com.playbridge.sender.ui.theme.ThemeController.current().label
+
+    val label = { options: List<Pair<String, String>>, code: String, fallback: String ->
+        options.find { it.second == code }?.first ?: fallback
+    }
+    val topics = listOf(
+        SettingsHubItem(
+            Icons.Default.Smartphone, "Phone player",
+            "${phoneMode.label} · ${landscapeOpen.label} · Background ${if (backgroundPlay) "on" else "off"}",
+            SettingsSection.PhonePlayer,
+        ),
+        SettingsHubItem(
+            Icons.Default.Tv, "TV",
+            "Auto-connect ${if (autoConnect) "on" else "off"} · ${label(SubtitlePreferences.videoQualities, resolution, "Auto")}",
+            SettingsSection.TV,
+        ),
+        SettingsHubItem(
+            Icons.Default.Subtitles, "Audio & subtitles",
+            "Audio: ${label(SubtitlePreferences.audioLanguages, audio, "Auto")} · Subtitles: ${label(SubtitlePreferences.subtitleLanguages, subtitles, "None")}",
+            SettingsSection.AudioSubtitles,
+        ),
+        SettingsHubItem(Icons.Default.Cast, "Casting", "Cast sheet, website queue ($queueWindow ahead), stream proxy", SettingsSection.Casting),
+        SettingsHubItem(
+            Icons.Default.Language, "Browser",
+            "Popups ${if (blockPopups) "blocked" else "allowed"} · $maxTabs open tabs",
+            SettingsSection.Browser,
+        ),
+        SettingsHubItem(
+            Icons.Default.SettingsRemote, "Remote",
+            if (remote.hapticsEnabled) "Haptics: ${remote.hapticsLevel.name}" else "Haptics off",
+            SettingsSection.Remote,
+        ),
+    )
+    val general = listOf(
+        SettingsHubItem(Icons.Default.Palette, "Appearance", "Theme: $themeLabel", SettingsSection.Appearance),
+        SettingsHubItem(Icons.Default.SwapVert, "Backup & restore", "Files and cloud backup", SettingsSection.Backup),
+        SettingsHubItem(Icons.Default.Description, "Logs & diagnostics", "Phone and TV logs", SettingsSection.Logs),
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -168,117 +195,19 @@ private fun SettingsHubContent(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Theme label must be read in composable scope so the subtitle refreshes on change.
-            val themeLabel = com.playbridge.sender.ui.theme.ThemeController.current().label
-            val rows = remember(themeLabel) {
-                buildList {
-                    add(SettingsHubRow.Header("General"))
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Palette,
-                            title = "Appearance",
-                            subtitle = "Theme: $themeLabel",
-                            onClick = onAppearance,
-                        )
-                    )
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.SwapVert,
-                            title = "Import / Export",
-                            subtitle = "Backup and restore settings",
-                            onClick = onImportExport,
-                        )
-                    )
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Description,
-                            title = "Logs",
-                            subtitle = "View phone and TV logs for troubleshooting",
-                            onClick = onLogs,
-                        )
-                    )
-
-                    add(SettingsHubRow.Header("Browser"))
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Block,
-                            title = "Popup Blocker",
-                            subtitle = "Block popups with per-site exceptions",
-                            onClick = onPopupBlocker,
-                        )
-                    )
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Cast,
-                            title = "Website casting permissions",
-                            subtitle = "Review or reset websites allowed to start a cast",
-                            onClick = onPageCastConsent,
-                        )
-                    )
-
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Tune,
-                            title = "Streaming Preferences",
-                            subtitle = "Audio, subtitles, and player quality",
-                            onClick = onStreaming,
-                        )
-                    )
-
-                    add(SettingsHubRow.Header("Casting"))
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.Tv,
-                            title = "TV",
-                            subtitle = "Player defaults, background link, diagnostics",
-                            onClick = onTV,
-                        )
-                    )
-                    add(
-                        SettingsHubRow.Item(
-                            icon = Icons.Default.SwapHoriz,
-                            title = "Stream proxy",
-                            subtitle = "Default cast route and remote stream-proxy URL",
-                            onClick = onProxy,
-                        )
+            listOf(null to topics, "General" to general).forEach { (header, items) ->
+                if (header != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = header,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     )
                 }
-            }
-
-            rows.forEachIndexed { index, row ->
-                when (row) {
-                    is SettingsHubRow.Header -> {
-                        if (index > 0) Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = row.title,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        )
-                        if (row.title == "Casting") {
-                            val connections: ConnectionViewModel = koinViewModel()
-                            val autoConnect by connections.autoConnectEnabled.collectAsState()
-                            ListItem(
-                                headlineContent = { Text("Auto-connect to TV") },
-                                supportingContent = { Text("Reconnect to the last PlayBridge TV") },
-                                trailingContent = { Switch(autoConnect, connections::setAutoConnectEnabled) },
-                                modifier = Modifier.clickable { connections.setAutoConnectEnabled(!autoConnect) },
-                            )
-                        }
-                    }
-                    is SettingsHubRow.Item -> {
-                        SettingsNavItem(
-                            icon = row.icon,
-                            title = row.title,
-                            subtitle = row.subtitle,
-                            onClick = row.onClick,
-                        )
-                        // Divider only between consecutive items (not before a header).
-                        val next = rows.getOrNull(index + 1)
-                        if (next is SettingsHubRow.Item) {
-                            HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
-                        }
-                    }
+                items.forEachIndexed { index, item ->
+                    SettingsNavItem(item.icon, item.title, item.summary) { onOpen(item.section) }
+                    if (index < items.lastIndex) HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
                 }
             }
 

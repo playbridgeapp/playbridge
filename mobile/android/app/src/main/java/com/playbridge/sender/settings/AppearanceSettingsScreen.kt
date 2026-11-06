@@ -1,8 +1,5 @@
 package com.playbridge.sender.settings
-import androidx.core.content.edit
 
-import android.app.Activity
-import android.content.Context
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,17 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.ui.theme.AppTheme
-import org.koin.compose.koinInject
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppearanceSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
-    val maxAliveTabsRepository by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
-    val coroutineScope = rememberCoroutineScope()
     // Reactive theme: reading it here subscribes, so the selected row updates instantly
     // when the theme changes — no Activity.recreate(), which used to reset in-Settings
     // navigation and break the Back button.
@@ -79,55 +70,6 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Tab Management",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-
-            var maxTabs by remember { mutableFloatStateOf(5f) }
-            LaunchedEffect(maxAliveTabsRepository) {
-                maxTabs = maxAliveTabsRepository.toFloat()
-            }
-
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Active Tab Limit", style = MaterialTheme.typography.bodyLarge)
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = "${maxTabs.toInt()} tabs",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-                Slider(
-                    value = maxTabs,
-                    onValueChange = { maxTabs = it },
-                    onValueChangeFinished = {
-                        coroutineScope.launch {
-                            settingsRepository.setMaxAliveTabs(maxTabs.toInt())
-                        }
-                    },
-                    valueRange = 1f..15f,
-                    steps = 13
-                )
-                Text(
-                    text = "Controls how many tabs are kept loaded in memory. Higher values allow faster switching between tabs but increase memory usage and risk of crashes on low-end devices.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
     }
 }

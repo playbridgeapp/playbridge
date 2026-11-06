@@ -163,7 +163,7 @@ fun LogsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Logs") },
+                title = { Text("Logs & diagnostics") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -502,7 +502,7 @@ private fun LogDetailScreen(entry: LogcatReader.LogLine, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Log Detail") },
+                title = { Text("Log detail") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -687,7 +687,7 @@ private fun ExcludeFiltersDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Exclude Filters") },
+        title = { Text("Exclude filters") },
         text = {
             Column {
                 Text(

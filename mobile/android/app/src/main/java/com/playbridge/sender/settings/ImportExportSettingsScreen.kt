@@ -168,7 +168,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Import / Export") },
+                title = { Text("Backup & restore") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -210,7 +210,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Importing…")
                     } else {
-                        Text("Import from File")
+                        Text("Import from file")
                     }
                 }
 
@@ -252,7 +252,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Export to File")
+                    Text("Export to file")
                 }
 
                 IconButton(
@@ -346,7 +346,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     s3Bucket = it
                     backupPrefs.edit { putString(BackupManager.KEY_BUCKET, it) }
                 },
-                label = { Text("Bucket Name") },
+                label = { Text("Bucket name") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -357,7 +357,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     s3AccessKey = it
                     backupPrefs.edit { putString(BackupManager.KEY_ACCESS_KEY, it) }
                 },
-                label = { Text("Access Key ID") },
+                label = { Text("Access key ID") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -368,7 +368,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     s3SecretKey = it
                     backupPrefs.edit { putString(BackupManager.KEY_SECRET_KEY, it) }
                 },
-                label = { Text("Secret Access Key") },
+                label = { Text("Secret access key") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -390,7 +390,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Enable Automatic Backup", modifier = Modifier.weight(1f))
+                Text("Automatic backup", modifier = Modifier.weight(1f))
                 Switch(
                     checked = isBackupEnabled,
                     onCheckedChange = { 
@@ -428,7 +428,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Backing up…")
                     } else {
-                        Text("Backup Now")
+                        Text("Back up now")
                     }
                 }
 
@@ -439,7 +439,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     modifier = Modifier.weight(1f),
                     enabled = !isCloudRestoring && backupManager.isConfigured()
                 ) {
-                    Text("Restore from Cloud")
+                    Text("Restore from cloud")
                 }
             }
 
@@ -462,7 +462,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                 showImportTabsDialog = false
                 importedTabsToRestore = null
             },
-            title = { Text("Duplicate Tabs Found") },
+            title = { Text("Duplicate tabs found") },
             text = { Text("Some of the imported tabs are already open. What would you like to do?") },
             confirmButton = {
                 Button(onClick = {
@@ -476,7 +476,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     }
                     Components.tabManager.restoreTabs(sessionTabs, null, Components.store)
                     importedTabsToRestore = null
-                }) { Text("Import All") }
+                }) { Text("Import all") }
             },
             dismissButton = {
                 OutlinedButton(onClick = {
@@ -497,7 +497,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                         Toast.makeText(context, "No new tabs to import", Toast.LENGTH_SHORT).show()
                     }
                     importedTabsToRestore = null
-                }) { Text("Skip Duplicates") }
+                }) { Text("Skip duplicates") }
             }
         )
     }
@@ -505,7 +505,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     if (showCloudRestoreDialog) {
         AlertDialog(
             onDismissRequest = { showCloudRestoreDialog = false },
-            title = { Text("Restore from Cloud") },
+            title = { Text("Restore from cloud") },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp),
@@ -514,12 +514,12 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
                     OutlinedTextField(
                         value = restoreDeviceId,
                         onValueChange = { restoreDeviceId = it },
-                        label = { Text("Source Device ID") },
+                        label = { Text("Source device ID") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
                     
-                    Text("Select Backup Date", style = MaterialTheme.typography.labelLarge)
+                    Text("Backup date", style = MaterialTheme.typography.labelLarge)
                     
                     OutlinedButton(
                         onClick = {
@@ -587,7 +587,7 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
     if (showExportDialog) {
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
-            title = { Text("Export Settings") },
+            title = { Text("Export settings") },
             text = {
                 Column {
                     Text("Select which settings to export:")
@@ -597,15 +597,15 @@ fun ImportExportSettingsScreen(onBack: () -> Unit) {
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportTvDefaults, onCheckedChange = { exportTvDefaults = it })
-                        Text("TV Player / Browser Defaults")
+                        Text("TV player and browser defaults")
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportUiPrefs, onCheckedChange = { exportUiPrefs = it })
-                        Text("UI Preferences (e.g., extensions toggle)")
+                        Text("Interface preferences")
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportTabs, onCheckedChange = { exportTabs = it })
-                        Text("Current Open Tabs")
+                        Text("Open tabs")
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = exportBookmarks, onCheckedChange = { exportBookmarks = it })

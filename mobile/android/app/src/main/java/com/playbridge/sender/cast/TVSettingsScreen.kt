@@ -5,20 +5,17 @@ import android.content.Context
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import com.playbridge.sender.connection.ConnectionViewModel
-import com.playbridge.sender.connection.TvLogsResult
-import com.playbridge.sender.connection.TvLogsSource
 import com.playbridge.sender.data.settings.SettingsRepository
-import android.os.Environment
-import android.widget.Toast
-import androidx.compose.foundation.clickable
+import com.playbridge.sender.settings.SettingsDropdown
+import com.playbridge.sender.settings.SettingsGroupTitle
+import com.playbridge.sender.settings.SettingsPage
+import com.playbridge.sender.settings.SettingsSwitch
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -27,273 +24,97 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import com.playbridge.sender.cast.remote.RemoteHapticLevel
 import com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore
 import com.playbridge.sender.cast.remote.rememberRemoteHapticEmitter
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TVSettingsScreen(
-    onBack: () -> Unit,
-    tvLogs: TvLogsSource? = null
-) {
+fun TVSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val settingsRepository: SettingsRepository = koinInject()
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
-    val isTvAvailable = tvLogs != null
 
     // Options reflect what the connected/last-paired TV reported it supports. Capabilities are
     // persisted on the saved device, so the real list survives disconnects (see
     // TvCapabilityOptions). Before any TV is paired, only "TV Default" is offered.
     val connectionViewModel: ConnectionViewModel = koinViewModel()
     val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+    val autoConnect by connectionViewModel.autoConnectEnabled.collectAsState()
 
     val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
-    var playerExpanded by remember { mutableStateOf(false) }
-    val playerOptions = TvCapabilityOptions.playerOptions(tvDevice)
-
-    var browserMode by remember {
-        mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv")
+    var browserMode by remember { mutableStateOf(prefs.getString("tv_browser_mode", "tv") ?: "tv") }
+    val preferredResolution by settingsRepository.defaultVideoQuality.collectAsState(initial = "Auto")
+    val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
+    var maxBitrateText by remember { mutableStateOf("") }
+    LaunchedEffect(maxBitrateCapMbps) {
+        maxBitrateText = if (maxBitrateCapMbps > 0.0) maxBitrateCapMbps.toString() else ""
     }
-    var browserExpanded by remember { mutableStateOf(false) }
-    val browserOptions = TvCapabilityOptions.browserOptions(tvDevice)
+    val castHistorySettings: CastHistorySettings = koinInject()
+    val preventHistory by castHistorySettings.preventHistory.collectAsState()
+    val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
+    // Idle link while backgrounded (default off = soft stand-down after grace).
+    val keepTvInBackground by settingsRepository.keepTvConnectionInBackground.collectAsState(initial = false)
 
-    var isDownloading by remember { mutableStateOf(false) }
-    var isClearing by remember { mutableStateOf(false) }
+    SettingsPage("TV", onBack) {
+        SettingsGroupTitle("Connection")
+        SettingsSwitch("Auto-connect to TV", "Reconnect to the last PlayBridge TV", autoConnect, connectionViewModel::setAutoConnectEnabled)
+        SettingsSwitch(
+            "Keep connection in background",
+            if (keepTvInBackground) {
+                "Stay linked to the TV with a Connected notification when PlayBridge is in the background (uses more battery)."
+            } else {
+                "When nothing is casting, disconnect after ~45s in the background to save battery. Reconnects when you return to the app. Casting always stays connected."
+            },
+            keepTvInBackground,
+        ) { scope.launch { settingsRepository.setKeepTvConnectionInBackground(it) } }
+        val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
+        AtvPairedTvsSettings(atvCredentials)
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("TV") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                }
-            )
+        SettingsGroupTitle("Playback")
+        SettingsDropdown("TV video player", playerMode, TvCapabilityOptions.playerOptions(tvDevice).map { it.second to it.first }, "TV Default") {
+            scope.launch { settingsRepository.setTvPlayerMode(it) }
         }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("Defaults", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-
-            // TV Video Player
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    readOnly = true,
-                    value = playerOptions.find { it.first == playerMode }?.second ?: "TV Default",
-                    onValueChange = {},
-                    label = { Text("TV Video Player") },
-                    trailingIcon = {
-                        IconButton(onClick = { playerExpanded = !playerExpanded }) {
-                            Icon(
-                                if (playerExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                contentDescription = if (playerExpanded) "Collapse" else "Expand"
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable { playerExpanded = !playerExpanded }
-                )
-                DropdownMenu(
-                    expanded = playerExpanded,
-                    onDismissRequest = { playerExpanded = false },
-                    modifier = Modifier.fillMaxWidth(0.9f)
-                ) {
-                    playerOptions.forEach { (optionId, optionName) ->
-                        DropdownMenuItem(
-                            text = { Text(optionName) },
-                            onClick = {
-                                playerExpanded = false
-                                scope.launch { settingsRepository.setTvPlayerMode(optionId) }
-                            }
-                        )
-                    }
-                }
-            }
-
-            // TV Browser Engine
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    readOnly = true,
-                    value = browserOptions.find { it.first == browserMode }?.second ?: "TV Default",
-                    onValueChange = {},
-                    label = { Text("TV Browser Engine") },
-                    trailingIcon = {
-                        IconButton(onClick = { browserExpanded = !browserExpanded }) {
-                            Icon(
-                                if (browserExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
-                                contentDescription = if (browserExpanded) "Collapse" else "Expand"
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .clickable { browserExpanded = !browserExpanded }
-                )
-                DropdownMenu(
-                    expanded = browserExpanded,
-                    onDismissRequest = { browserExpanded = false },
-                    modifier = Modifier.fillMaxWidth(0.9f)
-                ) {
-                    browserOptions.forEach { (optionId, optionName) ->
-                        DropdownMenuItem(
-                            text = { Text(optionName) },
-                            onClick = {
-                                browserMode = optionId
-                                browserExpanded = false
-                                prefs.edit { putString("tv_browser_mode", optionId) }
-                            }
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val castHistorySettings: CastHistorySettings = koinInject()
-            val preventHistory by castHistorySettings.preventHistory.collectAsState()
-            ListItem(
-                headlineContent = { Text("Prevent TV cast history") },
-                supportingContent = {
-                    Text("Keep new casts out of PlayBridge Android TV history and saved playback progress. Requires an updated TV app. Existing history stays unchanged.")
-                },
-                trailingContent = {
-                    Switch(
-                        checked = preventHistory,
-                        onCheckedChange = castHistorySettings::setPreventHistory,
-                    )
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            )
-
-            // Auto-switch to Remote
-            val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
-            ListItem(
-                headlineContent = { Text("Auto Switch to Remote") },
-                supportingContent = { Text("Automatically open remote control after casting content") },
-                trailingContent = {
-                    Switch(
-                        checked = autoSwitchToRemote,
-                        onCheckedChange = {
-                            scope.launch { settingsRepository.setAutoSwitchToRemote(it) }
-                        }
-                    )
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.padding(horizontal = 0.dp)
-            )
-
-            // Idle link while backgrounded (default off = soft stand-down after grace).
-            val keepTvInBackground by settingsRepository.keepTvConnectionInBackground
-                .collectAsState(initial = false)
-            ListItem(
-                headlineContent = { Text("Keep connection in background") },
-                supportingContent = {
-                    Text(
-                        if (keepTvInBackground) {
-                            "Stay linked to the TV with a Connected notification when PlayBridge is in the background (uses more battery)."
-                        } else {
-                            "When nothing is casting, disconnect after ~45s in the background to save battery. Reconnects when you return to the app. Casting always stays connected."
-                        }
-                    )
-                },
-                trailingContent = {
-                    Switch(
-                        checked = keepTvInBackground,
-                        onCheckedChange = {
-                            scope.launch { settingsRepository.setKeepTvConnectionInBackground(it) }
-                        }
-                    )
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier = Modifier.padding(horizontal = 0.dp)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            val remotePreferences: RemotePresentationPreferenceStore = koinInject()
-            RemoteSettingsGroup(remotePreferences)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            val atvCredentials: com.playbridge.sender.cast.atv.AtvCredentialStore = koinInject()
-            AtvPairedTvsSettings(atvCredentials)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-
-            if (!isTvAvailable) {
-                Text(
-                    "Connect to a TV to download or clear logs.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Button(
-                onClick = {
-                    if (tvLogs == null) return@Button
-                    isDownloading = true
-                    scope.launch {
-                        downloadTvLogs(context, tvLogs)
-                        isDownloading = false
-                    }
-                },
-                enabled = isTvAvailable && !isDownloading,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (isDownloading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text(if (isDownloading) "Downloading…" else "Download TV Logs")
-            }
-
-            OutlinedButton(
-                onClick = {
-                    if (tvLogs == null) return@OutlinedButton
-                    isClearing = true
-                    scope.launch {
-                        clearTvLogs(context, tvLogs)
-                        isClearing = false
-                    }
-                },
-                enabled = isTvAvailable && !isClearing,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Text(if (isClearing) "Clearing…" else "Clear TV Logs")
-            }
+        SettingsDropdown("TV browser engine", browserMode, TvCapabilityOptions.browserOptions(tvDevice).map { it.second to it.first }, "TV Default") {
+            browserMode = it
+            prefs.edit { putString("tv_browser_mode", it) }
         }
+        SettingsDropdown(
+            "Preferred resolution",
+            preferredResolution,
+            SubtitlePreferences.videoQualities,
+            "Auto",
+            description = "Default video track quality when casting.",
+        ) { code ->
+            scope.launch { settingsRepository.setDefaultVideoQuality(code) }
+            prefs.edit { putString("default_video_quality", code) }
+        }
+        OutlinedTextField(
+            value = maxBitrateText,
+            onValueChange = { raw ->
+                if (raw.all { it.isDigit() || it == '.' } && raw.count { it == '.' } <= 1) {
+                    maxBitrateText = raw
+                    scope.launch { settingsRepository.setMaxBitrateCapMbps(raw.toDoubleOrNull() ?: 0.0) }
+                }
+            },
+            label = { Text("Maximum video bitrate (Mbps)") },
+            supportingText = { Text("Leave empty for no limit.") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        )
+
+        SettingsGroupTitle("After casting")
+        SettingsSwitch("Open the remote", "Show the remote control after casting starts", autoSwitchToRemote) {
+            scope.launch { settingsRepository.setAutoSwitchToRemote(it) }
+        }
+        SettingsSwitch(
+            "Don't save cast history on TV",
+            "Keep new casts out of PlayBridge Android TV history and saved playback progress. Requires an updated TV app. Existing history stays unchanged.",
+            preventHistory,
+            castHistorySettings::setPreventHistory,
+        )
     }
 }
 
@@ -301,10 +122,11 @@ fun TVSettingsScreen(
 internal fun RemoteSettingsGroup(
     store: RemotePresentationPreferenceStore,
     sample: (RemoteHapticLevel) -> Unit = rememberRemoteHapticEmitter(),
+    showTitle: Boolean = true,
 ) {
     val preferences by store.state.collectAsState()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Remote", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        if (showTitle) Text("Remote", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         ListItem(
             headlineContent = { Text("Haptic feedback") },
             trailingContent = {
@@ -337,51 +159,6 @@ internal fun RemoteSettingsGroup(
                     )
                 }
             }
-        }
-    }
-}
-
-private fun tvLogsFailure(result: TvLogsResult): String = when (result) {
-    is TvLogsResult.Logs -> "TV logging is disabled. Enable it in TV → Settings → Logs."
-    TvLogsResult.Unsupported -> "Update the PlayBridge TV app to download its logs."
-    TvLogsResult.Unavailable -> "The TV did not respond. Check the connection and try again."
-}
-
-private suspend fun downloadTvLogs(context: Context, tvLogs: TvLogsSource) {
-    val result = tvLogs(false)
-    withContext(Dispatchers.IO) {
-        try {
-            if (result is TvLogsResult.Logs && result.enabled) {
-                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                val fileName = "playbridge_tv_logs_$timestamp.txt"
-                val file = File(
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                    fileName
-                )
-                file.writeText(result.text.ifEmpty { "Empty log" })
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Logs saved to Downloads/$fileName", Toast.LENGTH_LONG).show()
-                }
-            } else {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, tvLogsFailure(result), Toast.LENGTH_LONG).show()
-                }
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-}
-
-private suspend fun clearTvLogs(context: Context, tvLogs: TvLogsSource) {
-    val result = tvLogs(true)
-    withContext(Dispatchers.Main) {
-        if (result is TvLogsResult.Logs && result.enabled) {
-            Toast.makeText(context, "TV logs cleared", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, tvLogsFailure(result), Toast.LENGTH_SHORT).show()
         }
     }
 }
