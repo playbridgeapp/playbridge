@@ -730,7 +730,9 @@ open class PlayerActivity : ComponentActivity() {
                 .setUserAgent(headers["User-Agent"] ?: DEFAULT_UA)
             httpFactory.setDefaultRequestProperties(headers)
             val dataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
-            return DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
+            return DefaultMediaSourceFactory(dataSourceFactory)
+                .setSubtitleParserFactory(SniffingSubtitleParserFactory())
+                .createMediaSource(mediaItem)
         }
 
         internal fun buildMediaItem(

@@ -110,7 +110,10 @@ object PhoneExoPlayerFactory {
 
         return ExoPlayer.Builder(context)
             .setRenderersFactory(renderersFactory)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(dataSourceFactory)
+                    .setSubtitleParserFactory(SniffingSubtitleParserFactory()),
+            )
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .setAudioAttributes(audioAttrs, /* handleAudioFocus = */ false)
