@@ -1,5 +1,7 @@
 package com.playbridge.sender.browser
 
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import com.playbridge.sender.player.siteIconUrl
 import com.playbridge.sender.cast.remote.RemoteAction
 import com.playbridge.sender.cast.remote.RemoteController
 import com.playbridge.sender.cast.remote.RemoteControllerRegistry
@@ -599,7 +601,7 @@ fun AppNavHost(
                                     } catch (e: Exception) {
                                         currentUrl
                                     }
-                                    val faviconUrl = if (currentUrl != "about:blank") "https://www.google.com/s2/favicons?domain=$domain&sz=64" else null
+                                    val faviconUrl = siteIconUrl(currentUrl)
                                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                                         if (currentUrl != "about:blank") {
                                             item {
@@ -623,7 +625,8 @@ fun AppNavHost(
                                                                     .crossfade(false)
                                                                     .build(),
                                                                 contentDescription = "Site icon",
-                                                                modifier = Modifier.size(28.dp)
+                                                                modifier = Modifier.size(28.dp),
+                                                                error = rememberVectorPainter(Icons.Default.Language)
                                                             )
                                                         } else {
                                                             Icon(
