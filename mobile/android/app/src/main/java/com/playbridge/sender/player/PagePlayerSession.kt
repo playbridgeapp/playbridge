@@ -205,6 +205,8 @@ object PagePlayerSession {
             val plainSubtitle = payload.subtitles.any { it == spec.uri.toString() }
             spec.withRequestHeaders(subtitle?.headers ?: if (plainSubtitle) emptyMap() else payload.headers)
         }
-        return DefaultMediaSourceFactory(sources).createMediaSource(media)
+        return DefaultMediaSourceFactory(sources)
+            .setSubtitleParserFactory(SniffingSubtitleParserFactory())
+            .createMediaSource(media)
     }
 }
