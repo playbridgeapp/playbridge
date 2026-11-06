@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -206,6 +207,9 @@ internal fun PlayBridgeEdgeShortcut(
             Box(
                 modifier = Modifier
                     .size(48.dp)
+                    // The handle sits in the system back-gesture strip; without this a tap that
+                    // drifts sideways, or a drag off the edge, is taken as Back.
+                    .systemGestureExclusion()
                     .then(handleModifier)
                     .semantics { contentDescription = "PlayBridge menu" }
                     .clickable(role = Role.Button) { expanded = !expanded },

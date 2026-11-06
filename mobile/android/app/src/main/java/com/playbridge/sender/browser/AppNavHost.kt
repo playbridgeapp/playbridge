@@ -22,6 +22,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -534,6 +535,8 @@ fun AppNavHost(
                                                 y = displayedHandleOffset.y.roundToInt(),
                                             )
                                         }
+                                        // Keep edge taps and drags from being taken as Back.
+                                        .systemGestureExclusion()
                                         .pointerInput(maxHandleX, maxHandleY, restingHandleOffset) {
                                             detectDragGestures(
                                                 onDragStart = {
