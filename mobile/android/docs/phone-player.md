@@ -44,9 +44,15 @@ whether styled subtitles (ASS) are restyled. It applies live to ExoPlayer's capt
 mpv (`MpvMediaPlayer.setSubtitleStyle`). ExoPlayer always uses the phone style, since it has no
 ASS. mpv finds fonts for any script through fontconfig over the device's fonts.
 
+**Add a font file…** installs a .ttf, .otf or .ttc (up to 10 MB) as the custom font: one slot,
+in mpv's `sub-fonts-dir`, so ExoPlayer, the preview and mpv (by family name) all use it.
+Characters it lacks always fall back to the device's fonts; Android can't turn that off.
+
 A TV keeps its own style. Play on → **Configure TV** and Settings → TV → **Subtitles on the TV**
 edit it over the connection (`subtitle_style_query` / `subtitle_style`) when the TV advertises
-`subtitle_style_v1`; older TVs show an update hint instead.
+`subtitle_style_v1`; older TVs show an update hint instead. TVs with `subtitle_font_v1` also take a
+custom font from the phone (`subtitle_font_*`, sent in acknowledged pieces with progress); mpv on
+the TV picks a new font file up from the next video.
 
 ## Known limitations
 

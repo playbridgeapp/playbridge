@@ -1,5 +1,13 @@
 package com.playbridge.sender.settings
 
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import com.playbridge.shared.player.readFontFamily
+import com.playbridge.shared.player.installCustomSubtitleFont
+import com.playbridge.shared.player.customSubtitleFontFile
+import com.playbridge.shared.player.SubtitleStyle
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -230,6 +238,17 @@ fun AudioSubtitleSettingsScreen(onBack: () -> Unit) {
     val audio by settings.preferredAudioLang.collectAsState(initial = "")
     val subtitles by settings.preferredSubtitleLang.collectAsState(initial = "")
     val phoneStyle by settings.phoneSubtitleStyle.collectAsState(initial = com.playbridge.shared.player.SubtitleStyle.DEFAULT)
+    var phoneFontStatus by remember { mutableStateOf<String?>(null) }
+    var phoneFontBusy by remember { mutableStateOf(false) }
+    var fontRevision by remember { mutableIntStateOf(0) }
+    // The phone's installed font: its name for the choice and its typeface for the preview.
+    val phoneFont by produceState<Pair<String, android.graphics.Typeface>?>(null, fontRevision) {
+        value = withContext(Dispatchers.IO) {
+            customSubtitleFontFile(context.filesDir)?.let { file ->
+                runCatching { readFontFamily(file.readBytes())?.let { it to android.graphics.Typeface.createFromFile(file) } }.getOrNull()
+            }
+        }
+    }
 
     SettingsPage("Audio & subtitles", onBack) {
         Text(
@@ -247,7 +266,34 @@ fun AudioSubtitleSettingsScreen(onBack: () -> Unit) {
         }
 
         SettingsGroupTitle("Phone player subtitles")
-        SubtitleStyleEditor(phoneStyle, onChange = { scope.launch { settings.setPhoneSubtitleStyle(it) } })
+        SubtitleStyleEditor(
+            phoneStyle,
+            onChange = { scope.launch { settings.setPhoneSubtitleStyle(it) } },
+            font = SubtitleFontControls(
+                installed = phoneFont?.first,
+                status = phoneFontStatus,
+                busy = phoneFontBusy,
+                typeface = phoneFont?.second,
+                onPick = { uri ->
+                    phoneFontStatus = null
+                    phoneFontBusy = true
+                    scope.launch {
+                        val installed = withContext(Dispatchers.IO) {
+                            when (val picked = readPickedFont(context, uri)) {
+                                is PickedFont.Rejected -> { phoneFontStatus = picked.message; null }
+                                is PickedFont.Font -> installCustomSubtitleFont(context.filesDir, picked.bytes)
+                                    .also { if (it == null) phoneFontStatus = fontErrorMessage("invalid_font") }
+                            }
+                        }
+                        if (installed != null) {
+                            fontRevision++
+                            settings.setPhoneSubtitleStyle(phoneStyle.copy(font = SubtitleStyle.Font.CUSTOM, customFont = installed))
+                        }
+                        phoneFontBusy = false
+                    }
+                },
+            ),
+        )
         Text(
             "Your TV keeps its own style: change it in Settings → TV or Play on → Configure TV.",
             style = MaterialTheme.typography.bodySmall,

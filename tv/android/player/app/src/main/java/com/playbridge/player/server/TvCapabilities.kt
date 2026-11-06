@@ -23,7 +23,7 @@ data class TvCapabilities(
     val screenMirrorWebRtc: Boolean = true,
     val features: List<String> = listOf(
         "queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1",
-        "diagnostic_logs_v1", "player_home_v1", "subtitle_style_v1",
+        "diagnostic_logs_v1", "player_home_v1", "subtitle_style_v1", "subtitle_font_v1",
         com.playbridge.shared.protocol.RECEIVER_CAPABILITIES_V1_FEATURE,
     ),
     val capabilities: JsonObject = buildReceiverCapabilities(players, browsers),

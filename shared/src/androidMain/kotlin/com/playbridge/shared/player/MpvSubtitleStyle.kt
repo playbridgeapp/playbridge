@@ -12,7 +12,9 @@ private const val MPV_BASE_FONT_SIZE = 45
  */
 internal fun mpvSubtitleOptions(style: SubtitleStyle): List<Pair<String, String>> {
     val common = listOf(
-        "sub-font" to "Roboto",
+        // A custom font is installed in sub-fonts-dir; libass falls back per character to Roboto
+        // and the device's fonts for anything it lacks.
+        "sub-font" to (style.customFont ?: "Roboto"),
         "sub-font-size" to (MPV_BASE_FONT_SIZE * style.size.scale).roundToInt().toString(),
         "sub-color" to "#FFFFFFFF",
         "sub-ass-override" to if (style.overrideStyled) "force" else "scale",
