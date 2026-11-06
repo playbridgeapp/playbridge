@@ -92,6 +92,8 @@ sealed class IncomingMessage {
     data class SubtitleFontChunk(val transferId: String, val offset: Int, val data: String) : IncomingMessage()
     /** Phone finished sending a custom subtitle font. */
     data class SubtitleFontEnd(val transferId: String) : IncomingMessage()
+    /** Phone uninstalls a custom subtitle font. */
+    data class SubtitleFontRemove(val family: String) : IncomingMessage()
     /**
      * Select (and optionally save) a TV browser User-Agent override. Mirrors [UserScript]'s
      * shape: [name] blank means "switch back to default" (clears the active override without
@@ -330,9 +332,12 @@ fun createUserScriptsJson(names: List<String>): String =
 
 /**
  * Either direction: a complete subtitle style (the phone sets it, the TV reports it). A TV's
- * report also names its installed custom font in [installedFont], selected or not.
+ * report also lists its installed custom fonts in [installedFonts], selected or not.
  */
-fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle, installedFont: String? = null): String =
+fun createSubtitleStyleJson(
+    style: com.playbridge.shared.player.SubtitleStyle,
+    installedFonts: List<String>? = null,
+): String =
     buildJsonObject {
         put("type", "subtitle_style")
         put("size", style.size.wire)
@@ -341,7 +346,7 @@ fun createSubtitleStyleJson(style: com.playbridge.shared.player.SubtitleStyle, i
         put("font", style.font.wire)
         put("overrideStyled", style.overrideStyled)
         style.customFont?.let { put("customFont", it) }
-        installedFont?.let { put("installedFont", it) }
+        installedFonts?.let { fonts -> put("installedFonts", buildJsonArray { fonts.forEach { add(it) } }) }
     }.toString()
 
 /** Phone → TV: ask for the current subtitle style. */
@@ -374,6 +379,13 @@ fun createSubtitleFontChunkJson(transferId: String, offset: Int, data: ByteArray
         put("transferId", transferId)
         put("offset", offset)
         put("data", java.util.Base64.getEncoder().encodeToString(data))
+    }.toString()
+
+/** Phone → TV: uninstall custom font [family]; the TV reports its fonts again in `subtitle_style`. */
+fun createSubtitleFontRemoveJson(family: String): String =
+    buildJsonObject {
+        put("type", "subtitle_font_remove")
+        put("family", family)
     }.toString()
 
 /** Phone → TV: all bytes sent; the TV checks and installs the font, then answers `subtitle_font_result`. */
@@ -649,6 +661,9 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 if (id != null && offset != null && data != null) IncomingMessage.SubtitleFontChunk(id, offset, data)
                 else IncomingMessage.Unknown("subtitle_font_chunk_parse_error", "")
             }
+            "subtitle_font_remove" -> root["family"]?.jsonPrimitive?.contentOrNull
+                ?.let(IncomingMessage::SubtitleFontRemove)
+                ?: IncomingMessage.Unknown("subtitle_font_remove_parse_error", "")
             "subtitle_font_end" -> root["transferId"]?.jsonPrimitive?.contentOrNull
                 ?.let(IncomingMessage::SubtitleFontEnd)
                 ?: IncomingMessage.Unknown("subtitle_font_end_parse_error", "")

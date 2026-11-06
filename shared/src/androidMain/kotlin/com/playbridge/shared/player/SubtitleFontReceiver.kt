@@ -1,15 +1,15 @@
 package com.playbridge.shared.player
 
 import java.io.ByteArrayOutputStream
-import java.io.File
 import java.security.MessageDigest
 
 /**
  * Reassembles one custom subtitle font sent as `subtitle_font_begin`, ordered
- * `subtitle_font_chunk`s and `subtitle_font_end`, then checks and installs it under [filesDir].
- * One transfer at a time; a new begin replaces an unfinished one. Not thread-safe.
+ * `subtitle_font_chunk`s and `subtitle_font_end`, checks it, and hands it to [install]
+ * (normally [SubtitleFontLibrary.add]). One transfer at a time; a new begin replaces an
+ * unfinished one. Not thread-safe.
  */
-class SubtitleFontReceiver(private val filesDir: File) {
+class SubtitleFontReceiver(private val install: (ByteArray) -> SubtitleFontLibrary.AddResult) {
     sealed interface Result {
         /** [received] bytes are stored; send the next chunk. */
         data class Ack(val received: Int) : Result
@@ -50,7 +50,10 @@ class SubtitleFontReceiver(private val filesDir: File) {
         transfer = null
         val bytes = current.bytes.toByteArray()
         if (bytes.size != current.size || sha256(bytes) != current.sha256) return Result.Failed("checksum_mismatch")
-        return installCustomSubtitleFont(filesDir, bytes)?.let(Result::Installed) ?: Result.Failed("invalid_font")
+        return when (val added = install(bytes)) {
+            is SubtitleFontLibrary.AddResult.Added -> Result.Installed(added.family)
+            is SubtitleFontLibrary.AddResult.Failed -> Result.Failed(added.code)
+        }
     }
 
     companion object {

@@ -4,19 +4,21 @@ import android.content.Context
 import android.graphics.Typeface
 import android.net.Uri
 import com.playbridge.shared.player.MAX_SUBTITLE_FONT_BYTES
+import com.playbridge.shared.player.MAX_SUBTITLE_FONTS
 import com.playbridge.shared.player.readFontFamily
 
 /** The custom font part of the subtitle editor, for the phone player or a TV. */
 internal class SubtitleFontControls(
-    /** The installed custom font's family name, selected or not. */
-    val installed: String?,
-    /** Progress or an error, shown under the font choice. */
+    /** Installed custom font families, selected or not. */
+    val installed: List<String>,
+    /** Progress or an error, shown under the fonts. */
     val status: String?,
     /** A font is being installed; picking another waits. */
     val busy: Boolean,
-    /** The installed font, for the preview, when it is available here. */
+    /** The selected font, for the preview, when it is available here. */
     val typeface: Typeface?,
     val onPick: (Uri) -> Unit,
+    val onRemove: (String) -> Unit,
 )
 
 /** A picked font file, checked before anything is installed or sent. */
@@ -49,6 +51,7 @@ internal fun readPickedFont(context: Context, uri: Uri): PickedFont {
 internal fun fontErrorMessage(code: String?): String = when (code) {
     "too_large" -> "Fonts over 10 MB can't be used. Pick a smaller font file."
     "invalid_font" -> "That file isn't a TrueType or OpenType font."
+    "font_limit" -> "There are already $MAX_SUBTITLE_FONTS fonts or 30 MB of fonts. Remove one first."
     else -> "Couldn't send the font to the TV. Try again."
 }
 

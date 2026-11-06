@@ -126,8 +126,15 @@ class ConnectionCoordinator internal constructor(
         }
     }
 
-    /** The custom font installed on the TV, selected or not. */
-    val tvInstalledFont = MutableStateFlow<String?>(null)
+    /** The custom fonts installed on the TV, selected or not. */
+    val tvInstalledFonts = MutableStateFlow<List<String>>(emptyList())
+
+    /** Uninstalls [family] from the TV; it reports its fonts again in `subtitle_style`. */
+    fun removeTvSubtitleFont(family: String) {
+        if (tvSupportsSubtitleFont) {
+            webSocketClient?.send(com.playbridge.shared.protocol.createSubtitleFontRemoveJson(family))
+        }
+    }
 
     /** Whether the connected TV accepts a custom subtitle font from the phone. */
     val tvSupportsSubtitleFont: Boolean
@@ -385,7 +392,9 @@ class ConnectionCoordinator internal constructor(
                                 overrideStyled = if (json.has("overrideStyled")) json.optBoolean("overrideStyled") else null,
                                 customFont = json.optString("customFont").takeIf { it.isNotEmpty() },
                             )
-                            tvInstalledFont.value = json.optString("installedFont").takeIf { it.isNotEmpty() }
+                            tvInstalledFonts.value = json.optJSONArray("installedFonts")
+                                ?.let { fonts -> (0 until fonts.length()).mapNotNull { fonts.optString(it).takeIf(String::isNotEmpty) } }
+                                .orEmpty()
                         }
                         "user_scripts" -> {
                             val arr = json.optJSONArray("names")

@@ -270,14 +270,18 @@ class ServerService : Service() {
         }
 
     private val subtitleStyles by lazy { com.playbridge.player.player.SubtitleStyleStore.get(this) }
-    private val subtitleFonts by lazy { com.playbridge.shared.player.SubtitleFontReceiver(filesDir) }
+    private val subtitleFonts by lazy { com.playbridge.shared.player.SubtitleFontReceiver(subtitleStyles::addFont) }
 
     override fun onCreate() {
         super.onCreate()
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
         // Every paired phone sees a style change, whether it came from TV Settings or a phone.
-        scope.launch { subtitleStyles.style.drop(1).collect(::broadcastSubtitleStyle) }
+        scope.launch {
+            kotlinx.coroutines.flow.combine(subtitleStyles.style, subtitleStyles.installedFonts) { style, _ -> style }
+                .drop(1)
+                .collect(::broadcastSubtitleStyle)
+        }
         contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
         androidx.core.content.ContextCompat.registerReceiver(this, volumeReceiver, IntentFilter().apply {
             addAction("android.media.VOLUME_CHANGED_ACTION")
@@ -1021,11 +1025,13 @@ class ServerService : Service() {
                 replyToFont(command, msg.transferId, subtitleFonts.begin(msg.transferId, msg.size, msg.sha256))
             is IncomingMessage.SubtitleFontChunk ->
                 replyToFont(command, msg.transferId, subtitleFonts.chunk(msg.transferId, msg.offset, msg.data))
+            is IncomingMessage.SubtitleFontRemove -> scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                subtitleStyles.removeFont(msg.family)
+            }
             is IncomingMessage.SubtitleFontEnd -> scope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val result = subtitleFonts.end(msg.transferId)
                 if (result is com.playbridge.shared.player.SubtitleFontReceiver.Result.Installed) {
                     FileLogger.i(TAG, "Custom subtitle font installed")
-                    subtitleStyles.customFontInstalled(result.family)
                 }
                 replyToFont(command, msg.transferId, result)
             }
@@ -1128,7 +1134,7 @@ class ServerService : Service() {
     private fun broadcastSubtitleStyle(style: com.playbridge.shared.player.SubtitleStyle) {
         scope.launch {
             webSocketServer?.broadcastStatus(
-                com.playbridge.shared.protocol.createSubtitleStyleJson(style, subtitleStyles.customFontFamily),
+                com.playbridge.shared.protocol.createSubtitleStyleJson(style, subtitleStyles.installedFonts.value),
             )
         }
     }

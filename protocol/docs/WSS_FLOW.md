@@ -214,13 +214,15 @@ the normalized style, applies it at once to current and later playback, and send
 to every authenticated sender, including after changes made on the receiver itself. Unknown values
 mean the default. Senders should not send these frames to receivers without the feature.
 
-Receivers that also advertise `subtitle_font_v1` accept one custom subtitle font from a sender:
-`subtitle_font_begin` (size up to 10 MiB and SHA-256), ordered base64 `subtitle_font_chunk`s, each
-sent after the previous `subtitle_font_ack`, then `subtitle_font_end`. The receiver checks the
-size, checksum and font structure, replaces its single custom font, selects it (`font: custom`,
-`customFont: <family>`) and answers `subtitle_font_result` to that sender only. Characters the font
-lacks are drawn with the receiver's own fonts. `subtitle_style` reports from such receivers name the
-installed font in `installedFont` even while the default font is selected.
+Receivers that also advertise `subtitle_font_v1` keep up to 5 custom subtitle fonts, 30 MiB in all.
+A sender adds one with `subtitle_font_begin` (size up to 10 MiB and SHA-256), ordered base64
+`subtitle_font_chunk`s, each sent after the previous `subtitle_font_ack`, then `subtitle_font_end`.
+The receiver checks the size, checksum and font structure, adds the font (replacing one of the same
+family, or failing with `font_limit`), selects it (`font: custom`, `customFont: <family>`) and
+answers `subtitle_font_result` to that sender only. `subtitle_font_remove` uninstalls a family.
+`subtitle_style` reports from such receivers list `installedFonts`, selected or not. Characters a
+font lacks are drawn with the receiver's own fonts. Only the selected font is handed to mpv, because
+libass loads every font in its font directory into memory.
 
 Late network subtitle attachment uses `control` with `payload.command = "add_subtitle"`
 and `payload.subtitleResource` (URL, resource-scoped headers, optional label/language).
