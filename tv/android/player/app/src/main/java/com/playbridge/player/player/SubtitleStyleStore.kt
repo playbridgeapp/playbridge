@@ -58,11 +58,7 @@ internal fun SubtitleView.applySubtitleStyle(style: SubtitleStyle) {
     setStyle(
         CaptionStyleCompat(
             Color.WHITE,
-            when (style.background) {
-                SubtitleStyle.Background.NONE -> Color.TRANSPARENT
-                SubtitleStyle.Background.TRANSLUCENT -> Color.argb(0xB3, 0, 0, 0)
-                SubtitleStyle.Background.SOLID -> Color.BLACK
-            },
+            Color.argb((style.background.opacity * 255).toInt(), 0, 0, 0),
             Color.TRANSPARENT,
             when (style.edge) {
                 SubtitleStyle.Edge.OUTLINE -> CaptionStyleCompat.EDGE_TYPE_OUTLINE

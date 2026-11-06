@@ -17,11 +17,8 @@ internal fun mpvSubtitleOptions(style: SubtitleStyle): List<Pair<String, String>
         "sub-font-size" to (MPV_BASE_FONT_SIZE * style.size.scale).roundToInt().toString(),
         "sub-color" to "#FFFFFFFF",
         "sub-border-style" to if (box) "background-box" else "outline-and-shadow",
-        "sub-back-color" to when (style.background) {
-            SubtitleStyle.Background.NONE -> "#00000000"
-            SubtitleStyle.Background.TRANSLUCENT -> "#B3000000"
-            SubtitleStyle.Background.SOLID -> "#FF000000"
-        },
+        // mpv colours are #AARRGGBB.
+        "sub-back-color" to "#%02X000000".format((style.background.opacity * 255).roundToInt()),
         "sub-outline-color" to "#FF000000",
         "sub-outline-size" to if (style.edge == SubtitleStyle.Edge.OUTLINE) "2.0" else "0",
         "sub-shadow-color" to "#B3000000",

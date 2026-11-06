@@ -52,6 +52,10 @@ class SubtitleStyleTest {
         assertEquals("56", boxed["sub-font-size"])
         assertEquals("background-box", boxed["sub-border-style"])
         assertEquals("#FF000000", boxed["sub-back-color"])
+        assertEquals(
+            "#80000000",
+            mpvSubtitleOptions(SubtitleStyle(background = SubtitleStyle.Background.TRANSLUCENT)).toMap()["sub-back-color"],
+        )
         assertEquals("0", boxed["sub-outline-size"])
         assertEquals("0", boxed["sub-shadow-offset"])
         assertEquals("force", boxed["sub-ass-override"])

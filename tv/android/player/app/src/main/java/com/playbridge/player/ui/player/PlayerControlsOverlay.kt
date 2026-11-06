@@ -470,11 +470,7 @@ private fun SubtitleOverlay(
 ) {
     val startSize = BASE_SUBTITLE_TEXT_SIZE_SP * style.size.scale
     var fontSize by remember(text, startSize) { mutableStateOf(startSize.sp) }
-    val box = when (style.background) {
-        com.playbridge.shared.player.SubtitleStyle.Background.NONE -> Color.Transparent
-        com.playbridge.shared.player.SubtitleStyle.Background.TRANSLUCENT -> Color.Black.copy(alpha = 0.7f)
-        com.playbridge.shared.player.SubtitleStyle.Background.SOLID -> Color.Black
-    }
+    val box = Color.Black.copy(alpha = style.background.opacity)
     val base = androidx.compose.ui.text.TextStyle(
         fontSize = fontSize,
         fontWeight = FontWeight.SemiBold,

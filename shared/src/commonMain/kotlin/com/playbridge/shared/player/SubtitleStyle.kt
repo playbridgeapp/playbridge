@@ -20,10 +20,11 @@ data class SubtitleStyle(
         EXTRA_LARGE("extra_large", 1.5f),
     }
 
-    enum class Background(val wire: String) {
-        NONE("none"),
-        TRANSLUCENT("translucent"),
-        SOLID("solid"),
+    /** [opacity] is the black box's alpha; see-through must stay clearly lighter than solid. */
+    enum class Background(val wire: String, val opacity: Float) {
+        NONE("none", 0f),
+        TRANSLUCENT("translucent", 0.5f),
+        SOLID("solid", 1f),
     }
 
     enum class Edge(val wire: String) {
