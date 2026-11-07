@@ -62,6 +62,7 @@ class ConnectionCoordinator internal constructor(
     private val messages: Flow<String>,
     private val webSocketClient: WebSocketClient?,
     private val scope: CoroutineScope,
+    private val takePlaybackRequest: (String) -> Boolean = { webSocketClient?.takePlaybackRequest(it) == true },
     private val clock: () -> Long,
 ) {
     constructor(webSocketClient: WebSocketClient, scope: CoroutineScope) : this(
@@ -317,6 +318,11 @@ class ConnectionCoordinator internal constructor(
                         }
                         "command_result" -> {
                             val requestId = json.optString("requestId", "")
+                            if (requestId.isNotEmpty() && takePlaybackRequest(requestId) &&
+                                !json.optBoolean("ok", false)
+                            ) {
+                                playbackFailures.rejected(json.optString("error", "").ifEmpty { null })
+                            }
                             if (requestId.isNotEmpty()) {
                                 pendingQueueCommands.remove(requestId)?.complete(
                                     QueueCommandResult(

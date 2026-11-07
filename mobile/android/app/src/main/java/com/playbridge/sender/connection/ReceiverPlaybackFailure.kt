@@ -32,6 +32,13 @@ internal class ReceiverPlaybackFailures {
         }
     }
 
+    /** The TV refused a cast before opening its player; [code] is the `command_result` error. */
+    fun rejected(code: String?) {
+        val text = rejectionMessage(code)
+        dismissedMessage = null
+        mutableNotice.value = ReceiverPlaybackFailure(++sequence, text)
+    }
+
     /** False drops the entire stale error status, not just its notice. */
     fun status(state: String, id: String?, error: Any?): Boolean {
         if (state == "error") {
@@ -53,6 +60,13 @@ internal class ReceiverPlaybackFailures {
 
     companion object {
         private val whitespace = Regex("[\\s\\p{Z}\\u0085]+")
+
+        fun rejectionMessage(code: String?): String = when (code) {
+            "invalid_command" -> "The TV couldn't read this cast. Try casting it again."
+            "queue_full" -> "The TV is busy. Try again in a moment."
+            "unsupported" -> "The TV couldn't open its player. Open PlayBridge on the TV and try again."
+            else -> "The TV didn't start playback. Try casting it again."
+        }
         fun message(raw: Any?): String {
             val text = (raw as? String)?.replace(whitespace, " ")?.trim().orEmpty()
             if (text.isEmpty()) return "Playback failed on the TV"

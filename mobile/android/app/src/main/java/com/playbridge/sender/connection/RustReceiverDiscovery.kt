@@ -54,6 +54,7 @@ internal class RustReceiverDiscovery(context: Context) {
     private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
     private var worker: Job? = null
     private val activeHandle = AtomicLong(0L)
+    private val handleLock = Any()
     private var nativeUnavailableLogged = false
     /** Process-lifetime discovery cache keyed by [EndpointKey] string. */
     private val stickyEndpoints = ConcurrentHashMap<String, StickyEndpoint>()
@@ -139,10 +140,12 @@ internal class RustReceiverDiscovery(context: Context) {
         // Completion handlers run even when a newly-created coroutine is cancelled before its
         // body starts. That guarantees both the raw Rust handle and multicast lock are released.
         scanJob.invokeOnCompletion {
-            activeHandle.compareAndSet(handle, 0L)
             try {
-                RustDiscoveryNative.cancel(handle)
-                RustDiscoveryNative.free(handle)
+                synchronized(handleLock) {
+                    activeHandle.compareAndSet(handle, 0L)
+                    RustDiscoveryNative.cancel(handle)
+                    RustDiscoveryNative.free(handle)
+                }
             } catch (error: LinkageError) {
                 Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
             } finally {
@@ -155,13 +158,14 @@ internal class RustReceiverDiscovery(context: Context) {
     fun stop() {
         worker?.cancel()
         worker = null
-        val handle = activeHandle.getAndSet(0L)
-        if (handle != 0L) {
-            try {
-                RustDiscoveryNative.cancel(handle)
-            } catch (error: LinkageError) {
-                Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
+        try {
+            // The scan's completion frees the handle under the same lock, so this never cancels a freed one.
+            synchronized(handleLock) {
+                val handle = activeHandle.getAndSet(0L)
+                if (handle != 0L) RustDiscoveryNative.cancel(handle)
             }
+        } catch (error: LinkageError) {
+            Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
         }
         // Leave sticky results published so the UI does not collapse when a scan window ends.
         pruneSticky()

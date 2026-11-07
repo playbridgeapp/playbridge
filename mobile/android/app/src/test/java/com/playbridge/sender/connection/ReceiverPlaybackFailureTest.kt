@@ -31,6 +31,36 @@ class ReceiverPlaybackFailureTest {
         assertNull(coordinator.playbackFailure.value)
     }
 
+    @Test fun rejectedPlaylistShowsAFixedSentenceAndOtherResultsDoNot() = runTest {
+        val messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val playlists = mutableSetOf("cast-1", "cast-2")
+        val coordinator = ConnectionCoordinator(messages, null, backgroundScope, takePlaybackRequest = playlists::remove) { 0L }
+        runCurrent()
+        messages.emit("""{"type":"command_result","requestId":"queue-1","ok":false,"error":"queue_full"}""")
+        messages.emit("""{"type":"command_result","requestId":"cast-1","ok":true}""")
+        runCurrent()
+        assertNull(coordinator.playbackFailure.value)
+
+        messages.emit("""{"type":"command_result","requestId":"cast-2","ok":false,"error":"unsupported"}""")
+        runCurrent()
+        assertEquals(
+            "The TV couldn't open its player. Open PlayBridge on the TV and try again.",
+            coordinator.playbackFailure.value?.message,
+        )
+        coordinator.dismissPlaybackFailure()
+        // A repeated answer for the same request doesn't bring the notice back.
+        messages.emit("""{"type":"command_result","requestId":"cast-2","ok":false,"error":"unsupported"}""")
+        runCurrent()
+        assertNull(coordinator.playbackFailure.value)
+    }
+
+    @Test fun rejectionCodesMapToFixedSentences() {
+        assertEquals("The TV couldn't read this cast. Try casting it again.", ReceiverPlaybackFailures.rejectionMessage("invalid_command"))
+        assertEquals("The TV is busy. Try again in a moment.", ReceiverPlaybackFailures.rejectionMessage("queue_full"))
+        assertEquals("The TV didn't start playback. Try casting it again.", ReceiverPlaybackFailures.rejectionMessage("http://secret"))
+        assertEquals("The TV didn't start playback. Try casting it again.", ReceiverPlaybackFailures.rejectionMessage(null))
+    }
+
     @Test fun missingNullBlankAndNonStringReasonsUseGenericMessageWithoutRejectingStatus() = runTest {
         for (value in listOf(null, "null", "\" \\n \\t \"", "403", "{\"message\":\"no\"}", "true")) {
             val messages = MutableSharedFlow<String>(extraBufferCapacity = 2)
