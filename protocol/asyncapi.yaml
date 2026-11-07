@@ -312,6 +312,7 @@ components:
         - $ref: '#/components/schemas/SubtitleFontBegin'
         - $ref: '#/components/schemas/SubtitleFontChunk'
         - $ref: '#/components/schemas/SubtitleFontEnd'
+        - $ref: '#/components/schemas/SubtitleFontRemove'
         - $ref: '#/components/schemas/LogsQuery'
         - $ref: '#/components/schemas/LogsClear'
     ReceiverFrame:
@@ -1132,15 +1133,18 @@ components:
         size: { type: string, description: 'Known: small, medium (default), large, extra_large.' }
         background: { type: string, description: 'Known: none (default), translucent, solid.' }
         edge: { type: string, description: 'Known: outline (default), shadow, none.' }
-        font: { type: string, description: "Known: default, custom (the receiver's installed font, named in customFont)." }
+        font: { type: string, description: "Known: default, custom (one of the receiver's installed fonts, named in customFont)." }
         customFont:
           type: string
           maxLength: 128
-          description: Family name of the installed custom font; present exactly when font is custom.
-        installedFont:
-          type: string
-          maxLength: 128
-          description: Receiver reports only. The installed custom font's family, selected or not.
+          description: >-
+            Family name of the selected custom font; present exactly when font is custom. A family
+            that isn't installed on the receiver reads as the default font.
+        installedFonts:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 128 }
+          description: Receiver reports only. Installed custom font families, selected or not.
         overrideStyled:
           type: boolean
           description: Also restyle subtitles that carry their own styling (ASS/SSA, styled WebVTT/TTML).
@@ -1174,12 +1178,23 @@ components:
       type: object
       description: >-
         All bytes were sent. The receiver checks the size, checksum and that the bytes are a font,
-        installs it in its single custom-font slot, selects it, and answers subtitle_font_result;
-        on success it also sends subtitle_style to every authenticated sender.
+        adds it to its fonts (replacing one of the same family; at most 5 fonts and 30 MiB in all),
+        selects it, and answers subtitle_font_result; on success it also sends subtitle_style to
+        every authenticated sender.
       required: [type, transferId]
       properties:
         type: { const: subtitle_font_end }
         transferId: { type: string, maxLength: 128 }
+      additionalProperties: false
+    SubtitleFontRemove:
+      type: object
+      description: >-
+        Uninstalls a custom font. A style that used it switches to the default font; the receiver
+        sends subtitle_style, with the remaining installedFonts, to every authenticated sender.
+      required: [type, family]
+      properties:
+        type: { const: subtitle_font_remove }
+        family: { type: string, maxLength: 128 }
       additionalProperties: false
     SubtitleFontAck:
       type: object
@@ -1194,7 +1209,8 @@ components:
       type: object
       description: >-
         Sent only to the sending connection. Errors: too_large, invalid_chunk, unknown_transfer,
-        checksum_mismatch, invalid_font. A failure leaves any installed font unchanged.
+        checksum_mismatch, invalid_font, font_limit (5 fonts or 30 MiB already installed). A failure
+        leaves the installed fonts unchanged.
       required: [type, transferId, ok]
       properties:
         type: { const: subtitle_font_result }

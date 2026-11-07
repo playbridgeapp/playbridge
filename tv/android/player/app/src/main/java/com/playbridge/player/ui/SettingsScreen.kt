@@ -63,6 +63,7 @@ fun SettingsScreen(
     // Subtitle style: TV-wide, also changed by a paired phone.
     val subtitleStyles = remember { SubtitleStyleStore.get(context) }
     val subtitleStyle by subtitleStyles.style.collectAsState()
+    val installedFonts by subtitleStyles.installedFonts.collectAsState()
 
     // Settings States
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
@@ -367,27 +368,23 @@ fun SettingsScreen(
                                 },
                             )
                         }
-                        subtitleStyles.customFontFamily?.let { family ->
-                            item {
-                                SettingDropdownItem(
-                                    label = "Subtitle Font",
-                                    description = "Custom fonts are added from the PlayBridge phone app. Characters a font lacks use the TV's fonts.",
-                                    options = listOf(
-                                        SubtitleStyle.Font.DEFAULT.wire to "Default",
-                                        SubtitleStyle.Font.CUSTOM.wire to family,
-                                    ),
-                                    selected = subtitleStyle.font.wire,
-                                    onSelected = { wire ->
-                                        subtitleStyles.set(
-                                            if (wire == SubtitleStyle.Font.CUSTOM.wire) {
-                                                subtitleStyle.copy(font = SubtitleStyle.Font.CUSTOM, customFont = family)
-                                            } else {
-                                                subtitleStyle.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null)
-                                            },
-                                        )
-                                    },
-                                )
-                            }
+                        if (installedFonts.isNotEmpty()) item {
+                            SettingDropdownItem(
+                                label = "Subtitle Font",
+                                description = "Custom fonts are added and removed from the PlayBridge phone app. Characters a font lacks use the TV's fonts.",
+                                options = listOf(SubtitleStyle.Font.DEFAULT.wire to "Default") +
+                                    installedFonts.map { it to it },
+                                selected = subtitleStyle.customFont ?: SubtitleStyle.Font.DEFAULT.wire,
+                                onSelected = { choice ->
+                                    subtitleStyles.set(
+                                        if (choice in installedFonts) {
+                                            subtitleStyle.copy(font = SubtitleStyle.Font.CUSTOM, customFont = choice)
+                                        } else {
+                                            subtitleStyle.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null)
+                                        },
+                                    )
+                                },
+                            )
                         }
                         item {
                             SettingDropdownItem(

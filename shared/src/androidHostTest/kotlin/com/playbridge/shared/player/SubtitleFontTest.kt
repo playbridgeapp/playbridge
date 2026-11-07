@@ -38,11 +38,12 @@ class SubtitleFontTest {
     }
 
     @Test
-    fun receivedFontIsCheckedAndInstalledInOneSlot() {
+    fun receivedFontIsCheckedAndAddedToTheLibrary() {
         val filesDir = Files.createTempDirectory("font").toFile()
         try {
+            val library = SubtitleFontLibrary(filesDir)
             val bytes = font("Tajawal") + ByteArray(SUBTITLE_FONT_CHUNK_BYTES) // spans two chunks
-            val receiver = SubtitleFontReceiver(filesDir)
+            val receiver = SubtitleFontReceiver(library::add)
             assertEquals(SubtitleFontReceiver.Result.Ack(0), receiver.begin("t1", bytes.size, SubtitleFontReceiver.sha256(bytes)))
             var offset = 0
             while (offset < bytes.size) {
@@ -52,41 +53,65 @@ class SubtitleFontTest {
                 offset = end
             }
             assertEquals(SubtitleFontReceiver.Result.Installed("Tajawal"), receiver.end("t1"))
-            assertEquals("custom-subtitle.ttf", customSubtitleFontFile(filesDir)?.name)
-
-            // A replacement takes the slot; a non-font leaves the installed one alone.
-            assertEquals("Amiri", installCustomSubtitleFont(filesDir, font("Amiri", version = 0x4F54544F)))
-            assertEquals(listOf("custom-subtitle.otf"), subtitleFontsDir(filesDir).list()?.toList())
-            assertNull(installCustomSubtitleFont(filesDir, "not a font".toByteArray()))
-            assertEquals(listOf("custom-subtitle.otf"), subtitleFontsDir(filesDir).list()?.toList())
+            assertEquals(listOf("Tajawal"), library.families())
         } finally {
             filesDir.deleteRecursively()
         }
     }
 
     @Test
-    fun badTransfersFail() {
+    fun libraryKeepsFiveFontsAndLinksOnlyTheSelectedOneForMpv() {
         val filesDir = Files.createTempDirectory("font").toFile()
         try {
-            val receiver = SubtitleFontReceiver(filesDir)
-            assertEquals(SubtitleFontReceiver.Result.Failed("too_large"), receiver.begin("big", MAX_SUBTITLE_FONT_BYTES + 1, "00"))
+            val library = SubtitleFontLibrary(filesDir)
+            listOf("Amiri", "Cairo", "Lato", "Noto Sans", "Tajawal").forEach {
+                assertEquals(SubtitleFontLibrary.AddResult.Added(it), library.add(font(it)))
+            }
+            assertEquals(SubtitleFontLibrary.AddResult.Failed("font_limit"), library.add(font("Ubuntu")))
+            // The same family replaces its file, so it never counts twice.
+            assertEquals(SubtitleFontLibrary.AddResult.Added("Cairo"), library.add(font("Cairo", version = 0x4F54544F)))
+            assertEquals(SubtitleFontLibrary.AddResult.Failed("invalid_font"), library.add("not a font".toByteArray()))
+            assertEquals(listOf("Amiri", "Cairo", "Lato", "Noto Sans", "Tajawal"), library.families())
 
-            val bytes = font("Cairo")
-            receiver.begin("t", bytes.size, SubtitleFontReceiver.sha256(bytes))
-            // Out of order: the transfer is dropped.
-            val late = Base64.getEncoder().encodeToString(bytes.copyOfRange(4, bytes.size))
-            assertEquals(SubtitleFontReceiver.Result.Failed("invalid_chunk"), receiver.chunk("t", 4, late))
-            assertEquals(SubtitleFontReceiver.Result.Failed("unknown_transfer"), receiver.end("t"))
+            assertTrue(library.select("Cairo"))
+            assertEquals(listOf("custom-subtitle.otf"), subtitleFontsDir(filesDir).list()?.toList())
+            assertTrue(library.select("Lato"))
+            assertEquals(listOf("custom-subtitle.ttf"), subtitleFontsDir(filesDir).list()?.toList())
+            assertEquals(false, library.select("Ubuntu"))
 
-            // Wrong checksum, then a well-formed transfer of something that isn't a font.
-            receiver.begin("t", bytes.size, "0".repeat(64))
-            receiver.chunk("t", 0, Base64.getEncoder().encodeToString(bytes))
-            assertEquals(SubtitleFontReceiver.Result.Failed("checksum_mismatch"), receiver.end("t"))
-            val text = "not a font".toByteArray()
-            receiver.begin("u", text.size, SubtitleFontReceiver.sha256(text))
-            receiver.chunk("u", 0, Base64.getEncoder().encodeToString(text))
-            assertEquals(SubtitleFontReceiver.Result.Failed("invalid_font"), receiver.end("u"))
+            // Removing the selected font clears mpv's copy; a new font then fits.
+            assertTrue(library.remove("Lato"))
             assertNull(customSubtitleFontFile(filesDir))
+            assertEquals(SubtitleFontLibrary.AddResult.Added("Ubuntu"), library.add(font("Ubuntu")))
+            assertTrue(library.select(null))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theTotalSizeIsCapped() {
+        val filesDir = Files.createTempDirectory("font").toFile()
+        try {
+            val library = SubtitleFontLibrary(filesDir)
+            val nineMb = ByteArray(9 * 1024 * 1024)
+            listOf("A", "B", "C").forEach { assertEquals(SubtitleFontLibrary.AddResult.Added(it), library.add(font(it) + nineMb)) }
+            assertEquals(SubtitleFontLibrary.AddResult.Failed("font_limit"), library.add(font("D") + nineMb))
+            assertEquals(SubtitleFontLibrary.AddResult.Added("D"), library.add(font("D")))
+        } finally {
+            filesDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theEarlierSingleFontMovesIntoTheLibrary() {
+        val filesDir = Files.createTempDirectory("font").toFile()
+        try {
+            subtitleFontsDir(filesDir).mkdirs()
+            java.io.File(subtitleFontsDir(filesDir), "custom-subtitle.ttf").writeBytes(font("Cairo"))
+            val library = SubtitleFontLibrary(filesDir)
+            assertEquals(listOf("Cairo"), library.families())
+            assertEquals("custom-subtitle.ttf", customSubtitleFontFile(filesDir)?.name)
         } finally {
             filesDir.deleteRecursively()
         }

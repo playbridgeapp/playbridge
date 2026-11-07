@@ -1,6 +1,8 @@
 package com.playbridge.sender.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,7 +84,7 @@ internal fun SubtitleStyleEditor(
     }
 }
 
-/** Default or the installed custom font, and a button to pick a font file. */
+/** Default or one of the installed custom fonts, with remove buttons and a button to add a font file. */
 @Composable
 private fun FontChoice(
     style: SubtitleStyle,
@@ -93,27 +95,51 @@ private fun FontChoice(
     val picker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(font.onPick) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        val installed = font.installed
-        if (installed != null) {
-            StyleChoice(
-                "Font", style.font, SubtitleStyle.Font.entries, enabled && !font.busy,
-                label = { if (it == SubtitleStyle.Font.CUSTOM) installed else "Default" },
-            ) {
-                onChange(style.copy(font = it, customFont = installed.takeIf { _ -> it == SubtitleStyle.Font.CUSTOM }))
+    val usable = enabled && !font.busy
+    Column {
+        Text("Font", style = MaterialTheme.typography.bodyLarge)
+        FontRow("Default", style.font == SubtitleStyle.Font.DEFAULT, usable, onRemove = null) {
+            onChange(style.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null))
+        }
+        font.installed.forEach { family ->
+            FontRow(family, style.customFont == family, usable, onRemove = { font.onRemove(family) }) {
+                onChange(style.copy(font = SubtitleStyle.Font.CUSTOM, customFont = family))
             }
-        } else {
-            Text("Font", style = MaterialTheme.typography.bodyLarge)
         }
         androidx.compose.material3.OutlinedButton(
             onClick = { picker.launch(FONT_MIME_TYPES) },
-            enabled = enabled && !font.busy,
-        ) { Text(if (installed == null) "Add a font file…" else "Replace font file…") }
+            enabled = usable && font.installed.size < com.playbridge.shared.player.MAX_SUBTITLE_FONTS,
+            modifier = Modifier.padding(top = 4.dp),
+        ) { Text("Add a font file…") }
         Text(
-            font.status ?: "A .ttf or .otf file up to 10 MB. Characters it lacks use the device's fonts.",
+            font.status ?: "Up to ${com.playbridge.shared.player.MAX_SUBTITLE_FONTS} .ttf or .otf files, 30 MB in all. " +
+                "Characters a font lacks use the device's fonts.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
         )
+    }
+}
+
+@Composable
+private fun FontRow(name: String, selected: Boolean, enabled: Boolean, onRemove: (() -> Unit)?, onSelect: () -> Unit) {
+    androidx.compose.foundation.layout.Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected, enabled = enabled, role = androidx.compose.ui.semantics.Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.RadioButton(selected = selected, onClick = null, enabled = enabled)
+        Text(name, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1)
+        if (onRemove != null) {
+            androidx.compose.material3.IconButton(onClick = onRemove, enabled = enabled) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Default.Delete,
+                    contentDescription = "Remove $name",
+                )
+            }
+        }
     }
 }
 
@@ -215,12 +241,12 @@ internal fun TvSubtitleStyleSection(connected: Boolean) {
     }
 }
 
-/** Sends a picked font to the TV, which installs and selects it. */
+/** Sends a picked font to the TV, which installs and selects it; removes TV fonts. */
 @Composable
 private fun tvFontControls(coordinator: com.playbridge.sender.connection.ConnectionCoordinator): SubtitleFontControls {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val installed by coordinator.tvInstalledFont.collectAsState()
+    val installed by coordinator.tvInstalledFonts.collectAsState()
     val progress by coordinator.tvFontUploadProgress.collectAsState()
     var error by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     val sending = progress?.let { (sent, total) -> "Sending the font to the TV… ${sent * 100 / total.coerceAtLeast(1)}%" }
@@ -238,6 +264,10 @@ private fun tvFontControls(coordinator: com.playbridge.sender.connection.Connect
                         .onFailure { error = fontErrorMessage(it.message) }
                 }
             }
+        },
+        onRemove = { family ->
+            error = null
+            coordinator.removeTvSubtitleFont(family)
         },
     )
 }
