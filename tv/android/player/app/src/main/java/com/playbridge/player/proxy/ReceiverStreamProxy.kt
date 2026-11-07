@@ -17,6 +17,9 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -40,6 +43,11 @@ internal class ReceiverStreamProxy private constructor(
     private val nextRequestId = AtomicInteger(1)
     private val pending = ConcurrentHashMap<String, Continuation<JSONObject>>()
     private val closed = AtomicLong(0)
+
+    // Native calls hold the read lock; the poll thread frees the handle under the write lock once
+    // its loop ends, so no call can reach freed memory.
+    private val nativeLock = ReentrantReadWriteLock()
+    private var freed = false
     private val leaseScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val leases = PlaybackLeaseRegistry(leaseScope, ::renew) { id ->
         revoke(id)
@@ -120,10 +128,17 @@ internal class ReceiverStreamProxy private constructor(
             }
         }
         pending.clear()
-        if (handle != 0L) {
-            runCatching { ReceiverProxyNative.cancel(handle) }
-            runCatching { ReceiverProxyNative.free(handle) }
-        }
+        // Wakes the poll thread, which frees the handle.
+        runCatching { withHandle(ReceiverProxyNative::cancel) }
+    }
+
+    private inline fun <T> withHandle(block: (Long) -> T): T? =
+        nativeLock.read { if (freed || handle == 0L) null else block(handle) }
+
+    private fun release() = nativeLock.write {
+        if (freed || handle == 0L) return@write
+        freed = true
+        runCatching { ReceiverProxyNative.free(handle) }
     }
 
     private suspend fun submit(command: String, fields: Map<String, Any?>): JSONObject {
@@ -140,7 +155,7 @@ internal class ReceiverStreamProxy private constructor(
             suspendCoroutine { cont ->
                 pending[requestId] = cont
                 val ok = try {
-                    ReceiverProxyNative.submitJson(handle, payload.toString())
+                    withHandle { ReceiverProxyNative.submitJson(it, payload.toString()) } ?: false
                 } catch (e: Throwable) {
                     pending.remove(requestId)
                     cont.resumeWithException(e)
@@ -183,15 +198,20 @@ internal class ReceiverStreamProxy private constructor(
     }
 
     private fun pollLoop() {
-        while (closed.get() == 0L && handle != 0L) {
-            val json = try {
-                ReceiverProxyNative.nextEvent(handle, 200L)
-            } catch (e: Throwable) {
-                logWarn("nextEvent failed: ${e.message}")
-                break
+        try {
+            while (closed.get() == 0L) {
+                val json = try {
+                    withHandle { ReceiverProxyNative.nextEvent(it, 200L) }
+                } catch (e: Throwable) {
+                    logWarn("nextEvent failed: ${e.message}")
+                    break
+                }
+                if (json.isNullOrEmpty()) continue
+                handleEvent(json)
             }
-            if (json.isNullOrEmpty()) continue
-            handleEvent(json)
+        } finally {
+            shutdown()
+            release()
         }
     }
 
