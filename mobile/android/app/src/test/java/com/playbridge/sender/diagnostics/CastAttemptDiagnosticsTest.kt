@@ -5,6 +5,7 @@ import com.playbridge.sender.cast.dlna.dlnaActionFailureFromEvent
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,6 +34,13 @@ class CastAttemptDiagnosticsTest {
         assertFalse(isNativePlaybackStartCommand("""{"type":"command","action":"playlist_jump","payload":{"index":1}}"""))
         assertFalse(isNativePlaybackStartCommand("""{"type":"command","action":"control","payload":{"action":"play"}}"""))
         assertFalse(isNativePlaybackStartCommand("not json"))
+    }
+
+    @Test
+    fun playlistRequestIdIsReadOnlyFromPlaylists() {
+        assertEquals("r1", nativePlaybackRequestId("""{"type":"command","action":"playlist","requestId":"r1","payload":{"items":[]}}"""))
+        assertNull(nativePlaybackRequestId("""{"type":"command","action":"playlist","payload":{"items":[]}}"""))
+        assertNull(nativePlaybackRequestId("""{"type":"command","action":"queue_add","requestId":"r2","payload":{"items":[]}}"""))
     }
 
     @Test

@@ -197,10 +197,12 @@ private fun envelope(action: String, payloadJson: String, requestId: String? = n
         put("payload", Json.parseToJsonElement(payloadJson))
     }.toString()
 
-fun createPlaylistCommandJson(payload: PlaylistPayload): String =
+/** Carries a fresh [requestId] so the receiver can answer with a `command_result` if it rejects it. */
+fun createPlaylistCommandJson(payload: PlaylistPayload, requestId: String = UUID.randomUUID().toString()): String =
     envelope(
         "playlist",
         playlistAdapter.toJson(payload.copy(items = payload.items.map(PlayPayload::withResolvedMediaKind))),
+        requestId,
     )
 
 /**

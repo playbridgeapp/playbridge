@@ -106,13 +106,21 @@ internal fun classifyExternalPlayback(
     return outcome to stoppedBeforePlayback
 }
 
-internal fun isNativePlaybackStartCommand(message: String): Boolean {
-    if (!message.contains("\"playlist\"")) return false
+internal fun isNativePlaybackStartCommand(message: String): Boolean = nativePlaybackStartEnvelope(message) != null
+
+/** The requestId of a native playback start, if [message] is one and carries it. */
+internal fun nativePlaybackRequestId(message: String): String? =
+    nativePlaybackStartEnvelope(message)?.get("requestId")?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotEmpty)
+
+private fun nativePlaybackStartEnvelope(message: String): JsonObject? {
+    if (!message.contains("\"playlist\"")) return null
     return runCatching {
-        val envelope = Json.parseToJsonElement(message) as? JsonObject ?: return@runCatching false
-        envelope["type"]?.jsonPrimitive?.contentOrNull == "command" &&
-            envelope["action"]?.jsonPrimitive?.contentOrNull == "playlist"
-    }.getOrDefault(false)
+        val envelope = Json.parseToJsonElement(message) as? JsonObject ?: return@runCatching null
+        envelope.takeIf {
+            it["type"]?.jsonPrimitive?.contentOrNull == "command" &&
+                it["action"]?.jsonPrimitive?.contentOrNull == "playlist"
+        }
+    }.getOrNull()
 }
 
 /** Private, bounded storage for reports users may explicitly share from Cast History. */

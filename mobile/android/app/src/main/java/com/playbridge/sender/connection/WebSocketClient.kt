@@ -8,6 +8,7 @@ import com.playbridge.sender.cast.proxy.NativePlaybackLeases
 import com.playbridge.sender.cast.proxy.PhoneSenderServices
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import com.playbridge.sender.diagnostics.isNativePlaybackStartCommand
+import com.playbridge.sender.diagnostics.nativePlaybackRequestId
 import com.playbridge.sender.history.CastReplayStore
 import com.playbridge.sender.history.replaySourceFromNativeCommand
 import com.playbridge.sender.logging.DebugNetworkLogger
@@ -675,9 +676,21 @@ class WebSocketClient(
         Log.d(TAG, "$direction ${WireFrameLog.format(frame, BuildConfig.DEBUG)}")
     }
 
+    // Request IDs of recent playlists, so a rejecting command_result can be shown as a playback failure.
+    private val playbackRequestIds = object : LinkedHashSet<String>() {
+        override fun add(element: String): Boolean = super.add(element).also {
+            if (size > 32) remove(first())
+        }
+    }
+
+    /** True once for a requestId this client sent with a playlist. */
+    @Synchronized
+    fun takePlaybackRequest(requestId: String): Boolean = playbackRequestIds.remove(requestId)
+
     @Synchronized
     fun send(message: String): Boolean {
         val startsPlayback = isNativePlaybackStartCommand(message)
+        if (startsPlayback) nativePlaybackRequestId(message)?.let(playbackRequestIds::add)
         val ws = webSocket
         if (ws == null) {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
