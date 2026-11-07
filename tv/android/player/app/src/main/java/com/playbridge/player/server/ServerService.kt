@@ -27,8 +27,10 @@ import com.playbridge.player.mirror.ScreenMirrorReceiverController
 import com.playbridge.player.R
 import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.shared.protocol.IncomingMessage
+import com.playbridge.shared.protocol.createCommandResultJson
 import com.playbridge.shared.protocol.createContextJson
 import com.playbridge.shared.protocol.encodeSubtitleResourceJson
+import com.playbridge.shared.protocol.rejection
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import com.playbridge.player.userscript.UserScriptController
@@ -620,7 +622,9 @@ class ServerService : Service() {
             msg is IncomingMessage.QueueQuery || msg is IncomingMessage.QueueRemove ||
             msg is IncomingMessage.QueueMove || msg is IncomingMessage.QueueClear
         val isLateSubtitle = msg is IncomingMessage.Control && msg.payload.command == "add_subtitle"
-        command.requestId?.takeIf { isQueueV1 || isLateSubtitle }?.let { requestId ->
+        // A retried playlist must not start playback twice.
+        val isPlaylist = msg is IncomingMessage.Playlist
+        command.requestId?.takeIf { isQueueV1 || isLateSubtitle || isPlaylist }?.let { requestId ->
             val cached = synchronized(commandResultCache) { commandResultCache[requestId] }
             if (cached != null) {
                 scope.launch { webSocketServer?.sendTo(command.connectionId, cached) }
@@ -906,14 +910,28 @@ class ServerService : Service() {
                     )
                 }
 
+                if (payload.items.isEmpty() || payload.items.any { it.url.isBlank() } ||
+                    payload.start_index !in payload.items.indices
+                ) {
+                    FileLogger.w(TAG, "Rejecting playlist without playable items")
+                    completeCommand(command, ok = false, error = "invalid_command")
+                    return
+                }
+
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
 
                 // Single source of truth for the launch intent (sets PlaylistStore, picks the
                 // engine, maps every per-item extra). History replay builds the exact same
                 // intent from the stored payload — see PlayerLauncher.
-                val playerIntent = com.playbridge.player.player.PlayerLauncher
-                    .buildPlayerIntent(this, payload, tvPref)
+                val playerIntent = try {
+                    com.playbridge.player.player.PlayerLauncher
+                        .buildPlayerIntent(this, payload, tvPref)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Couldn't build the player launch: ${e.javaClass.simpleName}")
+                    completeCommand(command, ok = false, error = "invalid_command")
+                    return
+                }
                 val previousPlayerEngine = activePlayerEngine
                 val targetPlayerEngine = playerIntent
                     .getStringExtra(com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER)
@@ -933,8 +951,11 @@ class ServerService : Service() {
                     // the private process when no permanent host exists yet. Once the host is
                     // active, replacement intents go straight to it and it owns renderer swaps.
                     launchAfterMpvProcessExit(playerIntent, launchReason)
+                    completeCommand(command, ok = true)
+                } else if (launchActivityFromBackground(playerIntent, launchReason)) {
+                    completeCommand(command, ok = true)
                 } else {
-                    launchActivityFromBackground(playerIntent, launchReason)
+                    completeCommand(command, ok = false, error = "unsupported")
                 }
             }
             is IncomingMessage.QueueAdd -> {
@@ -1078,6 +1099,7 @@ class ServerService : Service() {
                     scheduleVolumeState()
                 } else {
                     FileLogger.w(TAG, "Ignoring unknown or unsupported command")
+                    completeCommand(command, ok = false, error = msg.rejection())
                 }
             }
         }
@@ -1313,14 +1335,15 @@ class ServerService : Service() {
         }
     }
 
-    private fun launchActivityFromBackground(intent: Intent, description: String) {
+    /** Returns false when neither the direct launch nor the full-screen notification could be posted. */
+    private fun launchActivityFromBackground(intent: Intent, description: String): Boolean {
         synchronized(contextLock) { activityLaunchesInFlight++ }
         try {
             // Attempt 1: direct startActivity using the visible-overlay BAL exemption.
             try {
                 startActivity(intent)
                 FileLogger.i(TAG, "startActivity succeeded for: $description")
-                return // startActivity worked — do not also fire the notification, which would
+                return true // startActivity worked — do not also fire the notification, which would
                        // deliver a second intent to the already-running activity via onNewIntent.
             } catch (e: Exception) {
                 FileLogger.w(TAG, "startActivity failed, falling back to fullScreenIntent: ${e.message}")
@@ -1345,10 +1368,25 @@ class ServerService : Service() {
                 .build()
 
             val manager = getSystemService(NotificationManager::class.java)
-            manager.notify(NOTIFICATION_ID_LAUNCH, notification)
+            return try {
+                manager.notify(NOTIFICATION_ID_LAUNCH, notification)
+                true
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Couldn't launch $description: ${e.javaClass.simpleName}")
+                false
+            }
         } finally {
             synchronized(contextLock) { activityLaunchesInFlight-- }
         }
+    }
+
+    /** Answers [command]'s requestId, if it has one; the result is cached so a retry gets the same answer. */
+    private fun completeCommand(command: WebSocketServer.RoutedCommand, ok: Boolean, error: String? = null) {
+        val requestId = command.requestId ?: return
+        val result = createCommandResultJson(requestId, ok, error)
+        pendingCommandIds.remove(requestId)
+        synchronized(commandResultCache) { commandResultCache[requestId] = result }
+        scope.launch { webSocketServer?.sendTo(command.connectionId, result) }
     }
 
     private fun createNotificationChannel() {

@@ -320,6 +320,23 @@ fun createUserScriptJson(name: String, content: String): String =
         put("content", content)
     }.toString()
 
+/** TV → sender: whether the command with [requestId] was accepted; [error] is a `CommandResult` code. */
+fun createCommandResultJson(requestId: String, ok: Boolean, error: String? = null): String =
+    buildJsonObject {
+        put("type", "command_result")
+        put("requestId", requestId)
+        put("ok", ok)
+        if (error != null) put("error", error)
+    }.toString()
+
+/** The `command_result` error for a command the receiver couldn't route: malformed or unknown. */
+fun IncomingMessage.Unknown.rejection(): String =
+    if (type.startsWith("parse_error") || type.startsWith("missing_") || type.endsWith("_parse_error")) {
+        "invalid_command"
+    } else {
+        "unsupported"
+    }
+
 /** Phone → TV: list the installed user scripts. */
 fun createUserScriptQueryJson(): String = """{"type":"user_script_query"}"""
 

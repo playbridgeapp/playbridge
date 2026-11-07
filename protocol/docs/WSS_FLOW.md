@@ -312,6 +312,13 @@ A controller may add a `requestId` to a command. Supporting receivers return exa
 `playlist_status` broadcast to all authenticated controllers. Receivers should make repeated
 request IDs idempotent for the lifetime of their bounded result cache.
 
+This covers `playlist` too: an accepted playlist answers `ok: true` once the receiver has started
+opening its player (playback errors after that arrive as `status` with `state: error`). A
+rejected one answers `ok: false` with `invalid_command` (no items, a blank URL, an out-of-range
+`startIndex` or a payload that doesn't parse), `queue_full` (the receiver's command queue is
+full) or `unsupported` (the player couldn't be opened, or the action is unknown). A retried
+`requestId` gets the cached answer and doesn't start playback twice.
+
 V1 queue snapshots remain complete and compact: at most 200 active items, at most 50 items in one
 batch append, and no media URLs or request headers in status frames. Larger catalogs should lazily
 append a bounded window. Paging and delta snapshots require a future advertised capability.
