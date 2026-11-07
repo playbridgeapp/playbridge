@@ -391,21 +391,17 @@ fun AppNavHost(
             session?.exitFullScreenMode()
         }
     }
-    // Tabs/Extensions use the Activity's Scaffold toolbar; other screens own theirs.
-    val bannerTopPadding = if (currentScreen in listOf(Screen.Tabs, Screen.Extensions)) {
-        innerPadding.calculateTopPadding()
-    } else 0.dp
-    Column(Modifier.fillMaxSize().padding(top = if (playbackFailure != null) bannerTopPadding else 0.dp)) {
-        playbackFailure?.let { failure ->
-            com.playbridge.sender.ui.ReceiverPlaybackFailureBanner(
-                message = failure.message,
-                onDismiss = connectionCoordinator::dismissPlaybackFailure,
-                modifier = if (bannerTopPadding > 0.dp) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars),
-            )
-        }
+    playbackFailure?.let { failure ->
+        val castSession by connectionViewModel.castSessionManager.sessionInfo.collectAsStateWithLifecycle()
+        com.playbridge.sender.ui.ReceiverPlaybackFailureDialog(
+            deviceName = castSession.deviceName,
+            message = failure.message,
+            onDismiss = connectionCoordinator::dismissPlaybackFailure,
+        )
+    }
+    Column(Modifier.fillMaxSize()) {
     Box(
         modifier = Modifier.weight(1f).fillMaxWidth()
-            .then(if (playbackFailure != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)
             .observeFullscreenInteractions(fullscreenBrowser) { fullscreenInteraction++ },
     ) {
     AnimatedContent(
