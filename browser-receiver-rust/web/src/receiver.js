@@ -3,6 +3,7 @@ import videojs from 'video.js';
 import { detectStreamKind, normalizeReceiverMedia, sourceTypeForKind } from './shared/media.js';
 import { createLoadLifecycle, normalizePlaybackState } from './shared/lifecycle.js';
 import { createReceiverPresentation, redactUrl } from './shared/presentation.js';
+import { bufferedAhead, createStallWatchdog, playbackErrorMessage } from './shared/health.js';
 
 (function () {
   var playerWrap = document.getElementById('player-wrap');
@@ -25,6 +26,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
   var currentStreamKind = null;
   var lastStatusAt = 0;
   var mediaActive = false;
+  var stallWatchdog = createStallWatchdog();
   var statusHideTimer = null;
   var lastPlaybackStatusKey = null;
   /** Bumps on every load/teardown so late media events ignore stale work. */
@@ -300,6 +302,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
   function teardownPlayer() {
     loadLifecycle.cancel();
     mediaActive = false;
+    stallWatchdog.stop();
     currentMedia = null;
     currentStreamKind = null;
     stopStatsLoop();
@@ -518,7 +521,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
    */
   function loadWithVideoJs(requestId, url, kind, generation) {
     if (!supportsVideoJs()) {
-      reportPlaybackError(requestId, null, 'This browser cannot play adaptive streams');
+      reportPlaybackError(requestId, null, "This browser can't play this stream type.");
       return Promise.reject(new Error('video.js unsupported'));
     }
     ensureVideoElement();
@@ -573,9 +576,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
       vjsPlayer.one('error', function () {
         if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
         var err = vjsPlayer.error();
-        var msg =
-          (err && (err.message || (err.code != null && 'Media error ' + err.code))) ||
-          'Playback error';
+        var msg = playbackErrorMessage(err, "The stream couldn't be started.");
         reportPlaybackError(requestId, err, msg);
         done(err || new Error(msg));
       });
@@ -629,6 +630,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     progressLoadId = requestId;
     var generation = loadLifecycle.current();
     mediaActive = true;
+    stallWatchdog.start();
     try {
       var normalized = normalizeReceiverMedia(media, { baseUrl: location.href });
       media = Object.assign({}, media, {
@@ -642,7 +644,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
       });
     } catch (error) {
       mediaActive = false;
-      reportPlaybackError(requestId, error, 'Invalid media');
+      reportPlaybackError(requestId, error, "The cast didn't include playable media.");
       return;
     }
     currentTitle = media.title || null;
@@ -726,7 +728,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
         })
         .catch(function (error) {
           if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
-          reportPlaybackError(requestId, error, 'Could not start adaptive playback');
+          reportPlaybackError(requestId, error, "The stream couldn't be started.");
         });
       return;
     }
@@ -740,7 +742,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     try {
       player.load();
     } catch (error) {
-      reportPlaybackError(requestId, error, 'Could not load media');
+      reportPlaybackError(requestId, error, "The video couldn't be loaded.");
       return;
     }
     sendStatus(requestId, 'buffering');
@@ -1521,20 +1523,9 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     }
   }
 
-  function errorMessage(error, fallback) {
-    if (!error) return fallback || 'Playback error';
-    if (typeof error === 'string') return error;
-    if (error.message) return String(error.message);
-    if (error.code != null) return 'Error ' + error.code;
-    try {
-      return JSON.stringify(error);
-    } catch (_) {
-      return fallback || 'Playback error';
-    }
-  }
-
   function reportPlaybackError(requestId, error, fallback) {
-    var message = errorMessage(error, fallback || 'Playback error');
+    stallWatchdog.stop();
+    var message = playbackErrorMessage(error, fallback);
     showStatus(message, true);
     send({
       type: 'error',
@@ -1573,9 +1564,27 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     el.addEventListener('error', function () {
       if (!mediaActive) return;
       setPlaybackStatus('error');
-      reportPlaybackError(null, el.error, 'Media error');
+      reportPlaybackError(null, el.error);
     });
   }
+
+  function checkStall() {
+    var el = mediaElement();
+    if (!mediaActive || !el) return;
+    var position = el.currentTime || 0;
+    var message = stallWatchdog.observe({
+      position: position,
+      buffered: bufferedAhead(el.buffered, position),
+      paused: el.paused,
+      seeking: el.seeking,
+      ended: el.ended
+    });
+    if (!message) return;
+    setPlaybackStatus('error');
+    reportPlaybackError(progressLoadId, null, message);
+  }
+
+  window.setInterval(checkStall, 1000);
 
   playOverlay.onclick = function () {
     playOverlay.style.display = 'none';
