@@ -5,6 +5,7 @@ import 'dart:ui' show ImageFilter, PlatformDispatcher;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_notifier/local_notifier.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -90,6 +91,11 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   ensurePlayBridgeMediaKitInitialized();
   await windowManager.ensureInitialized();
+  try {
+    await localNotifier.setup(appName: 'PlayBridge');
+  } catch (e) {
+    debugPrint('Notifications unavailable: $e');
+  }
 
   // Diagnostics: opt-in persistent logging (off by default). Tee debugPrint into the
   // store so existing logs are captured with no call-site changes, and record crashes.
@@ -543,6 +549,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _senderWasCasting = false;
   String? _lastReportedPlaybackError;
+  LocalNotification? _playbackErrorNotification;
   bool _wasStillWatchingPrompting = false;
 
   void _handleStillWatchingChange() {
@@ -569,6 +576,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       if (mounted) {
         final messenger = ScaffoldMessenger.maybeOf(context);
         if (playbackError != null) {
+          unawaited(_notifyPlaybackError(playbackError));
           messenger?.hideCurrentSnackBar();
           messenger?.showSnackBar(
             SnackBar(
@@ -584,6 +592,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           );
         } else {
           messenger?.hideCurrentSnackBar();
+          unawaited(_closePlaybackErrorNotification());
         }
       }
     }
@@ -660,6 +669,35 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       isRemote: true,
       localUserInitiated: true,
     ));
+  }
+
+  /// Casts from the browser extension usually happen while this window is
+  /// hidden in the tray, where the snackbar can't be seen.
+  Future<void> _notifyPlaybackError(String message) async {
+    try {
+      if (await windowManager.isVisible() && await windowManager.isFocused()) {
+        return;
+      }
+      await _closePlaybackErrorNotification();
+      final tv = _sender.selectionName;
+      final notification = LocalNotification(
+        title: tv.isEmpty ? 'Playback failed' : 'Playback failed on $tv',
+        body: message,
+      );
+      notification.onClick = () => unawaited(_showSenderScreen());
+      _playbackErrorNotification = notification;
+      await notification.show();
+    } catch (e) {
+      debugPrint('Playback error notification failed: $e');
+    }
+  }
+
+  Future<void> _closePlaybackErrorNotification() async {
+    final notification = _playbackErrorNotification;
+    _playbackErrorNotification = null;
+    try {
+      await notification?.close();
+    } catch (_) {}
   }
 
   Future<void> _initTrayAndWindow() async {
