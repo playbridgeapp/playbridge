@@ -428,6 +428,11 @@ class ReceiverServer extends ChangeNotifier {
         _sendTimeline(connectionId);
         await _publishVolume(connectionId: connectionId);
       case PlaylistCmd(:final items, :final startIndex, :final skipPreplay):
+        if (items.isEmpty || startIndex < 0 || startIndex >= items.length) {
+          _completeCommand(connectionId, requestId,
+              ok: false, error: 'invalid_command');
+          return;
+        }
         unawaited(
           screenMirror.stopForReplacement(reason: 'media_started'),
         );
@@ -443,6 +448,7 @@ class ReceiverServer extends ChangeNotifier {
         _progressReporter.configure(cmd.progressWebhook);
         _progressReporter.update(_progressSnapshot());
         _broadcastPlaylistStatus();
+        _completeCommand(connectionId, requestId, ok: true);
       case PlaylistJumpCmd(:final index, :final itemId, :final ifPlaybackId):
         if (requestId != null && player.playbackId == null) {
           _completeCommand(connectionId, requestId,
