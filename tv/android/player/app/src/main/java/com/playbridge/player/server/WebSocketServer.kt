@@ -3,6 +3,7 @@ package com.playbridge.player.server
 import android.util.Log
 import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createAuthResponseJson
+import com.playbridge.shared.protocol.createCommandResultJson
 import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
 import com.playbridge.shared.protocol.createPairingDeniedJson
 import com.playbridge.shared.protocol.createPairingChallengeJson
@@ -389,12 +390,13 @@ class WebSocketServer(
 
         override fun onMessage(conn: org.java_websocket.WebSocket, message: String) {
             if (authed.contains(conn)) {
+                var requestId: String? = null
                 try {
                     when (val msg = parseIncomingMessage(message)) {
                         is IncomingMessage.Ping -> conn.send(createPongJson())
                         is IncomingMessage.ReceiverCapabilitiesSubscribe -> capabilityPublisher.subscribe(conn)
                         else -> {
-                            val requestId = runCatching {
+                            requestId = runCatching {
                                 val json = org.json.JSONObject(message)
                                 if (!json.has("requestId")) null else json.optString("requestId")
                             }.getOrNull()
@@ -405,15 +407,23 @@ class WebSocketServer(
                             val connectionId = trackedConnections.idOf(conn) ?: return
                             if (!_commands.tryEmit(RoutedCommand(connectionId, requestId, msg))) {
                                 FileLogger.w(TAG, "Dropping command because the bounded receiver queue is full")
+                                rejectCommand(conn, requestId, "queue_full")
                             }
                         }
                     }
                 } catch (e: Exception) {
                     FileLogger.e(TAG, "Unable to process WSS command")
+                    rejectCommand(conn, requestId, "invalid_command")
                 }
                 return
             }
             handlePreAuth(conn, message)
+        }
+
+        /** Tells the sender a correlated command was not accepted; senders without a requestId get nothing. */
+        private fun rejectCommand(conn: org.java_websocket.WebSocket, requestId: String?, error: String) {
+            if (requestId == null) return
+            runCatching { conn.send(createCommandResultJson(requestId, ok = false, error = error)) }
         }
 
         override fun onMessage(conn: org.java_websocket.WebSocket, message: java.nio.ByteBuffer) {
