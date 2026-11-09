@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 playbridge-cast-core = { path = "../cast/core" }
 playbridge-cast-receiver = { path = "../cast/receiver" }
+playbridge-together = { path = "../cast/together" }
 playbridge-browser-receiver = { path = "../browser-receiver-rust" }
 stream-proxy-rust = { path = "../stream-proxy-rust" }
 serde = { version = "1", features = ["derive"] }
@@ -38,4 +39,5 @@ x509-parser = "0.18"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 semver = "1"
 tempfile = "3"
+url = "2"
 rmcp = { version = "3", default-features = false, features = ["server", "macros", "transport-io"] }

@@ -13,9 +13,6 @@ use crate::crypto::{self, MemberKeys};
 use crate::invite::check_relay_scheme;
 use crate::{Error, Result};
 
-/// PlayBridge's pairing service.
-pub const DEFAULT_PAIRING_URL: &str = "https://pair.together.playbridge.app";
-
 /// A code this receiver holds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Lobby {

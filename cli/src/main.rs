@@ -80,6 +80,7 @@ mod preferred;
 mod receive;
 mod receiver_policy;
 mod send;
+mod together;
 mod ui;
 mod update;
 mod update_installer;
@@ -419,6 +420,7 @@ async fn run(arguments: Vec<String>) -> Result<(), RunError> {
             .await
             .map_err(RunError::from),
         "atv" => run_atv(&arguments[1..]).await,
+        "together" => together::run(&arguments[1..]).await,
         "preferred" => {
             if let Some(sub) = arguments.get(1)
                 && sub == "clear"
@@ -938,6 +940,7 @@ Machine Commands:
   atv app <host> <package|uri>      Launch an app; a package id is preferred
   config <path|check>               Locate or validate UI configuration
   config skip-history [on|off]      Show or change the cast history default
+  together <host|join|pair>         Watch Together with a simulated player (see `together --help`)
 
 Global Options:
       --theme <name>               Override the configured UI theme
