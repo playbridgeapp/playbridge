@@ -141,10 +141,11 @@ and desktop senders use the link or scan the QR.
 ### Invite link
 
 ```text
-https://<room relay>/j/<room id>#<room key>
+https://<room relay>/j/<room id>#k=<room key>&h=<host signing key>
 ```
 
-The fragment never reaches the server. Rooms are created on the host's device
+The fragment never reaches the server. `h` is the host's Ed25519 public key,
+which members use to check host-signed messages (§4). Rooms are created on the host's device
 (random 128-bit ID, 256-bit key); the `Room` object starts when the first member
 connects.
 
