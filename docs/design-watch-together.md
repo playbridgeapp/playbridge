@@ -70,13 +70,24 @@ needs no new phone-to-TV protocol command.
 - Every device is a **member** of the room and connects to the Room Worker
   itself. A TV keeps playing in sync when the host's phone locks or leaves.
 - Phones are remotes and can also be screens (the phone player).
-- The **host** creates the room. Host duties pass to the earliest remaining
-  member if the host leaves.
+- The **host** creates the room. The invite carries the host's public signing
+  key, and the host signs every message that only a host may send (`load`,
+  `lock`, `change_policy`, `request_reply`, `host`). Members drop unsigned or
+  wrongly signed host messages, so a guest holding the room key still cannot act
+  as host.
+- When the host phone hands the room to one of its own TVs, it signs a
+  delegation for that TV. If the host leaves, host duties pass to the
+  earliest-joined delegated device. If none is left, the current video keeps
+  playing under the existing policy, but nobody can change the video.
 - Anyone can play, pause and seek. The host can turn on **Lock controls**, which
   overrides everything below.
 - Every member has an **owner**: the person whose phone added it. The host's
   own devices are **mine**; anything a guest adds belongs to that guest. This
   decides what playback data each member receives (§7).
+- Ownership is never self-asserted. A phone only treats a member as its own
+  when it learned that member's public key itself, over the paired LAN handoff
+  or the pairing flow it completed. A member's in-room claim of an owner is
+  ignored for credentials.
 
 ### Who can change the video
 
@@ -117,7 +128,10 @@ Nobody types on a TV.
    `together.example.workers.dev`?" The user confirms with the remote.
 4. The TV connects straight to the Room Worker. Pairing is done.
 
-The Pairing Worker never learns which room or relay the TV joined. A code alone
+An honest Pairing Worker never learns which room or relay the TV joined. A
+dishonest one could swap in its own key when a code is typed, so typed codes
+trust the pairing service. The QR carries a fingerprint of the TV's key and the
+phone checks it, so scanning does not. A code alone
 gets nothing: someone in the room has to send an invite, and the TV owner has to
 accept it.
 
@@ -141,7 +155,8 @@ connects.
 1. The host picks the video and sends it to the room.
 2. Every member loads it paused, buffers, and reports `ready` with the duration.
 3. When everyone is ready, or after 15 seconds, the room broadcasts
-   `play {position, at_room_time}` about 800 ms ahead. Late members seek to
+   `play {position, at_room_time}`, scheduled ahead by the slowest member's
+   round trip plus 500 ms (at least 800 ms). Late members seek to
    catch up.
 
 ### Clock
@@ -160,8 +175,12 @@ Each member corrects itself against the shared state
 | 150 ms to 2 s | Play at 0.95× or 1.05× until caught up |
 | Over 2 s | Seek |
 
-Members report position every 5 seconds or on change, so the room can hibernate
-between messages.
+Correction is local, so members do not stream positions. They send a message
+only when something changes (ready, buffering, seek, a correction over 2 s) and
+a `position` heartbeat every 30 seconds for the party screen. A Durable Object
+is evicted after about 10 seconds without events, so this keeps rooms
+hibernating between messages; reporting every 5 seconds would keep them awake.
+WebSocket protocol pings are answered by Cloudflare without waking the room.
 
 ### Buffering and failures
 
@@ -208,7 +227,10 @@ when it belongs to the person who shared the video, and **other** otherwise.
   IDs, member IDs, sizes and timing only.
 - The Room Worker checks a token derived from the room key (HKDF), so a room ID
   alone cannot join or spam a room.
-- Each member has its own key pair for per-member credential messages.
+- Each member has an X25519 key pair for per-member credential messages and an
+  Ed25519 key pair for signing.
+- Every sender numbers its messages (`seq`); members drop repeats and older
+  numbers, so the relay cannot replay messages.
 - Pairing codes expire after 10 minutes; code lookups are rate-limited per IP.
 - Joining a room on any relay shows its address in the join prompt.
 - The relay reports a protocol version; the app refuses incompatible relays with
@@ -232,7 +254,9 @@ One codebase, deployed two ways:
 | Rooms per IP per day | a few | configurable |
 | When the quota runs out | "The shared relay is busy. Deploy your own to keep watching." | The owner's own free quota |
 
-Both use WebSocket Hibernation and Cloudflare's free plan. Rooms close 30 minutes
+Both use SQLite-backed Durable Objects (the kind the free plan allows),
+WebSocket Hibernation and Cloudflare's free plan. Per-IP room limits are kept in
+a small `Limits` Durable Object keyed by IP. Rooms close 30 minutes
 after the last member leaves. On the free plan, hitting the daily limit stops the
 service until reset; it never bills.
 
