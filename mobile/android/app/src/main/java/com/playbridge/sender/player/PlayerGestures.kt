@@ -1,6 +1,8 @@
 package com.playbridge.sender.player
 
 import android.media.AudioManager
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -8,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -135,5 +138,45 @@ internal fun Modifier.panZoomGestures(state: PlayerScreenState): Modifier =
                     state.panOffset = Offset.Zero
                 }
             }
+        }
+    }
+
+/** How far two fingers must spread (or close) before the portrait fill switches. */
+internal const val PINCH_OPEN = 1.15f
+internal const val PINCH_CLOSE = 1 / PINCH_OPEN
+
+/** The fill a pinch asks for once it has moved far enough: open fills, close fits; null until then. */
+internal fun pinchFill(totalZoom: Float): Boolean? = when {
+    totalZoom >= PINCH_OPEN -> true
+    totalZoom <= PINCH_CLOSE -> false
+    else -> null
+}
+
+/**
+ * Two-finger pinch on an upright screen showing a landscape video: open to fill the screen
+ * (cropping the sides), close to go back to the portrait layout. One pinch switches once. Taps and
+ * one-finger drags pass through to [playerGestures].
+ */
+internal fun Modifier.portraitFillGestures(state: PlayerScreenState, enabled: Boolean): Modifier =
+    pointerInput(enabled) {
+        if (!enabled) return@pointerInput
+        awaitEachGesture {
+            var zoom = 1f
+            var switched = false
+            do {
+                // Initial pass: a pinch is claimed before the drag detector reads it as brightness or volume.
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } >= 2) {
+                    state.dragMode = DragMode.NONE
+                    if (!switched) {
+                        zoom *= event.calculateZoom()
+                        pinchFill(zoom)?.let { fill ->
+                            state.switchPortraitFill(fill)
+                            switched = true
+                        }
+                    }
+                    event.changes.forEach { it.consume() }
+                }
+            } while (event.changes.any { it.pressed })
         }
     }

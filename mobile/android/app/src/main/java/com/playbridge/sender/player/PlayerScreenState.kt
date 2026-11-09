@@ -71,6 +71,15 @@ internal class PlayerScreenState(
     var isScrubbing by mutableStateOf(false)
     var scrubFraction by mutableFloatStateOf(0f)
     var resizeMode by mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT)
+    /**
+     * Pinched open in the portrait layout: a landscape video fills the upright screen, cropped at
+     * the sides. For portrait clips stored with bars in a landscape frame.
+     */
+    var portraitFill by mutableStateOf(false)
+    /** Whether [portraitFill] applies right now (upright screen, landscape video, not PiP); set by PlayerScreen. */
+    var fillingPortrait by mutableStateOf(false)
+    /** The resize mode on screen: cropped to fill while [fillingPortrait], else the chosen one. */
+    val shownResizeMode: Int get() = if (fillingPortrait) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else resizeMode
     var speed by mutableFloatStateOf(1f)
     var locked by mutableStateOf(false)
     var showUnlock by mutableStateOf(false)
@@ -208,6 +217,12 @@ internal class PlayerScreenState(
             AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretched"
             else -> "Fit to screen"
         }
+    }
+
+    fun switchPortraitFill(fill: Boolean) {
+        if (portraitFill == fill) return
+        portraitFill = fill
+        statusMessage = if (fill) "Filling the screen · pinch in to fit" else "Fit to width"
     }
 
     fun togglePanZoom() {

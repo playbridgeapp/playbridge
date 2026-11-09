@@ -83,7 +83,10 @@
             </intent-filter>
         </activity>
         <!-- The player runs in its own task, so with background play on, Back can send it behind
-             the browser while it keeps playing (and a return brings it back as it was). -->
+             the browser while it keeps playing (and a return brings it back as it was). The InApp
+             copies below share the app's task instead, for "Picture-in-picture when you leave the
+             player": Back shrinks the video into picture-in-picture over the browser, and Recents
+             shows one PlayBridge entry. -->
         <activity
             android:name=".player.PlayerActivity"
             android:exported="false"
@@ -99,6 +102,22 @@
             android:name=".player.PortraitFirstPlayerActivity"
             android:exported="false"
             android:taskAffinity="${applicationId}.player"
+            android:theme="@style/Theme.PlayBridge.Player"
+            android:screenOrientation="fullUser"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
+        <activity
+            android:name=".player.InAppPlayerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PlayBridge.Player"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode" />
+        <activity
+            android:name=".player.InAppPortraitFirstPlayerActivity"
+            android:exported="false"
             android:theme="@style/Theme.PlayBridge.Player"
             android:screenOrientation="fullUser"
             android:launchMode="singleTask"

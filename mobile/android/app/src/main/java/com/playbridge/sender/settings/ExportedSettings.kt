@@ -73,7 +73,10 @@ data class ExportedAppSettings(
     val hideEmptyCastSheetTabs: Boolean? = null,
     val phonePlayerMode: String? = null,
     val phoneLandscapeOpen: String? = null,
+    /** Written alongside [phoneLeaveAction] for older versions, and read when a backup lacks it. */
     val phoneBackgroundPlay: Boolean? = null,
+    /** A [com.playbridge.sender.player.PhoneLeaveAction] id. */
+    val phoneLeaveAction: String? = null,
     /** The phone player's subtitle style as its `subtitle_style` JSON. */
     val phoneSubtitleStyle: String? = null,
 )

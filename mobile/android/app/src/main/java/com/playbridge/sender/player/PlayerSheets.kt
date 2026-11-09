@@ -268,12 +268,12 @@ internal fun PlayerSheetsHost(
     state: PlayerScreenState,
     engine: PhonePlayerEngine,
     onSwitchEngine: (PhonePlayerEngine) -> Unit,
-    backgroundMode: MutableState<Boolean>,
+    leaveAction: MutableState<PhoneLeaveAction>,
     onOpenExternal: () -> Unit,
 ) {
     val player = state.player
     if (state.showMore) {
-        MoreSheet(state, engine, onSwitchEngine, backgroundMode, onOpenExternal)
+        MoreSheet(state, engine, onSwitchEngine, leaveAction, onOpenExternal)
     }
 
     if (state.showEpisodes) {

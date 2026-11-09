@@ -74,6 +74,7 @@ import com.playbridge.sender.cast.remote.RemotePresentationPreferenceStore
 import com.playbridge.sender.data.settings.MediaDetectionSettings
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.player.PhoneLandscapeOpen
+import com.playbridge.sender.player.PhoneLeaveAction
 import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -200,7 +201,7 @@ fun PhonePlayerSettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val mode by settings.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
     val landscapeOpen by settings.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
-    val backgroundPlay by settings.phoneBackgroundPlay.collectAsState(initial = false)
+    val leaveAction by settings.phoneLeaveAction.collectAsState(initial = PhoneLeaveAction.PAUSE)
 
     SettingsPage("Phone player", onBack) {
         SettingsGroupTitle("Player")
@@ -217,12 +218,16 @@ fun PhonePlayerSettingsScreen(onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
-        SettingsGroupTitle("Playback")
-        SettingsSwitch(
-            "Keep playing in the background",
-            "Videos keep playing when you leave the player. Each video's More menu can still turn it off.",
-            backgroundPlay,
-        ) { scope.launch { settings.setPhoneBackgroundPlay(it) } }
+        SettingsGroupTitle("When you leave the player")
+        SettingsRadioGroup(PhoneLeaveAction.entries, leaveAction, { it.label }, { it.description }) {
+            scope.launch { settings.setPhoneLeaveAction(it) }
+        }
+        Text(
+            "Leaving means Back, Home or locking the phone. Each video's More menu can change it for that video; Picture-in-picture applies to videos opened after you choose it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
     }
 }
 

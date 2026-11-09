@@ -26,7 +26,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 private val SPEED_CHOICES = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 /**
- * Everything that isn't a primary control: speed, repeat, A-B loop and background play;
+ * Everything that isn't a primary control: speed, repeat, A-B loop and what leaving does;
  * aspect, zoom and frame capture; which decoder plays; stats; and handing off to another app.
  */
 @Composable
@@ -34,7 +34,7 @@ internal fun MoreSheet(
     state: PlayerScreenState,
     engine: PhonePlayerEngine,
     onSwitchEngine: (PhonePlayerEngine) -> Unit,
-    backgroundMode: MutableState<Boolean>,
+    leaveAction: MutableState<PhoneLeaveAction>,
     onOpenExternal: () -> Unit,
 ) {
     fun close() { state.showMore = false }
@@ -54,13 +54,17 @@ internal fun MoreSheet(
             },
             onClick = state::stepAbLoop,
         )
-        SwitchRow(
-            label = "Keep playing in the background",
-            detail = "When you leave the app or lock the phone",
-            checked = backgroundMode.value,
-        ) { on ->
-            backgroundMode.value = on
-            state.statusMessage = if (on) "Background play on" else "Background play off"
+        // The Settings choice, for this video only.
+        ChoiceLabel("When you leave the player")
+        val leaveChoices = PhoneLeaveAction.entries
+        ChoiceChips(leaveChoices.map { it.label to (leaveAction.value == it) }) {
+            val choice = leaveChoices[it]
+            leaveAction.value = choice
+            state.statusMessage = when (choice) {
+                PhoneLeaveAction.PAUSE -> "Leaving pauses this video"
+                PhoneLeaveAction.KEEP_PLAYING -> "This video keeps playing when you leave"
+                PhoneLeaveAction.PICTURE_IN_PICTURE -> "Leaving shrinks this video into a window"
+            }
         }
 
         TrackSectionHeader("Picture")
