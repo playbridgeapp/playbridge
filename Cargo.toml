@@ -4,6 +4,7 @@ members = [
     "cast/core",
     "cast/net-policy",
     "cast/receiver",
+    "cast/together",
     "cast/ffi",
     "stream-proxy-rust",
     "browser-receiver-rust",
