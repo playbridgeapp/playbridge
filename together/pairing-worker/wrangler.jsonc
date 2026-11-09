@@ -1,0 +1,16 @@
+// Pairing service for PlayBridge Watch Together: TV codes, QR codes and sealed
+// invites. PlayBridge runs one for everyone; it holds no room traffic.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "playbridge-together-pairing",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOBBIES", "class_name": "Lobby" },
+      { "name": "LIMITS", "class_name": "Limits" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Lobby", "Limits"] }]
+}

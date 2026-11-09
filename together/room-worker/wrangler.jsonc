@@ -1,0 +1,42 @@
+// Room relay for PlayBridge Watch Together. Deploying this file as-is gives a
+// self-hosted relay with the full limits. PlayBridge's shared relay deploys
+// with `wrangler deploy --env shared`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "playbridge-together-room",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "Room" },
+      { "name": "LIMITS", "class_name": "Limits" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Limits"] }],
+  "vars": {
+    "SHARED_TIER": "false",
+    "MAX_MEMBERS": "8",
+    "ROOM_LIFETIME_HOURS": "8",
+    "ROOMS_PER_IP_PER_DAY": "50",
+    "IDLE_CLOSE_MINUTES": "30"
+  },
+  "env": {
+    "shared": {
+      "name": "playbridge-together-room-shared",
+      "durable_objects": {
+        "bindings": [
+          { "name": "ROOMS", "class_name": "Room" },
+          { "name": "LIMITS", "class_name": "Limits" }
+        ]
+      },
+      "vars": {
+        "SHARED_TIER": "true",
+        "MAX_MEMBERS": "4",
+        "ROOM_LIFETIME_HOURS": "3",
+        "ROOMS_PER_IP_PER_DAY": "5",
+        "IDLE_CLOSE_MINUTES": "30"
+      }
+    }
+  }
+}
