@@ -70,12 +70,29 @@ needs no new phone-to-TV protocol command.
 - Every device is a **member** of the room and connects to the Room Worker
   itself. A TV keeps playing in sync when the host's phone locks or leaves.
 - Phones are remotes and can also be screens (the phone player).
-- The **host** creates the room and changes the video. Host duties pass to the
-  earliest remaining member if the host leaves.
-- Anyone can play, pause and seek. The host can turn on **Lock controls**.
-- Each member is **mine** (added through the host's own paired phone) or
-  **guest** (anything a guest device adds is also a guest). This decides what
-  playback data it receives (§7).
+- The **host** creates the room. Host duties pass to the earliest remaining
+  member if the host leaves.
+- Anyone can play, pause and seek. The host can turn on **Lock controls**, which
+  overrides everything below.
+- Every member has an **owner**: the person whose phone added it. The host's
+  own devices are **mine**; anything a guest adds belongs to that guest. This
+  decides what playback data each member receives (§7).
+
+### Who can change the video
+
+A host setting, **Settings → Watch Together → Who can change the video**:
+
+| Option | Behavior |
+| --- | --- |
+| Only me (default) | Only the host can change the video. |
+| Ask me | A guest can pick **Play in party** in the cast sheet. The host sees "Alex wants to play *Title* (youtube.com)" with **Allow**, **Deny** and **Always allow Alex**. |
+| Anyone | Any member can change the video. |
+
+- Requests show the title and site only, never the full URL, which can carry
+  tokens.
+- A request expires after 60 seconds; the guest sees "Atul didn't respond".
+- An allowed video starts like any other: everyone loads, buffers, then starts
+  together (§6).
 
 ## 5. Joining
 
@@ -158,9 +175,11 @@ between messages.
 
 ## 7. What is shared
 
-The host shares the full playback object. Credentials are routed by ownership.
+Whoever shares a video (the host, or a guest allowed by §4) shares the full
+playback object. Credentials are routed by ownership: a member is **same owner**
+when it belongs to the person who shared the video, and **other** otherwise.
 
-| Field | mine | guest |
+| Field | same owner | other |
 | --- | --- | --- |
 | URL, including signed links | ✅ | ✅ |
 | Referer, Origin, User-Agent, subtitles, title, start position | ✅ | ✅ |
@@ -168,15 +187,17 @@ The host shares the full playback object. Credentials are routed by ownership.
 | Phone-served files, LAN addresses | ✅ on the same network | ❌ blocked with a message |
 
 - Credentials are sent per member, encrypted to that member's key, never with
-  the room key, so guests cannot read them.
-- If a guest cannot play the video, the host sees "Alex's TV can't play this
+  the room key, so other members cannot read them.
+- If a member cannot play the video, the sharer sees "Alex's TV can't play this
   without your sign-in" and a one-time **Share my sign-in for this video** button
   with a plain warning.
+- A guest's credentials never go to the host or to other guests unless that
+  guest presses the same button.
 
 ### Nothing is recorded
 
 - Party playback never goes into TV history, phone cast history, resume progress
-  or Continue Watching.
+  or Continue Watching, whoever shared the video.
 - Logs redact URLs and headers.
 - Room keys and shared credentials live in memory only and are dropped when the
   member leaves.
@@ -234,7 +255,8 @@ Only the host's relay setting matters. Guests follow the invite link.
   for per-member messages), `seq`, `ct` (ciphertext).
 - **Room messages** (inside `ct`, defined in `cast/together`): `hello`,
   `member`, `load`, `ready`, `play`, `pause`, `seek`, `position`, `buffering`,
-  `leave`, `host`, `lock`, `credentials`, `warning`.
+  `leave`, `host`, `lock`, `change_policy`, `request_play`, `request_reply`,
+  `credentials`, `warning`.
 - **Clock**: `ping {t0}` and `pong {t0, room_time}` handled by the Room Worker
   without decryption.
 - **LAN command** (phone to paired PlayBridge receiver): `join_room {invite}`,
