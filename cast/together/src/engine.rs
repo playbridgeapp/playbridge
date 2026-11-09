@@ -735,6 +735,7 @@ impl Engine {
     ) {
         match body {
             Body::Hello {
+                member,
                 name,
                 kind,
                 screen,
@@ -745,6 +746,14 @@ impl Engine {
                 else {
                     return out.push(Output::Event(Event::Rejected("bad hello keys")));
                 };
+                let proven = member == from
+                    && signed
+                        .s
+                        .as_deref()
+                        .is_some_and(|s| crypto::verify(&sign_pk, signed.b.as_bytes(), s));
+                if !proven {
+                    return out.push(Output::Event(Event::Rejected("unproven hello")));
+                }
                 let known = self.peers.contains_key(&from);
                 self.peers.insert(
                     from,
@@ -1242,13 +1251,16 @@ impl Engine {
 
     fn send_hello(&mut self, to: Option<MemberId>, out: &mut Vec<Output>) {
         let body = Body::Hello {
+            member: self.cfg.me,
             name: self.cfg.name.clone(),
             kind: self.cfg.kind,
             screen: self.cfg.screen,
             box_pk: b64::encode(self.cfg.keys.box_public()),
             sign_pk: b64::encode(self.cfg.keys.signing_public()),
         };
-        self.send(body, to, false, out);
+        let b = serde_json::to_string(&body).expect("bodies serialize");
+        let s = Some(self.cfg.keys.sign(b.as_bytes()));
+        self.send_signed(Signed { b, s }, to, out);
     }
 
     fn issue_load(&mut self, item: SharedItem, room_now: f64, out: &mut Vec<Output>) {

@@ -81,7 +81,10 @@ pub enum ChangePolicy {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "k", rename_all = "snake_case")]
 pub enum Body {
+    /// Signed with the member's own `sign_pk`, and names the sender, so a
+    /// member cannot claim someone else's key (for example the host's).
     Hello {
+        member: MemberId,
         name: String,
         kind: DeviceKind,
         /// Whether this member plays the video (false for a remote-only phone).

@@ -565,6 +565,43 @@ fn sign_ins_reach_only_the_sharers_own_devices() {
 }
 
 #[test]
+fn a_guest_cannot_pose_as_the_host() {
+    let mut sim = Sim::new();
+    let _phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let guest = sim.add("Guest phone", false, false, 0.0);
+    sim.run(1_000.0);
+    // The guest claims the host's signing key in a hello it cannot sign.
+    let invite = sim.invite();
+    let from = sim.id(guest);
+    let body = serde_json::json!({
+        "k": "hello", "member": from.to_string(), "name": "Host phone", "kind": "phone",
+        "box_pk": playbridge_together::b64::encode([1_u8; 32]),
+        "sign_pk": playbridge_together::b64::encode(invite.host),
+    })
+    .to_string();
+    let plain = serde_json::to_vec(&serde_json::json!({ "b": body, "s": "AAAA" })).unwrap();
+    let seq = 99;
+    let ct = invite.key.seal(
+        &invite.room,
+        playbridge_together::crypto::Channel::Message,
+        &from,
+        seq,
+        &plain,
+    );
+    let local = sim.local(tv1);
+    let outputs = sim.devices[tv1]
+        .engine
+        .handle(ServerFrame::Msg { from, seq, ct }, local);
+    assert!(outputs.contains(&Output::Event(Event::Rejected("unproven hello"))));
+    assert!(
+        !outputs
+            .iter()
+            .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
+    );
+}
+
+#[test]
 fn replayed_messages_are_dropped() {
     let mut sim = Sim::new();
     let phone = sim.add("Host phone", true, false, 0.0);
