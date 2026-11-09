@@ -7,7 +7,9 @@ import com.playbridge.sender.cast.VideoDetector
 import android.content.Context
 import com.playbridge.shared.logging.redactUrlForLog
 import androidx.core.net.toUri
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.WindowManager
@@ -15,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -30,6 +33,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.ui.theme.PlayBridgePlayerTheme
@@ -136,11 +140,32 @@ open class PlayerActivity : ComponentActivity() {
     private var queueItems: List<MediaItem> = emptyList()
 
     /**
-     * The More sheet's "Keep playing in the background" switch, hoisted here (single source
-     * of truth shared with the composable) because onStop reads it.
+     * "When you leave the player", from Settings; the More sheet changes it for this video. Hoisted
+     * here (shared with the composable) because Back, Home and onStop read it.
      */
-    private val backgroundModeState = mutableStateOf(false)
+    private val leaveActionState = mutableStateOf(PhoneLeaveAction.PAUSE)
     private val isInPipModeState = mutableStateOf(false)
+
+    /** Set by the window's "Play in background" button, until the window has closed. */
+    private var pipBackgroundRequested = false
+    private var pipReceiverRegistered = false
+    private val pipReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val p = player ?: return
+            when (PipControl.of(intent.getIntExtra(EXTRA_PIP_CONTROL, 0))) {
+                PipControl.PLAY -> p.play()
+                PipControl.PAUSE -> p.pause()
+                PipControl.NEXT -> if (p.hasNextMediaItem()) p.seekToNextMediaItem()
+                PipControl.BACKGROUND -> {
+                    // Closing the window stops the activity; onPictureInPictureModeChanged then
+                    // keeps playback going under the media notification instead of closing.
+                    pipBackgroundRequested = true
+                    moveTaskToBack(false)
+                }
+                null -> Unit
+            }
+        }
+    }
 
 
     /** Follow the video's aspect for orientation until the user rotates manually. */
@@ -293,17 +318,88 @@ open class PlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Back: with "Keep playing in the background" on and the video playing, the player steps
-     * aside (its own task goes behind the browser) and keeps playing with a media notification;
-     * otherwise it closes.
+     * Back, by "When you leave the player" while a video plays. Picture-in-picture shrinks it into
+     * a window over the browser, as YouTube's mini player does: Android moves the player into the
+     * window and leaves the app's task, which the InApp player screens share, underneath. Keep
+     * playing sends the player's task behind the browser (its own task; when the choice was made
+     * in the More sheet of a shared-task player, the app goes behind the home screen) and it plays
+     * on under a media notification. Otherwise, or without PiP, the player closes.
      */
     private fun leave() {
-        if (backgroundModeState.value && player?.playWhenReady == true) moveTaskToBack(true) else finish()
+        val playing = player?.playWhenReady == true
+        when (leaveActionState.value) {
+            PhoneLeaveAction.PICTURE_IN_PICTURE -> if (playing && enterPip()) return
+            PhoneLeaveAction.KEEP_PLAYING -> if (playing) {
+                moveTaskToBack(true)
+                return
+            }
+            PhoneLeaveAction.PAUSE -> Unit
+        }
+        finish()
+    }
+
+    private val pipOnLeave: Boolean get() = leaveActionState.value == PhoneLeaveAction.PICTURE_IN_PICTURE
+
+    /** Opens the picture-in-picture window; false when the device or the user doesn't allow it. */
+    fun enterPip(): Boolean {
+        if (isInPipModeState.value) return true
+        if (!pipAllowed(this)) return false
+        return runCatching { enterPictureInPictureMode(currentPipParams()) }.getOrElse {
+            Log.w(PB_PLAYER, "PiP refused: ${it.javaClass.simpleName}")
+            false
+        }
+    }
+
+    private fun currentPipParams(): android.app.PictureInPictureParams {
+        val p = player
+        val size = p?.videoSize
+        val controls = pipControls(
+            playing = p?.playWhenReady == true,
+            hasNext = p?.hasNextMediaItem() == true,
+            max = maxPipActions(),
+        )
+        return pipParams(
+            activity = this,
+            aspect = pipAspect(size?.width ?: 0, size?.height ?: 0, size?.unappliedRotationDegrees ?: 0, size?.pixelWidthHeightRatio ?: 1f),
+            controls = controls,
+            // Home opens the window by itself only while something plays, when the setting is on.
+            autoEnter = pipOnLeave && p?.playWhenReady == true && pipAllowed(this),
+            title = p?.mediaMetadata?.title?.toString() ?: intent.getStringExtra(EXTRA_TITLE),
+        )
+    }
+
+    private fun maxPipActions(): Int =
+        runCatching { getMaxNumPictureInPictureActions() }.getOrDefault(3).coerceAtLeast(1)
+
+    /** Keeps the window's buttons, shape and Home behaviour in step with playback. */
+    private fun updatePipParams() {
+        if (isFinishing || isDestroyed || !pipAllowed(this)) return
+        runCatching { setPictureInPictureParams(currentPipParams()) }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Android 12+ opens the window itself (setAutoEnterEnabled); older versions are asked here.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && pipOnLeave && player?.playWhenReady == true) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         isInPipModeState.value = isInPictureInPictureMode
+        if (isInPictureInPictureMode) return
+        // The window closed. Expanding it brings the player back started; closing it (the window's
+        // X or "Play in background") leaves the activity stopped.
+        val closed = !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        val toBackground = pipBackgroundRequested
+        pipBackgroundRequested = false
+        if (!closed) return
+        if (toBackground) {
+            player?.playWhenReady = true
+            startBackgroundMediaSession()
+        } else {
+            player?.pause()
+            finish()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -312,6 +408,8 @@ open class PlayerActivity : ComponentActivity() {
         // first or not) replaces one still playing in the background.
         current?.get()?.takeIf { it !== this }?.finish()
         current = java.lang.ref.WeakReference(this)
+        ContextCompat.registerReceiver(this, pipReceiver, IntentFilter(ACTION_PIP_CONTROL), ContextCompat.RECEIVER_NOT_EXPORTED)
+        pipReceiverRegistered = true
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = leave()
         })
@@ -388,7 +486,9 @@ open class PlayerActivity : ComponentActivity() {
 
         requestHeaders = headers
         playerMode = runBlocking { settings.phonePlayerMode.first() }
-        backgroundModeState.value = runBlocking { settings.phoneBackgroundPlay.first() }
+        leaveActionState.value = runBlocking { settings.phoneLeaveAction.first() }
+        // Home opens the window by itself only for Picture-in-picture, also when chosen in More.
+        lifecycleScope.launch { snapshotFlow { leaveActionState.value }.collect { updatePipParams() } }
         val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
         // Subtitles ticked in the cast sheet, or sent by a website, override the subtitle preference.
         trackLanguages = PhoneTrackLanguages.of(
@@ -472,7 +572,7 @@ open class PlayerActivity : ComponentActivity() {
                     growFrom = growFromState.value,
                     onGrown = { growFromState.value = null },
                     onFullscreen = ::setFullscreen,
-                    backgroundMode = backgroundModeState,
+                    leaveAction = leaveActionState,
                     engineNotice = engineNoticeState.value,
                     onEngineNoticeAction = {
                         engineNoticeState.value = null
@@ -518,6 +618,7 @@ open class PlayerActivity : ComponentActivity() {
         player = next
         engineState.value = engine
         playerState.value = next
+        updatePipParams()
         Log.i(PB_PLAYER, "player=${engine.label} mode=${playerMode.id}")
         // prepare() is deferred until PlayerView attaches (see ensurePrepared).
     }
@@ -569,7 +670,14 @@ open class PlayerActivity : ComponentActivity() {
     // known; landscape content keeps the sensor-landscape default. The manual
     // rotate button disables this so it can't fight a user choice.
     private val playerListener = object : Player.Listener {
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = updatePipParams()
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updatePipParams()
+
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) = updatePipParams()
+
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+            updatePipParams()
             if (!autoOrientationEnabled) return
             val w = videoSize.width
             val h = videoSize.height
@@ -626,13 +734,17 @@ open class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Pause when leaving the foreground, UNLESS background mode is enabled — in which
-        // case expose playback through the media notification service. Skip on config
-        // changes (rotation would flash a notification) and in PiP (still visible).
-        if (!backgroundModeState.value) {
-            player?.playWhenReady = false
-        } else if (!isFinishing && !isChangingConfigurations && !isInPipModeState.value) {
+        // The window's "Play in background" closed it; onPictureInPictureModeChanged takes over.
+        if (pipBackgroundRequested) return
+        if (isFinishing) return
+        // A video in the window is one being watched: locking the phone keeps it playing, as
+        // Keep playing does, with the media notification for the lock screen. (The window's X
+        // also stops the activity first; onPictureInPictureModeChanged then closes the player.)
+        // Otherwise leaving pauses. Rotation never gets here: the activity handles it itself.
+        if (isInPipModeState.value || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
             startBackgroundMediaSession()
+        } else {
+            player?.playWhenReady = false
         }
     }
 
@@ -647,6 +759,10 @@ open class PlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (current?.get() === this) current = null
+        if (pipReceiverRegistered) {
+            runCatching { unregisterReceiver(pipReceiver) }
+            pipReceiverRegistered = false
+        }
         orientationWatcher.disable()
         stopBackgroundMediaSession()
         // Flush a final resume point and clear the in-app leg (the polling loop is already
@@ -672,12 +788,11 @@ open class PlayerActivity : ComponentActivity() {
          * phone is held rather than in landscape.
          */
         fun activityClass(websiteOrientation: PhonePlayerOpeningOrientation? = null): Class<out PlayerActivity> {
-            if (websiteOrientation != null) return PlayerActivity::class.java
             val settings = org.koin.core.context.GlobalContext.getOrNull()?.getOrNull<SettingsRepository>()
                 ?: return PlayerActivity::class.java
             val open = runBlocking { settings.phoneLandscapeOpen.first() }
-            return if (open == PhoneLandscapeOpen.PORTRAIT_FIRST) PortraitFirstPlayerActivity::class.java
-            else PlayerActivity::class.java
+            val leaveAction = runBlocking { settings.phoneLeaveAction.first() }
+            return playerActivityClass(open, leaveAction, websiteOrientation)
         }
 
         const val EXTRA_PAGE_SESSION_ID = "page_session_id"

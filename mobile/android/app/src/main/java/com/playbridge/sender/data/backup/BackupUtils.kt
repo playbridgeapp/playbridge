@@ -89,7 +89,8 @@ object BackupUtils {
             hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
             phonePlayerMode = settingsRepository.phonePlayerMode.first().id,
             phoneLandscapeOpen = settingsRepository.phoneLandscapeOpen.first().id,
-            phoneBackgroundPlay = settingsRepository.phoneBackgroundPlay.first(),
+            phoneBackgroundPlay = settingsRepository.phoneLeaveAction.first() == com.playbridge.sender.player.PhoneLeaveAction.KEEP_PLAYING,
+            phoneLeaveAction = settingsRepository.phoneLeaveAction.first().id,
             phoneSubtitleStyle = com.playbridge.shared.protocol.createSubtitleStyleJson(settingsRepository.phoneSubtitleStyle.first()),
         )
 
@@ -181,7 +182,11 @@ object BackupUtils {
                 s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
                 s.phonePlayerMode?.let { settingsRepository.setPhonePlayerMode(PhonePlayerMode.fromId(it)) }
                 s.phoneLandscapeOpen?.let { settingsRepository.setPhoneLandscapeOpen(PhoneLandscapeOpen.fromId(it)) }
-                s.phoneBackgroundPlay?.let { settingsRepository.setPhoneBackgroundPlay(it) }
+                if (s.phoneLeaveAction != null || s.phoneBackgroundPlay != null) {
+                    settingsRepository.setPhoneLeaveAction(
+                        com.playbridge.sender.player.PhoneLeaveAction.of(s.phoneLeaveAction, s.phoneBackgroundPlay),
+                    )
+                }
                 s.phoneSubtitleStyle?.let { json ->
                     runCatching {
                         com.playbridge.shared.protocol.parseSubtitleStyle(

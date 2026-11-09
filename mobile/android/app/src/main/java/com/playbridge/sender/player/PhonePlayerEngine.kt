@@ -75,3 +75,19 @@ enum class PhoneLandscapeOpen(val id: String, val label: String, val description
         fun fromId(id: String?): PhoneLandscapeOpen = entries.firstOrNull { it.id == id } ?: FULLSCREEN
     }
 }
+
+/** What a playing video does when you leave the player: Back, Home or locking the phone. */
+enum class PhoneLeaveAction(val id: String, val label: String, val description: String) {
+    PAUSE("pause", "Pause", "Back closes the player; Home or locking the phone pauses it"),
+    KEEP_PLAYING("background", "Keep playing", "The video keeps playing in the background, with a notification to control it"),
+    PICTURE_IN_PICTURE("pip", "Picture-in-picture", "Back and Home shrink the video into a floating window; locking the phone keeps it playing"),
+    ;
+
+    companion object {
+        fun fromId(id: String?): PhoneLeaveAction? = entries.firstOrNull { it.id == id }
+
+        /** The choice, or the earlier background play switch it replaced when it hasn't been set. */
+        fun of(id: String?, legacyBackgroundPlay: Boolean?): PhoneLeaveAction =
+            fromId(id) ?: if (legacyBackgroundPlay == true) KEEP_PLAYING else PAUSE
+    }
+}

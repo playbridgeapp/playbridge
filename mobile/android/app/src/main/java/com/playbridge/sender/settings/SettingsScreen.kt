@@ -127,7 +127,7 @@ private fun SettingsHubContent(
 
     val phoneMode by settings.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
     val landscapeOpen by settings.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
-    val backgroundPlay by settings.phoneBackgroundPlay.collectAsState(initial = false)
+    val leaveAction by settings.phoneLeaveAction.collectAsState(initial = com.playbridge.sender.player.PhoneLeaveAction.PAUSE)
     val autoConnect by connections.autoConnectEnabled.collectAsState()
     val resolution by settings.defaultVideoQuality.collectAsState(initial = "Auto")
     val audio by settings.preferredAudioLang.collectAsState(initial = "")
@@ -144,7 +144,7 @@ private fun SettingsHubContent(
     val topics = listOf(
         SettingsHubItem(
             Icons.Default.Smartphone, "Phone player",
-            "${phoneMode.label} · ${landscapeOpen.label} · Background ${if (backgroundPlay) "on" else "off"}",
+            "${phoneMode.label} · ${landscapeOpen.label} · Leaving: ${leaveAction.label}",
             SettingsSection.PhonePlayer,
         ),
         SettingsHubItem(

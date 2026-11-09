@@ -106,7 +106,7 @@ private fun ZoomedVideo(state: PlayerScreenState) {
     // mpv draws subtitles into the picture, so it zooms and fills itself rather than being scaled.
     val mpv = player as? MpvMediaPlayer
     var size by remember { mutableStateOf(IntSize.Zero) }
-    LaunchedEffect(mpv, state.resizeMode) { mpv?.setScaleMode(mpvScaleMode(state.resizeMode)) }
+    LaunchedEffect(mpv, state.shownResizeMode) { mpv?.setScaleMode(mpvScaleMode(state.shownResizeMode)) }
     LaunchedEffect(mpv) {
         if (mpv == null) return@LaunchedEffect
         snapshotFlow { Triple(state.scale, state.panOffset, size) }.collect { (scale, pan, area) ->
@@ -137,7 +137,7 @@ private fun ZoomedVideo(state: PlayerScreenState) {
                 // (SurfaceView is async and left Compose in permanent BUFFERING).
                 (LayoutInflater.from(ctx).inflate(R.layout.player_view, FrameLayout(ctx), false) as PlayerView).apply {
                     this.player = player
-                    this.resizeMode = viewResizeMode(player, state.resizeMode)
+                    this.resizeMode = viewResizeMode(player, state.shownResizeMode)
                     ensurePrepared(player)
                     post { ensurePrepared(player) }
 
@@ -146,7 +146,7 @@ private fun ZoomedVideo(state: PlayerScreenState) {
                 }
             },
             update = { view ->
-                val resizeMode = viewResizeMode(player, state.resizeMode)
+                val resizeMode = viewResizeMode(player, state.shownResizeMode)
                 if (view.resizeMode != resizeMode) view.resizeMode = resizeMode
                 if (view.player !== player) {
                     view.player = player

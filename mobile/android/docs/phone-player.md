@@ -56,6 +56,56 @@ edit it over the connection (`subtitle_style_query` / `subtitle_style`) when the
 custom fonts from the phone (`subtitle_font_*`, sent in acknowledged pieces with progress) and
 remove them; mpv on the TV picks up a newly selected font from the next video.
 
+## Portrait fill
+
+On an upright screen a landscape video gets the portrait layout (video on top, details below).
+Some portrait clips are stored in a landscape frame with bars at the sides; pinching open on the
+video fills the screen with it instead, cropped at the sides (`PlayerScreenState.portraitFill`,
+`portraitFillGestures`). Pinching closed returns to the portrait layout. Turning the phone to
+landscape shows the whole video as usual. The chosen Fit/Zoom/Stretch mode is kept; the fill only
+changes what is shown while upright. Pan & zoom keeps its own pinch, so the fill pinch is off
+while it is on.
+
+## Leaving the player
+
+**Settings → Phone player → When you leave the player** (`PhoneLeaveAction`) decides what a
+playing video does on Back, Home or locking the phone. Each video's More sheet offers the same
+three choices for that video only, starting from the setting.
+
+| Choice | Back | Home | Locking the phone |
+|---|---|---|---|
+| Pause (default) | Closes the player | Pauses | Pauses |
+| Keep playing | The player steps behind the browser and keeps playing | Keeps playing under its media notification | Keeps playing under its media notification |
+| Picture-in-picture | The video shrinks into a window over the browser | The window opens by itself (`setAutoEnterEnabled` on Android 12+, `onUserLeaveHint` before) | Keeps playing |
+
+Without a choice saved, the earlier "Keep playing in the background" switch carries over:
+on becomes Keep playing, off becomes Pause. The legacy key is still written, so an older version
+keeps the meaning, and backups carry both.
+
+## Picture-in-picture
+
+`PlayerPip.kt` builds the window; `PlayerActivity` decides when it opens. The player's PiP button
+always opens it. A video in the window is one being watched: locking the phone keeps it playing
+under the media notification, whatever the leave choice.
+
+The window's buttons are play/pause, Next when the queue has another item, and **Play in
+background**, which closes the window and keeps the audio going under the media notification.
+Fewer buttons are shown when the system allows fewer, dropping Play in background first. Closing
+the window with its X stops playback and closes the player; expanding it returns to the full
+player. The window takes the video's shape (clamped to Android's 2.39:1 limits) and animates out
+of the fitted video. Without PiP (no system support, or turned off for PlayBridge in system
+settings), Picture-in-picture behaves like Pause.
+
+The leave choice picks the player screen at launch (`playerActivityClass`). Keep playing uses
+`PlayerActivity`/`PortraitFirstPlayerActivity` in their own task (`taskAffinity`), which lets Back
+leave the player playing behind the browser; Recents then shows the player separately. Pause and
+Picture-in-picture use `InAppPlayerActivity`/`InAppPortraitFirstPlayerActivity`, which share the
+app's task: entering PiP moves the player into the window and leaves the browser underneath, so
+Back lands in the app even after Home and expanding the window again (Android returns the player
+to its original task), and Recents shows one PlayBridge entry. A player in PiP cannot bring
+another task forward itself; Android blocks that as a background activity launch. Changing the
+choice in the More sheet doesn't move a running player to the other task.
+
 ## Known limitations
 
 - After a seek, the position can briefly show the old time until mpv reports the new one.

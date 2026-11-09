@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Modifier
@@ -45,8 +46,8 @@ internal fun PlayerScreen(
     onGrown: () -> Unit,
     /** Fullscreen (landscape) when true, back to portrait when false. */
     onFullscreen: (Boolean) -> Unit,
-    /** Shared with the activity: onStop reads it to keep playing with a media notification. */
-    backgroundMode: MutableState<Boolean>,
+    /** "When you leave the player" for this video; shared with the activity, which acts on it. */
+    leaveAction: MutableState<PhoneLeaveAction>,
     engineNotice: EngineNotice?,
     onEngineNoticeAction: () -> Unit,
     onEngineNoticeDismiss: () -> Unit,
@@ -62,13 +63,20 @@ internal fun PlayerScreen(
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            val portraitLayout = maxHeight > maxWidth && state.isLandscapeVideo && !isInPip
+            val upright = maxHeight > maxWidth
+            val landscapeUpright = upright && state.isLandscapeVideo && !isInPip
+            // Pinched open, a landscape video fills the upright screen instead of the portrait layout.
+            val fillingPortrait = landscapeUpright && state.portraitFill
+            SideEffect { state.fillingPortrait = fillingPortrait }
+            val portraitLayout = landscapeUpright && !state.portraitFill
             val videoTop = WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding() +
                 PORTRAIT_TOP_BAR_HEIGHT
             val videoHeight = if (portraitLayout) maxWidth / state.layoutAspect else maxHeight
             // Growing from a thumbnail only maps onto an upright screen; landscape just fades in.
             val grow = rememberGrowFromThumbnail(growFrom.takeIf { maxHeight > maxWidth }, onGrown)
-            val gestures = Modifier.playerGestures(state, isInPip, LocalHapticFeedback.current)
+            val gestures = Modifier
+                .portraitFillGestures(state, enabled = landscapeUpright && !state.locked && !state.isPanZoomEnabled)
+                .playerGestures(state, isInPip, LocalHapticFeedback.current)
 
             // The video keeps its place in the tree across layouts, so its PlayerView survives rotation.
             Box(
@@ -98,7 +106,7 @@ internal fun PlayerScreen(
                 EngineNoticeCard(engineNotice, onEngineNoticeAction, onEngineNoticeDismiss)
                 CapturedFrameSnackbar(state)
             }
-            PlayerSheetsHost(state, engine, onSwitchEngine, backgroundMode, ::openExternal)
+            PlayerSheetsHost(state, engine, onSwitchEngine, leaveAction, ::openExternal)
         }
     }
 }

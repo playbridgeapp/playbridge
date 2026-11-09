@@ -5,4 +5,4 @@ package com.playbridge.sender.player
  * open in: Portrait first". Choosing it at launch (see [PlayerActivity.activityClass]) avoids
  * opening in landscape and then turning.
  */
-class PortraitFirstPlayerActivity : PlayerActivity()
+open class PortraitFirstPlayerActivity : PlayerActivity()

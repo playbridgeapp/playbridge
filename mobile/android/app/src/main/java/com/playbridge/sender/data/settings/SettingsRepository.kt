@@ -35,7 +35,9 @@ class SettingsRepository(
         /** A [com.playbridge.sender.player.PhoneLandscapeOpen] id: "fullscreen" (default) or "portrait". */
         val PHONE_LANDSCAPE_OPEN = stringPreferencesKey("phone_landscape_open")
         /** Whether the phone player starts with "Keep playing in the background" on. */
+        /** The switch [PHONE_LEAVE_ACTION] replaced; still written so an older version keeps the meaning. */
         val PHONE_BACKGROUND_PLAY = booleanPreferencesKey("phone_background_play")
+        val PHONE_LEAVE_ACTION = stringPreferencesKey("phone_leave_action")
         val PHONE_SUBTITLE_STYLE = stringPreferencesKey("phone_subtitle_style")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
@@ -72,7 +74,9 @@ class SettingsRepository(
         .map { PhonePlayerMode.fromId(it[Keys.PHONE_PLAYER_MODE]) }
     val phoneLandscapeOpen: Flow<PhoneLandscapeOpen> = dataStore.data.catch { handleException(it) }
         .map { PhoneLandscapeOpen.fromId(it[Keys.PHONE_LANDSCAPE_OPEN]) }
-    val phoneBackgroundPlay: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.PHONE_BACKGROUND_PLAY] ?: false }
+    /** What a playing video does when you leave the player; background play on before this existed means Keep playing. */
+    val phoneLeaveAction: Flow<com.playbridge.sender.player.PhoneLeaveAction> = dataStore.data.catch { handleException(it) }
+        .map { com.playbridge.sender.player.PhoneLeaveAction.of(it[Keys.PHONE_LEAVE_ACTION], it[Keys.PHONE_BACKGROUND_PLAY]) }
     /** How the phone player draws plain subtitles; a TV keeps its own (see `subtitle_style`). */
     val phoneSubtitleStyle: Flow<SubtitleStyle> = dataStore.data.catch { handleException(it) }.map { prefs ->
         prefs[Keys.PHONE_SUBTITLE_STYLE]?.let { json ->
@@ -119,7 +123,10 @@ class SettingsRepository(
     suspend fun setTvPlayerMode(value: String) = write { it[Keys.TV_PLAYER_MODE] = value }
     suspend fun setPhonePlayerMode(value: PhonePlayerMode) = write { it[Keys.PHONE_PLAYER_MODE] = value.id }
     suspend fun setPhoneLandscapeOpen(value: PhoneLandscapeOpen) = write { it[Keys.PHONE_LANDSCAPE_OPEN] = value.id }
-    suspend fun setPhoneBackgroundPlay(value: Boolean) = write { it[Keys.PHONE_BACKGROUND_PLAY] = value }
+    suspend fun setPhoneLeaveAction(value: com.playbridge.sender.player.PhoneLeaveAction) = write {
+        it[Keys.PHONE_LEAVE_ACTION] = value.id
+        it[Keys.PHONE_BACKGROUND_PLAY] = value == com.playbridge.sender.player.PhoneLeaveAction.KEEP_PLAYING
+    }
     suspend fun setPhoneSubtitleStyle(value: SubtitleStyle) = write {
         it[Keys.PHONE_SUBTITLE_STYLE] = com.playbridge.shared.protocol.createSubtitleStyleJson(value)
     }

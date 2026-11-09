@@ -14,8 +14,6 @@ import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.Environment
 import android.os.Build
-import android.app.PictureInPictureParams
-import android.util.Rational
 import android.view.View
 import android.view.ViewGroup
 import android.view.SurfaceView
@@ -134,9 +132,7 @@ internal fun saveBitmapToGallery(context: Context, bitmap: Bitmap, title: String
     }
 }
 
+/** The PiP button: the same window, buttons and shape as Back and Home use. */
 internal fun enterPip(activity: android.app.Activity) {
-    val params = PictureInPictureParams.Builder()
-        .setAspectRatio(Rational(16, 9))
-        .build()
-    activity.enterPictureInPictureMode(params)
+    (activity as? PlayerActivity)?.enterPip()
 }
