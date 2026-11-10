@@ -23,6 +23,8 @@ internal object WireFrameLog {
         "user_agent", "user_agent_query", "tv_logs", "tv_logs_query", "timeline", "subtitle_style",
         "subtitle_style_query", "subtitle_font_begin", "subtitle_font_chunk", "subtitle_font_end",
         "subtitle_font_ack", "subtitle_font_result", "subtitle_font_remove",
+        // Only ever summarized: the join carries the room key.
+        "watch_together_join", "watch_together_joined",
     )
 
     fun summary(frame: String): String {

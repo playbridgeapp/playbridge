@@ -37,6 +37,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.ui.theme.PlayBridgePlayerTheme
+import com.playbridge.sender.together.PhoneTogether
+import com.playbridge.shared.together.TogetherPlayerCommand
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -49,6 +51,11 @@ internal const val PB_PLAYER = "PB_PLAYER"
 
 /** Prepare only after PlayerView is attached (TextureView surface ready). */
 internal fun ensurePrepared(player: Player) {
+    // A party video waits for the room to start it.
+    if (player is PartyControlledPlayer) {
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        return
+    }
     if (player.playbackState == Player.STATE_IDLE) {
         player.prepare()
         player.playWhenReady = true
@@ -124,6 +131,19 @@ open class PlayerActivity : ComponentActivity() {
     private var player: Player? = null
     private var attachedPageSessionId: String? = null
 
+    /** The Watch Together video this player shows; null outside a party. */
+    private var partyItem: String? = null
+    private var partyLoadedReported = false
+    private val partyBridge = object : PhoneTogether.PartyPlayer {
+        override fun applyPartyCommand(command: TogetherPlayerCommand) =
+            this@PlayerActivity.applyPartyCommand(command)
+
+        override fun close() = finish()
+    }
+
+    /** What the controls drive: the party wrapper in a party, otherwise the player itself. */
+    private val controls: Player? get() = playerState.value
+
     /** The player on screen; changing it rebuilds the player UI around the new one. */
     private val playerState = mutableStateOf<Player?>(null)
     private val engineState = mutableStateOf(PhonePlayerEngine.EXOPLAYER)
@@ -151,7 +171,7 @@ open class PlayerActivity : ComponentActivity() {
     private var pipReceiverRegistered = false
     private val pipReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val p = player ?: return
+            val p = controls ?: return
             when (PipControl.of(intent.getIntExtra(EXTRA_PIP_CONTROL, 0))) {
                 PipControl.PLAY -> p.play()
                 PipControl.PAUSE -> p.pause()
@@ -285,7 +305,7 @@ open class PlayerActivity : ComponentActivity() {
         mediaControlJob = lifecycleScope.launch {
             com.playbridge.sender.cast.MediaControlChannel.actions.collect { command ->
                 if (!backgroundSessionActive || !command.targets(com.playbridge.sender.cast.MediaPlaybackService.OWNER_INAPP_PLAYER)) return@collect
-                val p = player ?: return@collect
+                val p = controls ?: return@collect
                 when (command.action) {
                     com.playbridge.sender.cast.MediaControlChannel.Action.PLAY -> p.play()
                     com.playbridge.sender.cast.MediaControlChannel.Action.PAUSE -> p.pause()
@@ -477,6 +497,8 @@ open class PlayerActivity : ComponentActivity() {
         }
 
         val startPositionMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L)
+        partyItem = intent.getStringExtra(EXTRA_WATCH_TOGETHER_ITEM)
+        partyItem?.let { PhoneTogether.attach(partyBridge, it) }
 
         Log.i(
             PB_PLAYER,
@@ -539,6 +561,15 @@ open class PlayerActivity : ComponentActivity() {
             return
         }
         showPlayer(first, initialEngine)
+        // The room extrapolates between reports; a steady one keeps its drift checks honest.
+        if (partyItem != null) {
+            lifecycleScope.launch {
+                while (true) {
+                    reportPartyState()
+                    delay(1_000)
+                }
+            }
+        }
         // Grow the video out of the tapped thumbnail on a fresh open, not on recreation.
         growFromState.value = if (savedInstanceState == null) {
             androidx.core.content.IntentCompat.getParcelableExtra(intent, PlayerLaunchOrigin.EXTRA_ORIGIN_BOUNDS, android.graphics.Rect::class.java)
@@ -566,7 +597,10 @@ open class PlayerActivity : ComponentActivity() {
                     websiteQueue = pageSessionId != null,
                     waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
                     onClose = ::leave,
-                    onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
+                    onEnded = {
+                        // The party stays on the ended video until someone picks another.
+                        if (partyItem == null && (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId))) finish()
+                    },
                     isInPip = isInPip,
                     poster = poster,
                     growFrom = growFromState.value,
@@ -582,6 +616,34 @@ open class PlayerActivity : ComponentActivity() {
                 ) }
             }
         }
+    }
+
+    /** A play, pause, seek or speed nudge from the party, for the real player. */
+    private fun applyPartyCommand(command: TogetherPlayerCommand) {
+        if (partyItem == null) return
+        val p = player ?: return
+        when (command) {
+            TogetherPlayerCommand.Play -> p.play()
+            TogetherPlayerCommand.Pause -> p.pause()
+            is TogetherPlayerCommand.Seek -> p.seekTo(command.positionMs.coerceAtLeast(0))
+            // Speed nudges keep this phone in step; they aren't the user's speed choice.
+            is TogetherPlayerCommand.Rate -> p.setPlaybackSpeed(command.rate)
+            // PhoneTogether opens a new video with a new intent.
+            is TogetherPlayerCommand.Load -> Unit
+        }
+        reportPartyState()
+    }
+
+    /** Tells the party where this phone's player is. */
+    private fun reportPartyState() {
+        if (partyItem == null) return
+        val p = player ?: return
+        PhoneTogether.onPlayerState(
+            positionMs = p.currentPosition.coerceAtLeast(0),
+            // An ended player is still set to play, but it isn't moving.
+            playing = p.playWhenReady && p.playbackState != Player.STATE_ENDED,
+            buffering = p.playbackState == Player.STATE_BUFFERING || p.playbackState == Player.STATE_IDLE,
+        )
     }
 
     private fun sameOrigin(first: String, second: String): Boolean {
@@ -617,7 +679,7 @@ open class PlayerActivity : ComponentActivity() {
         if (backgroundSessionActive) next.addListener(backgroundStateListener)
         player = next
         engineState.value = engine
-        playerState.value = next
+        playerState.value = if (partyItem != null) PartyControlledPlayer(next) else next
         updatePipParams()
         Log.i(PB_PLAYER, "player=${engine.label} mode=${playerMode.id}")
         // prepare() is deferred until PlayerView attaches (see ensurePrepared).
@@ -670,7 +732,27 @@ open class PlayerActivity : ComponentActivity() {
     // known; landscape content keeps the sensor-landscape default. The manual
     // rotate button disables this so it can't fight a user choice.
     private val playerListener = object : Player.Listener {
-        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = updatePipParams()
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            updatePipParams()
+            reportPartyState()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val item = partyItem ?: return
+            if (playbackState == Player.STATE_READY && !partyLoadedReported) {
+                partyLoadedReported = true
+                // A live stream has no end for the party to stop at.
+                val p = player
+                PhoneTogether.onLoaded(item, p?.duration?.takeIf { it > 0 && !p.isCurrentMediaItemLive })
+            }
+            reportPartyState()
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) = reportPartyState()
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = updatePipParams()
 
@@ -724,7 +806,9 @@ open class PlayerActivity : ComponentActivity() {
         // Back in the foreground (e.g. via the notification): the on-screen controls take
         // over again. Background play stays on until it's switched off in More.
         stopBackgroundMediaSession()
-        // Resume if the user returned while content was ready (onStop pauses).
+        // Resume if the user returned while content was ready (onStop pauses). The party
+        // kept a party video going.
+        if (partyItem != null) return
         player?.let { p ->
             if (p.playbackState != Player.STATE_IDLE && p.playbackState != Player.STATE_ENDED) {
                 p.playWhenReady = true
@@ -741,7 +825,8 @@ open class PlayerActivity : ComponentActivity() {
         // Keep playing does, with the media notification for the lock screen. (The window's X
         // also stops the activity first; onPictureInPictureModeChanged then closes the player.)
         // Otherwise leaving pauses. Rotation never gets here: the activity handles it itself.
-        if (isInPipModeState.value || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
+        // A party video keeps playing in step with the others until the player closes.
+        if (partyItem != null || isInPipModeState.value || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
             startBackgroundMediaSession()
         } else {
             player?.playWhenReady = false
@@ -769,6 +854,9 @@ open class PlayerActivity : ComponentActivity() {
         // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
         // activity handles orientation config changes itself.
         attachedPageSessionId?.let(PagePlayerSession::close)
+        // Closing the player stops watching here; the phone stays in the party as a remote.
+        // A new party video recreates the activity, which isn't a close.
+        if (partyItem != null) PhoneTogether.playerClosed(partyBridge, stopWatching = !isChangingConfigurations)
         player?.release()
         player = null
     }
@@ -816,6 +904,8 @@ open class PlayerActivity : ComponentActivity() {
         /** A website poster or backdrop URL, shown until the first frame. */
         const val EXTRA_POSTER_URL = "poster_url"
         const val EXTRA_SITE_ICON_URL = "site_icon_url"
+        /** The Watch Together item ID: the party controls playback. */
+        const val EXTRA_WATCH_TOGETHER_ITEM = "watch_together_item"
 
 
         private const val DEFAULT_UA =

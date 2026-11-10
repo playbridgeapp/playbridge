@@ -23,6 +23,8 @@ object PlayerLauncher {
         thumbnailKey: String? = null,
         /** The website's icon, pulsing in place of the spinner while the video loads. */
         siteIconUrl: String? = null,
+        /** A Watch Together video: the party controls playback (see [PlayerActivity]). */
+        watchTogetherItem: String? = null,
     ) {
         val intent = Intent(context, PlayerActivity.activityClass()).apply {
             putExtra(PlayerActivity.EXTRA_URL, url)
@@ -39,7 +41,9 @@ object PlayerLauncher {
             if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             thumbnailKey?.let { putExtra(PlayerActivity.EXTRA_THUMBNAIL_KEY, it) }
             siteIconUrl?.let { putExtra(PlayerActivity.EXTRA_SITE_ICON_URL, it) }
+            watchTogetherItem?.let { putExtra(PlayerActivity.EXTRA_WATCH_TOGETHER_ITEM, it) }
             origin?.putInto(this)
+            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent, PlayerLaunchOrigin.openOptions(context, origin))
     }

@@ -386,6 +386,8 @@ class BrowserActivity : ComponentActivity() {
     private val pendingLinkUrl = androidx.compose.runtime.mutableStateOf<String?>(null)
     private val pendingMediaTabId = androidx.compose.runtime.mutableStateOf<String?>(null)
     private val pendingCastRemote = androidx.compose.runtime.mutableStateOf(false)
+    /** A Watch Together invite link opened the app: show the party screen. */
+    private val pendingWatchTogether = androidx.compose.runtime.mutableStateOf(false)
     private val pendingDownloadNotification = mutableStateOf<DownloadNotificationOpen?>(null)
 
     override fun onNewIntent(intent: Intent) {
@@ -397,6 +399,7 @@ class BrowserActivity : ComponentActivity() {
             pendingMediaTabId.value = null
             pendingLinkUrl.value = it
         }
+        consumeWatchTogetherInvite()
         if (intent.action == ACTION_OPEN_MEDIA_TAB) {
             pendingCastRemote.value = false
             pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
@@ -412,6 +415,15 @@ class BrowserActivity : ComponentActivity() {
                 intent.getBooleanExtra(EXTRA_OPEN_DOWNLOAD_FILE, false),
             )
         }
+    }
+
+    /** Joins the party in a Watch Together invite link instead of opening it as a page. */
+    private fun consumeWatchTogetherInvite() {
+        val link = pendingLinkUrl.value?.let(com.playbridge.sender.together.WatchTogetherLinks::invite) ?: return
+        pendingLinkUrl.value = null
+        val together = com.playbridge.sender.together.PhoneTogether
+        together.join(this, link, together.watchHereByDefault(connectionCoordinator))
+        pendingWatchTogether.value = true
     }
 
     /** Extracts an http/https URL from a VIEW intent, or null if it isn't one we handle. */
@@ -590,6 +602,7 @@ class BrowserActivity : ComponentActivity() {
 
         // Capture a web link that launched us (tapped in another app); consumed in Compose.
         pendingLinkUrl.value = parseLinkIntent(intent)
+        if (savedInstanceState == null) consumeWatchTogetherInvite()
         if (intent?.action == ACTION_OPEN_MEDIA_TAB) {
             pendingMediaTabId.value = intent.getStringExtra(EXTRA_MEDIA_TAB_ID)?.takeIf { it.isNotBlank() }
         }
@@ -844,6 +857,12 @@ class BrowserActivity : ComponentActivity() {
                         currentScreen = Screen.Remote
                     }
                     pendingCastRemote.value = false
+                }
+            }
+            LaunchedEffect(pendingWatchTogether.value, tabsRestoredOrReady.value) {
+                if (pendingWatchTogether.value && tabsRestoredOrReady.value) {
+                    currentScreen = Screen.WatchTogether
+                    pendingWatchTogether.value = false
                 }
             }
             val downloadRequest = pendingDownloadNotification.value
@@ -2567,6 +2586,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                             Screen.History -> {}
                             Screen.CastHistory -> {}
+                            Screen.WatchTogether -> {}
                             Screen.Bookmarks -> {}
                             Screen.Home -> {}
                             Screen.Remote -> {}
@@ -2936,6 +2956,23 @@ class BrowserActivity : ComponentActivity() {
                         pendingContentPayload = null
                     },
                     onVideoClick = onVideoClick@ { video, subs, subtitleResources ->
+                         // In a watch party, a tapped video plays in the party instead.
+                         if (com.playbridge.sender.together.PhoneTogether.isInParty() &&
+                             video.playlistPayload == null &&
+                             video.kind == DetectedMediaKind.VIDEO
+                         ) {
+                             com.playbridge.sender.together.PhoneTogether.playInParty(
+                                 url = video.url,
+                                 title = video.title ?: selectedTab?.content?.title,
+                                 headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
+                                 subtitles = subs.orEmpty() + subtitleResources.map { it.url },
+                                 startMs = video.startPositionMs,
+                             )
+                             showVideoSheet = false
+                             forcePlaylistSheet = null
+                             currentScreen = Screen.WatchTogether
+                             return@onVideoClick
+                         }
                          when (castRoute) {
                              is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
                                  Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()

@@ -59,7 +59,9 @@ impl SimPlayer {
             return;
         }
         if self.playing && now >= self.buffering_until {
-            self.position += dt * self.rate * (1.0 + self.skew);
+            // Like a real player, it stops at the end (still set to play).
+            self.position =
+                (self.position + dt * self.rate * (1.0 + self.skew)).min(self.duration as f64);
         }
     }
 
@@ -126,6 +128,10 @@ impl Sim {
         } else {
             MemberKeys::generate()
         };
+        self.add_with(name, keys, screen, clock_offset)
+    }
+
+    fn add_with(&mut self, name: &str, keys: MemberKeys, screen: bool, clock_offset: f64) -> usize {
         let me = MemberId::generate();
         let engine = Engine::new(EngineConfig {
             invite: self.invite(),
@@ -428,6 +434,11 @@ fn pause_and_seek_from_any_member_apply_everywhere() {
     sim.run(1_500.0);
     assert!((sim.position(tv1) - 120_000.0).abs() < 1.0);
     sim.command(guest, Command::Play);
+    // A second tap while the start is scheduled changes nothing.
+    let scheduled = sim.devices[guest].engine.timeline().unwrap().clone();
+    sim.run(200.0);
+    sim.command(guest, Command::Play);
+    assert_eq!(sim.devices[guest].engine.timeline(), Some(&scheduled));
     sim.run(2_000.0);
     assert!(sim.devices[tv1].player.playing);
 }
@@ -562,6 +573,90 @@ fn sign_ins_reach_only_the_sharers_own_devices() {
             .map(String::as_str),
         Some("session=secret")
     );
+}
+
+#[test]
+fn a_tv_paired_by_code_gets_the_inviting_phones_sign_in() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(2_000.0);
+    // The phone learned only the TV's key, from the pairing lookup.
+    let tv_keys = MemberKeys::generate();
+    sim.command(phone, Command::AddOwnKey(tv_keys.box_public()));
+    let tv = sim.add_with("Paired TV", tv_keys, true, 0.0);
+    let guest_tv = sim.add("Friend's TV", false, true, 0.0);
+    sim.run(3_000.0);
+    assert_eq!(
+        sim.devices[tv]
+            .player
+            .secrets
+            .get("Cookie")
+            .map(String::as_str),
+        Some("session=secret")
+    );
+    assert!(sim.devices[guest_tv].player.secrets.is_empty());
+}
+
+#[test]
+fn a_remote_that_starts_watching_joins_the_video_in_step() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv = sim.add("Living room", false, true, 0.0);
+    let guest = sim.add("Guest phone", false, false, 321.0);
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(15_000.0);
+    // Forget what the remote's simulated player did so far: only the switch may start it.
+    sim.devices[guest].player = SimPlayer {
+        rate: 1.0,
+        duration: 600_000,
+        ..Default::default()
+    };
+    sim.command(guest, Command::SetScreen(true));
+    assert!(
+        sim.devices[guest].player.item.is_some(),
+        "it loads the current video"
+    );
+    assert!(
+        sim.devices[guest].player.position > 10_000.0,
+        "where the party is"
+    );
+    // Up to half a second off after loading is closed by a speed nudge.
+    sim.run(12_000.0);
+    assert!(sim.devices[guest].player.playing);
+    assert!(
+        sim.spread(&[tv, guest]) < 150.0,
+        "spread {}",
+        sim.spread(&[tv, guest])
+    );
+}
+
+#[test]
+fn the_party_stops_at_the_end_of_the_video() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let tv2 = sim.add("Bedroom", false, true, 250.0);
+    for device in &mut sim.devices {
+        device.player.duration = 20_000;
+    }
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(30_000.0);
+    let timeline = sim.devices[phone].engine.timeline().unwrap().clone();
+    assert!(!timeline.playing, "the room pauses at the end");
+    assert_eq!(timeline.position_ms, 20_000.0);
+    for tv in [tv1, tv2] {
+        assert!(sim.position(tv) <= 20_000.0);
+        assert!(sim.position(tv) > 19_000.0);
+    }
+    // Nothing keeps bouncing: no pauses for buffering after the end.
+    assert!(!sim.saw(
+        phone,
+        |e| matches!(e, Event::Waiting(list) if !list.is_empty())
+    ));
 }
 
 #[test]

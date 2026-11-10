@@ -104,7 +104,7 @@ internal fun VideoSurface(state: PlayerScreenState) {
 private fun ZoomedVideo(state: PlayerScreenState) {
     val player = state.player
     // mpv draws subtitles into the picture, so it zooms and fills itself rather than being scaled.
-    val mpv = player as? MpvMediaPlayer
+    val mpv = player.unwrapped() as? MpvMediaPlayer
     var size by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(mpv, state.shownResizeMode) { mpv?.setScaleMode(mpvScaleMode(state.shownResizeMode)) }
     LaunchedEffect(mpv) {
@@ -161,7 +161,7 @@ private fun ZoomedVideo(state: PlayerScreenState) {
 
 /** mpv's picture fills the view; mpv letterboxes, zooms or stretches it inside. */
 private fun viewResizeMode(player: Player, mode: Int): Int =
-    if (player is MpvMediaPlayer) AspectRatioFrameLayout.RESIZE_MODE_FILL else mode
+    if (player.unwrapped() is MpvMediaPlayer) AspectRatioFrameLayout.RESIZE_MODE_FILL else mode
 
 private fun mpvScaleMode(mode: Int): String = when (mode) {
     AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
@@ -177,7 +177,7 @@ private fun mpvScaleMode(mode: Int): String = when (mode) {
 private fun SubtitleLayer(player: Player) {
     val settings: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
     val style by settings.phoneSubtitleStyle.collectAsState(initial = com.playbridge.shared.player.SubtitleStyle.DEFAULT)
-    LaunchedEffect(player, style) { (player as? MpvMediaPlayer)?.setSubtitleStyle(style) }
+    LaunchedEffect(player, style) { (player.unwrapped() as? MpvMediaPlayer)?.setSubtitleStyle(style) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val fontRevision by PhoneSubtitleFonts.revision.collectAsState()
     // The chosen custom font, linked in for mpv; Android falls back per character to the device's fonts.

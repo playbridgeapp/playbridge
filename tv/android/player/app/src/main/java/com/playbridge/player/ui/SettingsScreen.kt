@@ -228,6 +228,7 @@ fun SettingsScreen(
                 }
 
                 when (selectedCategory) {
+                    SettingsCategory.WATCH_TOGETHER -> item { WatchTogetherPanel() }
                     SettingsCategory.PLAYER -> {
                         item {
                             SettingToggleItem(
@@ -1007,6 +1008,7 @@ fun SettingsScreen(
 
 enum class SettingsCategory(val label: String, val icon: ImageVector) {
     PLAYER("Playback", Icons.Default.PlayArrow),
+    WATCH_TOGETHER("Watch Together", Icons.Default.Person),
     BROWSER("Browser", Icons.Default.Search),
     INTEGRATIONS("Subtitles & Skipping", Icons.Default.Build),
     APPEARANCE("General", Icons.Default.Add),

@@ -19,6 +19,7 @@ pub mod invite;
 pub mod messages;
 pub mod pairing;
 pub mod sync;
+mod tls;
 
 pub use crypto::{MemberKeys, RoomKey};
 pub use ids::{MemberId, RoomId};

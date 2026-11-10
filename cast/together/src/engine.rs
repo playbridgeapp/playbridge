@@ -133,7 +133,13 @@ pub enum Command {
         member: MemberId,
         box_pk: [u8; 32],
     },
+    /// A device this device's owner paired by code or QR: only its key is
+    /// known, so it becomes a member of ours once it says hello with that key.
+    AddOwnKey([u8; 32]),
     ContinueWithout(MemberId),
+    /// Start or stop playing the video on this device. The others learn it
+    /// from a fresh hello; becoming a screen loads the current video.
+    SetScreen(bool),
     /// One-time share of the current item's sign-in with a member.
     ShareCredentials(MemberId),
     Leave,
@@ -187,6 +193,7 @@ pub struct Engine {
 
     // Credentials.
     own: HashMap<MemberId, [u8; 32]>,
+    own_keys: HashSet<[u8; 32]>,
     my_secrets: HashMap<String, BTreeMap<String, String>>,
     received: HashMap<(String, MemberId), BTreeMap<String, String>>,
 
@@ -239,6 +246,7 @@ impl Engine {
             last_waiting: Vec::new(),
             last_continue: Vec::new(),
             own: HashMap::new(),
+            own_keys: HashSet::new(),
             my_secrets: HashMap::new(),
             received: HashMap::new(),
             pending: HashMap::new(),
@@ -498,6 +506,13 @@ impl Engine {
                 let Some(current) = self.timeline.clone() else {
                     return out;
                 };
+                // Already so: a second tap must not push a scheduled start back.
+                if matches!(
+                    (&command, current.playing),
+                    (Command::Play, true) | (Command::Pause, false)
+                ) {
+                    return out;
+                }
                 let expected = current.expected_ms(room_now);
                 let (playing, position) = match command {
                     Command::Play => (true, expected),
@@ -577,18 +592,23 @@ impl Engine {
                 self.send_signed(signed, None, &mut out);
                 self.write_state(&mut out);
             }
-            Command::AddOwn { member, box_pk } => {
-                self.own.insert(member, box_pk);
-                if let Some(item) = self.item.clone()
-                    && item.shared_by == self.cfg.me
-                    && self.members.contains(&member)
-                {
-                    self.send_credentials(&item.id, member, &mut out);
+            Command::AddOwn { member, box_pk } => self.add_own(member, box_pk, &mut out),
+            Command::AddOwnKey(box_pk) => {
+                self.own_keys.insert(box_pk);
+                let matching: Vec<MemberId> = self
+                    .peers
+                    .iter()
+                    .filter(|(_, peer)| peer.box_pk == box_pk)
+                    .map(|(member, _)| *member)
+                    .collect();
+                for member in matching {
+                    self.add_own(member, box_pk, &mut out);
                 }
             }
             Command::ContinueWithout(member) => {
                 self.ignored.insert(member);
             }
+            Command::SetScreen(screen) => self.set_screen(screen, room_now, &mut out),
             Command::ShareCredentials(member) => {
                 let Some(item) = self.item.clone() else {
                     return out;
@@ -775,6 +795,9 @@ impl Engine {
                 }));
                 if !known && !self.members.contains(&from) {
                     self.members.push(from);
+                }
+                if self.own_keys.contains(&box_pk) && !self.own.contains_key(&from) {
+                    self.add_own(from, box_pk, out);
                 }
             }
             Body::Delegate { member, sign_pk } => {
@@ -1089,7 +1112,15 @@ impl Engine {
         let Some(timeline) = self.timeline.as_ref() else {
             return;
         };
-        let commands = match self.corrector.correct(timeline, room_now, player) {
+        let own_end = self
+            .ready
+            .get(&self.cfg.me)
+            .and_then(|(duration, _)| *duration)
+            .map(|d| d as f64);
+        let commands = match self
+            .corrector
+            .correct_until(timeline, room_now, player, own_end)
+        {
             Correction::None => return,
             Correction::Play => vec![PlayerCommand::Play],
             Correction::Pause => vec![PlayerCommand::Pause],
@@ -1180,6 +1211,15 @@ impl Engine {
         let Some(timeline) = self.timeline.clone() else {
             return;
         };
+        // The video is over: everyone stops at the end, together.
+        if timeline.playing
+            && let Some(end) = self.video_end()
+            && timeline.expected_ms(room_now) >= end
+        {
+            self.paused_for_buffering = false;
+            self.write_timeline(false, end, room_now, out);
+            return;
+        }
         if timeline.playing && !waiting.is_empty() {
             self.paused_for_buffering = true;
             let position = timeline.expected_ms(room_now);
@@ -1192,6 +1232,17 @@ impl Engine {
             let at = room_now + self.start_lead();
             self.write_timeline(true, timeline.position_ms, at, out);
         }
+    }
+
+    /// Where the video ends: the shortest length a screen reported. Live
+    /// streams report none, so they never end.
+    fn video_end(&self) -> Option<f64> {
+        self.ready
+            .iter()
+            .filter(|(member, _)| !self.ignored.contains(member))
+            .filter_map(|(_, (duration, _))| *duration)
+            .min()
+            .map(|d| d as f64)
     }
 
     fn expire_requests(&mut self, room_now: f64, out: &mut Vec<Output>) {
@@ -1263,6 +1314,52 @@ impl Engine {
         self.send_signed(Signed { b, s }, to, out);
     }
 
+    fn set_screen(&mut self, screen: bool, room_now: f64, out: &mut Vec<Output>) {
+        if self.cfg.screen == screen {
+            return;
+        }
+        self.cfg.screen = screen;
+        let me = self.cfg.me;
+        self.loaded_item = None;
+        self.sent_ready = None;
+        self.ready.remove(&me);
+        self.corrector.reset();
+        if self.reported_buffering {
+            self.reported_buffering = false;
+            self.buffering.remove(&me);
+            if let Some(item) = self.item.as_ref().map(|i| i.id.clone())
+                && self.connected
+            {
+                self.send(
+                    Body::Buffering {
+                        item,
+                        buffering: false,
+                    },
+                    None,
+                    false,
+                    out,
+                );
+            }
+        }
+        if self.connected {
+            self.send_hello(None, out);
+        }
+        // Join the video where the party is now.
+        if screen && let Some(item) = self.item.clone() {
+            let start_ms = self
+                .timeline
+                .as_ref()
+                .map(|t| t.expected_ms(room_now))
+                .unwrap_or(item.start_ms as f64);
+            let secrets = self.secrets_for(&item);
+            out.push(Output::Player(PlayerCommand::Load {
+                item,
+                secrets,
+                start_ms,
+            }));
+        }
+    }
+
     fn issue_load(&mut self, item: SharedItem, room_now: f64, out: &mut Vec<Output>) {
         let rev = self.next_seq();
         let signed = self.signed(&Body::Load { item: item.clone() }, true, rev);
@@ -1290,6 +1387,16 @@ impl Engine {
         self.send_signed(signed, Some(pending.from), out);
         if allowed {
             self.issue_load(pending.item, room_now, out);
+        }
+    }
+
+    fn add_own(&mut self, member: MemberId, box_pk: [u8; 32], out: &mut Vec<Output>) {
+        self.own.insert(member, box_pk);
+        if let Some(item) = self.item.clone()
+            && item.shared_by == self.cfg.me
+            && self.members.contains(&member)
+        {
+            self.send_credentials(&item.id, member, out);
         }
     }
 

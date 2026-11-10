@@ -40,6 +40,7 @@ internal fun rememberDashboardTileStates(
     val replaySources by replayStore.sources.collectAsStateWithLifecycle()
     val commandHistoryFlow = remember { DatabaseProvider.getDatabase(context).commandHistoryDao().getAll() }
     val commandHistory by commandHistoryFlow.collectAsStateWithLifecycle(initialValue = null)
+    val together by com.playbridge.sender.together.PhoneTogether.state.collectAsStateWithLifecycle()
 
     // Same permission set Phone files asks for; any one of them lists media.
     val mediaAccess = mediaPermissions().any {
@@ -74,6 +75,7 @@ internal fun rememberDashboardTileStates(
         collections = collections,
         castHistoryEmpty = commandHistory?.let { it.isEmpty() && attempts.isEmpty() },
         lastCastTitle = lastCastTitle,
+        watchTogether = together is com.playbridge.sender.together.PhoneTogether.State.InParty,
     )
 }
 

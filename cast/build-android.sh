@@ -4,7 +4,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 output_dir="$repo_dir/mobile/android/app/src/main/jniLibs"
-cargo_features="playbridge-cast-core-ffi/sender-services-android"
+cargo_features="playbridge-cast-core-ffi/sender-services-android,playbridge-cast-core-ffi/together"
 no_default_features=0
 android_api=26
 target_root=${CARGO_TARGET_DIR:-"$repo_dir/target"}
@@ -26,7 +26,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --tv)
             output_dir="$repo_dir/tv/android/player/app/src/main/jniLibs"
-            cargo_features="playbridge-cast-core-ffi/receiver-proxy-android"
+            cargo_features="playbridge-cast-core-ffi/receiver-proxy-android,playbridge-cast-core-ffi/together"
             no_default_features=1
             shift
             ;;

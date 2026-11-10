@@ -6,6 +6,10 @@ use crate::ids::MemberId;
 
 /// Drift under this is left alone.
 pub const DEADBAND_MS: f64 = 150.0;
+/// Drift under this is left alone while paused, and fixed by a speed nudge once
+/// playing again. Players keep no back buffer, so even a short seek back makes
+/// them load the video again.
+pub const PAUSED_DEADBAND_MS: f64 = 500.0;
 /// Drift up to this is fixed by nudging speed; beyond it, by seeking.
 pub const SEEK_THRESHOLD_MS: f64 = 2000.0;
 /// A nudge stops once drift is back under this.
@@ -95,16 +99,29 @@ impl Corrector {
         room_now: f64,
         player: PlayerSnapshot,
     ) -> Correction {
+        self.correct_until(timeline, room_now, player, None)
+    }
+
+    /// [`Self::correct`] for a video `end_ms` long: never seeks past the end,
+    /// and leaves a player that reached it alone.
+    pub fn correct_until(
+        &mut self,
+        timeline: &Timeline,
+        room_now: f64,
+        player: PlayerSnapshot,
+        end_ms: Option<f64>,
+    ) -> Correction {
         if player.buffering {
             return Correction::None;
         }
+        let end = end_ms.filter(|e| *e > 0.0).unwrap_or(f64::INFINITY);
         // Waiting for a scheduled start: hold paused at the start position.
         if timeline.starts_after(room_now) || !timeline.playing {
-            if player.playing {
+            if player.playing && player.position_ms < end - DEADBAND_MS {
                 return self.unnudged(Correction::Pause);
             }
-            let target = timeline.position_ms;
-            if (player.position_ms - target).abs() > DEADBAND_MS {
+            let target = timeline.position_ms.min(end);
+            if (player.position_ms - target).abs() > PAUSED_DEADBAND_MS {
                 self.rate = 1.0;
                 return Correction::Seek(target);
             }
@@ -112,10 +129,19 @@ impl Corrector {
         }
 
         let expected = timeline.expected_ms(room_now);
+        if expected >= end {
+            // The video is over here; the room pauses at the end shortly.
+            if player.position_ms >= end - SEEK_THRESHOLD_MS {
+                return self.unnudged(Correction::None);
+            }
+            self.rate = 1.0;
+            return Correction::Seek(end);
+        }
         let drift = player.position_ms - expected; // positive: ahead
         if !player.playing {
             self.rate = 1.0;
-            return if drift.abs() > DEADBAND_MS {
+            // Resuming a few hundred ms off: play, and let the nudge close it.
+            return if drift.abs() > PAUSED_DEADBAND_MS {
                 Correction::SeekAndPlay(expected)
             } else {
                 Correction::Play
@@ -244,6 +270,43 @@ mod tests {
         assert_eq!(
             c.correct(&t, 65_000.0, snap(0.0, false)),
             Correction::SeekAndPlay(60_000.0)
+        );
+    }
+
+    #[test]
+    fn small_gaps_while_paused_are_left_alone() {
+        let mut c = Corrector::default();
+        let t = timeline(false, 30_000.0, 0.0);
+        // Stopped a little after the pause: no seek, which would reload the video.
+        assert_eq!(c.correct(&t, 1.0, snap(30_300.0, false)), Correction::None);
+        // Resuming from there: play, and nudge the rest.
+        let t = timeline(true, 30_000.0, 0.0);
+        assert_eq!(c.correct(&t, 10.0, snap(30_300.0, false)), Correction::Play);
+        assert_eq!(
+            c.correct(&t, 500.0, snap(30_800.0, true)),
+            Correction::SetRate(1.0 - NUDGE_RATE)
+        );
+    }
+
+    #[test]
+    fn never_seeks_past_the_end() {
+        let mut c = Corrector::default();
+        let t = timeline(true, 0.0, 0.0);
+        // Finished here while the room's clock runs on: stay at the end.
+        assert_eq!(
+            c.correct_until(&t, 70_000.0, snap(60_000.0, false), Some(60_000.0)),
+            Correction::None
+        );
+        // Far behind with the room past the end: go to the end, not beyond.
+        assert_eq!(
+            c.correct_until(&t, 70_000.0, snap(10_000.0, true), Some(60_000.0)),
+            Correction::Seek(60_000.0)
+        );
+        // Paused at the end, still reporting playing: no pause bounce.
+        let paused = timeline(false, 60_000.0, 0.0);
+        assert_eq!(
+            c.correct_until(&paused, 70_000.0, snap(60_000.0, true), Some(60_000.0)),
+            Correction::None
         );
     }
 

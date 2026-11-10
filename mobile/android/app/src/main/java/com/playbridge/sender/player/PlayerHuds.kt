@@ -121,7 +121,7 @@ internal fun StatsOverlay(
         }
     }
 
-    val counters = (player as? ExoPlayer)?.videoDecoderCounters
+    val counters = (player.unwrapped() as? ExoPlayer)?.videoDecoderCounters
     val rendered = remember(tick) { counters?.renderedOutputBufferCount ?: 0 }
     val dropped = remember(tick) { counters?.droppedBufferCount ?: 0 }
     val skipped = remember(tick) { counters?.skippedOutputBufferCount ?: 0 }

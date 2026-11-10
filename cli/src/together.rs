@@ -278,9 +278,14 @@ async fn room(
                         let Some(base) = pairing.clone() else { println!("! start with --pairing to send invites"); continue };
                         let link = link.clone();
                         let from = name.clone();
+                        let commands = commands_tx.clone();
                         tokio::spawn(async move {
                             match send_pairing(&base, &target, link, from).await {
-                                Ok(()) => println!("✓ invite sent"),
+                                Ok(box_pk) => {
+                                    // The TV this terminal paired counts as its own.
+                                    let _ = commands.send(Command::AddOwnKey(box_pk));
+                                    println!("✓ invite sent");
+                                }
                                 Err(error) => println!("! pairing failed: {error}"),
                             }
                         });
@@ -355,7 +360,12 @@ fn parse_command(line: &str) -> Result<Option<Typed>, String> {
     Ok(Some(Typed::Room(command)))
 }
 
-async fn send_pairing(base: &str, target: &str, link: String, from: String) -> Result<(), String> {
+async fn send_pairing(
+    base: &str,
+    target: &str,
+    link: String,
+    from: String,
+) -> Result<[u8; 32], String> {
     let (service, code, fingerprint) = if target.contains("/p/") {
         let qr = QrPayload::parse(target).map_err(|e| e.to_string())?;
         (

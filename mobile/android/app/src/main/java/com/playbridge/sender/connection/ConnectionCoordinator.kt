@@ -127,6 +127,41 @@ class ConnectionCoordinator internal constructor(
         }
     }
 
+    /** The connected TV's name, when connected. */
+    val connectedTvName: String?
+        get() = (webSocketClient?.connectionState?.value as? WebSocketClient.ConnectionState.Connected)?.serverName
+
+    /** Whether the connected TV can join a Watch Together room. */
+    val tvSupportsWatchTogether: Boolean
+        get() = webSocketClient?.connectionState?.value is WebSocketClient.ConnectionState.Connected &&
+            com.playbridge.shared.protocol.WATCH_TOGETHER_FEATURE in webSocketClient.tvCapabilitiesState.value.features
+
+    @Volatile private var pendingWatchTogetherReply: CompletableDeferred<org.json.JSONObject>? = null
+
+    /**
+     * Asks the connected TV to join the room in [invite]. Returns its member ID and keys,
+     * which make it one of this phone's own devices, or the TV's error code.
+     */
+    suspend fun addTvToWatchTogether(invite: String, from: String): Result<WatchTogetherTv> {
+        val client = webSocketClient
+        if (client == null || !tvSupportsWatchTogether) return Result.failure(IllegalStateException("unsupported"))
+        val reply = CompletableDeferred<org.json.JSONObject>()
+        pendingWatchTogetherReply = reply
+        if (!client.send(com.playbridge.shared.protocol.createWatchTogetherJoinJson(invite, from))) {
+            return Result.failure(IllegalStateException("not_connected"))
+        }
+        val json = withTimeoutOrNull(FONT_REPLY_TIMEOUT_MS) { reply.await() }
+            ?: return Result.failure(IllegalStateException("no_reply"))
+        val member = json.optString("member")
+        val box = json.optString("box_pk")
+        val sign = json.optString("sign_pk")
+        return if (json.optBoolean("ok") && member.isNotEmpty() && box.isNotEmpty() && sign.isNotEmpty()) {
+            Result.success(WatchTogetherTv(connectedTvName ?: "TV", member, box, sign))
+        } else {
+            Result.failure(IllegalStateException(json.optString("error").ifEmpty { "failed" }))
+        }
+    }
+
     /** The custom fonts installed on the TV, selected or not. */
     val tvInstalledFonts = MutableStateFlow<List<String>>(emptyList())
 
@@ -386,6 +421,7 @@ class ConnectionCoordinator internal constructor(
                                 logd("TV timeline chapters=${timeline.chapters.size} segments=${timeline.segments.size}")
                             }
                         }
+                        "watch_together_joined" -> pendingWatchTogetherReply?.complete(json)
                         "subtitle_font_ack", "subtitle_font_result" -> pendingFontReply
                             ?.takeIf { it.first == json.optString("transferId") }
                             ?.second?.complete(json)
@@ -626,3 +662,6 @@ class ConnectionCoordinator internal constructor(
         var timeline: TvTimeline? = null,
     )
 }
+
+/** A TV this phone added to a Watch Together room over its paired connection. */
+data class WatchTogetherTv(val name: String, val member: String, val boxKey: String, val signKey: String)

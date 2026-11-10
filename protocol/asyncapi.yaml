@@ -309,6 +309,7 @@ components:
         - $ref: '#/components/schemas/UserAgentQuery'
         - $ref: '#/components/schemas/SubtitleStyle'
         - $ref: '#/components/schemas/SubtitleStyleQuery'
+        - $ref: '#/components/schemas/WatchTogetherJoin'
         - $ref: '#/components/schemas/SubtitleFontBegin'
         - $ref: '#/components/schemas/SubtitleFontChunk'
         - $ref: '#/components/schemas/SubtitleFontEnd'
@@ -341,6 +342,7 @@ components:
         - $ref: '#/components/schemas/ScreenMirrorAnswer'
         - $ref: '#/components/schemas/ScreenMirrorCandidate'
         - $ref: '#/components/schemas/ScreenMirrorEvent'
+        - $ref: '#/components/schemas/WatchTogetherJoined'
     Ping:
       type: object
       required: [type]
@@ -1224,6 +1226,33 @@ components:
       required: [type]
       properties:
         type: { const: subtitle_style_query }
+      additionalProperties: false
+    WatchTogetherJoin:
+      type: object
+      description: >-
+        Asks a paired receiver to join a Watch Together room (docs/design-watch-together.md).
+        Receivers advertise watch_together_v1 and answer with watch_together_joined. The
+        invite link's fragment holds the room key: never log it.
+      required: [type, invite, from]
+      properties:
+        type: { const: watch_together_join }
+        invite: { type: string, maxLength: 2048, description: 'https://<relay>/j/<room>#k=<room key>&h=<host signing key>' }
+        from: { type: string, maxLength: 128, description: "The sender's name, shown on the receiver." }
+      additionalProperties: false
+    WatchTogetherJoined:
+      type: object
+      description: >-
+        A receiver's answer to watch_together_join. On success it carries the receiver's room
+        member ID and public keys, so the sender can count it as its own device and hand it
+        host duties.
+      required: [type, ok]
+      properties:
+        type: { const: watch_together_joined }
+        ok: { type: boolean }
+        member: { type: string, description: '32 lowercase hex characters.' }
+        box_pk: { type: string, description: 'X25519 public key, unpadded base64url.' }
+        sign_pk: { type: string, description: 'Ed25519 public key, unpadded base64url.' }
+        error: { type: string, description: 'Known: invalid_invite, unavailable.' }
       additionalProperties: false
     UserAgentQuery:
       type: object

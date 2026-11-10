@@ -17,6 +17,7 @@ class DashboardItemsTest {
         Screen.ScreenMirror to "screen-mirror",
         Screen.Iptv to "iptv",
         Screen.Collections to "collections",
+        Screen.WatchTogether to "watch-together",
         Screen.CastHistory to "cast-history",
     )
 

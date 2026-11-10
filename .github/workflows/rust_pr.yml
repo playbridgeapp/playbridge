@@ -52,6 +52,11 @@ jobs:
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Test and lint Watch Together bindings
+        run: |
+          cargo test -p playbridge-cast-core-ffi --features together --locked together
+          cargo clippy -p playbridge-cast-core-ffi --features together --all-targets --locked -- -D warnings
+
       - name: Validate CLI installer
         run: sh -n cli/install.sh
 

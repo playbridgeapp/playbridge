@@ -54,6 +54,8 @@ receiver-proxy-android = [
     "dep:stream-proxy-rust",
     "stream-proxy-rust/upstream-jni",
 ]
+# Watch Together room engine and receiver pairing (`pb_together_*`).
+together = ["dep:playbridge-together", "dep:qrcode", "dep:url"]
 
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
@@ -62,6 +64,8 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 playbridge-cast-core = { path = "../core", optional = true }
 playbridge-cast-receiver = { path = "../receiver", optional = true }
 playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
+playbridge-together = { path = "../together", optional = true }
+qrcode = { version = "0.14", default-features = false, optional = true }
 # Features selected by the sender-services / receiver-proxy variants (no default features).
 stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true, default-features = false }
 base64 = { version = "0.22", optional = true }
