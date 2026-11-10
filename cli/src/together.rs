@@ -442,6 +442,8 @@ fn print_event(event: &Event) {
         Event::Policy(policy) => println!("  who can change the video: {policy:?}"),
         Event::CredentialsReceived { item } => println!("  received sign-in for {item}"),
         Event::Warning(text) => println!("! {text}"),
+        Event::Live(true) => println!("  live stream: play and pause only"),
+        Event::Live(false) => {}
         Event::Rejected(reason) => println!("  (dropped: {reason})"),
     }
 }
@@ -542,7 +544,7 @@ impl Player for SimPlayer {
                 self.rate = 1.0;
                 self.loading_until = Some(self.now() + 500.0);
             }
-            PlayerCommand::Play => self.playing = true,
+            PlayerCommand::Play | PlayerCommand::GoLive => self.playing = true,
             PlayerCommand::Pause => self.playing = false,
             PlayerCommand::Seek(to) => self.position = to,
             PlayerCommand::SetRate(rate) => self.rate = rate,

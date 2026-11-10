@@ -49,6 +49,7 @@ class Party {
     this.policy = TogetherPolicy.onlyHost,
     this.requests = const [],
     this.notice,
+    this.live = false,
   });
 
   final String roomId;
@@ -79,6 +80,9 @@ class Party {
   final List<PartyRequest> requests;
   final String? notice;
 
+  /// A live stream: the party shares play and pause only.
+  final bool live;
+
   /// Whether this computer may change the video without asking.
   bool get canChangeVideo =>
       host || (policy == TogetherPolicy.anyone && !locked);
@@ -98,6 +102,7 @@ class Party {
     TogetherPolicy? policy,
     List<PartyRequest>? requests,
     String? Function()? notice,
+    bool? live,
   }) =>
       Party(
         roomId: roomId,
@@ -119,6 +124,7 @@ class Party {
         policy: policy ?? this.policy,
         requests: requests ?? this.requests,
         notice: notice != null ? notice() : this.notice,
+        live: live ?? this.live,
       );
 
   @override
@@ -482,6 +488,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
           TogetherSeek(:final positionMs) =>
             player.partySeek(Duration(milliseconds: positionMs)),
           TogetherRate(:final rate) => player.partyRate(rate),
+          TogetherGoLive() => player.partyGoLive(),
           TogetherLoad() => Future<void>.value(),
         }));
   }
@@ -678,6 +685,8 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
         _updateParty((p) => p.copyWith(
             requests: p.requests.where((r) => r.id != request).toList()));
         _toast("The host didn't respond");
+      case TogetherLive(:final live):
+        _updateParty((p) => p.copyWith(live: live));
       case TogetherWarning(:final message):
         _updateParty((p) => p.copyWith(notice: () => message));
       case TogetherPairingCode():

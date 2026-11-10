@@ -12,6 +12,8 @@ oneway interface IRendererService {
     void play(long sessionId);
     void pause(long sessionId);
     void seekTo(long positionMs, long sessionId);
+    /** A live stream: jump to its live point. */
+    void seekToLive(long sessionId);
     void setPlaybackSpeed(float speed, long sessionId);
     void setVideoScaling(String mode, long sessionId);
     void setLooping(boolean enabled, long sessionId);

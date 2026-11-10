@@ -627,6 +627,14 @@ class MpvPlayerEngine(
         }
     }
 
+    // The end of a live stream's seekable range is its live point.
+    override fun seekToLive() {
+        logger.d(TAG, "seekToLive() queued")
+        enqueueControl("seekToLive") {
+            MPVLib.command("seek", "100", "absolute-percent")
+        }
+    }
+
     override fun setRate(rate: Float) {
         logger.i(TAG, "setRate($rate) queued")
         playbackSpeed = rate

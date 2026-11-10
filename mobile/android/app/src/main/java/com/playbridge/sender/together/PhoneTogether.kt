@@ -69,6 +69,8 @@ object PhoneTogether {
         val policy: TogetherPolicy = TogetherPolicy.OnlyHost,
         val requests: List<Request> = emptyList(),
         val notice: String? = null,
+        /** A live stream: the party shares play and pause only. */
+        val live: Boolean = false,
     ) {
         override fun toString(): String = "Party(room=$roomId, relay=$relay, host=$host)"
 
@@ -357,6 +359,7 @@ object PhoneTogether {
                 toast("The host didn't respond")
             }
             is TogetherEvent.Warning -> updateParty { it.copy(notice = event.message) }
+            is TogetherEvent.Live -> updateParty { it.copy(live = event.live) }
             is TogetherEvent.PairSent -> toast("Invite sent. Confirm on the TV.")
             is TogetherEvent.Error -> when (event.context) {
                 "pair_send" -> toast("Couldn't invite that TV: ${event.message}")

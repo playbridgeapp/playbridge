@@ -726,6 +726,7 @@ fn event_json(event: &Event) -> Option<Value> {
         Event::Policy(policy) => json!({"event": "policy", "policy": policy}),
         Event::CredentialsReceived { item } => json!({"event": "credentials", "item": item}),
         Event::Warning(message) => json!({"event": "warning", "message": message}),
+        Event::Live(live) => json!({"event": "live", "live": live}),
         Event::Rejected(reason) => json!({"event": "rejected", "reason": reason}),
     })
 }
@@ -770,10 +771,13 @@ impl Feed {
                     at,
                 ));
             }
-            PlayerCommand::Play | PlayerCommand::Pause | PlayerCommand::Seek(_) => {
+            PlayerCommand::Play
+            | PlayerCommand::GoLive
+            | PlayerCommand::Pause
+            | PlayerCommand::Seek(_) => {
                 if let Some(mut snapshot) = current {
                     match command {
-                        PlayerCommand::Play => snapshot.playing = true,
+                        PlayerCommand::Play | PlayerCommand::GoLive => snapshot.playing = true,
                         PlayerCommand::Pause => snapshot.playing = false,
                         PlayerCommand::Seek(to) => snapshot.position_ms = *to,
                         _ => {}
@@ -821,6 +825,7 @@ impl Player for BridgePlayer {
             PlayerCommand::Pause => json!({"action": "pause"}),
             PlayerCommand::Seek(to) => json!({"action": "seek", "position_ms": to}),
             PlayerCommand::SetRate(rate) => json!({"action": "rate", "rate": rate}),
+            PlayerCommand::GoLive => json!({"action": "go_live"}),
         };
         let _ = self
             .events

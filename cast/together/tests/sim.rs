@@ -29,6 +29,7 @@ struct SimPlayer {
     /// A live stream: reports no length and never ends.
     live: bool,
     seeks: u32,
+    went_live: u32,
 }
 
 impl SimPlayer {
@@ -47,6 +48,10 @@ impl SimPlayer {
                 self.loading_until = Some(now + LOAD_MS);
             }
             PlayerCommand::Play => self.playing = true,
+            PlayerCommand::GoLive => {
+                self.playing = true;
+                self.went_live += 1;
+            }
             PlayerCommand::Pause => self.playing = false,
             PlayerCommand::Seek(to) => {
                 self.position = to;
@@ -751,12 +756,34 @@ fn live_streams_share_play_and_pause_but_not_position() {
         assert_eq!(player.rate, 1.0, "no speed nudges in a live stream");
     }
 
+    assert!(sim.saw(phone, |e| matches!(e, Event::Live(true))));
+
+    // One device buffering doesn't hold everyone back from live.
+    let now = sim.now;
+    sim.devices[tv2].player.buffering_until = now + 4_000.0;
+    sim.run(3_000.0);
+    assert!(
+        sim.devices[tv1].player.playing,
+        "nobody waits for a live stall"
+    );
+    assert!(sim.devices[phone].engine.timeline().unwrap().playing);
+    sim.run(3_000.0);
+
+    // Live streams have nothing to seek to.
+    sim.command(phone, Command::Seek(5_000.0));
+    sim.run(2_000.0);
+
+    // After a pause, play goes back to live rather than resuming behind it.
     sim.command(phone, Command::Pause);
     sim.run(3_000.0);
     assert!(!sim.devices[tv1].player.playing && !sim.devices[tv2].player.playing);
+    let went_live = |sim: &Sim| [tv1, tv2].map(|tv| sim.devices[tv].player.went_live);
+    let before = went_live(&sim);
     sim.command(phone, Command::Play);
     sim.run(3_000.0);
     assert!(sim.devices[tv1].player.playing && sim.devices[tv2].player.playing);
+    let after = went_live(&sim);
+    assert!(after[0] > before[0] && after[1] > before[1]);
     assert_eq!(
         sim.devices[tv1].player.seeks + sim.devices[tv2].player.seeks,
         0

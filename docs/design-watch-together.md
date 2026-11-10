@@ -325,9 +325,14 @@ Sync details settled while testing:
 - When no device shows the video any more (every screen stopped watching),
   the room pauses where it was, and a video doesn't start until a device shows
   it. Whoever watches next loads at that point; play starts everyone.
-- Live streams (a screen loaded them with no length) share only playing or
+- Live streams (every screen loaded them with no length) share only playing or
   paused. A live position means something different on each device, so there
-  are no seeks or speed nudges: each device stays at its own live point.
+  are no seeks or speed nudges: each device stays at its own live point. The
+  room announces a live party (`live` event) and apps hide seeking; a seek is
+  refused. A buffering device doesn't pause a live party (that would put
+  everyone behind live), and play after a pause jumps each device back to its
+  live point (`go_live`). Devices can still sit a few seconds apart; lining
+  them up would need the stream's own clock (HLS program date-time).
 
 Not yet: web-page and Bridged App sources on the phone and TV (direct links
 only), and adding several paired TVs at once (the phone keeps one live TV

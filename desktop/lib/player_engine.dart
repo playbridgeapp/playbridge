@@ -281,6 +281,9 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> resume();
   Future<void> pause();
   Future<void> seek(Duration position);
+
+  /// A live stream: jump to the live point. Engines without live support do nothing.
+  Future<void> seekToLive() async {}
   Future<void> setVolume(double volume) async {}
   Future<void> stop();
   @override

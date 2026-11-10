@@ -50,6 +50,15 @@ class TogetherJsonTest {
     }
 
     @Test
+    fun parsesLiveStreams() {
+        assertEquals(TogetherEvent.Live(true), TogetherJson.event("""{"event":"live","live":true}"""))
+        assertEquals(
+            TogetherEvent.Player(TogetherPlayerCommand.GoLive),
+            TogetherJson.event("""{"event":"player","command":{"action":"go_live"}}"""),
+        )
+    }
+
+    @Test
     fun policiesRoundTrip() {
         assertEquals(TogetherEvent.Policy(TogetherPolicy.Ask), TogetherJson.event("""{"event":"policy","policy":"ask"}"""))
         assertEquals("only_host", TogetherPolicy.OnlyHost.wire)

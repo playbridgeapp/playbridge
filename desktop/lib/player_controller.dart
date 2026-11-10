@@ -1110,6 +1110,12 @@ class PlayerController extends ChangeNotifier {
     await partySeek(position);
   }
 
+  /// Watch Together on a live stream: jump to the live point and play.
+  Future<void> partyGoLive() async {
+    await _engine.seekToLive();
+    await partyResume();
+  }
+
   /// Exact speed for Watch Together's drift correction, off the user speed ladder.
   Future<void> partyRate(double rate) => _engine.setPlaybackRate(rate);
 

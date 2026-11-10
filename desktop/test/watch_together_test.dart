@@ -206,6 +206,11 @@ void main() {
     f.engine.durationMs = 0;
     await joinAndLoad(f);
     expect(f.room.last('loaded'), {'command': 'loaded', 'item': 'a'});
+
+    deliver(f.client, f.room, {'event': 'live', 'live': true});
+    expect(f.together.party!.live, isTrue);
+    deliver(f.client, f.room, player('go_live'));
+    await waitFor(() => f.engine.state == 'playing');
   });
 
   test('something else playing turns this computer into a remote', () async {

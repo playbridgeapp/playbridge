@@ -517,6 +517,11 @@ class MpvMediaPlayer(context: Context) : SimpleBasePlayer(Looper.getMainLooper()
         return Futures.immediateVoidFuture()
     }
 
+    /** A live stream: jump to its live point (a default-position seek here goes to the start). */
+    fun seekToLive() {
+        engine?.seekToLive()
+    }
+
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         if (items.isEmpty()) return Futures.immediateVoidFuture()
         val target = if (positionMs == C.TIME_UNSET) 0L else positionMs.coerceAtLeast(0)

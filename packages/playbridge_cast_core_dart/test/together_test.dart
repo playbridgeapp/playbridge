@@ -143,6 +143,18 @@ void main() {
     expect((events[4] as TogetherStopped).reason, TogetherStop.roomFull);
   });
 
+  test('parses live streams', () {
+    final events = <TogetherEvent>[];
+    client.events.listen(events.add);
+    native.pending.addAll([
+      '{"event":"live","live":true}',
+      '{"event":"player","command":{"action":"go_live"}}',
+    ]);
+    client.poll();
+    expect((events[0] as TogetherLive).live, isTrue);
+    expect((events[1] as TogetherPlayer).command, isA<TogetherGoLive>());
+  });
+
   test('close delivers what is left, then cancels and frees once', () {
     final events = <TogetherEvent>[];
     client.events.listen(events.add);

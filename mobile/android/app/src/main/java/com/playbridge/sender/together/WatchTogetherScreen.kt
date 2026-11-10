@@ -247,10 +247,13 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
             } else {
                 Text(item.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 item.site?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Text(formatTime(now), style = MaterialTheme.typography.bodyLarge)
+                // A live party shares play and pause only: no position, no seeking.
+                Text(if (party.live) "Live" else formatTime(now), style = MaterialTheme.typography.bodyLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { PhoneTogether.seekBy(-10_000) }, enabled = !party.locked || party.host) {
-                        Icon(Icons.Default.Replay10, contentDescription = "Back 10 seconds")
+                    if (!party.live) {
+                        IconButton(onClick = { PhoneTogether.seekBy(-10_000) }, enabled = !party.locked || party.host) {
+                            Icon(Icons.Default.Replay10, contentDescription = "Back 10 seconds")
+                        }
                     }
                     FilledIconButton(
                         onClick = { if (party.playing) PhoneTogether.pause() else PhoneTogether.play() },
@@ -261,8 +264,10 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
                             contentDescription = if (party.playing) "Pause" else "Play",
                         )
                     }
-                    IconButton(onClick = { PhoneTogether.seekBy(10_000) }, enabled = !party.locked || party.host) {
-                        Icon(Icons.Default.Forward10, contentDescription = "Forward 10 seconds")
+                    if (!party.live) {
+                        IconButton(onClick = { PhoneTogether.seekBy(10_000) }, enabled = !party.locked || party.host) {
+                            Icon(Icons.Default.Forward10, contentDescription = "Forward 10 seconds")
+                        }
                     }
                 }
             }

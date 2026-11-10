@@ -199,6 +199,11 @@ class MpvRendererService : Service() {
             }
         }
 
+        override fun seekToLive(requestedSessionId: Long) = onMain {
+            // Before FILE_LOADED there is nothing to seek: mpv opens a live stream at its live point.
+            if (isCurrent(requestedSessionId) && fileReadySessionId == requestedSessionId) engine?.seekToLive()
+        }
+
         override fun setPlaybackSpeed(speed: Float, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             desiredPlaybackSpeed = speed.coerceIn(0.25f, 4f)

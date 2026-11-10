@@ -697,13 +697,15 @@ class _VideoCard extends StatelessWidget {
                   Text(item.site!,
                       style: const TextStyle(fontSize: 12, color: _muted)),
                 const SizedBox(height: 8),
+                // A live party shares play and pause only: no position, no seeking.
                 Row(children: [
-                  IconButton(
-                    tooltip: 'Back 10 seconds',
-                    onPressed:
-                        canControl ? () => together.seekBy(-10000) : null,
-                    icon: const Icon(Icons.replay_10),
-                  ),
+                  if (!party.live)
+                    IconButton(
+                      tooltip: 'Back 10 seconds',
+                      onPressed:
+                          canControl ? () => together.seekBy(-10000) : null,
+                      icon: const Icon(Icons.replay_10),
+                    ),
                   IconButton.filled(
                     tooltip: party.playing ? 'Pause' : 'Play',
                     onPressed: canControl
@@ -713,13 +715,17 @@ class _VideoCard extends StatelessWidget {
                         : null,
                     icon: Icon(party.playing ? Icons.pause : Icons.play_arrow),
                   ),
-                  IconButton(
-                    tooltip: 'Forward 10 seconds',
-                    onPressed: canControl ? () => together.seekBy(10000) : null,
-                    icon: const Icon(Icons.forward_10),
-                  ),
+                  if (!party.live)
+                    IconButton(
+                      tooltip: 'Forward 10 seconds',
+                      onPressed:
+                          canControl ? () => together.seekBy(10000) : null,
+                      icon: const Icon(Icons.forward_10),
+                    ),
                   const SizedBox(width: 8),
-                  _PartyClock(together: together, party: party),
+                  party.live
+                      ? const Text('Live', style: TextStyle(color: _muted))
+                      : _PartyClock(together: together, party: party),
                 ]),
                 if (waiting.isNotEmpty)
                   Text('Waiting for ${waiting.join(', ')}…',

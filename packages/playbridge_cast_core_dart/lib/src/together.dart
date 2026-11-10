@@ -185,6 +185,8 @@ sealed class TogetherPlayerCommand {
       case 'rate':
         final rate = json['rate'];
         return TogetherRate(rate is num ? rate.toDouble() : 1.0);
+      case 'go_live':
+        return const TogetherGoLive();
     }
     return null;
   }
@@ -217,6 +219,11 @@ final class TogetherSeek extends TogetherPlayerCommand {
 final class TogetherRate extends TogetherPlayerCommand {
   const TogetherRate(this.rate);
   final double rate;
+}
+
+/// A live stream: jump to this device's live point and play.
+final class TogetherGoLive extends TogetherPlayerCommand {
+  const TogetherGoLive();
 }
 
 enum TogetherStop { left, unauthorized, roomFull, expired, replaced, error }
@@ -319,6 +326,8 @@ sealed class TogetherEvent {
         return item == null ? null : TogetherCredentialsReceived(item);
       case 'warning':
         return TogetherWarning(s('message') ?? '');
+      case 'live':
+        return TogetherLive(b('live'));
       case 'rejected':
         return TogetherRejected(s('reason') ?? '');
       case 'player':
@@ -491,6 +500,12 @@ final class TogetherCredentialsReceived extends TogetherEvent {
 final class TogetherWarning extends TogetherEvent {
   const TogetherWarning(this.message);
   final String message;
+}
+
+/// Whether the video is a live stream: the party shares play and pause only.
+final class TogetherLive extends TogetherEvent {
+  const TogetherLive(this.live);
+  final bool live;
 }
 
 /// A message the engine dropped; for logs only.
