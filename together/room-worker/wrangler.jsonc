@@ -37,9 +37,10 @@
         "ROOM_LIFETIME_HOURS": "3",
         "ROOMS_PER_IP_PER_DAY": "5",
         "IDLE_CLOSE_MINUTES": "30",
-        // App Links for invite links on party.playbridge.app: the release signing key.
+        // App Links for invite links on party.playbridge.app: the release signing key
+        // (GitHub APKs), then the Google Play app-signing key (Play installs).
         "ANDROID_APP_PACKAGE": "com.playbridge.sender",
-        "ANDROID_CERT_SHA256": "5C:14:53:AD:22:07:B8:56:2A:7B:54:FE:C9:F4:E7:98:C5:3C:41:5E:A6:C9:05:88:5A:27:07:0A:36:3F:39:F3"
+        "ANDROID_CERT_SHA256": "5C:14:53:AD:22:07:B8:56:2A:7B:54:FE:C9:F4:E7:98:C5:3C:41:5E:A6:C9:05:88:5A:27:07:0A:36:3F:39:F3,CC:A6:19:26:E9:CE:23:99:9B:81:36:72:4B:55:A7:C0:C8:E9:36:DD:5C:FD:92:21:BC:3C:9D:B6:2F:28:14:32"
       }
     }
   }

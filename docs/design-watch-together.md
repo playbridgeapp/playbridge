@@ -331,8 +331,8 @@ connection).
 
 - Universal links for `party.playbridge.app` on iOS (phase 2). Android App
   Links are in: the shared relay serves `/.well-known/assetlinks.json` from
-  `ANDROID_APP_PACKAGE` and `ANDROID_CERT_SHA256` (the release key; the Google
-  Play app-signing key still to be added), and the phone opens
+  `ANDROID_APP_PACKAGE` and `ANDROID_CERT_SHA256` (the release key and the
+  Google Play app-signing key), and the phone opens
   `party.playbridge.app/j/…` directly. Self-hosted relays leave both unset and
   rely on the invite page's "Open in PlayBridge" button.
 - Cloudflare account access for deploying (an API token as a GitHub secret, or
