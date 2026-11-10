@@ -187,6 +187,14 @@ class PingCmd extends Command {
   const PingCmd();
 }
 
+/// A paired phone asks this computer to join its watch party. [invite] holds the
+/// room key: never log it.
+class WatchTogetherJoinCmd extends Command {
+  final String invite;
+  final String from;
+  const WatchTogetherJoinCmd({required this.invite, required this.from});
+}
+
 class AuthCmd extends Command {
   final String? token;
   const AuthCmd({this.token});
@@ -262,6 +270,16 @@ Command parseCommand(String json) {
     switch (type) {
       case 'ping':
         return const PingCmd();
+      case 'watch_together_join':
+        final invite = root['invite'];
+        final from = root['from'];
+        if (invite is! String || invite.isEmpty || invite.length > 2048) {
+          return const UnknownCmd('watch_together_join');
+        }
+        return WatchTogetherJoinCmd(
+          invite: invite,
+          from: from is String && from.length <= 128 ? from : '',
+        );
       case 'pairing_request':
         return PairingRequestCmd(
           deviceName: (root['deviceName'] as String?) ?? '',

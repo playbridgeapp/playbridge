@@ -11,6 +11,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class _RecordingTransport implements TvTransport {
   @override
+  Set<String> get features => const {};
+
+  @override
+  Future<bool> sendRaw(String frame) async => false;
+
+  @override
   String? get lastError => null;
 
   bool acceptsControls = true;

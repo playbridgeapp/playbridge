@@ -116,6 +116,17 @@ String formatPlaybackErrorMessage(Object? rawError, {int? httpStatus}) {
   return "The media couldn't be loaded";
 }
 
+/// Watch Together's hold on the player: while [active], play, pause and seek from
+/// anywhere (keys, controls, media keys, the extension, a phone remote) go to the
+/// whole party, which drives the player back through [PlayerController.partyResume]
+/// and friends. Each returns false when the party didn't take the action.
+abstract interface class PartyControls {
+  bool get active;
+  bool play();
+  bool pause();
+  bool seek(int positionMs);
+}
+
 class PlayerController extends ChangeNotifier {
   final playbackBoundaries =
       StreamController<PlaybackBoundary>.broadcast(sync: true);
@@ -602,11 +613,14 @@ class PlayerController extends ChangeNotifier {
   Future<void> playItem(QueueItem item, {bool isRemote = false}) =>
       playPlaylist([item], 0, isRemote: isRemote);
 
+  /// [startPaused] opens the first item without playing it (Watch Together loads
+  /// paused and starts everyone together).
   Future<void> playPlaylist(
     List<QueueItem> items,
     int startIndex, {
     bool isRemote = false,
     bool Function()? canCommit,
+    bool startPaused = false,
   }) async {
     await _waitForProxyToggle();
     if (canCommit != null && !canCommit()) return;
@@ -652,7 +666,7 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
     try {
       await _resetVideoScalingForNewMedia();
-      await _openCurrentItem();
+      await _openCurrentItem(paused: startPaused);
     } finally {
       _opening = false;
       notifyListeners();
@@ -841,7 +855,7 @@ class PlayerController extends ChangeNotifier {
     await jumpTo(_currentIndex - 1);
   }
 
-  Future<void> _openCurrentItem() async {
+  Future<void> _openCurrentItem({bool paused = false}) async {
     _hasTerminalError = false;
     _terminalError = null;
     _stallTimer?.cancel();
@@ -866,8 +880,13 @@ class PlayerController extends ChangeNotifier {
     _imageDurationMs = 0;
     _imagePlaying = false;
     _startStallMonitor();
+    if (paused) _stallPlaybackRequested = false;
     try {
-      await _engine.open(item);
+      if (paused) {
+        await _engine.openPlaylist([item], 0, play: false);
+      } else {
+        await _engine.open(item);
+      }
     } catch (e) {
       await _handleTerminalError(e);
       return;
@@ -1070,7 +1089,32 @@ class PlayerController extends ChangeNotifier {
     indexChanges.value = i;
   }
 
+  /// Set while this computer plays a Watch Together video.
+  PartyControls? partyControls;
+
+  /// Whether a Watch Together party is driving the player.
+  bool get inParty => partyControls?.active ?? false;
+
   Future<void> resume() async {
+    if (inParty && partyControls!.play()) return;
+    await partyResume();
+  }
+
+  Future<void> pause() async {
+    if (inParty && partyControls!.pause()) return;
+    await partyPause();
+  }
+
+  Future<void> seek(Duration position) async {
+    if (inParty && partyControls!.seek(position.inMilliseconds)) return;
+    await partySeek(position);
+  }
+
+  /// Exact speed for Watch Together's drift correction, off the user speed ladder.
+  Future<void> partyRate(double rate) => _engine.setPlaybackRate(rate);
+
+  /// Play, pause and seek straight on the player, for the party's own commands.
+  Future<void> partyResume() async {
     _stallPlaybackRequested = true;
     _stallDetector.reset();
     if (_waitingForLinkedItems) {
@@ -1089,7 +1133,7 @@ class PlayerController extends ChangeNotifier {
     await _engine.resume();
   }
 
-  Future<void> pause() async {
+  Future<void> partyPause() async {
     _stallPlaybackRequested = false;
     _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) {
@@ -1101,7 +1145,7 @@ class PlayerController extends ChangeNotifier {
     await _engine.pause();
   }
 
-  Future<void> seek(Duration position) async {
+  Future<void> partySeek(Duration position) async {
     _stallDetector.reset();
     if (currentMediaKind == MediaKind.image) return;
     await _engine.seek(position);

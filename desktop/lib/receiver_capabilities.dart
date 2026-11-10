@@ -108,6 +108,7 @@ ReceiverRuntimeConfig buildDesktopReceiverRuntimeConfig({
         'subtitle_resource_add_v1',
         'progress_webhook_v1',
         'receiver_capabilities_v1',
+        'watch_together_v1',
       ],
       screenMirrorWebRtc: true,
       capabilities:

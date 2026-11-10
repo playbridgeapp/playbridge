@@ -12,6 +12,7 @@ import 'receiver_capability_policy.dart';
 import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
+import 'together/watch_together_join.dart';
 import 'tv_transport.dart';
 import 'extension_request_debug_log.dart';
 
@@ -514,6 +515,48 @@ class TvSenderController extends ChangeNotifier {
   bool get isConnected =>
       _state == SenderConnectionState.connected ||
       _state == SenderConnectionState.selected;
+
+  /// The selected TV is connected and can join a watch party.
+  bool get selectedTvSupportsWatchTogether =>
+      selectedTvConnected && _transport.features.contains(watchTogetherFeature);
+
+  /// Asks the connected TV to join a watch party. It joins without asking (it's
+  /// paired with this computer) and answers with its member ID and keys. [invite]
+  /// holds the room key: never log it.
+  Future<WatchTogetherJoinReply> addTvToWatchTogether(
+    String invite,
+    String from, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (!selectedTvSupportsWatchTogether) {
+      return const WatchTogetherJoinReply.failed('unsupported');
+    }
+    final reply = _transport.messages
+        .map((text) {
+          try {
+            return WatchTogetherJoinReply.fromJson(jsonDecode(text));
+          } on FormatException {
+            return null;
+          }
+        })
+        .where((reply) => reply != null)
+        .first
+        .timeout(timeout, onTimeout: () => null);
+    final sent = await _transport.sendRaw(jsonEncode({
+      'type': 'watch_together_join',
+      'invite': invite,
+      'from': from,
+    }));
+    if (!sent) {
+      unawaited(reply.catchError((Object _) => null));
+      return const WatchTogetherJoinReply.failed('unavailable');
+    }
+    try {
+      return await reply ?? const WatchTogetherJoinReply.failed('timeout');
+    } on StateError {
+      return const WatchTogetherJoinReply.failed('unavailable');
+    }
+  }
 
   /// Non-null while an unexpected PlayBridge drop is being retried.
   ReceiverReconnectStatus? get reconnectStatus => _reconnectStatus;

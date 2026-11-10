@@ -198,7 +198,11 @@ class StillWatchingController extends ChangeNotifier {
   }
 
   void _showPrompt() {
-    if (!_enabled || _player.state != 'playing' || _player.queue.isEmpty) {
+    // No prompt in a watch party: its pause would pause everyone.
+    if (!_enabled ||
+        _player.state != 'playing' ||
+        _player.queue.isEmpty ||
+        _player.inParty) {
       _syncCounting();
       return;
     }
