@@ -38,7 +38,7 @@ object TvTogether {
     const val PREF_PAIRING_URL = "pairing_url"
 
     /** PlayBridge's pairing service; Settings can point at another one. */
-    const val DEFAULT_PAIRING_URL = "https://playbridge-together-pairing.amehla.workers.dev"
+    const val DEFAULT_PAIRING_URL = "https://pair.playbridge.app"
 
     sealed interface State {
         data object Idle : State

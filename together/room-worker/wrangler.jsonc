@@ -24,6 +24,7 @@
   "env": {
     "shared": {
       "name": "playbridge-together-room-shared",
+      "routes": [{ "pattern": "party.playbridge.app", "custom_domain": true }],
       "durable_objects": {
         "bindings": [
           { "name": "ROOMS", "class_name": "Room" },

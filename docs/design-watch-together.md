@@ -309,8 +309,8 @@ sharing). While the phone is in a party, a video tapped in the cast sheet plays
 in the party. The phone can also watch: "Watch on this phone" (on by default
 when it isn't connected to a TV) plays the video in the phone player, whose
 controls go to the party; it can be switched on or off mid-party, and closing
-the player turns the phone back into a remote. The shared relay and pairing
-service run on `workers.dev`.
+the player turns the phone back into a remote. The shared relay runs at
+`party.playbridge.app` and the pairing service at `pair.playbridge.app`.
 
 Sync details settled while testing:
 
@@ -329,9 +329,8 @@ connection).
 
 ## 12. Open items
 
-- The PlayBridge relay addresses: `workers.dev` or a subdomain of a PlayBridge
-  domain. A custom domain lets invite links open the app directly (App Links
-  and universal links).
+- App Links and universal links for `party.playbridge.app`, so invite links
+  open the app directly.
 - Cloudflare account access for deploying (an API token as a GitHub secret, or
   manual `wrangler deploy`).
 - Self-hosted pairing: the QR already carries the pairing service address, so a

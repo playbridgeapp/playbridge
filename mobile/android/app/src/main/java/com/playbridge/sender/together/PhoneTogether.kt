@@ -40,8 +40,8 @@ object PhoneTogether {
     private const val PREF_PAIRING = "pairing_url"
 
     /** PlayBridge's shared relay: up to 4 devices for 3 hours. */
-    const val SHARED_RELAY = "https://playbridge-together-room-shared.amehla.workers.dev"
-    const val DEFAULT_PAIRING = "https://playbridge-together-pairing.amehla.workers.dev"
+    const val SHARED_RELAY = "https://party.playbridge.app"
+    const val DEFAULT_PAIRING = "https://pair.playbridge.app"
 
     data class Member(val name: String, val kind: com.playbridge.shared.together.TogetherDeviceKind, val host: Boolean)
     data class Request(val id: String, val from: String, val title: String, val site: String?)
