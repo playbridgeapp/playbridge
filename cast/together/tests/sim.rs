@@ -26,6 +26,9 @@ struct SimPlayer {
     buffering_until: f64,
     loaded: Option<(String, Option<u64>)>,
     duration: u64,
+    /// A live stream: reports no length and never ends.
+    live: bool,
+    seeks: u32,
 }
 
 impl SimPlayer {
@@ -45,7 +48,10 @@ impl SimPlayer {
             }
             PlayerCommand::Play => self.playing = true,
             PlayerCommand::Pause => self.playing = false,
-            PlayerCommand::Seek(to) => self.position = to,
+            PlayerCommand::Seek(to) => {
+                self.position = to;
+                self.seeks += 1;
+            }
             PlayerCommand::SetRate(rate) => self.rate = rate,
         }
     }
@@ -54,14 +60,19 @@ impl SimPlayer {
         if let Some(until) = self.loading_until {
             if now >= until {
                 self.loading_until = None;
-                self.loaded = Some((self.item.clone().unwrap(), Some(self.duration)));
+                let duration = (!self.live).then_some(self.duration);
+                self.loaded = Some((self.item.clone().unwrap(), duration));
             }
             return;
         }
         if self.playing && now >= self.buffering_until {
             // Like a real player, it stops at the end (still set to play).
-            self.position =
-                (self.position + dt * self.rate * (1.0 + self.skew)).min(self.duration as f64);
+            let end = if self.live {
+                f64::INFINITY
+            } else {
+                self.duration as f64
+            };
+            self.position = (self.position + dt * self.rate * (1.0 + self.skew)).min(end);
         }
     }
 
@@ -657,6 +668,99 @@ fn the_party_stops_at_the_end_of_the_video() {
         phone,
         |e| matches!(e, Event::Waiting(list) if !list.is_empty())
     ));
+}
+
+#[test]
+fn the_party_pauses_when_nobody_watches() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, true, 0.0);
+    let desktop = sim.add("Desktop", false, true, 120.0);
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(15_000.0);
+    let timeline = |sim: &Sim| sim.devices[phone].engine.timeline().unwrap().clone();
+
+    sim.command(desktop, Command::SetScreen(false));
+    sim.run(3_000.0);
+    assert!(timeline(&sim).playing, "the phone still watches");
+
+    sim.command(phone, Command::SetScreen(false));
+    sim.run(3_000.0);
+    let paused = timeline(&sim);
+    assert!(!paused.playing, "nobody watches: the party pauses");
+    assert!(
+        (10_000.0..20_000.0).contains(&paused.position_ms),
+        "where it was: {}",
+        paused.position_ms
+    );
+    sim.run(10_000.0);
+    assert_eq!(timeline(&sim).position_ms, paused.position_ms);
+
+    // Watching again loads where the party paused; play starts everyone.
+    sim.devices[desktop].player = SimPlayer {
+        rate: 1.0,
+        duration: 600_000,
+        ..Default::default()
+    };
+    sim.command(desktop, Command::SetScreen(true));
+    sim.run(3_000.0);
+    assert!((sim.position(desktop) - paused.position_ms).abs() < 600.0);
+    assert!(!sim.devices[desktop].player.playing);
+    sim.command(desktop, Command::Play);
+    sim.run(5_000.0);
+    assert!(timeline(&sim).playing);
+    assert!(sim.devices[desktop].player.playing);
+}
+
+#[test]
+fn a_party_with_no_screen_waits_to_start() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let guest = sim.add("Guest phone", false, false, 0.0);
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(20_000.0);
+    assert!(sim.devices[phone].engine.timeline().is_none());
+
+    sim.command(guest, Command::SetScreen(true));
+    sim.run(5_000.0);
+    assert!(sim.devices[phone].engine.timeline().unwrap().playing);
+    assert!(sim.devices[guest].player.playing);
+}
+
+#[test]
+fn live_streams_share_play_and_pause_but_not_position() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let tv2 = sim.add("Bedroom", false, true, 250.0);
+    for tv in [tv1, tv2] {
+        sim.devices[tv].player.live = true;
+    }
+    sim.devices[tv2].player.skew = 0.05;
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(8_000.0);
+    // The bedroom TV joined the stream at another point.
+    sim.devices[tv2].player.position += 30_000.0;
+    sim.run(10_000.0);
+    for tv in [tv1, tv2] {
+        let player = &sim.devices[tv].player;
+        assert!(player.playing);
+        assert_eq!(player.seeks, 0, "no seeks in a live stream");
+        assert_eq!(player.rate, 1.0, "no speed nudges in a live stream");
+    }
+
+    sim.command(phone, Command::Pause);
+    sim.run(3_000.0);
+    assert!(!sim.devices[tv1].player.playing && !sim.devices[tv2].player.playing);
+    sim.command(phone, Command::Play);
+    sim.run(3_000.0);
+    assert!(sim.devices[tv1].player.playing && sim.devices[tv2].player.playing);
+    assert_eq!(
+        sim.devices[tv1].player.seeks + sim.devices[tv2].player.seeks,
+        0
+    );
 }
 
 #[test]

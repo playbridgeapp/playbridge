@@ -169,6 +169,26 @@ impl Corrector {
         Correction::None
     }
 
+    /// A live stream: a position means something different on each device (each
+    /// joined at its own point in the stream), so only playing or paused is
+    /// shared. Each player stays at its own live point: no seeks, no nudges.
+    pub fn correct_live(
+        &mut self,
+        timeline: &Timeline,
+        room_now: f64,
+        player: PlayerSnapshot,
+    ) -> Correction {
+        if player.buffering {
+            return Correction::None;
+        }
+        let should_play = timeline.playing && !timeline.starts_after(room_now);
+        self.unnudged(match (should_play, player.playing) {
+            (true, false) => Correction::Play,
+            (false, true) => Correction::Pause,
+            _ => Correction::None,
+        })
+    }
+
     fn unnudged(&mut self, otherwise: Correction) -> Correction {
         if self.rate != 1.0 && otherwise == Correction::None {
             self.rate = 1.0;

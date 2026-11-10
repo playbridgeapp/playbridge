@@ -1112,15 +1112,18 @@ impl Engine {
         let Some(timeline) = self.timeline.as_ref() else {
             return;
         };
-        let own_end = self
-            .ready
-            .get(&self.cfg.me)
-            .and_then(|(duration, _)| *duration)
-            .map(|d| d as f64);
-        let commands = match self
-            .corrector
-            .correct_until(timeline, room_now, player, own_end)
-        {
+        let Some((own_duration, _)) = self.ready.get(&self.cfg.me) else {
+            return;
+        };
+        // Loaded with no length: a live stream, synced by playing or paused only.
+        let correction = match own_duration {
+            None => self.corrector.correct_live(timeline, room_now, player),
+            Some(end) => {
+                self.corrector
+                    .correct_until(timeline, room_now, player, Some(*end as f64))
+            }
+        };
+        let commands = match correction {
             Correction::None => return,
             Correction::Play => vec![PlayerCommand::Play],
             Correction::Pause => vec![PlayerCommand::Pause],
@@ -1194,8 +1197,14 @@ impl Engine {
             return;
         };
 
+        // Nobody shows the video: wait for a screen, and don't play to no one.
+        let any_screen = self.members.iter().any(|m| self.is_screen(m));
+
         // Schedule the start once everyone online is ready, or on timeout.
         if self.timeline.is_none() {
+            if !any_screen {
+                return;
+            }
             let everyone = self
                 .members
                 .iter()
@@ -1211,6 +1220,14 @@ impl Engine {
         let Some(timeline) = self.timeline.clone() else {
             return;
         };
+        // The last screen stopped watching: pause where the party is, so whoever
+        // watches next picks up from there.
+        if timeline.playing && !any_screen {
+            self.paused_for_buffering = false;
+            let position = timeline.expected_ms(room_now);
+            self.write_timeline(false, position, room_now, out);
+            return;
+        }
         // The video is over: everyone stops at the end, together.
         if timeline.playing
             && let Some(end) = self.video_end()

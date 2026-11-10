@@ -322,10 +322,41 @@ Sync details settled while testing:
   nudge after resuming.
 - A Play while already playing, or a Pause while paused, changes nothing, so
   repeated taps don't push a scheduled start back.
+- When no device shows the video any more (every screen stopped watching),
+  the room pauses where it was, and a video doesn't start until a device shows
+  it. Whoever watches next loads at that point; play starts everyone.
+- Live streams (a screen loaded them with no length) share only playing or
+  paused. A live position means something different on each device, so there
+  are no seeks or speed nudges: each device stays at its own live point.
 
 Not yet: web-page and Bridged App sources on the phone and TV (direct links
 only), and adding several paired TVs at once (the phone keeps one live TV
 connection).
+
+### Phase 3 status
+
+Built (macOS tested; Windows and Linux share the code): the desktop as screen,
+remote and host from a Watch Together screen in the sidebar.
+
+- **Screen.** "Watch on this computer" (on by default unless a TV is the chosen
+  screen) plays the party video in the desktop player, loaded paused, outside
+  history and resume points. Play, pause and seek from anywhere (keys, the
+  player's controls, media keys, the extension, a phone remote paired with the
+  Mac) go to the party. Speed nudges bypass the user speed ladder. The window
+  hiding and "Still watching?" don't pause a party. Playing something else, or
+  stopping the player, turns this computer into a remote.
+- **Joining.** Paste an invite link; show a code and QR for a phone to add
+  this computer; or a paired phone taps "Add" and the Mac joins without
+  asking. The desktop receiver advertises `watch_together_v1`, and its Rust
+  receiver passes an authenticated sender's `watch_together_join` to the app.
+- **Remote and host.** Start a party (shared relay or your own), copy the
+  invite, play, pause and seek, add the connected PlayBridge TV (it becomes
+  this computer's own and, for the host, its delegate) or a TV by code, lock,
+  who can change the video, requests, and sign-in sharing. A video sent from
+  the browser extension during a party plays in the party (direct links; a
+  synthetic playlist only exists on this computer, so it's refused).
+- The Dart binding (`packages/playbridge_cast_core_dart/lib/src/together.dart`)
+  wraps `pb_together_*`; desktop builds now include the `together` feature.
 
 ## 12. Open items
 
