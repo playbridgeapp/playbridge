@@ -1,5 +1,5 @@
 import { HEX_ID, PROTOCOL_VERSION, clientIp, errorResponse, json, limitsFor } from "@playbridge-together/shared";
-import { roomLimits, type Env } from "./config";
+import { assetLinks, roomLimits, type Env } from "./config";
 import { invitePage, setupPage } from "./pages";
 
 export { Room } from "./room";
@@ -20,6 +20,10 @@ export default {
         max_members: limits.maxMembers,
         room_lifetime_ms: limits.lifetimeMs,
       });
+    }
+    if (url.pathname === "/.well-known/assetlinks.json") {
+      const links = assetLinks(env);
+      return links ? json(links) : errorResponse("not_found", 404);
     }
     if (url.pathname === "/" || url.pathname === "/setup") {
       return html(setupPage(url.origin, limits));
