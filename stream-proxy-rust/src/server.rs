@@ -599,9 +599,14 @@ async fn stateful_proxy_handler(
     let target_url = match (
         single_query(&query_params, "uri")?,
         single_query(&query_params, "cap")?,
+        single_query(&query_params, "ref")?,
     ) {
-        (None, None) => session.original_url.clone(),
-        (Some(uri), Some(cap)) => {
+        (None, None, None) => session.original_url.clone(),
+        (None, None, Some(reference)) => state
+            .session_manager
+            .resolve_ref(session_id, reference)
+            .ok_or_else(invalid_capability)?,
+        (Some(uri), Some(cap), None) => {
             let grant = state
                 .encryption_handler
                 .decrypt_resource(cap)
@@ -1330,6 +1335,10 @@ fn single_query<'a>(
     Ok(value)
 }
 
+/// Encoded targets longer than this use a short reference: with the capability, which
+/// repeats the target, the URL would approach mpv's 4095-byte request limit.
+const LONG_TARGET_BYTES: usize = 1024;
+
 fn stateful_item_url(
     state: &AppState,
     session_id: &str,
@@ -1341,6 +1350,25 @@ fn stateful_item_url(
         |kind| hls_segment_filename(resolved_target, kind),
     );
     let encoded_target = encode_target(resolved_target);
+    // The capability carries the target again, so a long signed URL roughly doubles.
+    // mpv's HTTP layer truncates request URLs past 4095 bytes, which broke mpv DASH for
+    // long signed media URLs. Long targets get a short per-session reference instead.
+    if encoded_target.len() > LONG_TARGET_BYTES {
+        let Some(reference) = state.session_manager.short_ref(session_id, resolved_target) else {
+            return "/invalid-capability".into();
+        };
+        let mut url = format!(
+            "/s/{}/{}?ref={}",
+            session_id,
+            urlencoding::encode(&filename),
+            reference,
+        );
+        if let Some(kind) = hls_segment_kind {
+            url.push_str("&pb_hls=");
+            url.push_str(kind);
+        }
+        return url;
+    }
     let grant = ResourceGrant {
         session_id: session_id.to_string(),
         destination: resolved_target.to_string(),
