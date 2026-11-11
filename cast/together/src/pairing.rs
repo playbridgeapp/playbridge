@@ -108,7 +108,7 @@ impl PairingService {
         check_relay_scheme(&base)?;
         Ok(Self {
             base,
-            http: reqwest::Client::new(),
+            http: crate::tls::http_client(),
         })
     }
 
@@ -162,7 +162,7 @@ impl PairingService {
             HeaderValue::from_str(&format!("Bearer {}", lobby.token))
                 .map_err(|_| Error::Invalid("token"))?,
         );
-        let (mut ws, _) = tokio_tungstenite::connect_async(request).await?;
+        let (mut ws, _) = crate::tls::connect(request).await?;
         while let Some(message) = ws.next().await {
             let Message::Text(text) = message? else {
                 continue;
@@ -203,13 +203,14 @@ impl PairingService {
     // -- phone side
 
     /// Seals `invite` to the receiver holding `code` and delivers it. With a
-    /// QR fingerprint, refuses a key that does not match it.
+    /// QR fingerprint, refuses a key that does not match it. Returns the
+    /// receiver's box key, so the sender can treat it as its own device.
     pub async fn send_invite(
         &self,
         code: &str,
         invite: &PairingInvite,
         fingerprint: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<[u8; 32]> {
         let code = normalize_code(code).ok_or(Error::Invalid("pairing code"))?;
         let response = self
             .http
@@ -233,7 +234,7 @@ impl PairingService {
             .send()
             .await
             .map_err(network)?;
-        decode::<serde_json::Value>(response).await.map(|_| ())
+        decode::<serde_json::Value>(response).await.map(|_| pk)
     }
 }
 

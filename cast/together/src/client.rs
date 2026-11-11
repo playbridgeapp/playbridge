@@ -181,7 +181,7 @@ async fn connect(engine: &Engine) -> std::result::Result<Socket, Connect> {
         HeaderValue::from_str(&format!("Bearer {token}"))
             .expect("base64url is a valid header value"),
     );
-    match tokio_tungstenite::connect_async(request).await {
+    match crate::tls::connect(request).await {
         Ok((ws, _)) => Ok(ws),
         Err(tungstenite::Error::Http(response)) => match response.status().as_u16() {
             401 => Err(Connect::Fatal(Stop::Unauthorized)),

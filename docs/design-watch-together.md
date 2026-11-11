@@ -56,7 +56,7 @@ local-only mode.
 | Pairing Worker | `together/pairing-worker/` | `Lobby` Durable Object: TV codes, QR codes, sealed invites. |
 | Room Worker | `together/room-worker/` | `Room` Durable Object: room clock, state, message routing, limits. |
 | Shared types | `together/shared/` | Envelope types and protocol version used by both Workers. |
-| Contract | `protocol/` | The unencrypted envelope and the LAN `join_room` command (phone to TV). |
+| Contract | `protocol/` | The LAN `watch_together_join` command (phone to TV) and its `watch_together_joined` answer. |
 | CLI | `cli/` | `playbridge together join` with a fake player, for tests without app UI. |
 
 Every PlayBridge receiver already links the Rust core: the Android TV loads
@@ -112,7 +112,7 @@ Nobody types on a TV.
 | Situation | Flow |
 | --- | --- |
 | Friends | Host shares the invite link; it opens PlayBridge on their phone. |
-| Your paired TV | Tick it in the party screen. The phone sends the invite over the existing paired LAN connection (`join_room`). One tap. |
+| Your paired TV | Tap **Add <TV>** in the party screen. The phone sends the invite over its paired connection (`watch_together_join`). One tap. |
 | Friend's TV, friend has PlayBridge on their phone | The friend joins by link, then ticks their TV the same way. |
 | A TV with no phone running PlayBridge nearby | See the pairing flow below. Works from anywhere. |
 
@@ -284,24 +284,57 @@ Only the host's relay setting matters. Guests follow the invite link.
   `credentials`, `warning`.
 - **Clock**: `ping {t0}` and `pong {t0, room_time}` handled by the Room Worker
   without decryption.
-- **LAN command** (phone to paired PlayBridge receiver): `join_room {invite}`,
-  advertised with the `watch_together_v1` capability.
+- **LAN command** (phone to paired PlayBridge receiver): `watch_together_join
+  {invite, from}`, answered by `watch_together_joined {ok, member, box_pk,
+  sign_pk}`, advertised with the `watch_together_v1` capability. The phone
+  counts the TV as its own and, as host, delegates host duties to it.
 
 ## 11. Phases
 
 | Phase | Scope | Verification |
 | --- | --- | --- |
 | 0. Engine | Both Workers, `cast/together`, CLI fake player | Rust tests with simulated clocks and drift; Worker tests in local `workerd`; two CLI members in one room against a deployed Worker |
-| 1. Android | Android TV and Android phone (remote and screen): invite links, LAN handoff, pairing codes, mine and guest, no-history, relay setup | Hisense, Samsung phone, a second screen |
+| 1. Android | Android TV and Android phone: invite links, LAN handoff, pairing codes, mine and guest, no-history, relay setup | Hisense, Samsung phone, a second screen |
 | 2. Apple | Apple TV and iPhone | Main Bedroom Apple TV, iPhone 12 Pro Max |
 | 3. Desktop | Desktop receiver and sender | Mac |
 | Later | Google Cast, DLNA and Roku through a nearby PlayBridge device (seek-only); self-hosted pairing | — |
 
+### Phase 1 status
+
+Built: the Android TV (pairing code and QR, join prompt, synced player, remote
+controls go to the party, no history) and the Android phone as host, guest and
+remote (start or join, share the invite, add the connected TV or a TV by code,
+play, pause and seek, lock, who can change the video, requests, sign-in
+sharing). While the phone is in a party, a video tapped in the cast sheet plays
+in the party. The phone can also watch: "Watch on this phone" (on by default
+when it isn't connected to a TV) plays the video in the phone player, whose
+controls go to the party; it can be switched on or off mid-party, and closing
+the player turns the phone back into a remote. The shared relay runs at
+`party.playbridge.app` and the pairing service at `pair.playbridge.app`.
+
+Sync details settled while testing:
+
+- The room pauses at the end of the video (the shortest length a screen
+  reported), and no device is seeked past its own end. Live streams report no
+  length and never end.
+- Players keep no back buffer (low-memory TVs), so any seek back reloads the
+  video. While paused, gaps under 500 ms are left alone and closed by the speed
+  nudge after resuming.
+- A Play while already playing, or a Pause while paused, changes nothing, so
+  repeated taps don't push a scheduled start back.
+
+Not yet: web-page and Bridged App sources on the phone and TV (direct links
+only), and adding several paired TVs at once (the phone keeps one live TV
+connection).
+
 ## 12. Open items
 
-- The PlayBridge relay addresses: `workers.dev` or a subdomain of a PlayBridge
-  domain. A custom domain lets invite links open the app directly (App Links
-  and universal links).
+- Universal links for `party.playbridge.app` on iOS (phase 2). Android App
+  Links are in: the shared relay serves `/.well-known/assetlinks.json` from
+  `ANDROID_APP_PACKAGE` and `ANDROID_CERT_SHA256` (the release key and the
+  Google Play app-signing key), and the phone opens
+  `party.playbridge.app/j/…` directly. Self-hosted relays leave both unset and
+  rely on the invite page's "Open in PlayBridge" button.
 - Cloudflare account access for deploying (an API token as a GitHub secret, or
   manual `wrangler deploy`).
 - Self-hosted pairing: the QR already carries the pairing service address, so a

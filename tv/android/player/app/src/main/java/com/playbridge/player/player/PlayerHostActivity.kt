@@ -43,6 +43,8 @@ import androidx.media3.common.text.CueGroup
 import androidx.media3.ui.SubtitleView
 import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.together.TvTogether
+import com.playbridge.shared.together.TogetherPlayerCommand
 import com.playbridge.player.data.HistoryThumbnailMode
 import com.playbridge.player.data.HistoryThumbnailStore
 import com.playbridge.player.data.PlaybackContext
@@ -210,6 +212,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
     }
     private var requestedStartPositionMs: Long? = null
+    /** The Watch Together video this session plays; null outside a party. */
+    private var partyItem: String? = null
+    private var partyLoadedReported = false
+    /** The renderer said the party video is ready; its length goes out once we know it isn't live. */
+    private var partyReady = false
+    /** Whether the party video is live, once the renderer has said; null until then. */
+    private var partyLive: Boolean? = null
+    private val reportPartyLoadedAnyway = Runnable { reportPartyLoaded(force = true) }
+    private val partyPlayer = object : TvTogether.PartyPlayer {
+        override fun applyPartyCommand(command: TogetherPlayerCommand) = this@PlayerHostActivity.applyPartyCommand(command)
+    }
     private var lastSavedPositionMs = 0L
     private var activeHistoryId: String? = null
     private var sessionPlaybackContext: PlaybackContext? = null
@@ -411,6 +424,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             TAG,
             "Initial playback request context: ${sessionPlaybackContext.toSafeLogString()}",
         )
+        beginPartySession(intent)
         restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
@@ -491,7 +505,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             "onStop(finishing=$isFinishing, changingConfigurations=$isChangingConfigurations)",
         )
         if (!isFinishing && !isChangingConfigurations) {
-            handleControl("pause")
+            if (partyItem != null) {
+                // Leaving the player screen leaves the party; the others keep watching.
+                TvTogether.leave()
+                handleControl("pause", fromParty = true)
+            } else {
+                handleControl("pause")
+            }
         }
         runCatchingLogged(TAG, "Could not unregister playback control receiver", ::logPlayerFailure) {
             unregisterReceiver(controlReceiver)
@@ -1022,6 +1042,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         surfaceView.holder.removeCallback(surfaceCallback)
         controlsViewModel.detach()
         stillWatchingController.dispose()
+        mainHandler.removeCallbacks(reportPartyLoadedAnyway)
+        TvTogether.detach(partyPlayer)
         ServerService.notifyContextIdle(this, rendererKind.engineId)
         if (activeHostCount.decrementAndGet() <= 0) {
             ReceiverStreamProxy.shutdownIfRunning()
@@ -1079,6 +1101,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             TAG,
             "Replacement playback request context: ${sessionPlaybackContext.toSafeLogString()}",
         )
+        beginPartySession(requestIntent)
         restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
@@ -1590,9 +1613,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             renderer.prepare(request, sessionId)
             renderer.attachSurface(rendererSurface, sessionId)
             applyRendererSettings(renderer, sessionId)
-            stallPlaybackRequested = true
-            pendingPlayingState = true
-            renderer.play(sessionId)
+            // A party video loads paused; the room starts everyone together.
+            if (partyItem == null) {
+                stallPlaybackRequested = true
+                pendingPlayingState = true
+                renderer.play(sessionId)
+            }
             // Request resume immediately. MPV retains this until FILE_LOADED, while Exo can
             // accept a seek during preparation; waiting for a rendered-ready event can briefly
             // start long-form library media from zero.
@@ -2092,6 +2118,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             seekForSession(explicitPosition, sessionId)
             return
         }
+        // Party videos never resume from history.
+        if (partyItem != null) return
 
         val url = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.url ?: return
         lifecycleScope.launch {
@@ -2131,6 +2159,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererProtocol.EVENT_READY -> {
                 sessionCoordinator.markReady(currentSession.sessionId)
                 cancelStartupWatchdog()
+                if (partyItem != null && !partyLoadedReported) {
+                    partyReady = true
+                    reportPartyLoaded(force = false)
+                    mainHandler.removeCallbacks(reportPartyLoadedAnyway)
+                    mainHandler.postDelayed(reportPartyLoadedAnyway, PARTY_LIVE_WAIT_MS)
+                }
                 controlsViewModel.setBuffering(false)
                 controlsViewModel.clearPlaybackTransition()
                 currentExternalSubtitleUrl?.let { externalUrl ->
@@ -2172,6 +2206,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     nowMs = SystemClock.elapsedRealtime(),
                 )
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
+                if (partyItem != null) {
+                    TvTogether.onPlayerState(lastPositionMs, rendererPlaying, state == "buffering")
+                }
                 if (event.containsKey(RendererProtocol.KEY_BUFFERED_MS)) {
                     lastBufferedMs = event.getLong(RendererProtocol.KEY_BUFFERED_MS)
                     bufferedSessionId = currentSession.sessionId
@@ -2615,6 +2652,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleCapabilities(event: Bundle) {
+        if (partyItem != null) {
+            partyLive = event.getBoolean(RendererProtocol.KEY_IS_LIVE)
+            reportPartyLoaded(force = false)
+        }
         val previousState = controlsViewModel.controlsState.value
         val capabilities = PlaybackCapabilities(
             isLive = event.getBoolean(RendererProtocol.KEY_IS_LIVE),
@@ -3013,6 +3054,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleResource: SubtitleResource? = null,
         subtitleRequestId: String? = null,
         subtitleConnectionId: Long = 0L,
+        fromParty: Boolean = false,
     ) {
         // Mode switches must also finish a host still waiting for its renderer to bind.
         if (command == "stop") {
@@ -3059,6 +3101,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             )
             return
         }
+        // In a party, play, pause and seek from this TV go to everyone and come back
+        // through applyPartyCommand.
+        if (partyItem != null && !fromParty && forwardToParty(command)) return
 
         val currentSession = session ?: run {
             if (command == "add_subtitle") ServerService.completeLateSubtitleCommand(
@@ -3232,7 +3277,64 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     override fun getCurrentPosition(): Long = lastPositionMs
 
     override fun seekTo(position: Long) {
+        if (partyItem != null && TvTogether.localSeek(position)) return
         session?.let { seekForSession(position, it.sessionId) }
+    }
+
+    private fun beginPartySession(requestIntent: Intent) {
+        val item = requestIntent.getStringExtra(ServerService.EXTRA_WATCH_TOGETHER_ITEM)
+        partyItem = item
+        partyLoadedReported = false
+        partyReady = false
+        partyLive = null
+        mainHandler.removeCallbacks(reportPartyLoadedAnyway)
+        if (item != null) {
+            TvTogether.attach(partyPlayer, item)
+        } else {
+            TvTogether.detach(partyPlayer)
+            TvTogether.onOtherPlayback()
+        }
+    }
+
+    /**
+     * Tells the party this TV is ready, with the video's length so the party stops at
+     * its end. A live stream has no end, so it sends none; when the renderer never says
+     * whether it's live, [force] sends none either.
+     */
+    private fun reportPartyLoaded(force: Boolean) {
+        val item = partyItem ?: return
+        if (partyLoadedReported || !partyReady) return
+        val live = partyLive ?: if (force) true else return
+        partyLoadedReported = true
+        mainHandler.removeCallbacks(reportPartyLoadedAnyway)
+        TvTogether.onLoaded(item, if (live) 0L else lastDurationMs)
+    }
+
+    private fun forwardToParty(command: String?): Boolean = when {
+        command == "play" -> TvTogether.localPlay()
+        command == "pause" -> TvTogether.localPause()
+        command == "toggle" -> if (hostPlaying) TvTogether.localPause() else TvTogether.localPlay()
+        command?.startsWith("seek_to:") == true ->
+            command.removePrefix("seek_to:").toLongOrNull()?.let(TvTogether::localSeek) == true
+        command == "seek_back" -> TvTogether.localSeek(lastPositionMs - 10_000L)
+        command == "seek_forward" -> TvTogether.localSeek(lastPositionMs + 10_000L)
+        else -> false
+    }
+
+    private fun applyPartyCommand(command: TogetherPlayerCommand) {
+        if (partyItem == null) return
+        val currentSession = session ?: return
+        when (command) {
+            TogetherPlayerCommand.Play -> handleControl("play", fromParty = true)
+            TogetherPlayerCommand.Pause -> handleControl("pause", fromParty = true)
+            is TogetherPlayerCommand.Seek -> seekForSession(command.positionMs, currentSession.sessionId)
+            // Speed nudges stay out of the controls and saved settings.
+            is TogetherPlayerCommand.Rate -> runCatchingLogged(TAG, "Party speed failed", ::logPlayerFailure) {
+                rendererService?.setPlaybackSpeed(command.rate, currentSession.sessionId)
+            }
+            // TvTogether starts a new video through ServerService.
+            is TogetherPlayerCommand.Load -> Unit
+        }
     }
 
     private fun resetImageTransform() {
@@ -3454,6 +3556,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             state.isVisible -> controlsViewModel.hideControls()
             else -> {
                 logPlaybackContextCheckpoint("Back finishing player")
+                if (partyItem != null) TvTogether.leave()
                 finishingSession = true
                 finish()
             }
@@ -3694,6 +3797,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         private const val TAG = "PlayerHostActivity"
         const val EXTRA_RENDERER = "renderer"
         private const val RENDERER_OPEN_TIMEOUT_MS = 60_000L
+        /** How long a ready party video waits to hear whether it's live. */
+        private const val PARTY_LIVE_WAIT_MS = 2_000L
         private const val IMAGE_LOAD_TIMEOUT_MS = 20_000L
         private const val FAILURE_VISIBLE_MS = 600L
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L

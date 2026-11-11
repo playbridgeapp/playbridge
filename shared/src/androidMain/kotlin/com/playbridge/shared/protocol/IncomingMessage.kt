@@ -86,6 +86,13 @@ sealed class IncomingMessage {
     data class SubtitleStyle(val style: com.playbridge.shared.player.SubtitleStyle) : IncomingMessage()
     /** Phone asks the TV for its subtitle style; the TV replies with `subtitle_style`. */
     data object SubtitleStyleQuery : IncomingMessage()
+    /**
+     * Phone asks the TV to join a Watch Together room; the TV replies with
+     * `watch_together_joined`. [invite] holds the room key: never log it.
+     */
+    data class WatchTogetherJoin(val invite: String, val from: String) : IncomingMessage() {
+        override fun toString(): String = "WatchTogetherJoin(from=$from)"
+    }
     /** Phone starts sending a custom subtitle font. */
     data class SubtitleFontBegin(val transferId: String, val size: Int, val sha256: String) : IncomingMessage()
     /** One piece of a custom subtitle font; [data] is base64. */
@@ -370,6 +377,34 @@ fun createSubtitleStyleJson(
 
 /** Phone → TV: ask for the current subtitle style. */
 fun createSubtitleStyleQueryJson(): String = """{"type":"subtitle_style_query"}"""
+
+/** The receiver feature for `watch_together_join`. */
+const val WATCH_TOGETHER_FEATURE = "watch_together_v1"
+
+/** Phone → TV: join the Watch Together room in [invite]. */
+fun createWatchTogetherJoinJson(invite: String, from: String): String =
+    buildJsonObject {
+        put("type", "watch_together_join")
+        put("invite", invite)
+        put("from", from)
+    }.toString()
+
+/** TV → phone: the answer to `watch_together_join`; keys only when [ok]. */
+fun createWatchTogetherJoinedJson(
+    ok: Boolean,
+    member: String? = null,
+    boxKey: String? = null,
+    signKey: String? = null,
+    error: String? = null,
+): String =
+    buildJsonObject {
+        put("type", "watch_together_joined")
+        put("ok", ok)
+        member?.let { put("member", it) }
+        boxKey?.let { put("box_pk", it) }
+        signKey?.let { put("sign_pk", it) }
+        error?.let { put("error", it) }
+    }.toString()
 
 /** Reads a `subtitle_style` object; unknown or missing values use the defaults. */
 fun parseSubtitleStyle(root: JsonObject): com.playbridge.shared.player.SubtitleStyle =
@@ -666,6 +701,17 @@ fun parseIncomingMessage(text: String): IncomingMessage {
             "user_script_query" -> IncomingMessage.UserScriptQuery
             "subtitle_style" -> IncomingMessage.SubtitleStyle(parseSubtitleStyle(root))
             "subtitle_style_query" -> IncomingMessage.SubtitleStyleQuery
+            "watch_together_join" -> {
+                val invite = root["invite"]?.jsonPrimitive?.contentOrNull
+                if (invite != null && invite.length <= 2048) {
+                    IncomingMessage.WatchTogetherJoin(
+                        invite = invite,
+                        from = root["from"]?.jsonPrimitive?.contentOrNull.orEmpty().take(128),
+                    )
+                } else {
+                    IncomingMessage.Unknown("watch_together_join_parse_error", "")
+                }
+            }
             "subtitle_font_begin" -> {
                 val id = root["transferId"]?.jsonPrimitive?.contentOrNull
                 val size = root["size"]?.jsonPrimitive?.intOrNull

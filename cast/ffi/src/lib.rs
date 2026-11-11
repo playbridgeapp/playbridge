@@ -51,6 +51,8 @@ mod receiver_runtime;
     feature = "receiver-proxy-android"
 ))]
 mod sender_services;
+#[cfg(feature = "together")]
+mod together;
 
 /// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.
 #[cfg(all(

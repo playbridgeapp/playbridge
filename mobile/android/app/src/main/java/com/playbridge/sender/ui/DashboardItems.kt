@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
@@ -52,6 +53,7 @@ internal data class DashboardTileStates(
     val collections: Int? = null,
     val castHistoryEmpty: Boolean? = null,
     val lastCastTitle: String? = null,
+    val watchTogether: Boolean = false,
 )
 
 /** Shared by the dashboard and JVM constructor regression tests. */
@@ -101,6 +103,14 @@ internal fun dashboardItems(
             subtitle = countSubtitle(states.collections, "collection", empty = "Create your first", unknown = "Your playlists"),
             screen = Screen.Collections,
             gradientColors = listOf(Color(0xFF7B0D45), Color(0xFF9C1155)),
+        ),
+        DashboardItem(
+            icon = Icons.Default.Groups,
+            title = "Watch together",
+            subtitle = if (states.watchTogether) "In a party" else "In sync with friends",
+            screen = Screen.WatchTogether,
+            gradientColors = listOf(Color(0xFF1B5E20), Color(0xFF2E7D32)),
+            live = states.watchTogether,
         ),
         DashboardItem(
             icon = Icons.Default.History,
@@ -162,6 +172,7 @@ internal data class DashboardItem(
         Screen.Iptv -> "iptv"
         Screen.Collections -> "collections"
         Screen.CastHistory -> "cast-history"
+        Screen.WatchTogether -> "watch-together"
         else -> error("Unsupported dashboard destination")
     },
     val app: BridgedApp? = null,

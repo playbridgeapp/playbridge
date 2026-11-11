@@ -808,6 +808,13 @@ fun AppNavHost(
                         onBack = { onScreenChange(lastMainScreen) }
                     )
                 }
+                Screen.WatchTogether -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    com.playbridge.sender.together.WatchTogetherScreen(
+                        coordinator = connectionCoordinator,
+                        onMenuClick = { onScreenChange(Screen.Dashboard) },
+                    )
+                }
                 Screen.CastHistory -> {
                     BackHandler { onScreenChange(Screen.Dashboard) }
                     val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(context)

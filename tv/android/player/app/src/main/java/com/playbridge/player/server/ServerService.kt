@@ -918,44 +918,9 @@ class ServerService : Service() {
                     return
                 }
 
-                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-                val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
-
-                // Single source of truth for the launch intent (sets PlaylistStore, picks the
-                // engine, maps every per-item extra). History replay builds the exact same
-                // intent from the stored payload — see PlayerLauncher.
-                val playerIntent = try {
-                    com.playbridge.player.player.PlayerLauncher
-                        .buildPlayerIntent(this, payload, tvPref)
-                } catch (e: Exception) {
-                    FileLogger.e(TAG, "Couldn't build the player launch: ${e.javaClass.simpleName}")
-                    completeCommand(command, ok = false, error = "invalid_command")
-                    return
-                }
-                val previousPlayerEngine = activePlayerEngine
-                val targetPlayerEngine = playerIntent
-                    .getStringExtra(com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER)
-                    ?.takeIf { it == "mpv" || it == "exo" }
-                    ?: "exo"
-                activePlayerEngine = targetPlayerEngine
-                activeContext = "player"
-                broadcastContext()
-
-                pendingQueueItems.clear() // discard any stale items from a previous session
-                val launchReason = "Playing playlist (${payload.items.size} items)"
-                if (!com.playbridge.player.player.PlayerHostActivity.isActive() &&
-                    previousPlayerEngine == "mpv" &&
-                    MpvProcess.isRunning(this)
-                ) {
-                    // One-time migration/rollback boundary: a legacy MPV Activity can still own
-                    // the private process when no permanent host exists yet. Once the host is
-                    // active, replacement intents go straight to it and it owns renderer swaps.
-                    launchAfterMpvProcessExit(playerIntent, launchReason)
-                    completeCommand(command, ok = true)
-                } else if (launchActivityFromBackground(playerIntent, launchReason)) {
-                    completeCommand(command, ok = true)
-                } else {
-                    completeCommand(command, ok = false, error = "unsupported")
+                when (val error = launchPlaylist(payload)) {
+                    null -> completeCommand(command, ok = true)
+                    else -> completeCommand(command, ok = false, error = error)
                 }
             }
             is IncomingMessage.QueueAdd -> {
@@ -1041,6 +1006,20 @@ class ServerService : Service() {
             is IncomingMessage.SubtitleStyle ->
                 if (!subtitleStyles.set(msg.style)) broadcastSubtitleStyle(msg.style)
             is IncomingMessage.SubtitleStyleQuery -> broadcastSubtitleStyle(subtitleStyles.style.value)
+            is IncomingMessage.WatchTogetherJoin -> {
+                FileLogger.i(TAG, "Watch Together join from a paired phone")
+                val connectionId = command.connectionId
+                com.playbridge.player.together.TvTogether.joinFromPhone(this, msg.invite, msg.from) { joined, error ->
+                    val reply = com.playbridge.shared.protocol.createWatchTogetherJoinedJson(
+                        ok = joined != null,
+                        member = joined?.member,
+                        boxKey = joined?.boxKey,
+                        signKey = joined?.signKey,
+                        error = error,
+                    )
+                    scope.launch { webSocketServer?.sendTo(connectionId, reply) }
+                }
+            }
             // A phone sends its custom font in ordered pieces and waits for each reply.
             is IncomingMessage.SubtitleFontBegin ->
                 replyToFont(command, msg.transferId, subtitleFonts.begin(msg.transferId, msg.size, msg.sha256))
@@ -1332,6 +1311,52 @@ class ServerService : Service() {
             launchActivityFromBackground(intent, getString(R.string.user_script_prompt_notification))
         } catch (e: Exception) {
             FileLogger.w(TAG, "Could not bring script approval forward: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Starts [payload] in the player, as for a `playlist` command. Returns null once
+     * launched, else the command error. [watchTogetherItem] marks a Watch Together load.
+     */
+    private fun launchPlaylist(payload: playbridge.PlaylistPayload, watchTogetherItem: String? = null): String? {
+        val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+        val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
+
+        // Single source of truth for the launch intent (sets PlaylistStore, picks the
+        // engine, maps every per-item extra). History replay builds the exact same
+        // intent from the stored payload — see PlayerLauncher.
+        val playerIntent = try {
+            com.playbridge.player.player.PlayerLauncher
+                .buildPlayerIntent(this, payload, tvPref)
+                .apply { watchTogetherItem?.let { putExtra(EXTRA_WATCH_TOGETHER_ITEM, it) } }
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Couldn't build the player launch: ${e.javaClass.simpleName}")
+            return "invalid_command"
+        }
+        val previousPlayerEngine = activePlayerEngine
+        val targetPlayerEngine = playerIntent
+            .getStringExtra(com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER)
+            ?.takeIf { it == "mpv" || it == "exo" }
+            ?: "exo"
+        activePlayerEngine = targetPlayerEngine
+        activeContext = "player"
+        broadcastContext()
+
+        pendingQueueItems.clear() // discard any stale items from a previous session
+        val launchReason = "Playing playlist (${payload.items.size} items)"
+        return if (!com.playbridge.player.player.PlayerHostActivity.isActive() &&
+            previousPlayerEngine == "mpv" &&
+            MpvProcess.isRunning(this)
+        ) {
+            // One-time migration/rollback boundary: a legacy MPV Activity can still own
+            // the private process when no permanent host exists yet. Once the host is
+            // active, replacement intents go straight to it and it owns renderer swaps.
+            launchAfterMpvProcessExit(playerIntent, launchReason)
+            null
+        } else if (launchActivityFromBackground(playerIntent, launchReason)) {
+            null
+        } else {
+            "unsupported"
         }
     }
 
@@ -1752,6 +1777,14 @@ class ServerService : Service() {
          * Broadcast playback status (state/position/duration/title) to the phone
          * from a player activity. Reuses the generic JSON forwarder.
          */
+        const val EXTRA_WATCH_TOGETHER_ITEM = "extra_watch_together_item"
+
+        /** Plays a Watch Together video; false when the server isn't running or refused it. */
+        fun playForWatchTogether(payload: playbridge.PlaylistPayload, item: String): Boolean {
+            val instance = _staticInstance ?: return false
+            return instance.launchPlaylist(payload, watchTogetherItem = item) == null
+        }
+
         fun broadcastStatus(statusJson: String) {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
         }

@@ -1,10 +1,11 @@
 import { SELF, env as testEnv, runDurableObjectAlarm } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { Env } from "../src/config";
+import { assetLinks, type Env } from "../src/config";
 
 const env = testEnv as unknown as Env;
 
 const BASE = "https://relay.test";
+const CERT = Array.from({ length: 32 }, () => "AB").join(":");
 const hex = (n: number) => n.toString(16).padStart(32, "0");
 
 interface Client {
@@ -67,6 +68,19 @@ describe("room worker", () => {
     expect(await setup.text()).toContain("https://relay.test");
     const invite = await SELF.fetch(`${BASE}/j/${hex(1)}`);
     expect(invite.status).toBe(200);
+  });
+
+  it("serves App Links only when configured", async () => {
+    const res = await SELF.fetch(`${BASE}/.well-known/assetlinks.json`);
+    expect(res.status).toBe(200);
+    const [statement] = await res.json<any[]>();
+    expect(statement.target).toEqual({
+      namespace: "android_app",
+      package_name: "com.playbridge.sender",
+      sha256_cert_fingerprints: [CERT],
+    });
+    expect(assetLinks({ ANDROID_APP_PACKAGE: "com.playbridge.sender" } as Env)).toBeNull();
+    expect(assetLinks({ ANDROID_APP_PACKAGE: "x", ANDROID_CERT_SHA256: "nope" } as Env)).toBeNull();
   });
 
   it("welcomes members in join order and routes messages", async () => {

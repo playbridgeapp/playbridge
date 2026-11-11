@@ -24,6 +24,7 @@ sealed class Screen {
     data class IptvDetail(val playlistId: Long) : Screen()
     object Collections : Screen()
     data class CollectionDetail(val collectionId: Long) : Screen()
+    object WatchTogether : Screen()
 
     /** Heavy destinations that keep large view/image trees alive — transitions use fade only. */
     fun isHeavyScreen(): Boolean = when (this) {
@@ -58,6 +59,7 @@ sealed class Screen {
                         PhoneFiles -> "phonefiles"
                         Iptv -> "iptv"
                         Collections -> "collections"
+                        WatchTogether -> "watchtogether"
                         is IptvDetail -> "iptvdetail|${screen.playlistId}"
                         is CollectionDetail -> "collectiondetail|${screen.collectionId}"
                     }
@@ -81,6 +83,7 @@ sealed class Screen {
                         "phonefiles" -> PhoneFiles
                         "iptv" -> Iptv
                         "collections" -> Collections
+                        "watchtogether" -> WatchTogether
                         "iptvdetail" -> parts.getOrNull(1)?.toLongOrNull()
                             ?.let { IptvDetail(it) } ?: Browser
                         "collectiondetail" -> parts.getOrNull(1)?.toLongOrNull()

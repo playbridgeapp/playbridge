@@ -28,15 +28,27 @@ export function setupPage(origin: string, limits: RoomLimits): string {
   return page(
     "PlayBridge rooms",
     `<h1>PlayBridge Watch Together</h1><p>${intro}</p>
-<div class="card"><p>In PlayBridge, open Settings → Watch Together → Room relay, choose Custom, and paste this address:</p>
+<div class="card"><p>In PlayBridge, open Watch together → Change relay and paste this address:</p>
 <code id="address">${address}</code><button id="copy" type="button">Copy address</button></div>
 <script>document.getElementById("copy").onclick=()=>navigator.clipboard.writeText(document.getElementById("address").textContent).then(()=>{document.getElementById("copy").textContent="Copied"});</script>`,
   );
 }
 
 export function invitePage(): string {
+  // The room key stays in the fragment, which browsers never send. "Open in
+  // PlayBridge" hands the link to the app through an Android intent, which
+  // cannot carry a fragment, so the key moves to the query of an intent URL
+  // that the browser gives straight to the app and never loads.
   return page(
     "Watch party invite",
-    `<h1>You're invited to a watch party</h1><p>Open this link on a phone with PlayBridge installed to join. If it opened in a browser, copy the full link and paste it into PlayBridge → Watch Together → Join.</p>`,
+    `<h1>You're invited to a watch party</h1><p>Join with PlayBridge on your phone.</p>
+<div class="card"><a id="open" href="#"><button type="button">Open in PlayBridge</button></a>
+<p>If that doesn't work, copy this link and paste it into PlayBridge → Watch together → Join.</p>
+<button id="copy" type="button">Copy invite link</button></div>
+<script>
+const key=location.hash.slice(1);
+document.getElementById("open").href=key?"intent://"+location.host+location.pathname+"?"+key+"#Intent;scheme=https;package=com.playbridge.sender;end":"#";
+document.getElementById("copy").onclick=()=>navigator.clipboard.writeText(location.href).then(()=>{document.getElementById("copy").textContent="Copied"});
+</script>`,
   );
 }

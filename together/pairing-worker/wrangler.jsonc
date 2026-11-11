@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },
+  "routes": [{ "pattern": "pair.playbridge.app", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
       { "name": "LOBBIES", "class_name": "Lobby" },

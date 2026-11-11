@@ -75,7 +75,7 @@ internal fun PlayerScreenEffects(state: PlayerScreenState, isInPip: Boolean, onE
                 // On media item transition (seeking to previous/next or auto-advance), certain hardware
                 // decoders fail to hand off the surface correctly, causing a black screen.
                 // Re-preparing the player forces codec recreation and clean rendering.
-                if (player is ExoPlayer && (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
+                if (player.unwrapped() is ExoPlayer && (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
                     reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
                     reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)) {
                     player.prepare()
@@ -122,7 +122,7 @@ internal fun PlayerScreenEffects(state: PlayerScreenState, isInPip: Boolean, onE
     // available — silent video was the bug FFmpeg fixed; muting would reintroduce it.
     // Drop-audio is a last resort only if the extension AAR failed to load.
     LaunchedEffect(player, state.hasRenderedFrame) {
-        val exo = player as? ExoPlayer ?: return@LaunchedEffect
+        val exo = player.unwrapped() as? ExoPlayer ?: return@LaunchedEffect
         if (!state.hasRenderedFrame) return@LaunchedEffect
         delay(1_500)
         if (!isPlaybackStuck(exo, hasRenderedFrame = true)) return@LaunchedEffect

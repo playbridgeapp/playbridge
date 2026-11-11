@@ -82,6 +82,23 @@
                 <data android:scheme="https" />
             </intent-filter>
         </activity>
+        <!-- Watch party invite links open PlayBridge directly (App Links, verified by
+             party.playbridge.app/.well-known/assetlinks.json). An alias, because Android
+             treats a match on the browser filter above as a browser, and a browser never
+             wins a verified domain. -->
+        <activity-alias
+            android:name=".together.WatchPartyLink"
+            android:exported="true"
+            android:targetActivity=".browser.BrowserActivity">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="party.playbridge.app" />
+                <data android:pathPrefix="/j/" />
+            </intent-filter>
+        </activity-alias>
         <!-- The player runs in its own task, so with background play on, Back can send it behind
              the browser while it keeps playing (and a return brings it back as it was). The InApp
              copies below share the app's task instead, for "Picture-in-picture when you leave the
