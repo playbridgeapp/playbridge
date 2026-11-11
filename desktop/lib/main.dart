@@ -58,6 +58,8 @@ import 'shader_background.dart';
 import 'stats_overlay.dart';
 import 'still_watching_controller.dart';
 import 'still_watching_prompt.dart';
+import 'together/desktop_together.dart';
+import 'together/together_screen.dart';
 import 'tray_controller.dart';
 import 'tv_connection_store.dart';
 import 'tv_sender_controller.dart';
@@ -188,7 +190,15 @@ class StatsToggleIntent extends Intent {
 }
 
 // Navigation destinations — nowPlaying is a mode, not a persistent screen.
-enum _Dest { cast, sendToTv, nowCasting, history, favorites, settings }
+enum _Dest {
+  cast,
+  sendToTv,
+  nowCasting,
+  history,
+  favorites,
+  together,
+  settings
+}
 
 class ReceiverApp extends StatefulWidget {
   const ReceiverApp({
@@ -222,6 +232,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final TrayController _tray;
   late final TvSenderController _sender;
   late final ExtensionBridge _extBridge;
+  late final DesktopTogether _together;
+  StreamSubscription<String>? _togetherToasts;
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   late final MediaSessionBridge _mediaSession;
   late final StillWatchingController _stillWatching;
   final UpdateChecker _updateChecker = UpdateChecker();
@@ -449,6 +462,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       deviceId: widget.store.deviceId,
     );
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
+    _together = DesktopTogether(
+      player: _player,
+      sender: _sender,
+      prefs: widget.store.prefs,
+      deviceName: () => widget.store.deviceName,
+    );
+    _server.onWatchTogetherJoin = _together.joinFromPhone;
+    _togetherToasts = _together.toasts.listen((message) => _messengerKey
+        .currentState
+        ?.showSnackBar(SnackBar(content: Text(message))));
     _extBridge = ExtensionBridge(
       _sender,
       _player,
@@ -457,6 +480,15 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       onPromptStop: () => unawaited(_stillWatching.stopWatching()),
       onPlaybackActivity: _stillWatching.recordUserActivity,
       onNewMedia: _stillWatching.resetForNewMedia,
+      party: ({required url, title, headers}) {
+        if (!_together.isInParty) return null;
+        if (url.isEmpty) return '';
+        final message = _together.shareVideo(
+            url: url, title: title, headers: headers ?? const {});
+        _messengerKey.currentState
+            ?.showSnackBar(SnackBar(content: Text(message)));
+        return message;
+      },
       onShowApp: (pairId) async {
         await _showSenderScreen();
         if (pairId == null) return;
@@ -850,7 +882,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       await windowManager.setFullScreen(false);
       return;
     }
+    // A watch party keeps playing: pausing here would pause everyone.
     if (widget.store.pauseOnWindowHide &&
+        !_player.inParty &&
         (_player.state == 'playing' || _player.state == 'buffering')) {
       await _player.pause();
     }
@@ -1121,6 +1155,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (_pendingCastFile != null) _sender.removeListener(_maybeCastPendingFile);
     unawaited(_mediaSession.dispose());
     _extBridge.stop();
+    unawaited(_togetherToasts?.cancel());
+    _together.dispose();
     _sender.dispose();
     _discovery.stop();
     _server.stop();
@@ -1170,6 +1206,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Widget build(BuildContext context) {
     return MaterialApp(
         title: 'PlayBridge Desktop',
+        scaffoldMessengerKey: _messengerKey,
         debugShowCheckedModeBanner: false,
         theme: ThemeData.dark(useMaterial3: true).copyWith(
           scaffoldBackgroundColor: Colors.transparent,
@@ -1756,6 +1793,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           player: _player,
           onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
         ),
+      _Dest.together => TogetherScreen(together: _together),
       _Dest.settings => SettingsScreen(
           server: _server,
           store: widget.store,
@@ -1888,6 +1926,13 @@ class _NavSidebar extends StatelessWidget {
                     !showingVideo &&
                     dest == _Dest.favorites,
                 onTap: () => onDestSelect(_Dest.favorites),
+              ),
+              _NavItem(
+                icon: Icons.groups_outlined,
+                label: 'Watch Together',
+                selected:
+                    !screenMirroring && !showingVideo && dest == _Dest.together,
+                onTap: () => onDestSelect(_Dest.together),
               ),
               // ── Send: this computer casts to a TV ──
               const _NavSectionLabel('Send'),

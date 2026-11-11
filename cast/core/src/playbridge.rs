@@ -48,6 +48,10 @@ pub enum SenderFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         payload: Option<Value>,
     },
+    /// A paired phone asks this receiver to join a Watch Together room. The invite's
+    /// fragment holds the room key: never log it.
+    #[serde(rename = "watch_together_join")]
+    WatchTogetherJoin { invite: String, from: String },
     #[serde(other)]
     Unknown,
 }

@@ -154,6 +154,13 @@ class TvSenderClient {
   /// Last capabilities descriptor advertised by the receiver at auth/pairing.
   Map<String, dynamic>? get capabilities => _capabilities;
 
+  /// Protocol features the connected receiver advertised (for example `watch_together_v1`).
+  Set<String> get features => _features;
+  Set<String> _features = const {};
+
+  static Set<String> _featuresOf(Object? raw) =>
+      raw is List ? raw.map((f) => f.toString()).toSet() : const {};
+
   bool get isConnected => _current == SenderConnectionState.connected;
 
   void _setState(SenderConnectionState s) {
@@ -423,6 +430,7 @@ class TvSenderClient {
       if (token == null || token.isEmpty) {
         throw const FormatException('missing pairing token');
       }
+      _features = _featuresOf(credentials['features']);
       final rawCaps = credentials['capabilities'];
       _capabilities = rawCaps is Map
           ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
@@ -495,6 +503,7 @@ class TvSenderClient {
       _close();
       return;
     }
+    _features = _featuresOf(obj['features']);
     final rawCaps = obj['capabilities'];
     _capabilities = rawCaps is Map
         ? rawCaps.map((k, v) => MapEntry(k.toString(), v))
@@ -558,6 +567,7 @@ class TvSenderClient {
     client?.close(force: true);
     _clearPairingSecrets();
     _capabilities = null;
+    _features = const {};
     protocolSession.clear();
     await sub?.cancel();
     if (c != null) {

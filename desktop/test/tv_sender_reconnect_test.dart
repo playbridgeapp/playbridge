@@ -498,6 +498,12 @@ void main() {
 
 class _FakeTransport implements TvTransport {
   @override
+  Set<String> get features => const {};
+
+  @override
+  Future<bool> sendRaw(String frame) async => false;
+
+  @override
   String? lastError;
 
   _FakeTransport(this.protocol);

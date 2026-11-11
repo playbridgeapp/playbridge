@@ -58,6 +58,8 @@ pub enum PlayerCommand {
     Pause,
     Seek(f64),
     SetRate(f64),
+    /// A live stream: jump to this device's live point and play.
+    GoLive,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +101,9 @@ pub enum Event {
         item: String,
     },
     Warning(String),
+    /// Whether the video is a live stream: every screen loaded it with no length.
+    /// A live party shares playing or paused only, so apps hide seeking.
+    Live(bool),
     /// A message was dropped; for logs, never shown as an error.
     Rejected(&'static str),
 }
@@ -184,6 +189,8 @@ pub struct Engine {
     timeline: Option<Timeline>,
     load_seen_room: f64,
     ready: HashMap<MemberId, (Option<u64>, Option<f64>)>,
+    /// The last [`Event::Live`] sent.
+    live: bool,
     warned_duration: bool,
     buffering: HashMap<MemberId, f64>,
     ignored: HashSet<MemberId>,
@@ -239,6 +246,7 @@ impl Engine {
             timeline: None,
             load_seen_room: 0.0,
             ready: HashMap::new(),
+            live: false,
             warned_duration: false,
             buffering: HashMap::new(),
             ignored: HashSet::new(),
@@ -473,6 +481,11 @@ impl Engine {
         if self.connected {
             self.lead(room_now, &mut out);
         }
+        let live = self.video_live();
+        if live != self.live {
+            self.live = live;
+            out.push(Output::Event(Event::Live(live)));
+        }
         self.expire_requests(room_now, &mut out);
         out
     }
@@ -506,6 +519,11 @@ impl Engine {
                 let Some(current) = self.timeline.clone() else {
                     return out;
                 };
+                // A live stream has no shared position to move.
+                if matches!(command, Command::Seek(_)) && self.video_live() {
+                    out.push(Output::Event(Event::Rejected("live streams can't seek")));
+                    return out;
+                }
                 // Already so: a second tap must not push a scheduled start back.
                 if matches!(
                     (&command, current.playing),
@@ -1112,26 +1130,34 @@ impl Engine {
         let Some(timeline) = self.timeline.as_ref() else {
             return;
         };
-        let own_end = self
-            .ready
-            .get(&self.cfg.me)
-            .and_then(|(duration, _)| *duration)
-            .map(|d| d as f64);
-        let commands = match self
-            .corrector
-            .correct_until(timeline, room_now, player, own_end)
-        {
+        let Some((own_duration, _)) = self.ready.get(&self.cfg.me) else {
+            return;
+        };
+        // Loaded with no length: a live stream, synced by playing or paused only.
+        let live = own_duration.is_none();
+        let correction = match own_duration {
+            None => self.corrector.correct_live(timeline, room_now, player),
+            Some(end) => {
+                self.corrector
+                    .correct_until(timeline, room_now, player, Some(*end as f64))
+            }
+        };
+        let commands = match correction {
             Correction::None => return,
+            // Playing a live stream again starts at the live point, not where it paused.
+            Correction::Play if live => vec![PlayerCommand::GoLive],
             Correction::Play => vec![PlayerCommand::Play],
             Correction::Pause => vec![PlayerCommand::Pause],
             Correction::SetRate(rate) => vec![PlayerCommand::SetRate(rate)],
             Correction::Seek(to) => vec![PlayerCommand::Seek(to)],
             Correction::SeekAndPlay(to) => vec![PlayerCommand::Seek(to), PlayerCommand::Play],
         };
-        if commands
-            .iter()
-            .any(|c| matches!(c, PlayerCommand::Seek(_) | PlayerCommand::Play))
-        {
+        if commands.iter().any(|c| {
+            matches!(
+                c,
+                PlayerCommand::Seek(_) | PlayerCommand::Play | PlayerCommand::GoLive
+            )
+        }) {
             self.settle_until = local_ms + SETTLE_MS;
         }
         out.extend(commands.into_iter().map(Output::Player));
@@ -1194,8 +1220,14 @@ impl Engine {
             return;
         };
 
+        // Nobody shows the video: wait for a screen, and don't play to no one.
+        let any_screen = self.members.iter().any(|m| self.is_screen(m));
+
         // Schedule the start once everyone online is ready, or on timeout.
         if self.timeline.is_none() {
+            if !any_screen {
+                return;
+            }
             let everyone = self
                 .members
                 .iter()
@@ -1211,6 +1243,14 @@ impl Engine {
         let Some(timeline) = self.timeline.clone() else {
             return;
         };
+        // The last screen stopped watching: pause where the party is, so whoever
+        // watches next picks up from there.
+        if timeline.playing && !any_screen {
+            self.paused_for_buffering = false;
+            let position = timeline.expected_ms(room_now);
+            self.write_timeline(false, position, room_now, out);
+            return;
+        }
         // The video is over: everyone stops at the end, together.
         if timeline.playing
             && let Some(end) = self.video_end()
@@ -1220,7 +1260,9 @@ impl Engine {
             self.write_timeline(false, end, room_now, out);
             return;
         }
-        if timeline.playing && !waiting.is_empty() {
+        // A live stream doesn't wait for a buffering device: pausing would put
+        // everyone behind live, and the slow device catches up on its own.
+        if timeline.playing && !waiting.is_empty() && !self.video_live() {
             self.paused_for_buffering = true;
             let position = timeline.expected_ms(room_now);
             self.write_timeline(false, position, room_now, out);
@@ -1234,12 +1276,22 @@ impl Engine {
         }
     }
 
+    /// The video is a live stream: every screen that loaded it reported no length.
+    fn video_live(&self) -> bool {
+        let mut loaded = self
+            .ready
+            .iter()
+            .filter(|(member, _)| !self.ignored.contains(member) && self.is_screen(member))
+            .peekable();
+        loaded.peek().is_some() && loaded.all(|(_, (duration, _))| duration.is_none())
+    }
+
     /// Where the video ends: the shortest length a screen reported. Live
     /// streams report none, so they never end.
     fn video_end(&self) -> Option<f64> {
         self.ready
             .iter()
-            .filter(|(member, _)| !self.ignored.contains(member))
+            .filter(|(member, _)| !self.ignored.contains(member) && self.is_screen(member))
             .filter_map(|(_, (duration, _))| *duration)
             .min()
             .map(|d| d as f64)

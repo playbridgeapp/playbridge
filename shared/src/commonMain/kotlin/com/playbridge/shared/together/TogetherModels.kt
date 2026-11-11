@@ -70,6 +70,8 @@ sealed interface TogetherPlayerCommand {
     data object Pause : TogetherPlayerCommand
     data class Seek(val positionMs: Long) : TogetherPlayerCommand
     data class Rate(val rate: Float) : TogetherPlayerCommand
+    /** A live stream: jump to this device's live point and play. */
+    data object GoLive : TogetherPlayerCommand
 }
 
 enum class TogetherStop { Left, Unauthorized, RoomFull, Expired, Replaced, Error }
@@ -104,6 +106,8 @@ sealed interface TogetherEvent {
     data class Policy(val policy: TogetherPolicy) : TogetherEvent
     data class CredentialsReceived(val item: String) : TogetherEvent
     data class Warning(val message: String) : TogetherEvent
+    /** The video is a live stream: the party shares play and pause only, so hide seeking. */
+    data class Live(val live: Boolean) : TogetherEvent
     /** A message the engine dropped; for logs only. */
     data class Rejected(val reason: String) : TogetherEvent
     data class Player(val command: TogetherPlayerCommand) : TogetherEvent
@@ -202,6 +206,7 @@ object TogetherJson {
         "policy" -> TogetherEvent.Policy(TogetherPolicy.from(o.string("policy")))
         "credentials" -> TogetherEvent.CredentialsReceived(o.string("item") ?: return null)
         "warning" -> TogetherEvent.Warning(o.string("message").orEmpty())
+        "live" -> TogetherEvent.Live(o.bool("live"))
         "rejected" -> TogetherEvent.Rejected(o.string("reason").orEmpty())
         "player" -> parsePlayer(o.obj("command") ?: return null)?.let { TogetherEvent.Player(it) }
         "pairing_code" -> TogetherEvent.PairingCode(
@@ -238,6 +243,7 @@ object TogetherJson {
         "pause" -> TogetherPlayerCommand.Pause
         "seek" -> TogetherPlayerCommand.Seek(o.long("position_ms"))
         "rate" -> TogetherPlayerCommand.Rate((o["rate"] as? JsonPrimitive)?.doubleOrNull?.toFloat() ?: 1f)
+        "go_live" -> TogetherPlayerCommand.GoLive
         else -> null
     }
 

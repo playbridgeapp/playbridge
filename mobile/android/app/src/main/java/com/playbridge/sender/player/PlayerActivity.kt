@@ -625,6 +625,11 @@ open class PlayerActivity : ComponentActivity() {
         when (command) {
             TogetherPlayerCommand.Play -> p.play()
             TogetherPlayerCommand.Pause -> p.pause()
+            // Playing a live stream again starts at the live point, not where it paused.
+            TogetherPlayerCommand.GoLive -> {
+                if (p is MpvMediaPlayer) p.seekToLive() else p.seekToDefaultPosition()
+                p.play()
+            }
             is TogetherPlayerCommand.Seek -> p.seekTo(command.positionMs.coerceAtLeast(0))
             // Speed nudges keep this phone in step; they aren't the user's speed choice.
             is TogetherPlayerCommand.Rate -> p.setPlaybackSpeed(command.rate)

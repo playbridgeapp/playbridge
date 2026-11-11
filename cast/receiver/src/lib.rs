@@ -837,6 +837,18 @@ where
                         }
                         pairing = None;
                     }
+                    // Only a paired, authenticated sender may add this receiver to a party.
+                    SenderFrame::WatchTogetherJoin { .. } if authenticated => {
+                        shared.emit(ReceiverEvent::Command {
+                            connection_id: id,
+                            request_id: None,
+                            command: ReceiverCommand::Unknown {
+                                action: "watch_together_join".into(),
+                                payload: Value::Null,
+                            },
+                            raw: text.to_string(),
+                        });
+                    }
                     SenderFrame::Command { action, payload } if authenticated => {
                         let request_id = serde_json::from_str::<Value>(&text)
                             .ok()
@@ -1455,6 +1467,31 @@ mod tests {
         assert_eq!(
             command,
             ReceiverCommand::Control(json!({"command":"pause"}))
+        );
+        // A paired phone's Watch Together handoff reaches the app with its raw frame.
+        socket
+            .send(&SenderFrame::WatchTogetherJoin {
+                invite: "https://relay.test/j/room#k=key".into(),
+                from: "Phone".into(),
+            })
+            .await
+            .unwrap();
+        let (command, raw) = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let ReceiverEvent::Command { command, raw, .. } = events.recv().await.unwrap() {
+                    break (command, raw);
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            command,
+            ReceiverCommand::Unknown { ref action, .. } if action == "watch_together_join"
+        ));
+        assert_eq!(
+            serde_json::from_str::<Value>(&raw).unwrap()["invite"],
+            "https://relay.test/j/room#k=key"
         );
         socket.close().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {

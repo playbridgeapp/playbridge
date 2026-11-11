@@ -19,6 +19,9 @@ interface PlaybackEngine {
     fun pause()
     fun stop()
     fun seek(positionMs: Long)
+
+    /** A live stream: jump to the live point. Engines without live support do nothing. */
+    fun seekToLive() {}
     fun setRate(rate: Float)
     fun setAudioTrack(id: String?)
     fun setSubtitleTrack(id: String?)

@@ -39,6 +39,7 @@ class ExtensionBridge {
     this.onPlaybackActivity,
     this.onNewMedia,
     this.onShowApp,
+    this.party,
   }) : linkedPlayback =
             LinkedPlaybackCoordinator(DesktopLinkedPlayback(_player, _sender));
 
@@ -46,6 +47,14 @@ class ExtensionBridge {
 
   final TvSenderController _sender;
   final PlayerController _player;
+
+  /// Sends casts into the watch party while this computer is in one. Returns
+  /// what happened, or null outside a party.
+  final String? Function({
+    required String url,
+    String? title,
+    Map<String, String>? headers,
+  })? party;
   final bool Function()? isPlaybackPromptActive;
   final VoidCallback? onPromptContinue;
   final VoidCallback? onPromptStop;
@@ -221,6 +230,23 @@ class ExtensionBridge {
         final audioUrl = (obj['audioUrl'] as String?)?.trim();
         final playlistBody = (obj['playlistBody'] as String?)?.trim();
         debugLogExtensionCastRequest(url: url, headers: headers);
+        // In a watch party the video goes to everyone. A synthetic playlist only
+        // exists on this computer, so it can't be shared.
+        final hasBody = playlistBody != null && playlistBody.isNotEmpty;
+        final partyResult = party?.call(
+            url: hasBody ? '' : url, title: title, headers: headers);
+        if (partyResult != null) {
+          final shared = !hasBody;
+          _send(socket, {
+            'type': 'result',
+            'ok': shared,
+            'target': 'party',
+            'message':
+                shared ? partyResult : "This video can't play in a watch party",
+            if (!shared) 'error': 'party_unsupported',
+          });
+          break;
+        }
         if (!_sender.selection.isLocal && obj['destination'] != 'local') {
           final targetId = _sender.selection.identityKey;
           final targetName = _sender.selectionName;

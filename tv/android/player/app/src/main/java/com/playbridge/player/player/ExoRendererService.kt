@@ -158,6 +158,10 @@ class ExoRendererService : Service() {
             if (isCurrent(requestedSessionId)) engine?.seek(positionMs)
         }
 
+        override fun seekToLive(requestedSessionId: Long) = onMain {
+            if (isCurrent(requestedSessionId)) engine?.seekToLive()
+        }
+
         override fun setPlaybackSpeed(speed: Float, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             desiredPlaybackSpeed = speed.coerceIn(0.25f, 4f)

@@ -3304,7 +3304,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun reportPartyLoaded(force: Boolean) {
         val item = partyItem ?: return
         if (partyLoadedReported || !partyReady) return
-        val live = partyLive ?: if (force) true else return
+        // Not told in time whether it's live: a video with a known length isn't.
+        val live = partyLive ?: if (force) lastDurationMs <= 0 else return
         partyLoadedReported = true
         mainHandler.removeCallbacks(reportPartyLoadedAnyway)
         TvTogether.onLoaded(item, if (live) 0L else lastDurationMs)
@@ -3327,6 +3328,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when (command) {
             TogetherPlayerCommand.Play -> handleControl("play", fromParty = true)
             TogetherPlayerCommand.Pause -> handleControl("pause", fromParty = true)
+            // Playing a live stream again starts at the live point, not where it paused.
+            TogetherPlayerCommand.GoLive -> {
+                runCatchingLogged(TAG, "Party live seek failed", ::logPlayerFailure) {
+                    rendererService?.seekToLive(currentSession.sessionId)
+                }
+                handleControl("play", fromParty = true)
+            }
             is TogetherPlayerCommand.Seek -> seekForSession(command.positionMs, currentSession.sessionId)
             // Speed nudges stay out of the controls and saved settings.
             is TogetherPlayerCommand.Rate -> runCatchingLogged(TAG, "Party speed failed", ::logPlayerFailure) {

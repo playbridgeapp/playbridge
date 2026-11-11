@@ -588,6 +588,16 @@ class MpvEngine extends PlayerEngine {
   Future<void> pause() => player.pause();
   @override
   Future<void> seek(Duration position) => player.seek(position);
+
+  /// The end of a live stream's seekable range is its live point.
+  @override
+  Future<void> seekToLive() async {
+    final native = player.platform;
+    if (native is NativePlayer) {
+      await native.command(['seek', '100', 'absolute-percent']);
+    }
+  }
+
   @override
   Future<void> setVolume(double volume) => player.setVolume(volume * 100.0);
   @override

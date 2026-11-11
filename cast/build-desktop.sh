@@ -26,12 +26,12 @@ case "$(uname -s)" in
         add_target x86_64-apple-darwin
         cargo_build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services \
+            --features playbridge-cast-core-ffi/sender-services,playbridge-cast-core-ffi/together \
             --package playbridge-cast-cli --release \
             --target aarch64-apple-darwin
         cargo_build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services \
+            --features playbridge-cast-core-ffi/sender-services,playbridge-cast-core-ffi/together \
             --package playbridge-cast-cli --release \
             --target x86_64-apple-darwin
         mkdir -p "$output_root/macos"
@@ -52,7 +52,7 @@ case "$(uname -s)" in
         add_target x86_64-unknown-linux-gnu
         cargo_build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services \
+            --features playbridge-cast-core-ffi/sender-services,playbridge-cast-core-ffi/together \
             --package playbridge-cast-cli --release \
             --target x86_64-unknown-linux-gnu
         mkdir -p "$output_root/linux"
@@ -67,7 +67,7 @@ case "$(uname -s)" in
         add_target x86_64-pc-windows-msvc
         cargo_build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services \
+            --features playbridge-cast-core-ffi/sender-services,playbridge-cast-core-ffi/together \
             --package playbridge-cast-cli --release \
             --target x86_64-pc-windows-msvc
         mkdir -p "$output_root/windows"

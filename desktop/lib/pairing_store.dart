@@ -83,6 +83,9 @@ class PairingStore {
 
   final SharedPreferences _prefs;
 
+  /// The app's preferences, for features that keep their own keys.
+  SharedPreferences get prefs => _prefs;
+
   static Future<PairingStore> load() async {
     final p = await SharedPreferences.getInstance();
     return PairingStore._(p);

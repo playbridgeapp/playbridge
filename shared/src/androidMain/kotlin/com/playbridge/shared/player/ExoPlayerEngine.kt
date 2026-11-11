@@ -656,6 +656,12 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         logger.d(TAG, "seek($positionMs)")
         player?.seekTo(positionMs)
     }
+
+    // A live stream's default position is its live point.
+    override fun seekToLive() {
+        logger.d(TAG, "seekToLive()")
+        player?.seekToDefaultPosition()
+    }
     override fun setRate(rate: Float) {
         logger.i(TAG, "setRate($rate)")
         player?.setPlaybackSpeed(rate)

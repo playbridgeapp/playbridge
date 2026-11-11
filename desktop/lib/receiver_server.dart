@@ -18,6 +18,7 @@ import 'extension_request_debug_log.dart';
 import 'late_subtitle_loader.dart';
 import 'progress_webhook.dart';
 import 'receiver_capabilities.dart';
+import 'together/watch_together_join.dart';
 import 'remote_player_settings.dart';
 import 'remote_timeline.dart';
 import 'video_scaling.dart';
@@ -110,6 +111,10 @@ class ReceiverServer extends ChangeNotifier {
   final VoidCallback? onPromptStop;
   final VoidCallback? onPlaybackActivity;
   final VoidCallback? onNewMedia;
+
+  /// Joins a paired phone's watch party (`watch_together_join`); set by Watch Together.
+  Future<WatchTogetherJoinReply> Function(String invite, String from)?
+      onWatchTogetherJoin;
   final VoidCallback? onScreenMirrorStarted;
   final void Function(String)? onRemoteVolumeFeedback;
   late final _volumeCommands = RemoteVolumeCommands(_applyVolumeChange);
@@ -722,6 +727,12 @@ class ReceiverServer extends ChangeNotifier {
               player.rotateImage(dx);
           }
         }
+      case WatchTogetherJoinCmd(:final invite, :final from):
+        final join = onWatchTogetherJoin;
+        final reply = join == null
+            ? const WatchTogetherJoinReply.failed('unavailable')
+            : await join(invite, from);
+        _runtime?.sendTo(connectionId, reply.toJson());
       case UnknownCmd(:final type):
         if (type == 'receiver_capabilities_subscribe') {
           _capabilitySubscribers.add(connectionId);

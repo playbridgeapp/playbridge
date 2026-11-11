@@ -123,6 +123,12 @@ abstract class TvTransport {
   /// Send browser control command.
   Future<bool> sendBrowserControl(String action) async => false;
 
+  /// Protocol features the receiver advertised; empty when unknown.
+  Set<String> get features => const {};
+
+  /// Send a protocol frame as-is (PlayBridge receivers only).
+  Future<bool> sendRaw(String frame) async => false;
+
   /// Dispose transport resources and subscriptions.
   Future<void> dispose();
 }
@@ -235,6 +241,12 @@ class PlayBridgeTransport extends TvTransport {
   @override
   Future<bool> sendBrowserControl(String action) async =>
       _client.send(senderBrowserControlJson(action));
+
+  @override
+  Set<String> get features => _client.features;
+
+  @override
+  Future<bool> sendRaw(String frame) async => _client.send(frame);
 
   @override
   Future<void> dispose() => _client.dispose();

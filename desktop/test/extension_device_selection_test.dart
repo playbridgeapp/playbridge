@@ -32,6 +32,17 @@ DiscoveredTv discovered(String id, {String? name, int? port = 8765}) =>
         wssPort: null);
 
 class FakeTransport implements TvTransport {
+  /// Features the fake receiver advertises, and raw frames sent to it.
+  @override
+  Set<String> features = {};
+  final raw = <String>[];
+
+  @override
+  Future<bool> sendRaw(String frame) async {
+    raw.add(frame);
+    return true;
+  }
+
   final states = StreamController<SenderConnectionState>.broadcast();
   final creds = StreamController<TvCredentials>.broadcast();
   final text = StreamController<String>.broadcast();
