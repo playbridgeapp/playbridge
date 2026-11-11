@@ -81,6 +81,8 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         with:
           channel: stable
+          # Pinned: 3.50 deprecates importing material.dart, which fails analyze.
+          flutter-version: 3.47.9
           cache: true
 
       - name: Set up Rust
