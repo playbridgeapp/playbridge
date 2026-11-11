@@ -93,3 +93,27 @@ test('a stopped watchdog reports nothing', () => {
   clock.advance(120000);
   assert.equal(watchdog.observe({}), null);
 });
+
+test('a load that never gets metadata stalls even though the element is paused', () => {
+  const clock = fakeClock();
+  const watchdog = createStallWatchdog({ now: clock.now });
+  watchdog.start();
+  clock.advance(29000);
+  assert.equal(watchdog.observe({ paused: true, readyState: 0 }), null);
+  clock.advance(1000);
+  assert.equal(watchdog.observe({ paused: true, readyState: 0 }), STARTUP_STALLED);
+});
+
+test('a paused load with metadata is waiting on the person, not stalled', () => {
+  const clock = fakeClock();
+  const watchdog = createStallWatchdog({ now: clock.now });
+  watchdog.start();
+  clock.advance(60000);
+  assert.equal(watchdog.observe({ paused: true, readyState: 1 }), null);
+});
+
+test('a format error before metadata reads as a load failure', () => {
+  assert.equal(playbackErrorMessage({ code: 4 }, null, { loaded: false }), "The video couldn't be loaded.");
+  assert.equal(playbackErrorMessage({ code: 4 }, null, { loaded: true }), "The browser can't play this video format.");
+  assert.equal(playbackErrorMessage({ code: 2 }, null, { loaded: false }), "The browser couldn't reach the video server.");
+});

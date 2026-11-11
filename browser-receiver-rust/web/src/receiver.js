@@ -1525,7 +1525,8 @@ import { bufferedAhead, createStallWatchdog, playbackErrorMessage } from './shar
 
   function reportPlaybackError(requestId, error, fallback) {
     stallWatchdog.stop();
-    var message = playbackErrorMessage(error, fallback);
+    var el = mediaElement();
+    var message = playbackErrorMessage(error, fallback, { loaded: !!el && el.readyState >= 1 });
     showStatus(message, true);
     send({
       type: 'error',
@@ -1577,7 +1578,8 @@ import { bufferedAhead, createStallWatchdog, playbackErrorMessage } from './shar
       buffered: bufferedAhead(el.buffered, position),
       paused: el.paused,
       seeking: el.seeking,
-      ended: el.ended
+      ended: el.ended,
+      readyState: el.readyState
     });
     if (!message) return;
     setPlaybackStatus('error');

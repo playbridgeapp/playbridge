@@ -4,6 +4,7 @@
 export const PLAYBACK_FAILED = 'Playback failed in the browser.';
 export const STARTUP_STALLED = "The video didn't start loading.";
 export const PLAYBACK_STALLED = 'The video stopped loading.';
+export const NOT_LOADED = "The video couldn't be loaded.";
 
 // HTMLMediaElement MediaError codes, which Video.js errors share.
 const MEDIA_ERROR_MESSAGES = {
@@ -13,9 +14,14 @@ const MEDIA_ERROR_MESSAGES = {
   4: "The browser can't play this video format."
 };
 
-/** A fixed sentence for [error]: its media error code if it has one, else [fallback]. */
-export function playbackErrorMessage(error, fallback) {
+/**
+ * A fixed sentence for [error]: its media error code if it has one, else [fallback].
+ * Pass [loaded] false when the error arrived before any metadata: Chrome then reports a
+ * failed or cut-off download as code 4 too, so "can't play this format" would mislead.
+ */
+export function playbackErrorMessage(error, fallback, { loaded = true } = {}) {
   const code = error && typeof error === 'object' ? error.code : null;
+  if (code === 4 && !loaded) return NOT_LOADED;
   return MEDIA_ERROR_MESSAGES[code] || fallback || PLAYBACK_FAILED;
 }
 
@@ -33,7 +39,9 @@ export function bufferedAhead(buffered, position) {
 /**
  * Reports a load that never makes progress: no position or buffered-ahead
  * growth for [startupMs] before playback starts, or [stallMs] once it has.
- * Time spent paused doesn't count, and a seek starts the window again.
+ * Time spent paused doesn't count, and a seek starts the window again. Before
+ * metadata arrives ([readyState] 0) the element is paused only because the receiver
+ * hasn't called play() yet, so that time does count.
  */
 export function createStallWatchdog({ startupMs = 30000, stallMs = 45000, now = Date.now } = {}) {
   let phase = 'idle';
@@ -56,9 +64,17 @@ export function createStallWatchdog({ startupMs = 30000, stallMs = 45000, now = 
       phase = 'idle';
     },
     /** Returns STARTUP_STALLED or PLAYBACK_STALLED once when a deadline passes, else null. */
-    observe({ position = 0, buffered = 0, paused = false, seeking = false, ended = false }) {
+    observe({
+      position = 0,
+      buffered = 0,
+      paused = false,
+      seeking = false,
+      ended = false,
+      readyState = 4
+    }) {
       if (phase === 'idle') return null;
-      if (paused || ended || seeking) {
+      const waitingForMetadata = phase === 'startup' && readyState < 1;
+      if ((paused && !waitingForMetadata) || ended || seeking) {
         restart(position, buffered);
         return null;
       }
