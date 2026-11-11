@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
+import 'package:uuid/uuid.dart';
 
 import 'protocol.dart';
 import 'receiver_capability_policy.dart';
@@ -134,8 +135,31 @@ abstract class TvTransport {
 }
 
 /// Transport implementation for PlayBridge WebSocket protocol (`wss://`).
-class PlayBridgeTransport extends TvTransport {
+/// A transport whose playlists carry request IDs the receiver can reject.
+abstract interface class PlaybackRequestTracker {
+  /// True once for a requestId this transport sent with a playlist.
+  bool takePlaybackRequest(String requestId);
+}
+
+class PlayBridgeTransport extends TvTransport
+    implements PlaybackRequestTracker {
   final TvSenderClient _client;
+
+  // Recent playlist request IDs, so a rejecting command_result can be shown.
+  final _playbackRequests = <String>{};
+
+  String _newPlaybackRequest() {
+    final id = const Uuid().v4();
+    _playbackRequests.add(id);
+    if (_playbackRequests.length > 32) {
+      _playbackRequests.remove(_playbackRequests.first);
+    }
+    return id;
+  }
+
+  @override
+  bool takePlaybackRequest(String requestId) =>
+      _playbackRequests.remove(requestId);
 
   PlayBridgeTransport({TvSenderClient? client})
       : _client = client ?? TvSenderClient();
@@ -194,12 +218,12 @@ class PlayBridgeTransport extends TvTransport {
   Future<void> disconnect() => _client.disconnect();
 
   @override
-  Future<bool> castVideo(PlayPayload video) async =>
-      _client.send(senderSingleVideoCommandJson(video));
+  Future<bool> castVideo(PlayPayload video) async => _client.send(
+      senderSingleVideoCommandJson(video, requestId: _newPlaybackRequest()));
 
   @override
-  Future<bool> castPlaylist(PlaylistPayload playlist) async =>
-      _client.send(senderPlaylistCommandJson(playlist));
+  Future<bool> castPlaylist(PlaylistPayload playlist) async => _client.send(
+      senderPlaylistCommandJson(playlist, requestId: _newPlaybackRequest()));
 
   @override
   Future<bool> sendControl(String command) async =>

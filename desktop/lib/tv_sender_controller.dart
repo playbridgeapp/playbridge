@@ -20,6 +20,18 @@ import 'extension_request_debug_log.dart';
 /// Non-empty string: trim, collapse whitespace/control chars to one line, cap at 512 chars.
 /// Otherwise (missing, null, empty/blank, non-string): generic "Playback failed on the TV".
 @visibleForTesting
+
+/// A fixed sentence for a receiver's `command_result` rejecting a cast; the
+/// receiver's own text is never shown.
+String playbackRejectionMessage(Object? code) => switch (code) {
+      'invalid_command' =>
+        "The TV couldn't read this cast. Try casting it again.",
+      'queue_full' => 'The TV is busy. Try again in a moment.',
+      'unsupported' =>
+        "The TV couldn't open its player. Open PlayBridge on the TV and try again.",
+      _ => "The TV didn't start playback. Try casting it again.",
+    };
+
 String normalizePlaybackError(Object? raw) {
   if (raw is! String) {
     return 'Playback failed on the TV';
@@ -1915,6 +1927,19 @@ class TvSenderController extends ChangeNotifier {
       final obj = jsonDecode(text);
       if (obj is! Map) return;
       final type = obj['type'];
+      if (type == 'command_result') {
+        final requestId = obj['requestId'];
+        final transport = _transport;
+        if (requestId is String &&
+            transport is PlaybackRequestTracker &&
+            (transport as PlaybackRequestTracker)
+                .takePlaybackRequest(requestId) &&
+            obj['ok'] != true) {
+          _lastPlaybackError = playbackRejectionMessage(obj['error']);
+          notifyListeners();
+        }
+        return;
+      }
       if (type == 'status') {
         if (_transport.protocol != TvProtocol.playBridge) {
           _externalVolumeSupported = obj['volumeSupported'] is bool

@@ -52,7 +52,7 @@ notices, and make the corresponding source available — see *Source availabilit
 - **OkHttp / Okio**, **Wire** (Square) — Apache-2.0
 - **Ktor**, **Koin**, **multiplatform-settings**, **Coil** — Apache-2.0
 - **Java-WebSocket** — MIT · **Bouncy Castle** — MIT (Bouncy Castle Licence)
-- **Desktop (Flutter)** — `media_kit` (MIT); `video_player`, `shelf`, `web_socket_channel`, `path_provider`, `shared_preferences` (BSD-3, Flutter/Dart); `bonsoir`, `window_manager`, `tray_manager`, `uuid`, `crypto`, `basic_utils` (MIT/BSD)
+- **Desktop (Flutter)** — `media_kit` (MIT); `video_player`, `shelf`, `web_socket_channel`, `path_provider`, `shared_preferences` (BSD-3, Flutter/Dart); `bonsoir`, `window_manager`, `tray_manager`, `local_notifier`, `flutter_local_notifications`, `uuid`, `crypto`, `basic_utils` (MIT/BSD)
 - **Browser extension** — `@bufbuild/protobuf` (Apache-2.0), `esbuild` (MIT), `typescript` (Apache-2.0)
 
 ## Source availability

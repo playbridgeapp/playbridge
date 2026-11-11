@@ -176,7 +176,8 @@ jobs:
           pkg-config \
           libmpv-dev \
           liblzma-dev \
-          libayatana-appindicator3-dev
+          libayatana-appindicator3-dev \
+          libnotify-dev
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'

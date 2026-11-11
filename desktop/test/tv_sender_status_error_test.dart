@@ -47,8 +47,78 @@ class _RecordingTransport implements TvTransport {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _TrackingTransport extends _RecordingTransport
+    implements PlaybackRequestTracker {
+  final sent = <String>{'cast-1', 'cast-2'};
+
+  @override
+  bool takePlaybackRequest(String requestId) => sent.remove(requestId);
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  group('playlist rejections', () {
+    Future<TvSenderController> makeTracked() async {
+      final sender = TvSenderController(
+        identity: await PairingStore.load(),
+        store: await TvConnectionStore.load(),
+        transport: _TrackingTransport(),
+      );
+      addTearDown(sender.dispose);
+      return sender;
+    }
+
+    test('a rejected playlist becomes a fixed playback error', () async {
+      final sender = await makeTracked();
+      sender.handleReceiverMessage(jsonEncode({
+        'type': 'command_result',
+        'requestId': 'cast-1',
+        'ok': false,
+        'error': 'unsupported',
+      }));
+      expect(sender.lastPlaybackError,
+          "The TV couldn't open its player. Open PlayBridge on the TV and try again.");
+    });
+
+    test('accepted, unknown and repeated results show nothing', () async {
+      final sender = await makeTracked();
+      sender.handleReceiverMessage(jsonEncode({
+        'type': 'command_result',
+        'requestId': 'queue-1',
+        'ok': false,
+        'error': 'queue_full'
+      }));
+      sender.handleReceiverMessage(jsonEncode(
+          {'type': 'command_result', 'requestId': 'cast-2', 'ok': true}));
+      sender.handleReceiverMessage(jsonEncode({
+        'type': 'command_result',
+        'requestId': 'cast-2',
+        'ok': false,
+        'error': 'unsupported'
+      }));
+      expect(sender.lastPlaybackError, isNull);
+    });
+
+    test('codes map to fixed sentences, never receiver text', () {
+      expect(playbackRejectionMessage('invalid_command'),
+          "The TV couldn't read this cast. Try casting it again.");
+      expect(playbackRejectionMessage('queue_full'),
+          'The TV is busy. Try again in a moment.');
+      expect(playbackRejectionMessage('http://secret'),
+          "The TV didn't start playback. Try casting it again.");
+      expect(playbackRejectionMessage(null),
+          "The TV didn't start playback. Try casting it again.");
+    });
+  });
+
+  test('playlists carry the requestId they were given', () {
+    final json = jsonDecode(senderSingleVideoCommandJson(
+        PlayPayload(url: 'https://example.com/a.mp4'),
+        requestId: 'r1')) as Map;
+    expect(json['action'], 'playlist');
+    expect(json['requestId'], 'r1');
+  });
 
   Future<TvSenderController> makeSender() async {
     final sender = TvSenderController(

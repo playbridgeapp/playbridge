@@ -636,18 +636,28 @@ String senderPairingConfirmationJson(String mac) =>
 
 /// `{"type":"command","action":<action>,"payload":<payload>}` — mirrors the
 /// shared `envelope(...)` builder.
-String _commandEnvelope(String action, Object? payload) =>
-    jsonEncode({'type': 'command', 'action': action, 'payload': payload});
+String _commandEnvelope(String action, Object? payload, {String? requestId}) =>
+    jsonEncode({
+      'type': 'command',
+      'action': action,
+      if (requestId != null) 'requestId': requestId,
+      'payload': payload,
+    });
 
 /// Proto payloads are serialized via the generated proto3-JSON encoder so the
 /// field names match the `.proto` contract both TVs were generated from.
-String senderPlaylistCommandJson(PlaylistPayload payload) =>
-    _commandEnvelope('playlist', payload.toProto3Json());
+///
+/// [requestId] lets the receiver answer with a `command_result` if it rejects
+/// the playlist.
+String senderPlaylistCommandJson(PlaylistPayload payload,
+        {String? requestId}) =>
+    _commandEnvelope('playlist', payload.toProto3Json(), requestId: requestId);
 
 /// A single video is sent as a one-item playlist — there is no standalone
 /// `play` command; the TV always builds a queue so `queue_add` can append.
-String senderSingleVideoCommandJson(PlayPayload video) =>
-    senderPlaylistCommandJson(PlaylistPayload(items: [video]));
+String senderSingleVideoCommandJson(PlayPayload video, {String? requestId}) =>
+    senderPlaylistCommandJson(PlaylistPayload(items: [video]),
+        requestId: requestId);
 
 String senderQueueAddJson(PlayPayload item) =>
     _commandEnvelope('queue_add', {'item': item.toProto3Json()});
