@@ -5,7 +5,6 @@ import 'dart:ui' show ImageFilter, PlatformDispatcher;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:local_notifier/local_notifier.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -32,6 +31,7 @@ import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
 import 'playback_clock.dart';
+import 'playback_error_notifier.dart';
 import 'playback_osd.dart';
 import 'playback_speed.dart';
 import 'subtitle_delay.dart';
@@ -92,7 +92,7 @@ Future<void> main(List<String> args) async {
   ensurePlayBridgeMediaKitInitialized();
   await windowManager.ensureInitialized();
   try {
-    await localNotifier.setup(appName: 'PlayBridge');
+    await PlaybackErrorNotifier.setUp();
   } catch (e) {
     debugPrint('Notifications unavailable: $e');
   }
@@ -549,7 +549,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _senderWasCasting = false;
   String? _lastReportedPlaybackError;
-  LocalNotification? _playbackErrorNotification;
+  late final _playbackErrorNotifier =
+      PlaybackErrorNotifier(onClick: () => unawaited(_showSenderScreen()));
   bool _wasStillWatchingPrompting = false;
 
   void _handleStillWatchingChange() {
@@ -678,25 +679,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       if (await windowManager.isVisible() && await windowManager.isFocused()) {
         return;
       }
-      await _closePlaybackErrorNotification();
       final tv = _sender.selectionName;
-      final notification = LocalNotification(
+      await _playbackErrorNotifier.show(
         title: tv.isEmpty ? 'Playback failed' : 'Playback failed on $tv',
         body: message,
       );
-      notification.onClick = () => unawaited(_showSenderScreen());
-      _playbackErrorNotification = notification;
-      await notification.show();
     } catch (e) {
       debugPrint('Playback error notification failed: $e');
     }
   }
 
   Future<void> _closePlaybackErrorNotification() async {
-    final notification = _playbackErrorNotification;
-    _playbackErrorNotification = null;
     try {
-      await notification?.close();
+      await _playbackErrorNotifier.close();
     } catch (_) {}
   }
 
