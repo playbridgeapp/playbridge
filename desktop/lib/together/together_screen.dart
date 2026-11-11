@@ -272,6 +272,7 @@ class _WatchHereSwitch extends StatelessWidget {
         contentPadding: EdgeInsets.zero,
         value: value,
         onChanged: onChanged,
+        // ignore: deprecated_member_use (activeThumbColor needs a newer Flutter than some dev machines)
         activeColor: Colors.tealAccent,
         title: const Text('Watch on this computer'),
         subtitle: Text(
@@ -589,6 +590,7 @@ class _PartyViewState extends State<_PartyView> {
                 contentPadding: EdgeInsets.zero,
                 value: party.locked,
                 onChanged: together.lock,
+                // ignore: deprecated_member_use (activeThumbColor needs a newer Flutter than some dev machines)
                 activeColor: Colors.tealAccent,
                 title: const Text('Lock controls'),
                 subtitle: const Text(
