@@ -2,7 +2,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dashmap::DashMap;
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::time::interval;
@@ -22,6 +22,19 @@ pub struct ProxySession {
     pub last_accessed_at: Instant,
     expires_at: Instant,
     owner_managed: bool,
+    /// Short references to long targets this session's rewrites handed out. Shared, so
+    /// cloning a session doesn't copy the table and revoking it drops every reference.
+    refs: Arc<Mutex<RefTable>>,
+}
+
+/// Targets reachable through `?ref=<id>` instead of `?uri=…&cap=…`. Only the proxy adds
+/// entries, from URLs its own manifest rewrites produced, so a reference grants no more
+/// than the capability it replaces.
+#[derive(Debug, Default)]
+struct RefTable {
+    by_ref: HashMap<String, String>,
+    by_target: HashMap<String, String>,
+    order: VecDeque<String>,
 }
 
 impl ProxySession {
@@ -41,6 +54,7 @@ impl ProxySession {
             last_accessed_at: now,
             expires_at: now + Duration::from_secs(7200),
             owner_managed: false,
+            refs: Arc::default(),
         }
     }
 }
@@ -116,12 +130,50 @@ impl SessionManager {
         self.sessions.clear();
     }
 
+    /// A short reference to [target] for session [id], reusing the existing one when the
+    /// same target was referenced before. None when the session is gone.
+    pub fn short_ref(&self, id: &str, target: &str) -> Option<String> {
+        let refs = self.sessions.get(id)?.refs.clone();
+        let mut table = refs.lock().ok()?;
+        if let Some(existing) = table.by_target.get(target) {
+            return Some(existing.clone());
+        }
+        while table.order.len() >= MAX_REFS_PER_SESSION {
+            let Some(oldest) = table.order.pop_front() else {
+                break;
+            };
+            if let Some(old_target) = table.by_ref.remove(&oldest) {
+                table.by_target.remove(&old_target);
+            }
+        }
+        let reference = Self::generate_ref();
+        table.by_ref.insert(reference.clone(), target.to_string());
+        table
+            .by_target
+            .insert(target.to_string(), reference.clone());
+        table.order.push_back(reference.clone());
+        Some(reference)
+    }
+
+    /// The target a [reference] from [short_ref] stands for in session [id].
+    pub fn resolve_ref(&self, id: &str, reference: &str) -> Option<String> {
+        let refs = self.sessions.get(id)?.refs.clone();
+        let table = refs.lock().ok()?;
+        table.by_ref.get(reference).cloned()
+    }
+
     pub fn revoke(&self, id: &str) -> bool {
         self.sessions.remove(id).is_some()
     }
 
     fn generate_id() -> String {
         let mut bytes = [0u8; 24];
+        rand::thread_rng().fill(&mut bytes);
+        URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    fn generate_ref() -> String {
+        let mut bytes = [0u8; 16];
         rand::thread_rng().fill(&mut bytes);
         URL_SAFE_NO_PAD.encode(bytes)
     }
@@ -159,6 +211,9 @@ impl SessionManager {
 // Active native owners renew; shutdown/revoke invalidates immediately.
 const OWNER_ABANDONMENT_GRACE: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_ACTIVE_SESSIONS: usize = 4_096;
+/// Long targets are rare (signed media URLs), so this only bounds a misbehaving source.
+/// The oldest reference goes first.
+const MAX_REFS_PER_SESSION: usize = 4_096;
 
 fn expired(session: &ProxySession, now: Instant) -> bool {
     now >= session.expires_at
