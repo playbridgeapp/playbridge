@@ -73,6 +73,8 @@ jobs:
       uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
+        # Pinned: 3.50 deprecates importing material.dart, which fails analyze.
+        flutter-version: 3.47.9
         cache: true
 
     - name: Set up Rust
@@ -184,6 +186,8 @@ jobs:
       uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
+        # Pinned: 3.50 deprecates importing material.dart, which fails analyze.
+        flutter-version: 3.47.9
         cache: true
 
     - name: Set up Rust
@@ -263,6 +267,8 @@ jobs:
       uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
+        # Pinned: 3.50 deprecates importing material.dart, which fails analyze.
+        flutter-version: 3.47.9
         cache: true
 
     - name: Set up Rust
