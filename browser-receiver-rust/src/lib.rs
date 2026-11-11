@@ -82,6 +82,10 @@ pub struct BrowserSessionStatus {
     pub volume: f64,
     pub muted: bool,
     pub title: Option<String>,
+    /// The last playback failure, a short user-safe sentence. Kept while the
+    /// browser stays in error, buffering or paused; cleared by playback or a new load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl Default for BrowserSessionStatus {
@@ -93,7 +97,26 @@ impl Default for BrowserSessionStatus {
             volume: 1.0,
             muted: false,
             title: None,
+            error: None,
         }
+    }
+}
+
+const BROWSER_PLAYBACK_FAILED: &str = "Playback failed in the browser.";
+
+/// The browser page sends fixed sentences; anything else, or anything that
+/// looks like it carries a URL, becomes a generic sentence before senders see it.
+fn safe_browser_error(message: &str) -> String {
+    let single_line = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let looks_unsafe = single_line.is_empty()
+        || single_line.chars().count() > 160
+        || single_line.contains("://")
+        || single_line.contains('@')
+        || single_line.chars().any(char::is_control);
+    if looks_unsafe {
+        BROWSER_PLAYBACK_FAILED.to_string()
+    } else {
+        single_line
     }
 }
 
@@ -264,6 +287,7 @@ impl BrowserReceiverService {
         if !entry.approved.load(Ordering::Acquire) || entry.closed.load(Ordering::Acquire) {
             return Err("browser session not approved".into());
         }
+        entry.status.write().await.error = None;
         let webhook = media.progress_webhook.take();
         let identity = media.progress_identity.take();
         let item_id = identity
@@ -822,14 +846,23 @@ async fn handle_browser_frame(
                     duration_ms,
                 );
             }
-            *entry.status.write().await = BrowserSessionStatus {
+            let mut status = entry.status.write().await;
+            let error = match state {
+                BrowserPlaybackState::Error
+                | BrowserPlaybackState::Buffering
+                | BrowserPlaybackState::Paused => status.error.take(),
+                _ => None,
+            };
+            *status = BrowserSessionStatus {
                 state,
                 position_ms,
                 duration_ms,
                 volume: volume.clamp(0.0, 1.0),
                 muted,
                 title,
+                error,
             };
+            drop(status);
             let _ = service.state.events.send(BrowserReceiverEvent::Status {
                 session: entry.snapshot().await,
                 request_id,
@@ -849,7 +882,12 @@ async fn handle_browser_frame(
             if request_id.as_ref() == Some(&*entry.progress_load_id.lock().unwrap()) {
                 entry.progress.lock().unwrap().finish("stopped");
             }
-            entry.status.write().await.state = BrowserPlaybackState::Error;
+            let message = safe_browser_error(&message);
+            {
+                let mut status = entry.status.write().await;
+                status.state = BrowserPlaybackState::Error;
+                status.error = Some(message.clone());
+            }
             let _ = service.state.events.send(BrowserReceiverEvent::Error {
                 session: entry.snapshot().await,
                 request_id,
@@ -930,6 +968,23 @@ fn random_code() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browser_errors_are_short_sentences_without_urls() {
+        use super::{BROWSER_PLAYBACK_FAILED, safe_browser_error};
+        assert_eq!(
+            safe_browser_error("  The video stopped\n loading. "),
+            "The video stopped loading."
+        );
+        for unsafe_text in [
+            "GET https://cdn.test/a.m3u8?token=x failed",
+            "user@host refused",
+            "",
+            &"A".repeat(161),
+        ] {
+            assert_eq!(safe_browser_error(unsafe_text), BROWSER_PLAYBACK_FAILED);
+        }
+    }
+
     use std::{net::TcpListener as StdTcpListener, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};

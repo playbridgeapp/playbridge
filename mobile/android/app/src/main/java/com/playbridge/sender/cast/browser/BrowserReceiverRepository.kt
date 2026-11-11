@@ -248,12 +248,11 @@ class BrowserReceiverRepository(
             }
             "error" -> {
                 // Operation errors are already delivered via submit() exceptions.
-                // Session playback errors may arrive with a nested session.
+                // Session playback errors may arrive with a nested session; the host
+                // reduces their message to a short sentence without URLs.
                 val message = event.optString("message").takeIf { it.isNotEmpty() }
                 if (message != null && event.has("session")) {
-                    _state.update {
-                        it.copy(lastError = "TV browser couldn’t play this stream")
-                    }
+                    _state.update { it.copy(lastError = message) }
                 }
             }
         }

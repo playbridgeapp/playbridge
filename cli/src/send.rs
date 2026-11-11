@@ -2644,7 +2644,8 @@ pub(crate) async fn run_dashboard_browser_cast(
                         let _ = events.try_send(CastEvent::Snapshot { generation, snapshot: snapshot.clone() });
                     }
                     Err(message) => {
-                        session_error = Some(format!("browser receiver connection lost: {message}"));
+                        // Already a full sentence: a playback error or a disconnect.
+                        session_error = Some(message);
                         break;
                     }
                 }
