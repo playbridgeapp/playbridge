@@ -1,65 +1,90 @@
 package com.playbridge.player.ui.player
 
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.LaunchedEffect
-import androidx.tv.material3.Surface
-import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.Border
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.tv.material3.Text
 import com.playbridge.player.player.ChapterPickerDialog
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.StillWatchingState
-import com.playbridge.player.player.SwitchPlayerDialog
+import com.playbridge.player.together.TvTogether
+import com.playbridge.player.ui.TogetherPartyLabel
+import com.playbridge.player.ui.TogetherPlayerChrome
 import com.playbridge.player.ui.components.LoadingBlob
+import com.playbridge.player.ui.toPartyUi
 import com.playbridge.player.ui.theme.TvExpressiveMotion
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvTheme
+import kotlinx.coroutines.flow.StateFlow
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/**
+ * Everything drawn over the video: the seek strip (Left/Right), the full controls (OK, Up, Down),
+ * the side panels, skip button, notices, Still Watching, the loading spinner and the error screen.
+ * Which surface shows follows [PlayerControlsState]; the keys that move between them are decided
+ * by [resolveKeyAction] and applied in PlayerHostActivity.
+ *
+ * [state] changes about once a second; exact position comes from [progress], which only the seek
+ * bars read. Music draws its own progress and buttons through [MusicTransport] (see
+ * MediaPresentation), so this overlay draws none of them for `mediaKind == "audio"`.
+ */
 @Composable
 fun PlayerControlsOverlay(
     state: PlayerControlsState,
+    progress: StateFlow<SeekProgress>,
     mediaKind: String = "video",
     subtitleStyle: com.playbridge.shared.player.SubtitleStyle = com.playbridge.shared.player.SubtitleStyle.DEFAULT,
     subtitleTypeface: android.graphics.Typeface? = null,
     stillWatchingState: StillWatchingState = StillWatchingState(),
     onContinueWatching: () -> Unit = {},
+    onStopWatching: () -> Unit = {},
     onTogglePlay: () -> Unit,
-    onTrackSelection: () -> Unit,
     onSubtitles: () -> Unit,
     onPlaylist: () -> Unit,
     onChapters: () -> Unit = {},
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onLoop: () -> Unit,
-    onSwitchPlayer: () -> Unit,
     onSeek: (Long) -> Unit,
+    onBookmark: () -> Unit = {},
     onPrePlayStartNow: () -> Unit = {},
+    onPrePlayStartOver: () -> Unit = {},
     onPrePlayBack: () -> Unit = {},
+    party: TvTogether.State.InParty? = null,
+    onLeaveParty: () -> Unit = {},
     onSettingsTabSelected: (SettingsTab) -> Unit = {},
     onTrackSelected: (UnifiedTrack) -> Unit = {},
     onSpeedSelected: (Float) -> Unit = {},
@@ -78,24 +103,20 @@ fun PlayerControlsOverlay(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        // Music keeps a compact progress surface visible after the expanded controls time out.
-        // Video controls continue to disappear completely for an unobstructed picture.
-        val keepCompactMusicProgress = mediaKind == "audio"
-        val showExpandedControls = state.isVisible && state.isFullControlsVisible
+        val isAudio = mediaKind == "audio"
+        val isImage = mediaKind == "image"
+        val surface = state.controlsSurface()
 
-        // Main Controls Overlay
+        // Main controls layer: seek strip, full controls and the side panels.
         AnimatedVisibility(
-            visible = (state.isVisible || keepCompactMusicProgress) &&
-                state.playbackTransitionMessage == null,
+            visible = state.isVisible &&
+                state.playbackTransitionMessage == null &&
+                state.playbackError == null,
             enter = fadeIn(TvExpressiveMotion.effects()),
             exit = fadeOut(TvExpressiveMotion.effects()),
             modifier = Modifier.fillMaxSize()
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (showExpandedControls) Color.Black.copy(alpha = 0.5f) else Color.Transparent)
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 // Settings Panel (Slides from right)
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.SETTINGS,
@@ -105,12 +126,14 @@ fun PlayerControlsOverlay(
                 ) {
                     MediaSettingsPanel(
                         state = state,
-                        onTabSelected = onSettingsTabSelected,
                         onTrackSelected = onTrackSelected,
                         onSpeedSelected = onSpeedSelected,
                         onScalingSelected = onScalingSelected,
                         onToggleAudioBoost = onToggleAudioBoost,
-                        onDismiss = onSettingsDismiss
+                        onDismiss = onSettingsDismiss,
+                        onPlayerSwitched = onPlayerSwitched,
+                        onToggleLoop = onLoop,
+                        onOpenChapters = onChapters,
                     )
                 }
 
@@ -165,125 +188,52 @@ fun PlayerControlsOverlay(
                     )
                 }
 
-                // Switch Player Overlay
-                AnimatedVisibility(
-                    visible = state.activeOverlay == ActiveOverlay.SWITCH_PLAYER,
-                    enter = fadeIn(TvExpressiveMotion.effects()),
-                    exit = fadeOut(TvExpressiveMotion.effects()),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    SwitchPlayerDialog(
-                        currentPlayer = state.engineType.lowercase(),
-                        onPlayerSelected = onPlayerSwitched,
-                        onDismiss = onOverlayDismiss
+                // The Still Watching prompt owns focus while it is up; the controls beneath it wait.
+                if (surface == ControlsSurface.CONTROLS && !isAudio && !stillWatchingState.isPrompting) {
+                    FullControls(
+                        state = state,
+                        progress = progress,
+                        mediaKind = mediaKind,
+                        onTogglePlay = onTogglePlay,
+                        // Audio opens the panel on its Audio page; More opens the list.
+                        onAudio = { onSettingsTabSelected(SettingsTab.AUDIO) },
+                        onMore = { onSettingsTabSelected(SettingsTab.SPEED) },
+                        onSubtitles = onSubtitles,
+                        onPlaylist = onPlaylist,
+                        onPrev = onPrev,
+                        onNext = onNext,
+                        onSeek = onSeek,
+                        onBookmark = onBookmark,
+                        party = party,
+                        onLeaveParty = onLeaveParty,
                     )
-                }
-
-                if (state.activeOverlay == ActiveOverlay.NONE) {
-                    if (showExpandedControls) {
-                        // Top shadow
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight(0.4f)
-                                .align(Alignment.TopCenter)
-                                .background(
-                                    brush = Brush.verticalGradient(
-                                        colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
-                                    )
-                                )
+                } else if (surface == ControlsSurface.SEEK_BAR && !isAudio && !isImage) {
+                    val showTimelineMetadata = !state.capabilities.isLive && state.duration > 0L
+                    val timelineChapters = if (showTimelineMetadata) state.chapters else emptyList()
+                    val timelineSegments = if (showTimelineMetadata) state.skipSegments else emptyList()
+                    val seekCaption = state.chapterOsd ?: if (showTimelineMetadata) {
+                        com.playbridge.player.player.timelineCaption(
+                            chapters = timelineChapters,
+                            segments = timelineSegments,
+                            positionMs = state.currentPosition,
+                            durationMs = state.duration,
                         )
-
-                        // Bottom shadow
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight(0.5f)
-                                .align(Alignment.BottomCenter)
-                                .background(
-                                    brush = Brush.verticalGradient(
-                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
-                                    )
-                                )
-                        )
-
-                        // Top Metadata
-                        TopMetadata(
-                            title = state.title,
-                            subtitle = state.subtitle,
-                            modifier = Modifier.align(Alignment.TopCenter)
-                        )
+                    } else {
+                        null
                     }
-
-                    // Bottom Controls
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 40.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        if (showExpandedControls) {
-                            BottomMetadata(
-                                engineType = state.engineType,
-                                streamInfo = state.streamInfo,
-                                hdrFormat = state.hdrFormat
-                            )
-                        }
-
-                        if (mediaKind != "image") {
-                            val showTimelineMetadata = !state.capabilities.isLive && state.duration > 0L
-                            val timelineChapters = if (showTimelineMetadata) state.chapters else emptyList()
-                            val timelineSegments = if (showTimelineMetadata) state.skipSegments else emptyList()
-                            val seekCaption = state.chapterOsd ?: if (showTimelineMetadata) {
-                                com.playbridge.player.player.timelineCaption(
-                                    chapters = timelineChapters,
-                                    segments = timelineSegments,
-                                    positionMs = state.currentPosition,
-                                    durationMs = state.duration,
-                                )
-                            } else {
-                                null
-                            }
-                            PlayerSeekbar(
-                                position = state.currentPosition,
-                                duration = state.duration,
-                                bufferedPosition = state.bufferedPosition,
-                                onSeek = { delta -> onSeek(delta) },
-                                chapters = timelineChapters,
-                                segments = timelineSegments,
-                                caption = seekCaption,
-                            )
-                        }
-
-                        if (showExpandedControls) {
-                            ControlActionButtons(
-                                isPlaying = state.isPlaying,
-                                isLooping = state.isLooping,
-                                hasPlaylist = state.hasPlaylist,
-                                hasMultipleStreams = false,
-                                canSwitchPlayer = state.canSwitchPlayer,
-                                mediaKind = mediaKind,
-                                onTogglePlay = onTogglePlay,
-                                onTrackSelection = onTrackSelection,
-                                onSubtitles = onSubtitles,
-                                onPlaylist = onPlaylist,
-                                onStreams = {},
-                                onPrev = onPrev,
-                                onNext = onNext,
-                                onLoop = onLoop,
-                                onSwitchPlayer = onSwitchPlayer,
-                                hasChapters = state.hasSelectableChapters(mediaKind),
-                                onChapters = onChapters,
-                                isVisible = state.isVisible,
-                                initialFocusTarget = state.controlActionFocusTarget(mediaKind),
-                            )
-                        }
-                    }
+                    EdgeScrim(top = false, height = SEEK_STRIP_SCRIM_HEIGHT, alpha = TvTheme.player.scrimTopAlpha, modifier = Modifier.align(Alignment.BottomCenter))
+                    SeekStrip(
+                        progress = progress,
+                        chapters = timelineChapters,
+                        segments = timelineSegments,
+                        caption = seekCaption,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 44.dp),
+                    )
                 }
             }
         }
 
-        if (state.prePlayMetadata == null &&
+        if (state.prePlayMetadata == null && state.playbackError == null &&
             (state.playbackTransitionMessage != null ||
                 (state.isBuffering && !state.isVisible))
         ) {
@@ -294,131 +244,200 @@ fun PlayerControlsOverlay(
         }
 
         // Subtitle Overlay (Manual Parser)
+        val liftDp = state.subtitleLiftDp()
         if (state.currentSubtitleText != null && state.playbackTransitionMessage == null) {
             SubtitleOverlay(
                 text = state.currentSubtitleText,
                 style = subtitleStyle,
                 typeface = subtitleTypeface,
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    // One translation, no size or layout change: clear of the strip or controls.
+                    .graphicsLayer { translationY = -liftDp.dp.toPx() },
             )
         }
 
-        // Skip Segment Button (Netflix style)
+        // Small play/pause badge for a media key pressed with nothing else on screen.
+        TransportBadgeView(
+            badge = state.transportBadge,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = TvSpacing.playerEdge, end = TvSpacing.screenGutter),
+        )
+
+        // Skip intro / recap / credits
         state.activeSkipSegment
-            ?.takeUnless { state.isPlaybackObscured() }
+            ?.takeUnless { state.isPlaybackObscured() || surface == ControlsSurface.PANEL }
             ?.let { segment ->
-            val focusRequester = remember { FocusRequester() }
-            val skipButtonBottomPadding = when {
-                showExpandedControls -> 220.dp
-                state.isVisible || keepCompactMusicProgress -> 150.dp
-                else -> 120.dp
-            }
-            
-            // Request focus when the button becomes visible
-            LaunchedEffect(segment) {
-                focusRequester.requestFocus()
-            }
-            
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(end = 48.dp, bottom = skipButtonBottomPadding), // floats above seekbar / controls
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                Surface(
-                    onClick = { onSkipSegment() },
-                    modifier = Modifier
-                        .focusRequester(focusRequester)
-                        .onFocusChanged { focusState ->
-                            onSkipButtonFocusChanged(focusState.isFocused)
-                        }
-                        .width(140.dp)
-                        .height(40.dp),
-                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
-                    colors = ClickableSurfaceDefaults.colors(
-                        containerColor = Color.Black.copy(alpha = 0.55f),
-                        focusedContainerColor = Color.Black.copy(alpha = 0.8f)
-                    ),
-                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
-                    border = ClickableSurfaceDefaults.border(
-                        border = Border(
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.25f))
-                        ),
-                        focusedBorder = Border(
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color.White)
-                        )
-                    )
-                ) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Skip ${segment.type.replaceFirstChar { it.uppercase() }}",
-                            style = androidx.compose.ui.text.TextStyle(
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White
-                            )
-                        )
-                    }
+                val bottom = when (surface) {
+                    ControlsSurface.CONTROLS -> 320.dp
+                    ControlsSurface.SEEK_BAR -> 196.dp
+                    else -> 56.dp
                 }
+                SkipSegmentButton(
+                    segment = segment,
+                    onSkip = onSkipSegment,
+                    onFocusChanged = onSkipButtonFocusChanged,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = TvSpacing.screenGutter, bottom = bottom),
+                )
+            }
+
+        // Short notices: bookmark confirmation (light pill, above the controls) and "Press Back again to stop".
+        state.notice?.let { notice ->
+            val bottom = when (surface) {
+                ControlsSurface.CONTROLS -> 262.dp
+                ControlsSurface.SEEK_BAR -> 196.dp
+                else -> 56.dp
+            }
+            NoticePill(
+                notice = notice,
+                modifier = if (notice.emphasis) {
+                    Modifier.align(Alignment.BottomEnd).padding(end = TvSpacing.screenGutter, bottom = bottom)
+                } else {
+                    Modifier.align(Alignment.BottomCenter).padding(bottom = bottom)
+                },
+            )
+        }
+
+        // Watch Together: member chips, the "waiting for ..." pill and party notices. Not focusable.
+        // On a bare video it only appears while someone is loading or there is something to say.
+        if (party != null) {
+            val ui = party.toPartyUi()
+            if (surface != ControlsSurface.NOTHING || ui.waitingFor.isNotEmpty() || ui.notice != null) {
+                TogetherPlayerChrome(party)
             }
         }
 
-        // PrePlay Overlay — TOP layer, deliberately last: it must cover the
-        // buffering spinner and the subtitle overlay (which otherwise bleed
-        // through while the player pre-buffers a resume position underneath).
+        // What a phone just did: a short confirmation, never the full controls and never focus.
+        if (state.prePlayMetadata == null && state.playbackError == null && !stillWatchingState.isPrompting) {
+            val seekTarget = state.phoneSeek?.targetMs
+            PhoneConfirmations(
+                state = state,
+                progress = progress,
+                controlsUp = surface == ControlsSurface.CONTROLS || surface == ControlsSurface.PANEL,
+                seekCaption = state.phoneSeek?.let { seek ->
+                    phoneSeekCaption(
+                        seek.name,
+                        if (!state.capabilities.isLive && state.duration > 0L) {
+                            com.playbridge.player.player.timelineCaption(
+                                chapters = state.chapters,
+                                segments = state.skipSegments,
+                                positionMs = seekTarget ?: 0L,
+                                durationMs = state.duration,
+                            )
+                        } else {
+                            null
+                        },
+                    )
+                },
+                rightTopInset = if (party != null) 56.dp else 0.dp,
+            )
+        }
+
+        // PrePlay Overlay — deliberately above the spinner and subtitles: it must cover them
+        // while the player pre-buffers a resume position underneath.
         state.prePlayMetadata?.let { metadata ->
             com.playbridge.player.preplay.PrePlayScreen(
                 metadata = metadata,
                 isLaunching = state.isPrePlayLaunching,
                 launchCountdown = state.prePlayCountdown,
                 onStartNow = onPrePlayStartNow,
-                onBack = onPrePlayBack
+                onBack = onPrePlayBack,
+                resumePositionMs = state.prePlayResume?.positionMs,
+                resumeDurationMs = state.prePlayResume?.durationMs,
+                onStartOver = if (state.prePlayResume != null) onPrePlayStartOver else null,
+                choiceWindowSeconds = com.playbridge.player.preplay.PREPLAY_COUNTDOWN_SECONDS,
             )
         }
 
         if (stillWatchingState.isPrompting) {
-            StillWatchingDialog(
+            StillWatchingPrompt(
                 title = state.title,
                 secondsRemaining = stillWatchingState.secondsRemaining,
                 onContinue = onContinueWatching,
+                onStop = onStopWatching,
             )
+        }
+
+        state.playbackError?.let { reason ->
+            PlaybackErrorScreen(title = state.title, reason = reason)
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+private val SEEK_STRIP_SCRIM_HEIGHT = 170.dp
+
+/** Title, seek bar and the fixed button row on a top and bottom scrim (mockup PlayerControls). */
 @Composable
-private fun StillWatchingDialog(
-    title: String,
-    secondsRemaining: Int,
-    onContinue: () -> Unit,
+private fun BoxScope.FullControls(
+    state: PlayerControlsState,
+    progress: StateFlow<SeekProgress>,
+    mediaKind: String,
+    onTogglePlay: () -> Unit,
+    onAudio: () -> Unit,
+    onMore: () -> Unit,
+    onSubtitles: () -> Unit,
+    onPlaylist: () -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onBookmark: () -> Unit,
+    party: TvTogether.State.InParty?,
+    onLeaveParty: () -> Unit,
 ) {
-    val continueFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { continueFocus.requestFocus() }
-    Box(
-        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f)),
-        contentAlignment = Alignment.Center,
+    val isImage = mediaKind == "image"
+    val seekFocus = remember { FocusRequester() }
+    val playFocus = remember { FocusRequester() }
+    val focusLabel = remember { mutableStateOf("") }
+    val showTimeline = !state.capabilities.isLive && state.duration > 0L
+
+    EdgeScrim(top = true, height = 130.dp, alpha = TvTheme.player.scrimTopAlpha, modifier = Modifier.align(Alignment.TopCenter))
+    EdgeScrim(top = false, height = 250.dp, alpha = TvTheme.player.scrimBottomAlpha, modifier = Modifier.align(Alignment.BottomCenter))
+    TopMetadata(
+        title = state.title,
+        context = if (party == null) controlsContextLine(state) else null,
+        contextContent = party?.let { { TogetherPartyLabel(it) } },
+        modifier = Modifier.align(Alignment.TopCenter),
+    )
+    Column(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .padding(horizontal = TvSpacing.screenGutter)
+            .padding(bottom = TvSpacing.playerEdge),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        Column(
-            modifier = Modifier.width(560.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp)).padding(36.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) {
-            Text("Are you still watching?", color = MaterialTheme.colorScheme.onSurface, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            if (title.isNotBlank()) Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
-            Text(
-                "Playback will stop in ${secondsRemaining.coerceAtLeast(0) / 60}:${(secondsRemaining.coerceAtLeast(0) % 60).toString().padStart(2, '0')}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (!isImage) {
+            PlayerSeekbar(
+                progress = progress,
+                onSeek = onSeek,
+                focusRequester = seekFocus,
+                downFocus = playFocus,
+                onFocused = { focusLabel.value = "" },
+                chapters = if (showTimeline) state.chapters else emptyList(),
+                segments = if (showTimeline) state.skipSegments else emptyList(),
             )
-            Surface(
-                onClick = onContinue,
-                modifier = Modifier.focusRequester(continueFocus),
-                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
-            ) { Text("Continue watching", Modifier.padding(horizontal = 24.dp, vertical = 14.dp)) }
         }
+        ControlActionButtons(
+            isPlaying = state.isPlaying,
+            hasPlaylist = state.hasPlaylist,
+            bookmark = state.bookmark,
+            focusLabel = focusLabel,
+            seekBarFocus = if (isImage) FocusRequester.Default else seekFocus,
+            onTogglePlay = onTogglePlay,
+            onSeekBack = { onSeek(-SEEK_STEP_MS) },
+            onSeekForward = { onSeek(SEEK_STEP_MS) },
+            onPrev = onPrev,
+            onNext = onNext,
+            onBookmark = onBookmark,
+            onSubtitles = onSubtitles,
+            onAudio = onAudio,
+            onPlaylist = onPlaylist,
+            onMore = onMore,
+            mediaKind = mediaKind,
+            onLeaveParty = if (party != null) onLeaveParty else null,
+            initialFocusTarget = state.controlActionFocusTarget(mediaKind),
+            audioHasFocusAfterPanel = state.activeSettingsTab == SettingsTab.AUDIO,
+            playFocus = playFocus,
+        )
     }
 }
 
@@ -441,7 +460,7 @@ private fun PlaybackTransitionOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(if (message != null) Color.Black else Color.Transparent),
+            .background(if (message != null) TvTheme.player.background else Color.Transparent),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -452,11 +471,11 @@ private fun PlaybackTransitionOverlay(
             message?.let {
                 Text(
                     text = it,
-                    color = Color.White.copy(alpha = textAlpha),
+                    color = TvTheme.player.onSurface.copy(alpha = textAlpha),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                        .background(TvTheme.player.background.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 22.dp, vertical = 12.dp),
                 )
             }

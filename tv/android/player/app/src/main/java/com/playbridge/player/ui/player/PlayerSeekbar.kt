@@ -3,206 +3,251 @@ package com.playbridge.player.ui.player
 import android.view.KeyEvent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.playbridge.player.player.SkipSegment
 import com.playbridge.player.player.chapterFractions
 import com.playbridge.player.player.segmentFractions
+import com.playbridge.player.ui.theme.Primary
+import com.playbridge.player.ui.theme.TvSize
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvText
+import com.playbridge.player.ui.theme.TvTheme
 import com.playbridge.shared.player.PlayerChapter
+import kotlinx.coroutines.flow.StateFlow
 import java.util.Locale
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+private val BarThumbRadius = 11.dp
+private val BarCanvasHeight = 22.dp
+private val ChapterMarkWidth = 3.dp
+private val ChapterMarkHeight = 12.dp
+
+/**
+ * Seek bar on the full controls (mockup PlayerControls): an 8dp bar with elapsed and total time
+ * under it. It takes focus; Left/Right seek (10 s, faster while held) and the thumb appears only
+ * while focused. Nothing here changes size on focus. Position comes from [progress] and is read
+ * in the draw phase, so only this bar redraws as playback moves.
+ */
 @Composable
 fun PlayerSeekbar(
-    position: Long,
-    duration: Long,
-    bufferedPosition: Long,
+    progress: StateFlow<SeekProgress>,
     onSeek: (Long) -> Unit,
+    focusRequester: FocusRequester,
+    downFocus: FocusRequester,
+    onFocused: () -> Unit,
+    modifier: Modifier = Modifier,
     chapters: List<PlayerChapter> = emptyList(),
     segments: List<SkipSegment> = emptyList(),
-    caption: String? = null,
-    modifier: Modifier = Modifier
 ) {
-    var isFocused by remember { mutableStateOf(false) }
-    val progress = if (duration > 0) (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
-    val bufferProgress = if (duration > 0) (bufferedPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
-
-    val elapsedText = remember(position) { formatDuration(position) }
-    val remainingText = remember(position, duration) {
-        val remaining = if (duration > 0) duration - position else 0
-        "-${formatDuration(remaining)}"
-    }
-    val chapterGapFractions = remember(chapters, duration) {
-        chapterFractions(chapters, duration)
-    }
-    val segmentRanges = remember(segments, duration) {
-        segmentFractions(segments, duration)
-    }
-
+    val state = progress.collectAsState()
+    var focused by remember { mutableStateOf(false) }
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 48.dp)
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .onKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown) {
-                    when (event.nativeKeyEvent.keyCode) {
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(TvSpacing.s),
+    ) {
+        SeekBarCanvas(
+            progress = state,
+            chapters = chapters,
+            segments = segments,
+            showThumb = { focused },
+            modifier = Modifier
+                .focusRequester(focusRequester)
+                .focusProperties { down = downFocus }
+                .onFocusChanged {
+                    focused = it.isFocused
+                    if (it.isFocused) onFocused()
+                }
+                .onKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    when (event.key.nativeKeyCode) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            onSeek(-10_000L)
-                            true
+                            onSeek(-seekStepMs(event.nativeKeyEvent.repeatCount)); true
                         }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            onSeek(10_000L)
-                            true
+                            onSeek(seekStepMs(event.nativeKeyEvent.repeatCount)); true
                         }
                         else -> false
                     }
-                } else false
-            },
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+                }
+                .focusable()
+                .semantics { contentDescription = "Seek bar" },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            ClockText(state) { formatClock(it.position) }
+            ClockText(state) { if (it.duration > 0L) formatClock(it.duration) else "" }
+        }
+    }
+}
+
+/**
+ * The seek bar shown alone when Left or Right is pressed with nothing on screen (mockup
+ * PlayerSeek): the target time large, the chapter or skip-segment [caption] under it, the total
+ * on the right, the bar, and (with [showHints]) a hint line. A phone's seek (PhoneSeeking) omits the hints. It is not focusable; keys keep going to the host.
+ */
+@Composable
+fun SeekStrip(
+    progress: StateFlow<SeekProgress>,
+    modifier: Modifier = Modifier,
+    chapters: List<PlayerChapter> = emptyList(),
+    segments: List<SkipSegment> = emptyList(),
+    caption: String? = null,
+    showHints: Boolean = true,
+) {
+    val state = progress.collectAsState()
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = TvSpacing.screenGutter),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Time labels and centered chapter / skip-segment caption
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Text(
-                text = elapsedText,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (!caption.isNullOrBlank()) {
-                    Text(
-                        text = caption,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.85f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            }
-            Text(
-                text = remainingText,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White
-            )
-        }
-
-        // The actual bar
-        val activeColor = MaterialTheme.colorScheme.primary
-        val segmentColor = activeColor.copy(alpha = 0.55f)
-        val bufferColor = Color.White.copy(alpha = 0.6f)
-        val trackColor = Color.White.copy(alpha = 0.1f)
-        val barHeight = if (isFocused) 8.dp else 4.dp
-        val segmentBarHeight = if (isFocused) 10.dp else 7.dp
-        val canvasHeight = if (isFocused) 16.dp else 10.dp
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(canvasHeight)
-                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-        ) {
-            val width = size.width
-            val height = size.height
-            val centerY = height / 2f
-            val trackStroke = barHeight.toPx()
-            val segmentStroke = segmentBarHeight.toPx()
-            val gapWidth = 4.dp.toPx()
-
-            // 1. Track (Full duration background)
-            drawLine(
-                color = trackColor,
-                start = Offset(0f, centerY),
-                end = Offset(width, centerY),
-                strokeWidth = trackStroke,
-                cap = StrokeCap.Round
-            )
-
-            // 2. Buffer (Line from current progress to buffered position)
-            if (bufferProgress > progress) {
-                drawLine(
-                    color = bufferColor,
-                    start = Offset(width * progress, centerY),
-                    end = Offset(width * bufferProgress, centerY),
-                    strokeWidth = trackStroke / 2f,
-                    cap = StrokeCap.Round
+            Column {
+                ClockText(state, style = STRIP_TIME_STYLE, color = TvTheme.player.onSurface) { formatClock(it.position) }
+                Text(
+                    text = caption.orEmpty().ifBlank { " " },
+                    style = TvText.caption,
+                    color = TvTheme.player.onSurfaceMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            // 3. Skip-segment highlight bands (Intro / Recap / Credits / Preview)
-            segmentRanges.forEach { range ->
-                val startX = width * range.startFraction
-                val endX = width * range.endFraction
-                if (endX > startX) {
-                    drawLine(
-                        color = segmentColor,
-                        start = Offset(startX, centerY),
-                        end = Offset(endX, centerY),
-                        strokeWidth = segmentStroke,
-                        cap = StrokeCap.Butt,
-                    )
-                }
-            }
-
-            // 4. Progress (Active playback line)
-            drawLine(
-                color = activeColor,
-                start = Offset(0f, centerY),
-                end = Offset(width * progress, centerY),
-                strokeWidth = trackStroke,
-                cap = StrokeCap.Round
-            )
-
-            // 5. Chapter gaps (punched through track, buffer, segment bands, and played fill)
-            chapterGapFractions.forEach { fraction ->
-                val x = width * fraction
-                drawLine(
-                    color = Color.Transparent,
-                    start = Offset(x, 0f),
-                    end = Offset(x, height),
-                    strokeWidth = gapWidth,
-                    cap = StrokeCap.Butt,
-                    blendMode = BlendMode.Clear,
-                )
-            }
-
-            // 6. Focused thumb (drawn after chapter gaps so it is never notched)
-            if (isFocused) {
-                drawCircle(
-                    color = Color.White,
-                    radius = 6.dp.toPx(),
-                    center = Offset(width * progress, centerY),
-                )
+            ClockText(state, style = TvText.row) {
+                if (it.duration > 0L) formatClock(it.duration) else ""
             }
         }
+        SeekBarCanvas(
+            progress = state,
+            chapters = chapters,
+            segments = segments,
+            showThumb = { true },
+        )
+        if (showHints) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Left and right to seek 10 seconds", style = TvText.caption, color = TvTheme.player.onSurfaceMuted)
+                Text("Down for controls", style = TvText.caption, color = TvTheme.player.onSurfaceMuted)
+            }
+        }
+    }
+}
+
+private val STRIP_TIME_STYLE = TvText.panelTitle.copy(fontSize = 34.sp, lineHeight = 38.sp)
+
+/** A time label that re-reads [progress] itself, so its parent does not recompose as playback moves. */
+@Composable
+internal fun ClockText(
+    progress: State<SeekProgress>,
+    style: androidx.compose.ui.text.TextStyle = TvText.value,
+    color: Color = TvTheme.player.onSurfaceMuted,
+    text: (SeekProgress) -> String,
+) {
+    Text(text = text(progress.value), style = style, color = color, maxLines = 1)
+}
+
+/**
+ * Track, buffered range, skip-segment bands, played part, chapter marks and (optionally) thumb.
+ * Fixed 22dp tall; [showThumb] and [progress] are read while drawing, never in composition.
+ */
+@Composable
+private fun SeekBarCanvas(
+    progress: State<SeekProgress>,
+    chapters: List<PlayerChapter>,
+    segments: List<SkipSegment>,
+    showThumb: () -> Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val durationState = remember(progress) { derivedStateOf { progress.value.duration } }
+    val duration = durationState.value
+    val chapterMarks = remember(chapters, duration) { chapterFractions(chapters, duration) }
+    val segmentRanges = remember(segments, duration) { segmentFractions(segments, duration) }
+    val trackColor = TvTheme.player.track
+    val bufferColor = TvTheme.player.buffer
+    val bandColor = Primary.copy(alpha = 0.45f)
+    val playedColor = Primary
+    val markColor = TvTheme.player.background
+    val thumbColor = TvTheme.player.onSurface
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(BarCanvasHeight),
+    ) {
+        val p = progress.value
+        val width = size.width
+        val barHeight = TvSize.seekBarHeight.toPx()
+        val top = (size.height - barHeight) / 2f
+        val radius = CornerRadius(barHeight / 2f)
+        val fraction = if (p.duration > 0L) (p.position.toFloat() / p.duration).coerceIn(0f, 1f) else 0f
+        val bufferFraction = if (p.duration > 0L) (p.buffered.toFloat() / p.duration).coerceIn(0f, 1f) else 0f
+
+        drawRoundRect(trackColor, Offset(0f, top), Size(width, barHeight), radius)
+        if (bufferFraction > 0f) {
+            drawRoundRect(bufferColor, Offset(0f, top), Size(width * bufferFraction, barHeight), radius)
+        }
+        segmentRanges.forEach { range ->
+            val startX = width * range.startFraction
+            val endX = width * range.endFraction
+            if (endX > startX) drawRect(bandColor, Offset(startX, top), Size(endX - startX, barHeight))
+        }
+        if (fraction > 0f) {
+            drawRoundRect(playedColor, Offset(0f, top), Size(width * fraction, barHeight), radius)
+        }
+        val markW = ChapterMarkWidth.toPx()
+        val markH = ChapterMarkHeight.toPx()
+        chapterMarks.forEach { f ->
+            drawRect(markColor, Offset(width * f - markW / 2f, (size.height - markH) / 2f), Size(markW, markH))
+        }
+        if (showThumb()) {
+            drawCircle(thumbColor, BarThumbRadius.toPx(), Offset(width * fraction, size.height / 2f))
+        }
+    }
+}
+
+/** 6:42 or 1:02:03, ASCII digits. The elapsed and total labels on the controls use this. */
+internal fun formatClock(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format(Locale.ROOT, "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.ROOT, "%d:%02d", minutes, seconds)
     }
 }
 

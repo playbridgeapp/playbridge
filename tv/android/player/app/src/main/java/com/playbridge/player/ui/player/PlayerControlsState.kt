@@ -7,15 +7,24 @@ enum class SettingsTab {
 }
 
 enum class ActiveOverlay {
-    NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, CHAPTERS, SWITCH_PLAYER
+    NONE, SETTINGS, SUBTITLES, PLAYLIST_PICKER, CHAPTERS
 }
+
+/** Whether the current item can be bookmarked, and if so whether it already is. */
+enum class BookmarkState { UNAVAILABLE, OFF, ON }
+
+/** The small play or pause badge shown when a media key is pressed with nothing else on screen. */
+enum class TransportBadge { NONE, PAUSED, PLAYING }
+
+/** A short message pill over the player, e.g. "Press Back again to stop". [emphasis] uses the light pill. */
+@Immutable
+data class PlayerNotice(val text: String, val emphasis: Boolean = false)
 
 enum class ControlActionFocusTarget {
     PLAY_PAUSE,
     PLAYLIST,
     CHAPTERS,
     SUBTITLES,
-    SWITCH_PLAYER,
     SETTINGS,
 }
 
@@ -99,6 +108,25 @@ data class PlayerControlsState(
     val isSkipButtonFocused: Boolean = false,
     val chapters: List<com.playbridge.shared.player.PlayerChapter> = emptyList(),
     val chapterOsd: String? = null,
+
+    // Bookmark button: UNAVAILABLE hides it (not in history, skip_history, history off, party).
+    val bookmark: BookmarkState = BookmarkState.UNAVAILABLE,
+    val transportBadge: TransportBadge = TransportBadge.NONE,
+    val notice: PlayerNotice? = null,
+    /** Reason shown on the playback error screen; null while nothing has failed. */
+    val playbackError: String? = null,
+    /** Name of the phone that cast this, for the "From <phone>" lines. Null until a caller sets it. */
+    val senderName: String? = null,
+    /** A phone paused playback: draws "Paused from <phone>" until playback resumes. */
+    val phonePaused: PhoneOrigin? = null,
+    /** A phone is seeking: draws the seek strip (or a pill while the controls are up) briefly. */
+    val phoneSeek: PhoneSeek? = null,
+    /** A phone changed a setting: draws a small card briefly. */
+    val phoneCard: PhoneChangeCard? = null,
+    /** Pre-play: the saved place playback will resume from, when there is one. */
+    val prePlayResume: PrePlayResume? = null,
+    /** The current video is a Watch Together party video. */
+    val isPartySession: Boolean = false,
 )
 
 internal fun PlayerControlsState.isPlaybackObscured(): Boolean =
@@ -119,8 +147,6 @@ internal fun PlayerControlsState.controlActionFocusTarget(
         if (hasSelectableChapters(mediaKind)) ControlActionFocusTarget.CHAPTERS else ControlActionFocusTarget.PLAY_PAUSE
     ActiveOverlay.SUBTITLES ->
         if (mediaKind == "video") ControlActionFocusTarget.SUBTITLES else ControlActionFocusTarget.PLAY_PAUSE
-    ActiveOverlay.SWITCH_PLAYER ->
-        if (canSwitchPlayer && mediaKind != "image") ControlActionFocusTarget.SWITCH_PLAYER else ControlActionFocusTarget.PLAY_PAUSE
     ActiveOverlay.SETTINGS ->
         if (mediaKind != "image") ControlActionFocusTarget.SETTINGS else ControlActionFocusTarget.PLAY_PAUSE
     ActiveOverlay.NONE -> ControlActionFocusTarget.PLAY_PAUSE
@@ -135,4 +161,15 @@ internal fun PlayerControlsState.shouldAutoHideControls(): Boolean =
         activeOverlay == ActiveOverlay.NONE &&
         (!isFullControlsVisible || isPlaying)
 
+/** How far subtitles are lifted, in design dp, while the seek strip, controls or a phone's strip are on screen. */
+internal const val SUBTITLE_LIFT_DP = 168
 
+/**
+ * 0 on a bare video; [SUBTITLE_LIFT_DP] while something is drawn along the bottom edge (the seek
+ * strip, the full controls, or a phone's seek strip / paused bar), so subtitles sit clear above it.
+ */
+internal fun PlayerControlsState.subtitleLiftDp(): Int = when (controlsSurface()) {
+    ControlsSurface.CONTROLS, ControlsSurface.SEEK_BAR -> SUBTITLE_LIFT_DP
+    ControlsSurface.NOTHING -> if (phoneSeek != null || phonePaused != null) SUBTITLE_LIFT_DP else 0
+    ControlsSurface.PANEL -> 0
+}

@@ -7,8 +7,11 @@ import androidx.tv.material3.darkColorScheme
 import androidx.tv.material3.lightColorScheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 
 enum class AppTheme(val label: String) {
@@ -130,10 +133,25 @@ fun PlayBridgeTVTheme(
         AppTheme.AMOLED -> AmoledColorScheme
         AppTheme.LIGHT  -> LightColorScheme
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        shapes = ExpressiveShapes,
-        typography = AppTypography,
-        content = content
-    )
+    val tvColors = when (theme) {
+        AppTheme.DARK   -> DarkTvColors
+        AppTheme.AMOLED -> AmoledTvColors
+        AppTheme.LIGHT  -> LightTvColors
+    }
+    // One design dp is the same share of the screen on every TV: the screen is always 1280 dp wide,
+    // as in the mockups. The font scale the user chose is kept. Computed from the real display, so
+    // wrapping again (the dialog's theme) gives the same value.
+    val systemDensity = LocalDensity.current
+    val metrics = LocalContext.current.resources.displayMetrics
+    val density = remember(metrics.widthPixels, metrics.heightPixels, systemDensity.fontScale) {
+        Density(designDensity(metrics), systemDensity.fontScale)
+    }
+    CompositionLocalProvider(LocalDensity provides density, LocalTvColors provides tvColors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            shapes = ExpressiveShapes,
+            typography = AppTypography,
+            content = content
+        )
+    }
 }

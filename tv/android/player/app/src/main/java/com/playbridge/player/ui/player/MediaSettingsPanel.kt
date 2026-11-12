@@ -1,396 +1,194 @@
 package com.playbridge.player.ui.player
 
-import androidx.compose.animation.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.*
+import com.playbridge.player.ui.components.ListRow
+import com.playbridge.player.ui.player.panels.PanelCaption
+import com.playbridge.player.ui.player.panels.PanelFocus
+import com.playbridge.player.ui.player.panels.PlaybackSpeeds
+import com.playbridge.player.ui.player.panels.PlayerSidePanel
+import com.playbridge.player.ui.player.panels.ScalingOptions
+import com.playbridge.player.ui.player.panels.initialPanelFocus
+import com.playbridge.player.ui.player.panels.playerChoiceFocusIndex
+import com.playbridge.player.ui.player.panels.playerChoiceItems
+import com.playbridge.player.ui.player.panels.playerEngineLabel
+import com.playbridge.player.ui.player.panels.scalingLabel
+import com.playbridge.player.ui.player.panels.speedLabel
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+private enum class MorePage(val title: String) {
+    MAIN("More"), AUDIO("Audio"), QUALITY("Quality"), SPEED("Speed"), SCALING("Picture size"), PLAYER("Player"),
+}
+
+/** One row of the main "More" list. */
+private class MoreEntry(
+    val title: String,
+    val value: String,
+    val page: MorePage? = null,
+    val onClick: (() -> Unit)? = null,
+)
+
+/**
+ * The "More" side panel: Audio, Quality, Speed, Picture size, Boost quiet audio, Repeat, Chapters
+ * and Player as rows with their current value; Audio, Quality, Speed, Picture size and Player open
+ * a page in the same panel. Left or Back go from a page to the list, and from the list call
+ * [onDismiss].
+ *
+ * Optional extras (rows are hidden while the callback is null):
+ * - [onPlayerSwitched]: shows the Player row/page; pass the host's renderer switch.
+ * - [onToggleLoop]: shows the Repeat row (value from `state.isLooping`).
+ * - [onOpenChapters]: shows the Chapters row when the media has two or more chapters.
+ *
+ * `state.activeSettingsTab == AUDIO` opens straight on the Audio page (the control row's Audio
+ * button); any other value opens the list (the More button). Back from a page opened that way
+ * closes the panel, since there is no list behind it. Read once, when the panel opens.
+ */
 @Composable
 fun MediaSettingsPanel(
     state: PlayerControlsState,
-    onTabSelected: (SettingsTab) -> Unit,
     onTrackSelected: (UnifiedTrack) -> Unit,
     onSpeedSelected: (Float) -> Unit,
     onScalingSelected: (String) -> Unit,
     onToggleAudioBoost: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onPlayerSwitched: ((String) -> Unit)? = null,
+    onToggleLoop: (() -> Unit)? = null,
+    onOpenChapters: (() -> Unit)? = null,
 ) {
-    val activeTab = state.activeSettingsTab
+    val startPage = remember { if (state.activeSettingsTab == SettingsTab.AUDIO) MorePage.AUDIO else MorePage.MAIN }
+    var page by remember { mutableStateOf(startPage) }
+    var mainFocusIndex by remember { mutableIntStateOf(0) }
+    val back: () -> Unit = {
+        if (page != MorePage.MAIN && startPage == MorePage.MAIN) page = MorePage.MAIN else onDismiss()
+    }
 
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.CenterEnd
-    ) {
-        Row(
-            modifier = Modifier
-                .width(420.dp)
-                .fillMaxHeight(0.85f)
-                .padding(end = 24.dp)
-                .background(Color(0xF21A1A2E), RoundedCornerShape(14.dp))
-                .padding(12.dp)
-        ) {
-            val sideBarFocusRequester = remember { FocusRequester() }
-            val selectedTabFocusRequester = remember { FocusRequester() }
-
-            // Initial focus on sidebar only once when panel opens
-            LaunchedEffect(Unit) {
-                selectedTabFocusRequester.requestFocus()
-            }
-
-            // Sidebar tabs
-            LazyColumn(
-                modifier = Modifier
-                    .width(110.dp)
-                    .fillMaxHeight()
-                    .padding(end = 8.dp)
-                    .selectableGroup()
-                    .focusRequester(sideBarFocusRequester),
-                verticalArrangement = Arrangement.Top,
-                contentPadding = PaddingValues(top = 4.dp)
-            ) {
-                item {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 12.dp, start = 8.dp)
-                    )
-                }
-
-                val tabs = buildList {
-                    if (state.capabilities.qualityAvailable && state.videoTracks.hasSelectableVideoQualities()) {
-                        add(SettingsTab.VIDEO to "Quality")
+    key(page) {
+        when (page) {
+            MorePage.MAIN -> {
+                val caps = state.capabilities
+                val entries = buildList {
+                    if (state.audioTracks.isNotEmpty()) {
+                        add(MoreEntry("Audio", state.audioTracks.firstOrNull { it.isSelected }?.name ?: "", MorePage.AUDIO))
                     }
-                    if (state.audioTracks.size > 1 || state.capabilities.audioBoostAvailable) {
-                        add(SettingsTab.AUDIO to "Audio")
+                    if (caps.qualityAvailable && state.videoTracks.hasSelectableVideoQualities()) {
+                        add(MoreEntry("Quality", state.videoTracks.firstOrNull { it.isSelected }?.name ?: "Auto", MorePage.QUALITY))
                     }
-                    if (state.capabilities.speedAvailable) add(SettingsTab.SPEED to "Speed")
-                    if (state.capabilities.scalingAvailable) add(SettingsTab.SCALING to "Scaling")
+                    if (caps.speedAvailable) add(MoreEntry("Speed", speedLabel(state.playbackSpeed), MorePage.SPEED))
+                    if (caps.scalingAvailable) add(MoreEntry("Picture size", scalingLabel(state.videoScalingMode), MorePage.SCALING))
+                    if (caps.audioBoostAvailable) {
+                        add(MoreEntry("Boost quiet audio", if (state.isAudioBoostEnabled) "On" else "Off", onClick = onToggleAudioBoost))
+                    }
+                    if (onToggleLoop != null) {
+                        add(MoreEntry("Repeat", if (state.isLooping) "On" else "Off", onClick = onToggleLoop))
+                    }
+                    if (onOpenChapters != null && state.hasSelectableChapters()) {
+                        add(MoreEntry("Chapters", state.chapters.size.toString(), onClick = onOpenChapters))
+                    }
+                    if (onPlayerSwitched != null && state.canSwitchPlayer) {
+                        add(MoreEntry("Player", playerEngineLabel(state.engineType), MorePage.PLAYER))
+                    }
                 }
-
-                items(tabs, key = { it.first.name }) { (tab, label) ->
-                    SettingsTabButton(
-                        text = label,
-                        isSelected = activeTab == tab,
-                        onClick = { onTabSelected(tab) },
-                        modifier = if (activeTab == tab) {
-                            Modifier.focusRequester(selectedTabFocusRequester)
-                        } else Modifier,
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+                val focus = remember { PanelFocus(mainFocusIndex.coerceIn(0, (entries.size - 1).coerceAtLeast(0))) }
+                val streamDetails = listOfNotNull(state.streamInfo, state.hdrFormat).filter { it.isNotBlank() }.joinToString(" · ")
+                PlayerSidePanel(title = MorePage.MAIN.title, onDismiss = back, focus = focus) {
+                    items(entries.size) { i ->
+                        val e = entries[i]
+                        ListRow(
+                            title = e.title,
+                            trailing = e.value.takeIf { it.isNotEmpty() },
+                            onClick = {
+                                mainFocusIndex = i
+                                if (e.page != null) page = e.page else e.onClick?.invoke()
+                            },
+                            modifier = Modifier.initialPanelFocus(focus, i),
+                        )
+                    }
+                    if (streamDetails.isNotEmpty()) {
+                        item(key = "stream_details") { PanelCaption("Stream: $streamDetails") }
+                    }
                 }
             }
 
-            // Divider
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .fillMaxHeight()
-                    .background(Color.White.copy(alpha = 0.1f))
-            )
+            MorePage.AUDIO -> TrackPage(MorePage.AUDIO.title, state.audioTracks, onTrackSelected, back)
+            MorePage.QUALITY -> TrackPage(MorePage.QUALITY.title, state.videoTracks, onTrackSelected, back)
 
-            // Content Area
-            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                when (activeTab) {
-                    SettingsTab.VIDEO -> UnifiedTrackList(state.videoTracks, onTrackSelected)
-                    SettingsTab.AUDIO -> Column {
-                        if (state.capabilities.audioBoostAvailable) {
-                            AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
-                        }
-                        Box(modifier = Modifier.weight(1f)) {
-                            UnifiedTrackList(state.audioTracks, onTrackSelected)
-                        }
+            MorePage.SPEED -> {
+                val focus = remember { PanelFocus(PlaybackSpeeds.indexOf(state.playbackSpeed).coerceAtLeast(0)) }
+                PlayerSidePanel(title = MorePage.SPEED.title, onDismiss = back, focus = focus) {
+                    items(PlaybackSpeeds.size) { i ->
+                        val speed = PlaybackSpeeds[i]
+                        ListRow(
+                            title = speedLabel(speed),
+                            selected = speed == state.playbackSpeed,
+                            onClick = { onSpeedSelected(speed) },
+                            modifier = Modifier.initialPanelFocus(focus, i),
+                        )
                     }
-                    SettingsTab.SPEED -> SpeedSettingsList(state.playbackSpeed, onSpeedSelected)
-                    SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected)
+                }
+            }
+
+            MorePage.SCALING -> {
+                val focus = remember { PanelFocus(ScalingOptions.indexOfFirst { it.mode == state.videoScalingMode }.coerceAtLeast(0)) }
+                PlayerSidePanel(title = MorePage.SCALING.title, onDismiss = back, focus = focus) {
+                    items(ScalingOptions.size) { i ->
+                        val o = ScalingOptions[i]
+                        ListRow(
+                            title = o.label,
+                            subtitle = o.description,
+                            selected = o.mode == state.videoScalingMode,
+                            onClick = { onScalingSelected(o.mode) },
+                            modifier = Modifier.initialPanelFocus(focus, i),
+                        )
+                    }
+                }
+            }
+
+            MorePage.PLAYER -> {
+                val current = state.engineType.lowercase()
+                val focus = remember { PanelFocus(playerChoiceFocusIndex(current)) }
+                PlayerSidePanel(title = MorePage.PLAYER.title, onDismiss = back, focus = focus) {
+                    playerChoiceItems(current, focus) { id -> onPlayerSwitched?.invoke(id) }
                 }
             }
         }
     }
-
-    androidx.activity.compose.BackHandler { onDismiss() }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** A page listing audio or video tracks with a check on the selected one. */
 @Composable
-private fun SettingsTabButton(
-    text: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        selected = isSelected,
-        onClick = onClick,
-        scale = SelectableSurfaceDefaults.scale(focusedScale = 1.02f),
-        colors = SelectableSurfaceDefaults.colors(
-            containerColor = Color.Transparent,
-            focusedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f),
-            selectedContainerColor = Color(0xFF00D9FF).copy(alpha = 0.15f),
-            focusedSelectedContainerColor = Color(0xFF00D9FF).copy(alpha = 0.25f)
-        ),
-        shape = SelectableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Box(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-            )
-        }
-    }
-}
-
-@Composable
-private fun UnifiedTrackList(
+private fun TrackPage(
+    title: String,
     tracks: List<UnifiedTrack>,
-    onTrackSelected: (UnifiedTrack) -> Unit
+    onTrackSelected: (UnifiedTrack) -> Unit,
+    onBack: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(start = 8.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
-    ) {
-        // Split embedded (in the media) from externally added subtitle tracks so they can be
-        // shown under a separator. Audio/video tabs have no external tracks, so nothing changes.
-        val (embedded, external) = tracks.partition { it.type != "external_sub" }
-
-        items(embedded, key = { it.id }) { track ->
-            UnifiedTrackItem(
-                track = track,
-                onClick = { onTrackSelected(track) }
-            )
-        }
-
-        if (external.isNotEmpty()) {
-            if (embedded.isNotEmpty()) {
-                item(key = "external_subs_separator") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 2.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(Color.White.copy(alpha = 0.15f))
-                        )
-                        Text(
-                            text = "External subtitles",
-                            color = Color.Gray,
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(top = 6.dp, start = 4.dp)
-                        )
-                    }
-                }
-            }
-            items(external, key = { it.id }) { track ->
-                UnifiedTrackItem(
-                    track = track,
-                    onClick = { onTrackSelected(track) }
-                )
-            }
-        }
-
-        if (tracks.isEmpty()) {
-            item {
-                Text(
-                    text = "No tracks available",
-                    color = Color.Gray,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-        }
+    val focus = remember { PanelFocus(tracks.indexOfFirst { it.isSelected }.coerceAtLeast(0)) }
+    PlayerSidePanel(title = title, onDismiss = onBack, focus = focus) {
+        trackRows(tracks, focus, onTrackSelected)
+        if (tracks.isEmpty()) item(key = "empty") { PanelCaption("No tracks available") }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun UnifiedTrackItem(
-    track: UnifiedTrack,
-    onClick: () -> Unit
+private fun LazyListScope.trackRows(
+    tracks: List<UnifiedTrack>,
+    focus: PanelFocus,
+    onTrackSelected: (UnifiedTrack) -> Unit,
 ) {
-    Surface(
-        selected = track.isSelected,
-        onClick = onClick,
-        scale = SelectableSurfaceDefaults.scale(focusedScale = 1.02f),
-        colors = SelectableSurfaceDefaults.colors(
-            containerColor = Color.Transparent,
-            focusedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-            selectedContainerColor = Color.Transparent,
-            focusedSelectedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-        ),
-        shape = SelectableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 1.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = if (track.isSelected) "✓" else " ",
-                color = Color(0xFF00D9FF),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.width(22.dp)
-            )
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = track.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (track.isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                track.secondaryText?.let { secondary ->
-                    Text(
-                        text = secondary,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        fontSize = 11.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SpeedSettingsList(
-    currentSpeed: Float,
-    onSpeedSelected: (Float) -> Unit
-) {
-    val speeds = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(start = 8.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
-    ) {
-        items(speeds, key = { it.toString() }) { speed ->
-            UnifiedTrackItem(
-                track = UnifiedTrack(
-                    id = speed.toString(),
-                    name = if (speed == 1.0f) "1.0x (Normal)" else "${speed}x",
-                    isSelected = speed == currentSpeed,
-                    type = "speed"
-                ),
-                onClick = { onSpeedSelected(speed) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ScalingSettingsList(
-    currentMode: String,
-    onModeSelected: (String) -> Unit,
-) {
-    // These are the modes implemented consistently by both permanent renderer services.
-    val modes = listOf(
-        Triple("Fit", "Fit", "Show the whole picture with letterboxing"),
-        Triple("Zoom", "Crop to fill", "Fill the screen while preserving aspect ratio"),
-        Triple("Fill", "Stretch", "Fill the screen without preserving aspect ratio"),
-    )
-
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(start = 8.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
-    ) {
-        items(modes, key = { it.first }) { (mode, label, description) ->
-            UnifiedTrackItem(
-                track = UnifiedTrack(
-                    id = mode,
-                    name = label,
-                    isSelected = mode == currentMode,
-                    type = "scaling",
-                    secondaryText = description,
-                ),
-                onClick = { onModeSelected(mode) }
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun AudioBoostItem(
-    isEnabled: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        selected = isEnabled,
-        onClick = onClick,
-        scale = SelectableSurfaceDefaults.scale(focusedScale = 1.02f),
-        colors = SelectableSurfaceDefaults.colors(
-            containerColor = Color.Transparent,
-            focusedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-            selectedContainerColor = Color.Transparent,
-            focusedSelectedContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-        ),
-        shape = SelectableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 8.dp, bottom = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = if (isEnabled) "✓" else " ",
-                color = Color(0xFF00D9FF),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.width(22.dp)
-            )
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Audio Boost",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (isEnabled) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Increase quiet audio and dialogue",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-        }
+    items(tracks.size, key = { tracks[it].id }) { i ->
+        val t = tracks[i]
+        ListRow(
+            title = t.name,
+            subtitle = t.secondaryText,
+            selected = t.isSelected,
+            onClick = { onTrackSelected(t) },
+            modifier = Modifier.initialPanelFocus(focus, i),
+        )
     }
 }

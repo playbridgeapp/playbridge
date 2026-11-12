@@ -1,5 +1,7 @@
 package com.playbridge.player.ui.player
 
+import com.playbridge.player.ui.theme.TvTheme
+
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -17,8 +19,15 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.tv.material3.Text
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.res.painterResource
+import com.playbridge.player.R
+import com.playbridge.player.ui.components.TvChip
+import com.playbridge.player.ui.theme.TvRadius
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +52,14 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import playbridge.PlayPayload
 
+/**
+ * The picture behind the controls for music and photos (video is drawn by the renderer).
+ *
+ * Music (mockup PlayerMusic): artwork, optional "From <phone>" chip, title, artist, album, then
+ * [musicControls] (progress and transport buttons, owned by the overlay). Photos (mockup
+ * PlayerPhoto): the photo shown whole, plus a counter pill and a hint pill while [showPhotoHints].
+ * [senderName] is null until a caller supplies the phone's name; nothing invented is shown.
+ */
 @Composable
 fun MediaPresentation(
     payload: PlayPayload?,
@@ -52,142 +69,141 @@ fun MediaPresentation(
     imageOffsetY: Float = 0f,
     imageRotation: Float = 0f,
     onImageShown: (String) -> Unit = {},
+    senderName: String? = null,
+    photoCounter: String? = null,
+    showPhotoHints: Boolean = true,
+    musicControls: @Composable () -> Unit = {},
 ) {
     when (mediaKind) {
-        "audio" -> MusicPresentation(payload)
-        "image" -> ImagePresentation(
-            payload,
-            imageScale,
-            imageOffsetX,
-            imageOffsetY,
-            imageRotation,
-            onImageShown,
-        )
+        "audio" -> PlayerDarkSurface { MusicPresentation(payload, senderName, musicControls) }
+        "image" -> Box(Modifier.fillMaxSize()) {
+            ImagePresentation(
+                payload,
+                imageScale,
+                imageOffsetX,
+                imageOffsetY,
+                imageRotation,
+                onImageShown,
+            )
+            if (showPhotoHints) PhotoHints(photoCounter, senderName)
+        }
     }
 }
 
 @Composable
-private fun MusicPresentation(payload: PlayPayload?) {
+private fun MusicPresentation(
+    payload: PlayPayload?,
+    senderName: String?,
+    controls: @Composable () -> Unit,
+) {
     val metadata = payload?.visual_metadata
     val artwork = metadata?.artwork_url ?: metadata?.poster_url ?: metadata?.backdrop_url
-    val shape = RoundedCornerShape(28.dp)
-    BoxWithConstraints(
+    val shape = TvRadius.cardShape
+    Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xFF18152A), Color(0xFF090B12), Color(0xFF050609)),
-                ),
-            ),
-        contentAlignment = Alignment.Center,
+            .background(TvTheme.colors.surface)
+            .padding(horizontal = 96.dp),
+        horizontalArrangement = Arrangement.spacedBy(64.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (artwork != null) {
-            AsyncImage(
-                model = artwork,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                alpha = 0.24f,
-                modifier = Modifier.fillMaxSize().blur(42.dp),
-            )
-        }
         Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, Color(0xD9050609)),
-                    ),
-                ),
-        )
-        val artworkSize = minOf(maxWidth * 0.34f, maxHeight * 0.62f)
-            .coerceIn(260.dp, 440.dp)
-        Row(
-            modifier = Modifier.padding(start = 72.dp, end = 72.dp, bottom = 88.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .size(400.dp)
+                .clip(shape)
+                .background(TvTheme.colors.accentContainer),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(artworkSize)
-                    .shadow(36.dp, shape)
-                    .clip(shape)
-                    .border(1.dp, Color.White.copy(alpha = 0.2f), shape),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (artwork != null) {
-                    AsyncImage(
-                        model = artwork,
-                        contentDescription = "Album artwork",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(Color(0xFF6D5DFB), Color(0xFF332A73), Color(0xFF151225)),
-                                ),
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("◉", fontSize = MaterialTheme.typography.displayLarge.fontSize * 2f, color = Color.White.copy(alpha = 0.3f))
-                        Text("♫", style = MaterialTheme.typography.displayLarge, color = Color.White)
-                    }
-                }
-            }
-            Spacer(Modifier.size(64.dp))
-            Column(
-                modifier = Modifier.widthIn(max = 520.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.Start,
-            ) {
-                Text(
-                    text = "NOW PLAYING",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color(0xFFC9C5FF),
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Color.White.copy(alpha = 0.1f))
-                        .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(50))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+            if (artwork != null) {
+                AsyncImage(
+                    model = artwork,
+                    contentDescription = "Album artwork",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                Spacer(Modifier.size(24.dp))
+            } else {
+                Text("♫", fontSize = 96.sp, color = TvTheme.colors.onAccentContainer)
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
+        ) {
+            senderName?.takeIf { it.isNotBlank() }?.let {
+                TvChip("From $it", icon = painterResource(R.drawable.ic_player_phone))
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     text = payload?.title ?: metadata?.title ?: "Music",
-                    style = MaterialTheme.typography.displaySmall,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 3,
+                    style = TvText.pageTitle.copy(fontSize = 50.sp, lineHeight = 55.sp),
+                    color = TvTheme.colors.onSurface,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 metadata?.artist?.takeIf { it.isNotBlank() }?.let { artist ->
-                    Spacer(Modifier.size(16.dp))
                     Text(
                         artist,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color(0xFFE0DFFF),
-                        fontWeight = FontWeight.Medium,
+                        style = TvText.cardTitle,
+                        color = TvTheme.colors.onSurface,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
                 metadata?.album?.takeIf { it.isNotBlank() }?.let { album ->
-                    Spacer(Modifier.size(8.dp))
                     Text(
                         album,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White.copy(alpha = 0.62f),
+                        style = TvText.row.copy(fontWeight = FontWeight.Normal),
+                        color = TvTheme.colors.onSurfaceMuted,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+            controls()
         }
     }
+}
+
+/** Photo counter ("3 of 24"), the phone it came from, and the Left/Right hint (mockup PlayerPhoto). */
+@Composable
+private fun PhotoHints(counter: String?, senderName: String?) {
+    if (counter == null && senderName.isNullOrBlank()) return
+    Box(Modifier.fillMaxSize().padding(horizontal = TvSpacing.screenGutter, vertical = 44.dp)) {
+        Row(
+            modifier = Modifier.align(Alignment.BottomStart),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            counter?.let { PhotoPill { Text(it, style = TvText.button, color = TvTheme.player.onSurface) } }
+            senderName?.takeIf { it.isNotBlank() }?.let { name ->
+                PhotoPill {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painterResource(R.drawable.ic_player_phone), null, Modifier.size(16.dp),
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(TvTheme.player.onSurfaceMuted),
+                        )
+                        Text("From $name", style = TvText.value, color = TvTheme.player.onSurfaceMuted)
+                    }
+                }
+            }
+        }
+        if (counter != null) {
+            PhotoPill(Modifier.align(Alignment.BottomEnd)) {
+                Text("Left and right for the next photo", style = TvText.value, color = TvTheme.player.onSurfaceMuted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoPill(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .background(TvTheme.player.panel, TvRadius.pill)
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center,
+    ) { content() }
 }
 
 @Composable
@@ -217,7 +233,7 @@ private fun ImagePresentation(
             .build()
     }
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
+        modifier = Modifier.fillMaxSize().background(TvTheme.player.background),
         contentAlignment = Alignment.Center,
     ) {
         val quarterTurns = (animatedRotation.value / 90f).roundToInt()

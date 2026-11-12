@@ -67,6 +67,10 @@ data class PlaybackHistoryItem(
 internal fun historyDurationForSave(duration: Long, existingDuration: Long?): Long =
     duration.takeIf { it > 0L } ?: existingDuration ?: 0L
 
+/** What "Clear watch history" keeps: bookmarked entries only. Everything else is dropped. */
+internal fun historyKeptWhenCleared(items: List<PlaybackHistoryItem>): List<PlaybackHistoryItem> =
+    items.filter { it.isFavorite }
+
 class HistoryStore(private val context: Context) {
     private val thumbnailStore by lazy { HistoryThumbnailStore(context) }
 
@@ -192,6 +196,7 @@ class HistoryStore(private val context: Context) {
         if (removed) thumbnailStore.remove(id)
     }
     
+    /** Removes every entry that is not a bookmark (and its thumbnail); bookmarks are kept. */
     suspend fun clearHistory() {
         val removedIds = mutableListOf<String>()
         context.historyDataStore.edit { prefs ->
@@ -202,7 +207,7 @@ class HistoryStore(private val context: Context) {
                 emptyList()
             }
 
-            val favoritesOnly = currentList.filter { it.isFavorite }
+            val favoritesOnly = historyKeptWhenCleared(currentList)
             removedIds += currentList.asSequence()
                 .filterNot(PlaybackHistoryItem::isFavorite)
                 .map(PlaybackHistoryItem::id)

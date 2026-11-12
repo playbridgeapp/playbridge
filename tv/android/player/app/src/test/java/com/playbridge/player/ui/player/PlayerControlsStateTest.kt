@@ -140,13 +140,6 @@ class PlayerControlsStateTest {
             ).controlActionFocusTarget(mediaKind = "audio"),
         )
         assertEquals(
-            ControlActionFocusTarget.SWITCH_PLAYER,
-            PlayerControlsState(
-                canSwitchPlayer = true,
-                lastClosedOverlay = ActiveOverlay.SWITCH_PLAYER,
-            ).controlActionFocusTarget(mediaKind = "video"),
-        )
-        assertEquals(
             ControlActionFocusTarget.SETTINGS,
             PlayerControlsState(
                 lastClosedOverlay = ActiveOverlay.SETTINGS,
@@ -220,9 +213,6 @@ class PlayerControlsStateTest {
             },
             Triple(ActiveOverlay.SETTINGS, ControlActionFocusTarget.SETTINGS) { vm ->
                 vm.showSettings(SettingsTab.AUDIO)
-            },
-            Triple(ActiveOverlay.SWITCH_PLAYER, ControlActionFocusTarget.SWITCH_PLAYER) { vm ->
-                vm.showSwitchPlayer()
             },
         )
 

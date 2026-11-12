@@ -2,10 +2,11 @@ package com.playbridge.player
 
 import android.Manifest
 import android.content.Intent
+import com.playbridge.player.ui.components.CornerCardSlot
 import com.playbridge.player.ui.components.DeviceGuard
-import com.playbridge.player.ui.components.OverlayPermissionDialog
 import com.playbridge.player.ui.components.OverlayPermissionGuard
-import com.playbridge.player.ui.components.WrongDeviceDialog
+import com.playbridge.player.ui.components.OverlayPermissionScreen
+import com.playbridge.player.ui.components.WrongDeviceScreen
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -14,9 +15,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.core.content.ContextCompat
@@ -30,13 +31,16 @@ import com.playbridge.player.data.PlaybackHistoryItem
 import com.playbridge.player.data.historyLogKey
 import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
-import com.playbridge.player.ui.LibraryScreen
-import com.playbridge.player.ui.PairingScreen
-import com.playbridge.player.ui.PairingNavigationState
 import com.playbridge.player.ui.SettingsScreen
+import com.playbridge.player.ui.settings.SettingsCategory
+import com.playbridge.player.update.UpdateGate
 import com.playbridge.player.ui.UserScriptApprovalPrompt
-import com.playbridge.player.ui.resumePositionForHistoryItem
-import com.playbridge.player.ui.components.AppSidebar
+import com.playbridge.player.ui.WatchTogetherPanel
+import com.playbridge.player.ui.home.BookmarkActionsPanel
+import com.playbridge.player.ui.home.HomeScreen
+import com.playbridge.player.ui.home.PairingRequestCard
+import com.playbridge.player.ui.home.bookmarksOf
+import com.playbridge.player.ui.home.resumePositionForHistoryItem
 import com.playbridge.player.ui.theme.AppTheme
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import kotlinx.coroutines.flow.first
@@ -104,42 +108,42 @@ class MainActivity : ComponentActivity() {
             var showOverlayRationale by remember {
                 mutableStateOf(OverlayPermissionGuard.isNeeded(this))
             }
-            if (showPhoneWarning) {
-                WrongDeviceDialog(onDismiss = {
-                    DeviceGuard.dismiss(this)
-                    showPhoneWarning = false
-                })
-            } else if (showOverlayRationale) {
-                // Explain the "Display over other apps" permission before sending the
-                // user to the bare system toggle. Gated behind the wrong-device dialog so
-                // the two prompts never stack on a sideloaded phone install.
-                OverlayPermissionDialog(
-                    onOpenSettings = {
-                        OverlayPermissionGuard.openSettings(this)
-                        showOverlayRationale = false
-                    },
-                    onDismiss = { showOverlayRationale = false }
-                )
-            }
-            // Update-available notify / download / install flow. Gated behind the
-            // cold-start guard dialogs so we never stack two dialogs (bad with D-pad focus);
-            // once those are dismissed the update dialog surfaces on its own.
-            if (!showPhoneWarning && !showOverlayRationale) {
-                com.playbridge.player.update.UpdateGate(
-                    com.playbridge.player.update.UpdateChecker.getInstance(this)
-                )
-            }
             PlayBridgeTVTheme(theme = appTheme.value) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     shape = RectangleShape
                 ) {
-                    MainContent(
-                        pairingStore = pairingStore,
-                        historyStore = historyStore,
-                        openPairingRequest = _openPairingRequest,
-                        currentTheme = appTheme
-                    )
+                    if (showPhoneWarning) {
+                        WrongDeviceScreen(onDismiss = {
+                            DeviceGuard.dismiss(this@MainActivity)
+                            showPhoneWarning = false
+                        })
+                    } else if (showOverlayRationale) {
+                        // Explain the "Display over other apps" permission before sending the
+                        // user to the bare system toggle. Gated behind the wrong-device notice so
+                        // the two never stack on a sideloaded phone install.
+                        OverlayPermissionScreen(
+                            onOpenSettings = {
+                                OverlayPermissionGuard.openSettings(this@MainActivity)
+                                showOverlayRationale = false
+                            },
+                            onDismiss = { showOverlayRationale = false }
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            MainContent(
+                                pairingStore = pairingStore,
+                                historyStore = historyStore,
+                                openPairingRequest = _openPairingRequest,
+                                currentTheme = appTheme
+                            )
+                            // Update card (available / downloading / installing), bottom-right.
+                            // Only shown once the cold-start notices above are dismissed.
+                            UpdateGate(
+                                com.playbridge.player.update.UpdateChecker.getInstance(this@MainActivity)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -173,11 +177,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Screen.Home has been removed. The PairingScreen is now shown both on first launch
-// (no devices ever paired) and when navigating to "Pair New Device" from the Library.
+/** Home is the only top-level screen; the others open from it and Back returns to it.
+ * Phones are managed in Settings, so Home's Phones pill opens Settings on that category. */
 enum class Screen {
-    Pairing,
-    Library,
+    Home,
+    WatchTogether,
     Settings
 }
 
@@ -190,13 +194,9 @@ fun MainContent(
 ) {
     val scope = rememberCoroutineScope()
     val currentContext = androidx.compose.ui.platform.LocalContext.current
-    val prefs = remember { currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
-    // Both values survive Activity recreation; the onboarding effect must not overwrite a
-    // restored destination after a temporary trip to Android settings.
-    var currentScreen by rememberSaveable { mutableStateOf(Screen.Library) }
-    var previousScreen by rememberSaveable { mutableStateOf<Screen?>(null) }
-    var isInitialCheckDone by rememberSaveable { mutableStateOf(false) }
-    var pairingNavigationState by remember { mutableStateOf(PairingNavigationState()) }
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.Home) }
+    var settingsCategory by rememberSaveable { mutableStateOf(SettingsCategory.Playback) }
+    var actionsFor by remember { mutableStateOf<PlaybackHistoryItem?>(null) }
 
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
@@ -204,28 +204,23 @@ fun MainContent(
     val pendingUserScript by ServerService.pendingUserScriptReview.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
+    val history by historyStore.history.collectAsState(initial = emptyList())
+    val bookmarks = remember(history) { bookmarksOf(history) }
 
-    // Keep explicit pairing navigation and initial destination selection in one ordered effect.
-    // During a cold standby launch, separate effects can race: pairing selects Connect, consumes
-    // its flag, and then the initial destination overwrites it with Library.
+    // Back from Settings or Watch Together returns to Home. Registered before the screens
+    // so a screen's own BackHandler (for example a Settings sub-page) is consulted first.
+    androidx.activity.compose.BackHandler(enabled = pendingUserScript == null && currentScreen != Screen.Home) {
+        currentScreen = Screen.Home
+    }
+
+    // A pairing request arriving through ACTION_OPEN_PAIRING just needs the activity in front:
+    // the request itself appears as a card over whichever screen is showing. Consume the flag.
     val shouldOpenPairing by openPairingRequest
-    LaunchedEffect(pairedDevices, isOnboardingDone, shouldOpenPairing) {
-        if (shouldOpenPairing) {
-            currentScreen = Screen.Pairing
-            openPairingRequest.value = false
-            isInitialCheckDone = true
-        } else if (!isInitialCheckDone) {
-            currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
-                Screen.Pairing
-            } else {
-                Screen.Library
-            }
-            
-            if (!isOnboardingDone) {
-                pairingStore.setOnboardingDone(true)
-            }
-            isInitialCheckDone = true
-        }
+    LaunchedEffect(shouldOpenPairing) {
+        if (shouldOpenPairing) openPairingRequest.value = false
+    }
+    LaunchedEffect(isOnboardingDone) {
+        if (!isOnboardingDone) pairingStore.setOnboardingDone(true)
     }
 
     var serverIp by remember { mutableStateOf<String?>(null) }
@@ -244,44 +239,21 @@ fun MainContent(
             serverPort = port
         }
     }
+    // The name phones see in their list (Android's device name), not the stored pairing name.
     LaunchedEffect(Unit) {
-        pairingStore.deviceName.collect { name ->
-            deviceName = name
-        }
+        deviceName = com.playbridge.player.server.advertisedDeviceName(currentContext.applicationContext)
     }
 
-    // Keep Connect visible for the full SAS request. A separate authenticated sender may
-    // already be connected, so only completion of this exact request may leave the screen.
-    LaunchedEffect(pendingPairingRequest) {
-        pendingPairingRequest?.let { request ->
-            pairingNavigationState = pairingNavigationState.onRequest(request.deviceUUID)
-            currentScreen = Screen.Pairing
-        }
-    }
-    LaunchedEffect(Unit) {
-        ServerService.pairingCompletions.collect { completion ->
-            val transition = pairingNavigationState.onCompletion(
-                deviceUUID = completion.deviceUUID,
-                approved = completion.approved,
-            )
-            pairingNavigationState = transition.state
-            if (transition.openLibrary) {
-                previousScreen = Screen.Pairing
-                currentScreen = Screen.Library
-            }
-        }
-    }
-
-    val onPlayItem: (PlaybackHistoryItem) -> Unit = { item ->
+    val onPlayItem: (PlaybackHistoryItem, Boolean) -> Unit = { item, startOver ->
         // Replay runs through the same launch path as a live cast. Only unfinished items
-        // resume; completed Recent/Favorite items intentionally restart from the beginning.
+        // resume; completed items restart from the beginning. startOver forces a restart.
         val payload = com.playbridge.shared.protocol.decodePlaylistPayloadJson(item.payloadJson)
         if (payload != null) {
-            val resumePosition = resumePositionForHistoryItem(item)
+            val resumePosition = if (startOver) null else resumePositionForHistoryItem(item)
             FileLogger.i(
                 "LibraryPlayback",
                 "Launching history entry=${historyLogKey(item.id)}, " +
-                    "position=${resumePosition ?: 0L}/${item.duration}, " +
+                    "position=${resumePosition ?: 0L}/${item.duration}, startOver=$startOver, " +
                     "savedContext=${item.playbackContext.toSafeLogString()}",
             )
             val tvPref = currentContext
@@ -306,61 +278,57 @@ fun MainContent(
         }
     }
 
-    // Background comes straight from the themed Surface (colorScheme.surface), so
-    // Dark / AMOLED / Light are respected with no extra gradient layer.
-    // A script prompt replaces the shell so D-pad focus cannot escape to Deny’s neighbors.
+    // Background comes from the themed Surface, so Dark / AMOLED / Light are respected.
+    // A script prompt replaces the shell so D-pad focus cannot escape to Deny's neighbours.
     Box(modifier = Modifier.fillMaxSize()) {
         if (pendingUserScript != null) {
             UserScriptApprovalPrompt(pendingUserScript!!)
             return@Box
         }
-        Row(modifier = Modifier.fillMaxSize()) {
-            AppSidebar(
-                currentScreen = currentScreen,
-                onScreenSelected = {
-                    if (it != currentScreen) previousScreen = currentScreen
-                    currentScreen = it
-                },
+        when (currentScreen) {
+            Screen.Home -> HomeScreen(
+                deviceName = deviceName,
+                address = serverIp?.let { "$it:${serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT}" },
+                connectionState = connectionState,
+                connectedCount = connectedCount,
+                pairedCount = pairedDevices.size,
+                bookmarks = bookmarks,
+                onPlay = { onPlayItem(it, false) },
+                onBookmarkActions = { actionsFor = it },
+                onWatchTogether = { currentScreen = Screen.WatchTogether },
+                onPhones = { settingsCategory = SettingsCategory.Phones; currentScreen = Screen.Settings },
+                onSettings = { settingsCategory = SettingsCategory.Playback; currentScreen = Screen.Settings },
+                takeInitialFocus = pendingPairingRequest == null && actionsFor == null,
             )
+            Screen.WatchTogether -> WatchTogetherPanel(
+                requestInitialFocus = true,
+                onBack = { currentScreen = Screen.Home },
+            )
+            Screen.Settings -> SettingsScreen(
+                onThemeChanged = { theme -> currentTheme.value = theme },
+                pairingStore = pairingStore,
+                initialCategory = settingsCategory,
+            )
+        }
 
-            // Content Area
-            Box(modifier = Modifier.weight(1f)) {
-                when (currentScreen) {
-                    Screen.Pairing -> {
-                        PairingScreen(
-                            ip = serverIp ?: "unknown",
-                            // Show the wss:// port — the address senders connect to.
-                            port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
-                            deviceName = deviceName,
-                            connectionState = connectionState,
-                            connectedCount = connectedCount,
-                            pendingRequest = pendingPairingRequest,
-                            onDeny = { ServerService.denyPairing() },
-                            pairedDevices = pairedDevices,
-                            onForget = { device -> scope.launch { pairingStore.forgetDevice(device) } },
-                            onForgetAll = { scope.launch { pairingStore.forgetAllDevices() } }
-                        )
-                    }
-                    Screen.Library -> {
-                        LibraryScreen(
-                            historyStore = historyStore,
-                            onPlayItem = onPlayItem
-                        )
-                    }
-                    Screen.Settings -> {
-                        SettingsScreen(
-                            onThemeChanged = { theme -> currentTheme.value = theme }
-                        )
-                    }
-                }
+        // A pairing request is a card over whichever screen is showing (top-right). It keeps the
+        // server's 60 second timeout and the Deny path; the server removes it when it ends.
+        pendingPairingRequest?.let { request ->
+            CornerCardSlot(Alignment.TopEnd) {
+                PairingRequestCard(request = request, onDeny = { ServerService.denyPairing() })
             }
         }
     }
 
-    androidx.activity.compose.BackHandler(enabled = pendingUserScript == null && previousScreen != null) {
-        val target = previousScreen
-        previousScreen = null
-        if (target != null) currentScreen = target
+    actionsFor?.let { item ->
+        BookmarkActionsPanel(
+            item = item,
+            onResume = { actionsFor = null; onPlayItem(item, false) },
+            onStartOver = { actionsFor = null; onPlayItem(item, true) },
+            // Removing a bookmark only clears the flag; the stored history entry is kept.
+            onRemoveBookmark = { actionsFor = null; scope.launch { historyStore.toggleFavorite(item.id) } },
+            onDismiss = { actionsFor = null },
+        )
     }
 }
 

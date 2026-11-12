@@ -18,4 +18,19 @@ class HistoryStoreMergeTest {
     fun `new history without duration remains unknown`() {
         assertEquals(0L, historyDurationForSave(0L, null))
     }
+
+    private fun item(id: String, favorite: Boolean) = PlaybackHistoryItem(
+        id = id, payloadJson = "{}", url = "u", title = null, position = 0, duration = 0, isFavorite = favorite,
+    )
+
+    @Test
+    fun `clearing history keeps only bookmarks`() {
+        val kept = historyKeptWhenCleared(listOf(item("a", false), item("b", true), item("c", false)))
+        assertEquals(listOf("b"), kept.map { it.id })
+    }
+
+    @Test
+    fun `clearing history with no bookmarks keeps nothing`() {
+        assertEquals(emptyList<PlaybackHistoryItem>(), historyKeptWhenCleared(listOf(item("a", false))))
+    }
 }

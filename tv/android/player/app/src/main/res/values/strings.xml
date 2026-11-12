@@ -19,20 +19,12 @@
     <string name="user_script_deny">Deny</string>
     <string name="user_script_remove">Remove</string>
     <string name="user_script_cancel">Cancel</string>
-    <string name="user_script_prompt_title">Install browser script?</string>
     <string name="user_script_review_title">Approve browser script?</string>
     <string name="user_script_remove_title">Remove browser script?</string>
     <string name="user_script_remove_body">Remove %1$s from this TV? It will stop running.</string>
     <string name="user_script_from">From %1$s</string>
-    <string name="user_script_unknown_device">Unknown device</string>
     <string name="user_script_local_source">This TV</string>
     <string name="user_script_name">Script</string>
     <string name="user_script_size">Size</string>
-    <plurals name="user_script_size_bytes">
-        <item quantity="one">%1$d byte</item>
-        <item quantity="other">%1$d bytes</item>
-    </plurals>
-    <string name="user_script_hash">SHA-256</string>
-    <string name="user_script_timeout">Request expires in 60 seconds</string>
     <string name="user_script_prompt_notification">Browser script needs approval</string>
 </resources>
