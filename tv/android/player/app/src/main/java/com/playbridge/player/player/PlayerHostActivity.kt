@@ -2133,7 +2133,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     } else {
                         lifecycleScope.launch(Dispatchers.IO) {
                             val thumbnailUrl = try {
-                                historyThumbnailStore.save(historyId, bitmap)
+                                // A black frame is no preview; the next capture tries again.
+                                val pixels = IntArray(bitmap.width * bitmap.height)
+                                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                                if (isBlankFrame(pixels)) null else historyThumbnailStore.save(historyId, bitmap)
                             } finally {
                                 bitmap.recycle()
                             }

@@ -161,8 +161,12 @@ internal fun PlayerControlsState.shouldAutoHideControls(): Boolean =
         activeOverlay == ActiveOverlay.NONE &&
         (!isFullControlsVisible || isPlaying)
 
-/** How far subtitles are lifted, in design dp, while the seek strip, controls or a phone's strip are on screen. */
-internal const val SUBTITLE_LIFT_DP = 168
+/**
+ * How far subtitles are lifted, in design dp, while the seek strip, controls or a phone's strip
+ * are on screen. The seek bar's top edge is 180dp above the bottom of the screen and a cue that
+ * sets its own line sits right on that bottom edge, so this leaves a 20dp gap above the bar.
+ */
+internal const val SUBTITLE_LIFT_DP = 200
 
 /**
  * 0 on a bare video; [SUBTITLE_LIFT_DP] while something is drawn along the bottom edge (the seek
