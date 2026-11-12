@@ -59,6 +59,9 @@ data class PlaybackHistoryItem(
     // its image-cache key so rewriting the same private JPEG path becomes visible at once.
     val thumbnailRevision: Long = 0L,
     val isFavorite: Boolean = false,
+    // Kept only because it was bookmarked: a private cast (skip_history) or one made while
+    // history is off. It is removed, not demoted to history, when the bookmark is removed.
+    val bookmarkOnly: Boolean = false,
     // TV-side choices made after the cast began. Nullable keeps history written by older
     // versions readable and lets current global player/rendering settings remain authoritative.
     val playbackContext: PlaybackContext? = null,
@@ -66,6 +69,28 @@ data class PlaybackHistoryItem(
 
 internal fun historyDurationForSave(duration: Long, existingDuration: Long?): Long =
     duration.takeIf { it > 0L } ?: existingDuration ?: 0L
+
+/**
+ * Whether a play may be written. A bookmarked entry always keeps its place up to date;
+ * anything else is written only when the cast is [recordable] (history on, not private).
+ */
+internal fun historyWriteAllowed(recordable: Boolean, existing: PlaybackHistoryItem?): Boolean =
+    recordable || existing?.isFavorite == true
+
+/**
+ * The list after the bookmark on [id] is toggled. Removing the bookmark from a
+ * bookmark-only entry removes the entry, so a private cast never falls into history.
+ */
+internal fun historyAfterBookmarkToggle(
+    items: List<PlaybackHistoryItem>,
+    id: String,
+): List<PlaybackHistoryItem> = items.mapNotNull { item ->
+    when {
+        item.id != id -> item
+        item.isFavorite && item.bookmarkOnly -> null
+        else -> item.copy(isFavorite = !item.isFavorite)
+    }
+}
 
 /** What "Clear watch history" keeps: bookmarked entries only. Everything else is dropped. */
 internal fun historyKeptWhenCleared(items: List<PlaybackHistoryItem>): List<PlaybackHistoryItem> =
@@ -98,9 +123,6 @@ class HistoryStore(private val context: Context) {
         thumbnailUrl: String? = null,
         playbackContext: PlaybackContext? = null,
     ) {
-        if (com.playbridge.shared.protocol.decodePlaylistPayloadJson(payloadJson)
-                ?.items?.any { it.skip_history == true } == true
-        ) return
         val logKey = historyLogKey(id)
         if (url.isBlank() || payloadJson.isBlank()) {
             FileLogger.w(
@@ -111,11 +133,9 @@ class HistoryStore(private val context: Context) {
             return
         }
 
-        val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("enable_history", true)) {
-            FileLogger.d(TAG, "Context persistence skipped for entry=$logKey: history disabled")
-            return
-        }
+        // Private casts and plays made while history is off are written only to keep an
+        // existing bookmark's place up to date.
+        val recordable = isRecordable(payloadJson)
 
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
@@ -128,6 +148,10 @@ class HistoryStore(private val context: Context) {
             // Preserve an existing artwork URL if the caller didn't supply one (e.g. the
             // periodic position-only save), and keep the existing favorite flag.
             val existingItem = currentList.find { it.id == id }
+            if (!historyWriteAllowed(recordable, existingItem)) {
+                FileLogger.d(TAG, "Context persistence skipped for entry=$logKey: not recordable")
+                return@edit
+            }
             val finalThumbnailUrl = thumbnailUrl ?: existingItem?.thumbnailUrl
             // Landing is recorded before the renderer knows its duration. Preserve the known
             // duration so immediately backing out of a resumed item does not temporarily move
@@ -154,6 +178,7 @@ class HistoryStore(private val context: Context) {
                 thumbnailUrl = finalThumbnailUrl,
                 thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,
                 isFavorite = existingItem?.isFavorite ?: false,
+                bookmarkOnly = !recordable,
                 playbackContext = finalPlaybackContext,
             )
 
@@ -175,6 +200,67 @@ class HistoryStore(private val context: Context) {
         }
     }
     
+    /** History on and the cast not sent as private (skip_history). */
+    private fun isRecordable(payloadJson: String): Boolean {
+        val private = com.playbridge.shared.protocol.decodePlaylistPayloadJson(payloadJson)
+            ?.items?.any { it.skip_history == true } == true
+        val historyOn = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            .getBoolean("enable_history", true)
+        return !private && historyOn
+    }
+
+    /**
+     * Bookmarks what is playing, whatever kind of cast it is. An entry that already exists is
+     * flagged; otherwise one is created, marked bookmark-only when the play itself must not
+     * appear in history.
+     */
+    suspend fun bookmark(
+        id: String,
+        payloadJson: String,
+        url: String,
+        title: String?,
+        position: Long,
+        duration: Long,
+        thumbnailUrl: String? = null,
+        playbackContext: PlaybackContext? = null,
+    ) {
+        if (url.isBlank() || payloadJson.isBlank()) return
+        val recordable = isRecordable(payloadJson)
+        context.historyDataStore.edit { prefs ->
+            val currentList = try {
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(
+                    prefs[PLAYBACK_HISTORY] ?: "[]",
+                ).toMutableList()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(isFavorite = true)
+            } else {
+                currentList.add(
+                    0,
+                    PlaybackHistoryItem(
+                        id = id,
+                        payloadJson = payloadJson,
+                        url = url,
+                        title = title,
+                        position = position.coerceAtLeast(0L),
+                        duration = duration.coerceAtLeast(0L),
+                        thumbnailUrl = thumbnailUrl,
+                        isFavorite = true,
+                        bookmarkOnly = !recordable,
+                        playbackContext = playbackContext,
+                    ),
+                )
+            }
+            prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                ListSerializer(PlaybackHistoryItem.serializer()),
+                currentList,
+            )
+        }
+    }
+
     suspend fun removeItem(id: String) {
         var removed = false
         context.historyDataStore.edit { prefs ->
@@ -247,26 +333,23 @@ class HistoryStore(private val context: Context) {
     }
 
     suspend fun toggleFavorite(id: String) {
+        var removed = false
         context.historyDataStore.edit { prefs ->
-            val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
-                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(currentJson).toMutableList()
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(prefs[PLAYBACK_HISTORY] ?: "[]")
             } catch (e: Exception) {
-                mutableListOf()
+                emptyList()
             }
-
-            val index = currentList.indexOfFirst { it.id == id }
-            if (index != -1) {
-                val item = currentList[index]
-                // Favorite is an independent Library attribute. Removing the flag must not
-                // delete playback history or make an item disappear from Recent.
-                currentList[index] = item.copy(isFavorite = !item.isFavorite)
-
-                prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
-                    ListSerializer(PlaybackHistoryItem.serializer()),
-                    currentList
-                )
-            }
+            if (currentList.none { it.id == id }) return@edit
+            // Removing a bookmark keeps the entry in history, except for a bookmark-only
+            // entry (a private cast), which is removed with its bookmark.
+            val updated = historyAfterBookmarkToggle(currentList, id)
+            removed = updated.none { it.id == id }
+            prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                ListSerializer(PlaybackHistoryItem.serializer()),
+                updated,
+            )
         }
+        if (removed) thumbnailStore.remove(id)
     }
 }

@@ -33,7 +33,6 @@ class ProgressManager(
     private val lifecycleScope: LifecycleCoroutineScope,
     private val playbackSource: PlaybackProgressSource,
 ) {
-    private var skipHistory = false
     private var currentUrl: String? = null
     private var currentTitle: String? = null
     private var currentContentType: String? = null
@@ -78,8 +77,6 @@ class ProgressManager(
         videoScalingMode: Int? = null,
         playbackContext: PlaybackContext? = null,
     ) {
-        skipHistory = com.playbridge.shared.protocol.decodePlaylistPayloadJson(payloadJson)
-            ?.items?.any { it.skip_history == true } == true
         currentUrl = url
         currentTitle = title
         currentContentType = contentType
@@ -157,7 +154,7 @@ class ProgressManager(
      * used to be the only save points are skipped on a force-stop / swipe-away.
      */
     fun recordLanded(startPositionMs: Long) {
-        if (skipHistory) return
+        // A private cast is still offered to the store: it writes only if the item is bookmarked.
         val url = currentUrl ?: return
         val payloadJson = currentPayloadJson ?: return
         val historyId = currentHistoryId ?: return
@@ -189,11 +186,29 @@ class ProgressManager(
         }
     }
 
+    /** Bookmarks the current item at its current place; works for every kind of cast. */
+    suspend fun bookmarkCurrent() {
+        val url = currentUrl ?: return
+        val payloadJson = currentPayloadJson ?: return
+        val historyId = currentHistoryId ?: return
+        withContext(NonCancellable + Dispatchers.IO) {
+            historyStore.bookmark(
+                id = historyId,
+                payloadJson = payloadJson,
+                url = url,
+                title = currentTitle,
+                position = playbackSource.getCurrentPosition(),
+                duration = playbackSource.getMediaDuration(),
+                thumbnailUrl = currentThumbnailUrl,
+                playbackContext = currentPlaybackContext,
+            )
+        }
+    }
+
     /**
      * Persist the current playback position and whichever artwork the host most recently set.
      */
     fun saveProgress() {
-        if (skipHistory) return
         val duration = playbackSource.getMediaDuration()
         val position = playbackSource.getCurrentPosition()
         val url = currentUrl

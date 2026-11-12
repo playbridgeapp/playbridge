@@ -261,6 +261,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var pendingAudioContextRestore = false
     private var pendingSubtitleContextRestore = false
     private var currentHistoryId: String? = null
+
+    /** Key the bookmark button acts on; set for every cast, including private ones. */
+    private var bookmarkId: String? = null
     private var currentHistoryHasThumbnail = false
     private var thumbnailCaptureInFlightGeneration: Long? = null
     private var thumbnailCaptureGeneration = 0L
@@ -1987,7 +1990,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val thumbnailUrl = visualMetadata?.backdrop_url
             ?: visualMetadata?.poster_url
             ?: historyThumbnailStore.existingUrl(historyId)
-        currentHistoryId = historyId.takeUnless { items.any { it.skip_history == true } }
+        bookmarkId = historyId
+        // A private cast has no history entry of its own unless it has been bookmarked.
+        currentHistoryId = historyId.takeUnless {
+            items.any { it.skip_history == true } && historySnapshot[historyId] != true
+        }
         refreshBookmarkState()
         currentHistoryHasThumbnail = thumbnailUrl != null
         resetHistoryThumbnailCaptureClock()
@@ -3497,34 +3504,32 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     /**
-     * Bookmark button state. It is shown only when this item is already in the stored history,
-     * which is exactly when [HistoryStore.toggleFavorite] can act on it: casts sent with
-     * skip_history have no [currentHistoryId], and with history disabled no entry is written.
-     * It is hidden during a Watch Together party and for photos.
+     * Bookmark button state. Every kind of cast can be bookmarked, including private casts
+     * and casts made while history is off; only a Watch Together party hides the button.
      */
     private fun refreshBookmarkState() {
-        val id = currentHistoryId
-        val bookmarked = if (id == null || partyItem != null || currentMediaKind == MediaKind.IMAGE) {
-            null
-        } else {
-            historySnapshot[id]
-        }
+        val id = bookmarkId
         controlsViewModel.setBookmarkState(
-            when (bookmarked) {
-                null -> BookmarkState.UNAVAILABLE
-                true -> BookmarkState.ON
-                false -> BookmarkState.OFF
+            when {
+                id == null || partyItem != null -> BookmarkState.UNAVAILABLE
+                historySnapshot[id] == true -> BookmarkState.ON
+                else -> BookmarkState.OFF
             },
         )
     }
 
     private fun toggleBookmark() {
-        val id = currentHistoryId ?: return
+        val id = bookmarkId ?: return
         if (partyItem != null) return
-        val bookmarked = historySnapshot[id] ?: return
-        val nowBookmarked = !bookmarked
+        val nowBookmarked = historySnapshot[id] != true
         lifecycleScope.launch {
-            historyStore.toggleFavorite(id)
+            if (nowBookmarked) {
+                progressManager.bookmarkCurrent()
+                // From here on this item has an entry, so its place and picture are kept.
+                currentHistoryId = id
+            } else {
+                historyStore.toggleFavorite(id)
+            }
             controlsViewModel.showNotice(bookmarkNoticeText(nowBookmarked), emphasis = nowBookmarked)
         }
     }

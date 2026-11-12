@@ -229,6 +229,12 @@ private fun RowButton(
     size: Dp = TvSize.iconButton,
     active: Boolean = false,
 ) {
+    val focused = remember { mutableStateOf(false) }
+    // The label can change while the button keeps focus (Bookmark becomes Bookmarked,
+    // Play becomes Pause), so the slot follows the label, not only focus moves.
+    LaunchedEffect(label, focused.value) {
+        if (focused.value) focusLabel.value = label
+    }
     IconCircleButton(
         icon = painterResource(icon),
         contentDescription = label,
@@ -238,7 +244,10 @@ private fun RowButton(
         active = active,
         modifier = modifier
             .focusProperties { up = seekBarFocus }
-            .onFocusChanged { if (it.isFocused) focusLabel.value = label },
+            .onFocusChanged {
+                focused.value = it.isFocused
+                if (it.isFocused) focusLabel.value = label
+            },
     )
 }
 
