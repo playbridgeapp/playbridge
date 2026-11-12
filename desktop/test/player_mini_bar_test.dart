@@ -4,6 +4,12 @@ import 'package:playbridge_desktop/media_kind.dart';
 import 'package:flutter/gestures.dart';
 import 'package:playbridge_desktop/player_engine.dart';
 import 'package:playbridge_desktop/player_mini_bar.dart';
+import 'package:playbridge_desktop/ui/pb_widgets.dart';
+
+Finder _pressableFor(IconData icon) => find.ancestor(
+      of: find.byIcon(icon),
+      matching: find.byType(PbPressable),
+    );
 
 void main() {
   Future<void> pump(
@@ -103,9 +109,7 @@ void main() {
     );
     expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
     expect(
-      tester
-          .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.play_arrow))
-          .onPressed,
+      tester.widget<PbPressable>(_pressableFor(Icons.play_arrow)).onTap,
       isNotNull,
     );
 
@@ -119,9 +123,7 @@ void main() {
     );
     expect(find.byType(Slider), findsNothing);
     expect(
-      tester
-          .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.play_arrow))
-          .onPressed,
+      tester.widget<PbPressable>(_pressableFor(Icons.play_arrow)).onTap,
       isNull,
     );
     expect(find.byTooltip('Stop'), findsOneWidget);

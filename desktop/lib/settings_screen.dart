@@ -1,3 +1,4 @@
+import 'history_store.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,9 +10,13 @@ import 'logs_screen.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'receiver_server.dart';
+import 'settings/settings_parts.dart';
+import 'ui/pb_theme.dart';
+import 'ui/pb_widgets.dart';
 import 'update/app_version.dart';
 import 'update/update_checker.dart';
 
+/// Settings, split into General, Playback, Advanced and About tabs.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -23,6 +28,7 @@ class SettingsScreen extends StatefulWidget {
     required this.onNavigateToCast,
     this.onSettingsChanged,
     this.onQuit,
+    this.autoLaunchForTest,
   });
 
   final ReceiverServer server;
@@ -36,15 +42,24 @@ class SettingsScreen extends StatefulWidget {
   /// Fully quit the app (same as tray → Quit). Red window X only hides.
   final VoidCallback? onQuit;
 
+  /// Replaces the real launch-at-login handler in widget tests.
+  @visibleForTesting
+  final AutoLaunch? autoLaunchForTest;
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
+const _tabLabels = ['General', 'Playback', 'Advanced', 'About'];
+
 class _SettingsScreenState extends State<SettingsScreen> {
+  int _tab = 0;
   bool? _autoLaunchEnabled;
   bool _isSandboxed = false;
   AutoLaunch? _autoLaunch;
   late bool _loggingEnabled = LogStore.instance.enabled;
+
+  PairingStore get _store => widget.store;
 
   @override
   void initState() {
@@ -55,8 +70,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadAutoLaunch() async {
     final sandboxed = await AutoLaunch.isLikelySandboxed();
     if (!Platform.isWindows) {
-      final execPath = await AutoLaunch.resolveExecutablePath();
-      final al = AutoLaunch(executablePath: execPath);
+      final al = widget.autoLaunchForTest ??
+          AutoLaunch(executablePath: await AutoLaunch.resolveExecutablePath());
       final enabled = await al.isEnabled();
       if (mounted) {
         setState(() {
@@ -78,7 +93,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } else {
       await al.disable();
     }
-    setState(() => _autoLaunchEnabled = value);
+    if (mounted) setState(() => _autoLaunchEnabled = value);
+  }
+
+  /// Runs [change] on the store, then refreshes this screen.
+  Future<void> _update(Future<void> Function() change,
+      {bool notify = false}) async {
+    await change();
+    if (mounted) setState(() {});
+    if (notify) widget.onSettingsChanged?.call();
   }
 
   @override
@@ -86,549 +109,495 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListenableBuilder(
       listenable: Listenable.merge([widget.server, widget.player]),
       builder: (context, _) {
-        final authed = widget.server.authedClientCount;
-        final total = widget.server.connectedClientCount;
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
-          children: [
-            Text('Settings', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 24),
-
-            // — Playback ————————————————————————————
-            _Section('Playback'),
-            _Tile(
-              icon: Icons.fullscreen,
-              title: 'Full screen on play',
-              subtitle:
-                  'Automatically enter full screen when a video starts playing.',
-              trailing: Switch(
-                value: widget.store.autoFullScreen,
-                onChanged: (v) async {
-                  await widget.store.setAutoFullScreen(v);
-                  if (mounted) setState(() {});
-                },
+        final body = switch (_tab) {
+          0 => _general(context),
+          1 => _playback(context),
+          2 => _advanced(context),
+          _ => _about(context),
+        };
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Settings',
+                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
               ),
-            ),
-            _Tile(
-              icon: Icons.visibility_off_outlined,
-              title: 'Pause when window is hidden',
-              subtitle:
-                  'Red close button hides to the menu bar. On: pause playback. '
-                  'Off: keep playing in the background (default).',
-              trailing: Switch(
-                value: widget.store.pauseOnWindowHide,
-                onChanged: (v) async {
-                  await widget.store.setPauseOnWindowHide(v);
-                  if (mounted) setState(() {});
-                },
+              const SizedBox(height: 20),
+              PbSegmentedTabs(
+                labels: _tabLabels,
+                selectedIndex: _tab,
+                onChanged: (i) => setState(() => _tab = i),
               ),
-            ),
-            _Tile(
-              icon: Icons.high_quality_outlined,
-              title: 'Preselect HLS quality',
-              subtitle:
-                  'Choose the highest compatible H.264 rendition before playback '
-                  'for faster startup. Off: let MPV handle the master playlist.',
-              trailing: Switch(
-                value: widget.player.preselectHlsQuality,
-                onChanged: (v) async {
-                  widget.player.setPreselectHlsQuality(v);
-                  await widget.store.setPreselectHlsQuality(v);
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.network_ping,
-              title: 'Stream proxy mode',
-              subtitle:
-                  'Proxy protected CDN streams through local FFmpeg AVIO. '
-                  'Auto: only on failure. Always: for all browser HLS casts.',
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  border: Border.all(color: Colors.white12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<StreamProxyMode>(
-                    value: widget.store.streamProxyMode,
-                    borderRadius: BorderRadius.circular(10),
-                    dropdownColor: const Color(0xFF202126),
-                    icon: const Icon(Icons.expand_more, size: 18),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      await widget.store.setStreamProxyMode(v);
-                      if (mounted) setState(() {});
-                    },
-                    items: const [
-                      DropdownMenuItem(
-                        value: StreamProxyMode.off,
-                        child: Text('Off'),
-                      ),
-                      DropdownMenuItem(
-                        value: StreamProxyMode.auto,
-                        child: Text('Auto'),
-                      ),
-                      DropdownMenuItem(
-                        value: StreamProxyMode.always,
-                        child: Text('Always'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            _Tile(
-              icon: Icons.bedtime_outlined,
-              title: 'Still watching reminder',
-              subtitle:
-                  'Pause after continuous viewing and stop if nobody responds.',
-              trailing: Switch(
-                value: widget.store.stillWatchingEnabled,
-                onChanged: (v) async {
-                  await widget.store.setStillWatchingEnabled(v);
-                  if (mounted) setState(() {});
-                  widget.onSettingsChanged?.call();
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.timer_outlined,
-              title: 'Reminder interval',
-              subtitle: 'Only active playback counts toward this time.',
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  border: Border.all(color: Colors.white12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<int>(
-                    value: widget.store.stillWatchingThresholdMinutes,
-                    borderRadius: BorderRadius.circular(10),
-                    dropdownColor: const Color(0xFF202126),
-                    icon: const Icon(Icons.expand_more, size: 18),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    onChanged: widget.store.stillWatchingEnabled
-                        ? (v) async {
-                            if (v == null) return;
-                            await widget.store
-                                .setStillWatchingThresholdMinutes(v);
-                            if (mounted) setState(() {});
-                            widget.onSettingsChanged?.call();
-                          }
-                        : null,
-                    items: PairingStore.stillWatchingPresets
-                        .map((minutes) => DropdownMenuItem(
-                              value: minutes,
-                              child: Text(minutes < 60
-                                  ? '$minutes min'
-                                  : '${minutes ~/ 60}${minutes % 60 == 0 ? '' : '.5'} hr'),
-                            ))
-                        .toList(),
-                  ),
-                ),
-              ),
-            ),
-            _Tile(
-              icon: Icons.hourglass_bottom,
-              title: 'Response time',
-              subtitle: 'Time to respond before playback stops.',
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  border: Border.all(color: Colors.white12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<int>(
-                    value: widget.store.stillWatchingResponseSeconds,
-                    borderRadius: BorderRadius.circular(10),
-                    dropdownColor: const Color(0xFF202126),
-                    icon: const Icon(Icons.expand_more, size: 18),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    onChanged: widget.store.stillWatchingEnabled
-                        ? (v) async {
-                            if (v == null) return;
-                            await widget.store
-                                .setStillWatchingResponseSeconds(v);
-                            if (mounted) setState(() {});
-                            widget.onSettingsChanged?.call();
-                          }
-                        : null,
-                    items: PairingStore.stillWatchingResponsePresets
-                        .map((seconds) => DropdownMenuItem(
-                              value: seconds,
-                              child: Text(seconds < 60
-                                  ? '$seconds sec'
-                                  : '${seconds ~/ 60} min'),
-                            ))
-                        .toList(),
-                  ),
-                ),
-              ),
-            ),
-            _Tile(
-              icon: Icons.skip_next,
-              title: 'Skip-segment provider',
-              subtitle:
-                  'Intro/recap/outro buttons for titles with IMDb or TMDB ids.',
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  border: Border.all(color: Colors.white12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: widget.store.skipSegmentsProvider,
-                    borderRadius: BorderRadius.circular(10),
-                    dropdownColor: const Color(0xFF202126),
-                    icon: const Icon(Icons.expand_more, size: 18),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    onChanged: (v) async {
-                      if (v == null) return;
-                      await widget.store.setSkipSegmentsProvider(v);
-                      if (mounted) setState(() {});
-                    },
-                    items: const [
-                      DropdownMenuItem(
-                          value: 'both', child: Text('Both providers')),
-                      DropdownMenuItem(
-                          value: 'introdb', child: Text('IntroDB')),
-                      DropdownMenuItem(
-                          value: 'theintrodb', child: Text('TheIntroDB')),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            _Tile(
-              icon: Icons.fast_forward,
-              title: 'Auto-skip intro',
-              subtitle: 'Jump intro segments without showing the Skip button.',
-              trailing: Switch(
-                value: widget.store.autoSkipIntro,
-                onChanged: (v) async {
-                  await widget.store.setAutoSkipIntro(v);
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.fast_forward,
-              title: 'Auto-skip recap',
-              subtitle: 'Jump recap segments without showing the Skip button.',
-              trailing: Switch(
-                value: widget.store.autoSkipRecap,
-                onChanged: (v) async {
-                  await widget.store.setAutoSkipRecap(v);
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.fast_forward,
-              title: 'Auto-skip outro',
-              subtitle: 'Jump outro/credits without showing the Skip button.',
-              trailing: Switch(
-                value: widget.store.autoSkipOutro,
-                onChanged: (v) async {
-                  await widget.store.setAutoSkipOutro(v);
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.keyboard,
-              title: 'Keyboard shortcuts',
-              subtitle: 'Space, arrows, F, I, and gestures — press ? anytime.',
-              onTap: () => showKeyboardShortcutsSheet(context),
-            ),
-            _Tile(
-              icon: Icons.insights,
-              title: 'Show playback stats',
-              subtitle:
-                  'Overlay dropped frames, fps, bitrate… (toggle with the I key). '
-                  'Internal MPV only.',
-              trailing: ValueListenableBuilder<bool>(
-                valueListenable: widget.showStats,
-                builder: (context, on, _) => Switch(
-                  value: on,
-                  onChanged: (v) => widget.showStats.value = v,
-                ),
-              ),
-            ),
-            _Tile(
-              icon: Icons.history,
-              title: 'Save Cast History',
-              subtitle:
-                  'Keep recently played media on this Desktop. Casts requesting no history are always excluded.',
-              trailing: Switch(
-                value: widget.store.enableHistory,
-                onChanged: (v) async {
-                  await widget.store.setEnableHistory(v);
-                  if (mounted) setState(() {});
-                  widget.onSettingsChanged?.call();
-                },
-              ),
-            ),
-
-            _Section('Sending'),
-            _Tile(
-              icon: Icons.history_toggle_off,
-              title: 'Prevent receiver cast history',
-              subtitle:
-                  'Keep new casts out of history on updated PlayBridge Android TV and Desktop receivers. Existing history stays unchanged.',
-              trailing: Switch(
-                value: widget.store.preventReceiverHistory,
-                onChanged: (value) async {
-                  await widget.store.setPreventReceiverHistory(value);
-                  if (mounted) setState(() {});
-                },
-              ),
-            ),
-
-            // — Pairing ————————————————————————————
-            _Section('Pairing'),
-            _Tile(
-              icon: Icons.phonelink,
-              title: 'Device name',
-              trailing: Text(
-                widget.store.deviceName,
-                style: const TextStyle(color: Colors.white38, fontSize: 13),
-              ),
-            ),
-            _Tile(
-              icon: Icons.pin,
-              title: 'Show pairing PIN',
-              subtitle: 'Return to the Cast screen to re-pair',
-              onTap: widget.onNavigateToCast,
-            ),
-            _Tile(
-              icon: Icons.devices,
-              title: 'Connected clients',
-              trailing: Text(
-                authed > 0 ? '$authed authenticated  ($total total)' : 'none',
-                style: TextStyle(
-                  color: authed > 0 ? Colors.tealAccent : Colors.white38,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            if (authed > 0)
-              _Tile(
-                icon: Icons.logout,
-                title: 'Disconnect all clients',
-                subtitle: 'Forces re-authentication on the next connection',
-                onTap: () async {
-                  await widget.server.kickAll();
-                  if (mounted) widget.onNavigateToCast();
-                },
-                danger: true,
-              ),
-
-            // — System ——————————————————————————————
-            _Section('System'),
-            if (!Platform.isWindows)
-              _Tile(
-                icon: Icons.launch,
-                title: 'Launch at login',
-                subtitle:
-                    _isSandboxed ? 'Not available in sandboxed builds' : null,
-                trailing: _autoLaunchEnabled == null
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Switch(
-                        value: _autoLaunchEnabled!,
-                        onChanged: _isSandboxed ? null : _toggleAutoLaunch,
-                      ),
-              ),
-
-            // — Diagnostics ————————————————————————
-            _Section('Diagnostics'),
-            _Tile(
-              icon: Icons.bug_report_outlined,
-              title: 'Enable logging',
-              subtitle:
-                  'Save app logs and memory samples every 30 seconds to this device '
-                  'for troubleshooting. Off by default — '
-                  'logs can contain stream URLs and request headers (including '
-                  'Debrid tokens), so only enable when needed.',
-              trailing: Switch(
-                value: _loggingEnabled,
-                onChanged: (v) async {
-                  await LogStore.instance.setEnabled(v);
-                  if (mounted) setState(() => _loggingEnabled = v);
-                },
-              ),
-            ),
-            _Tile(
-              icon: Icons.article_outlined,
-              title: 'View logs',
-              subtitle: 'Open the in-app log viewer',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const LogsScreen()),
-              ),
-            ),
-
-            // — About ———————————————————————————————
-            _Section('About'),
-            _Tile(
-              icon: Icons.info_outline,
-              title: 'PlayBridge Desktop',
-              trailing: Text(
-                'v$kAppVersion  ·  port ${widget.server.wssPort ?? kDefaultPort}',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-            ),
-            ListenableBuilder(
-              listenable: widget.updateChecker,
-              builder: (context, _) {
-                final checking = widget.updateChecker.state is UpdateChecking;
-                return _Tile(
-                  icon: Icons.system_update_alt,
-                  title: 'Check for updates',
-                  subtitle: 'Downloads and installs the new version in place, '
-                      'then restarts the app.',
-                  trailing: checking
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : null,
-                  onTap: checking
-                      ? null
-                      : () => widget.updateChecker.check(manual: true),
-                );
-              },
-            ),
-            if (widget.onQuit != null) ...[
-              const SizedBox(height: 12),
-              _Tile(
-                icon: Icons.power_settings_new,
-                title: 'Quit PlayBridge',
-                subtitle:
-                    'Stop the receiver and exit. The red window button only '
-                    'hides to the menu bar.',
-                danger: true,
-                onTap: () => _confirmQuit(context),
+              const SizedBox(height: 20),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: body,
               ),
             ],
-          ],
+          ),
         );
       },
+    );
+  }
+
+  // ── General ────────────────────────────────────────────────────────────
+
+  Widget _general(BuildContext context) {
+    return SettingsGroup(
+      children: [
+        PbValueRow(
+          title: 'This computer’s name',
+          subtitle: 'What phones see in their list of devices',
+          value: _store.deviceName,
+        ),
+        if (!Platform.isWindows)
+          PbSwitchRow(
+            title: 'Open when I log in',
+            subtitle: _isSandboxed
+                ? 'Not available in sandboxed builds'
+                : 'Starts in the menu bar, ready for casts',
+            value: _autoLaunchEnabled ?? false,
+            onChanged: (_autoLaunchEnabled == null || _isSandboxed)
+                ? null
+                : _toggleAutoLaunch,
+          ),
+        PbValueRow(
+          title: 'When I close the window',
+          subtitle: 'PlayBridge stays in the menu bar either way',
+          value: _store.pauseOnWindowHide ? 'Pause' : 'Keep playing',
+          onTap: () async {
+            final v = await showSettingsChoiceDialog<bool>(
+              context,
+              title: 'When I close the window',
+              message: 'PlayBridge stays in the menu bar either way.',
+              options: const [
+                (false, 'Keep playing'),
+                (true, 'Pause'),
+              ],
+              selected: _store.pauseOnWindowHide,
+            );
+            if (v != null) await _update(() => _store.setPauseOnWindowHide(v));
+          },
+        ),
+        const SettingsSectionHeading('History'),
+        // Hidden until a phone can supply the Recent list; nothing is recorded
+        // on this computer before then.
+        if (kPhoneRecentsSupported)
+          PbSwitchRow(
+            title: 'Save cast history',
+            subtitle: 'Keep recently played media on this computer. Casts that '
+                'ask for no history are always left out',
+            value: _store.enableHistory,
+            onChanged: (v) =>
+                _update(() => _store.setEnableHistory(v), notify: true),
+          ),
+        PbSwitchRow(
+          title: 'Keep my casts out of the TV’s history',
+          subtitle: 'New casts you send to a PlayBridge Android TV or '
+              'computer are not added to its history. Existing history '
+              'stays as it is',
+          value: _store.preventReceiverHistory,
+          onChanged: (v) => _update(() => _store.setPreventReceiverHistory(v)),
+        ),
+      ],
+    );
+  }
+
+  // ── Playback ───────────────────────────────────────────────────────────
+
+  static String _minutesLabel(int minutes) {
+    if (minutes < 60) return '$minutes minutes';
+    final hours = minutes / 60;
+    final text = minutes % 60 == 0 ? '${minutes ~/ 60}' : hours.toString();
+    return hours == 1 ? '1 hour' : '$text hours';
+  }
+
+  static String _secondsLabel(int seconds) {
+    if (seconds < 60) return '$seconds seconds';
+    final m = seconds ~/ 60;
+    return m == 1 ? '1 minute' : '$m minutes';
+  }
+
+  Widget _playback(BuildContext context) {
+    final stillOn = _store.stillWatchingEnabled;
+    return SettingsGroup(
+      children: [
+        PbSwitchRow(
+          title: 'Go full screen when a video starts',
+          subtitle: 'Useful when this computer is connected to a TV or '
+              'projector',
+          value: _store.autoFullScreen,
+          onChanged: (v) => _update(() => _store.setAutoFullScreen(v)),
+        ),
+        ValueListenableBuilder<bool>(
+          valueListenable: widget.showStats,
+          builder: (context, on, _) => PbSwitchRow(
+            title: 'Show playback stats',
+            subtitle: 'Dropped frames, frame rate and bitrate over the '
+                'video. Press I to toggle. Built-in player only',
+            value: on,
+            onChanged: (v) => widget.showStats.value = v,
+          ),
+        ),
+        PbSwitchRow(
+          title: 'Ask “Still watching?”',
+          subtitle: 'Pauses after a long stretch and stops if nobody answers',
+          value: stillOn,
+          onChanged: (v) =>
+              _update(() => _store.setStillWatchingEnabled(v), notify: true),
+        ),
+        Opacity(
+          opacity: stillOn ? 1 : 0.5,
+          child: PbValueRow(
+            title: 'Ask after',
+            subtitle: 'Only time spent playing counts',
+            value: _minutesLabel(_store.stillWatchingThresholdMinutes),
+            onTap: stillOn
+                ? () async {
+                    final v = await showSettingsChoiceDialog<int>(
+                      context,
+                      title: 'Ask after',
+                      message: 'Only time spent playing counts.',
+                      options: [
+                        for (final m in PairingStore.stillWatchingPresets)
+                          (m, _minutesLabel(m)),
+                      ],
+                      selected: _store.stillWatchingThresholdMinutes,
+                    );
+                    if (v != null) {
+                      await _update(
+                          () => _store.setStillWatchingThresholdMinutes(v),
+                          notify: true);
+                    }
+                  }
+                : null,
+          ),
+        ),
+        Opacity(
+          opacity: stillOn ? 1 : 0.5,
+          child: PbValueRow(
+            title: 'Wait for an answer',
+            subtitle: 'How long before playback stops',
+            value: _secondsLabel(_store.stillWatchingResponseSeconds),
+            onTap: stillOn
+                ? () async {
+                    final v = await showSettingsChoiceDialog<int>(
+                      context,
+                      title: 'Wait for an answer',
+                      message: 'How long before playback stops.',
+                      options: [
+                        for (final s
+                            in PairingStore.stillWatchingResponsePresets)
+                          (s, _secondsLabel(s)),
+                      ],
+                      selected: _store.stillWatchingResponseSeconds,
+                    );
+                    if (v != null) {
+                      await _update(
+                          () => _store.setStillWatchingResponseSeconds(v),
+                          notify: true);
+                    }
+                  }
+                : null,
+          ),
+        ),
+        const SettingsSectionHeading('Intros, recaps and credits'),
+        SettingsChipsRow(
+          title: 'Skip without asking',
+          subtitle: 'Jumps past these parts without showing the Skip button. '
+              'Works for films and episodes that PlayBridge can identify',
+          chips: [
+            SettingsChip(
+              'Intros',
+              _store.autoSkipIntro,
+              (v) => _update(() => _store.setAutoSkipIntro(v)),
+            ),
+            SettingsChip(
+              'Recaps',
+              _store.autoSkipRecap,
+              (v) => _update(() => _store.setAutoSkipRecap(v)),
+            ),
+            SettingsChip(
+              'Credits',
+              _store.autoSkipOutro,
+              (v) => _update(() => _store.setAutoSkipOutro(v)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ── Advanced ───────────────────────────────────────────────────────────
+
+  static String _proxyLabel(StreamProxyMode m) => switch (m) {
+        StreamProxyMode.off => 'Never',
+        StreamProxyMode.auto => 'When needed',
+        StreamProxyMode.always => 'Always',
+      };
+
+  static String _providerLabel(String p) => switch (p) {
+        'introdb' => 'IntroDB',
+        'theintrodb' => 'TheIntroDB',
+        _ => 'IntroDB and TheIntroDB',
+      };
+
+  Widget _advanced(BuildContext context) {
+    final authed = widget.server.authedClientCount;
+    final total = widget.server.connectedClientCount;
+    return SettingsGroup(
+      children: [
+        const SettingsIntro(
+            'For troubleshooting. Most people never need these.'),
+        PbValueRow(
+          title: 'Load streams through this computer',
+          subtitle: 'Helps with sites that block direct playback',
+          value: _proxyLabel(_store.streamProxyMode),
+          onTap: () async {
+            final v = await showSettingsChoiceDialog<StreamProxyMode>(
+              context,
+              title: 'Load streams through this computer',
+              message: 'Never: always play directly. When needed: only after '
+                  'a direct stream fails. Always: every video from a browser.',
+              options: [
+                for (final m in StreamProxyMode.values) (m, _proxyLabel(m)),
+              ],
+              selected: _store.streamProxyMode,
+            );
+            if (v != null) await _update(() => _store.setStreamProxyMode(v));
+          },
+        ),
+        PbSwitchRow(
+          title: 'Pick the stream quality before playing',
+          subtitle: 'Starts faster. Turn off to let the player choose',
+          value: widget.player.preselectHlsQuality,
+          onChanged: (v) async {
+            widget.player.setPreselectHlsQuality(v);
+            await _update(() => _store.setPreselectHlsQuality(v));
+          },
+        ),
+        PbValueRow(
+          title: 'Where skip times come from',
+          subtitle: 'The services asked for intro, recap and credit times',
+          value: _providerLabel(_store.skipSegmentsProvider),
+          onTap: () async {
+            final v = await showSettingsChoiceDialog<String>(
+              context,
+              title: 'Where skip times come from',
+              options: const [
+                ('both', 'IntroDB and TheIntroDB'),
+                ('introdb', 'IntroDB'),
+                ('theintrodb', 'TheIntroDB'),
+              ],
+              selected: _store.skipSegmentsProvider,
+            );
+            if (v != null) {
+              await _update(() => _store.setSkipSegmentsProvider(v));
+            }
+          },
+        ),
+        PbValueRow(
+          title: 'Connected phones',
+          value: authed > 0 ? '$authed signed in ($total connected)' : 'None',
+        ),
+        if (authed > 0)
+          SettingsActionRow(
+            title: 'Disconnect every phone',
+            subtitle: 'They have to sign in again the next time they connect',
+            danger: true,
+            onTap: () async {
+              await widget.server.kickAll();
+              if (mounted) widget.onNavigateToCast();
+            },
+          ),
+        const SettingsSectionHeading('Bug reports'),
+        PbSwitchRow(
+          title: 'Keep a log',
+          subtitle: 'Saves app logs and memory use every 30 seconds on this '
+              'computer. Logs can include video addresses and account tokens. '
+              'Turn on only while reproducing a problem',
+          value: _loggingEnabled,
+          onChanged: (v) async {
+            await LogStore.instance.setEnabled(v);
+            if (mounted) setState(() => _loggingEnabled = v);
+          },
+        ),
+        SettingsActionRow(
+          title: 'View logs',
+          subtitle: 'Open the log viewer',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const LogsScreen()),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── About ──────────────────────────────────────────────────────────────
+
+  static String _updateStatus(UpdateState s, int port) => switch (s) {
+        UpdateIdle() => 'Receiving on port $port',
+        UpdateChecking() => 'Checking for updates…',
+        UpdateUpToDate() => 'Up to date',
+        UpdateAvailable(:final info) => 'Version ${info.version} is available',
+        UpdateDownloading(:final info) => 'Downloading ${info.version}…',
+        UpdateInstalling(:final info) =>
+          'Installing ${info.version}, then restarting',
+        UpdateError(:final message) => message,
+      };
+
+  Widget _about(BuildContext context) {
+    final port = widget.server.wssPort ?? kDefaultPort;
+    return SettingsGroup(
+      children: [
+        ListenableBuilder(
+          listenable: widget.updateChecker,
+          builder: (context, _) {
+            final state = widget.updateChecker.state;
+            final busy = state is UpdateChecking ||
+                state is UpdateDownloading ||
+                state is UpdateInstalling;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 20),
+              decoration: BoxDecoration(
+                color: PbColors.card,
+                borderRadius: BorderRadius.circular(PbMetrics.rowRadius),
+              ),
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 24,
+                runSpacing: 14,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const _AppMark(),
+                      const SizedBox(width: 16),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'PlayBridge Desktop $kAppVersion',
+                              style: TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              _updateStatus(state, port),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: state is UpdateError
+                                    ? PbColors.error
+                                    : PbColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  PbButton(
+                    label: 'Check for updates',
+                    onPressed: busy
+                        ? null
+                        : () => widget.updateChecker.check(manual: true),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+        PbValueRow(
+          title: 'Port phones connect to',
+          value: '$port',
+        ),
+        SettingsActionRow(
+          title: 'Keyboard shortcuts',
+          trailing: const Text('?',
+              style: TextStyle(color: PbColors.textSecondary, fontSize: 14)),
+          onTap: () => showKeyboardShortcutsSheet(context),
+        ),
+        if (widget.onQuit != null) ...[
+          const SizedBox(height: 10),
+          SettingsActionRow(
+            title: 'Quit PlayBridge',
+            subtitle: 'Phones can’t cast here until you open it again. '
+                'Closing the window does not quit',
+            danger: true,
+            onTap: () => _confirmQuit(context),
+          ),
+        ],
+      ],
     );
   }
 
   Future<void> _confirmQuit(BuildContext context) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Quit PlayBridge?'),
-        content: const Text(
-          'The desktop receiver will stop. Phones won’t be able to cast here '
-          'until you open PlayBridge again.',
+      barrierColor: PbColors.scrim,
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Quit PlayBridge?',
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                const Text(
+                  'The desktop receiver will stop. Phones won’t be able to '
+                  'cast here until you open PlayBridge again.',
+                  style: TextStyle(color: PbColors.textSecondary),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    PbButton(
+                      label: 'Cancel',
+                      variant: PbButtonVariant.quiet,
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                    ),
+                    const SizedBox(width: 8),
+                    PbButton(
+                      label: 'Quit',
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Quit'),
-          ),
-        ],
       ),
     );
     if (ok == true) widget.onQuit?.call();
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section(this.label);
-  final String label;
+class _AppMark extends StatelessWidget {
+  const _AppMark();
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 20, 0, 4),
-      child: Text(
-        label.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11,
-          letterSpacing: 1.2,
-          color: Colors.white38,
-          fontWeight: FontWeight.w600,
-        ),
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: PbColors.accent,
+        borderRadius: BorderRadius.circular(14),
       ),
-    );
-  }
-}
-
-class _Tile extends StatelessWidget {
-  const _Tile({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.trailing,
-    this.onTap,
-    this.danger = false,
-  });
-
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final Widget? trailing;
-  final VoidCallback? onTap;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      leading: Icon(icon,
-          size: 20, color: danger ? Colors.redAccent : Colors.white54),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: danger ? Colors.redAccent : Colors.white,
-          fontSize: 14,
-        ),
-      ),
-      subtitle: subtitle != null
-          ? Text(subtitle!,
-              style: const TextStyle(color: Colors.white38, fontSize: 12))
-          : null,
-      trailing: trailing,
-      onTap: onTap,
+      child: const Icon(Icons.play_arrow_rounded,
+          size: 30, color: PbColors.background),
     );
   }
 }
