@@ -59,7 +59,7 @@ fun PlayerDarkSurface(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalTvColors provides DarkTvColors, content = content)
 }
 
-/** A short message pill. [PlayerNotice.emphasis] draws the light pill used for the bookmark confirmation. */
+/** A short message pill. [PlayerNotice.emphasis] draws the light pill used for the bookmark confirmations. */
 @Composable
 fun NoticePill(notice: PlayerNotice, modifier: Modifier = Modifier) {
     val bg = if (notice.emphasis) DarkTvColors.onSurface else TvTheme.player.panel
@@ -73,9 +73,9 @@ fun NoticePill(notice: PlayerNotice, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (notice.emphasis) {
+        notice.icon?.let { icon ->
             Image(
-                painterResource(R.drawable.ic_player_bookmark_filled), null,
+                painterResource(icon), null,
                 Modifier.size(18.dp), colorFilter = ColorFilter.tint(fg),
             )
         }

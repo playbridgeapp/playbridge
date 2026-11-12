@@ -224,9 +224,9 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     private var badgeJob: Job? = null
 
     /** Show a short message pill that clears itself after [durationMs]. */
-    fun showNotice(text: String, emphasis: Boolean = false, durationMs: Long = 3_000L) {
+    fun showNotice(text: String, emphasis: Boolean = false, icon: Int? = null, durationMs: Long = 3_000L) {
         noticeJob?.cancel()
-        _controlsState.update { it.copy(notice = PlayerNotice(text, emphasis)) }
+        _controlsState.update { it.copy(notice = PlayerNotice(text, emphasis, icon)) }
         noticeJob = scope.launch {
             delay(durationMs)
             _controlsState.update { it.copy(notice = null) }

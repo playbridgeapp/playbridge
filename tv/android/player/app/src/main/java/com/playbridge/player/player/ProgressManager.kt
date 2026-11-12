@@ -51,6 +51,7 @@ class ProgressManager(
 
     val url: String? get() = currentUrl
     val title: String? get() = currentTitle
+    val thumbnailUrl: String? get() = currentThumbnailUrl
     val contentType: String? get() = currentContentType
     val headers: Map<String, String>? get() = currentHeaders
     val preferredAudioLanguage: String? get() = currentPreferredAudioLanguage
@@ -119,8 +120,8 @@ class ProgressManager(
         FileLogger.i(TAG, "Updated in-memory playback context: ${playbackContext.toSafeLogString()}")
     }
 
-    /** Update cached artwork after a one-time frame capture. */
-    fun updateThumbnail(thumbnailUrl: String) {
+    /** Update cached artwork after a frame capture, or clear it once that capture is deleted. */
+    fun updateThumbnail(thumbnailUrl: String?) {
         currentThumbnailUrl = thumbnailUrl
     }
 

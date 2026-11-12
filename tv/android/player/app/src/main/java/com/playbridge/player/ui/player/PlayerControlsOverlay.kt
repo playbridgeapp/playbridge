@@ -280,7 +280,7 @@ fun PlayerControlsOverlay(
                 )
             }
 
-        // Short notices: bookmark confirmation (light pill, above the controls) and "Press Back again to stop".
+        // Short notices: bookmark confirmations (light pill, above the controls) and "Press Back again to stop".
         state.notice?.let { notice ->
             val bottom = when (surface) {
                 ControlsSurface.CONTROLS -> 262.dp

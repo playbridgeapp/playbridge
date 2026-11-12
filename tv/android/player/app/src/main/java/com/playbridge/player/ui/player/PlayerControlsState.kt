@@ -16,9 +16,9 @@ enum class BookmarkState { UNAVAILABLE, OFF, ON }
 /** The small play or pause badge shown when a media key is pressed with nothing else on screen. */
 enum class TransportBadge { NONE, PAUSED, PLAYING }
 
-/** A short message pill over the player, e.g. "Press Back again to stop". [emphasis] uses the light pill. */
+/** A short message pill over the player, e.g. "Press Back again to stop". [emphasis] uses the light pill, with [icon] in front when set. */
 @Immutable
-data class PlayerNotice(val text: String, val emphasis: Boolean = false)
+data class PlayerNotice(val text: String, val emphasis: Boolean = false, val icon: Int? = null)
 
 enum class ControlActionFocusTarget {
     PLAY_PAUSE,

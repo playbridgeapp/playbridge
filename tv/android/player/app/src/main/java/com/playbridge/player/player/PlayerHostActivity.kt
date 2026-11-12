@@ -152,6 +152,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var backArmedUntilMs = 0L
     /** History id to bookmarked flag for stored items; just enough for the bookmark button. */
     private var historySnapshot: Map<String, Boolean> = emptyMap()
+    private var currentCastIsPrivate = false
     private val sessionCoordinator = RendererSessionCoordinator()
     private val failureReporter = RendererFailureReporter()
     private val stallDetector = PlaybackStallDetector()
@@ -1992,8 +1993,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ?: historyThumbnailStore.existingUrl(historyId)
         bookmarkId = historyId
         // A private cast has no history entry of its own unless it has been bookmarked.
+        currentCastIsPrivate = items.any { it.skip_history == true }
         currentHistoryId = historyId.takeUnless {
-            items.any { it.skip_history == true } && historySnapshot[historyId] != true
+            currentCastIsPrivate && historySnapshot[historyId] != true
         }
         refreshBookmarkState()
         currentHistoryHasThumbnail = thumbnailUrl != null
@@ -2038,16 +2040,25 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         thumbnailPlaybackElapsedMs +
             (thumbnailPlayingSinceElapsedMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L)
 
-    private fun requestHistoryThumbnailCapture(exitFallback: Boolean = false) {
+    /**
+     * [forBookmark] is the moment an item is bookmarked. A bookmark with no picture always
+     * gets one, whatever the history and thumbnail settings say, and without the usual wait.
+     */
+    private fun requestHistoryThumbnailCapture(
+        exitFallback: Boolean = false,
+        forBookmark: Boolean = false,
+    ) {
         if (currentMediaKind != MediaKind.VIDEO) return
         val historyId = currentHistoryId ?: return
         if (thumbnailCaptureInFlightGeneration != null) return
-        if (!getSharedPreferences("browser_prefs", MODE_PRIVATE)
-                .getBoolean("enable_history", true)
-        ) return
 
         val playbackElapsedMs = historyThumbnailPlaybackElapsedMs(SystemClock.elapsedRealtime())
-        if (!shouldCaptureHistoryThumbnail(
+        val bookmarkNeedsPicture = !currentHistoryHasThumbnail &&
+            (forBookmark || historySnapshot[historyId] == true)
+        if (!bookmarkNeedsPicture && !getSharedPreferences("browser_prefs", MODE_PRIVATE)
+                .getBoolean("enable_history", true)
+        ) return
+        if (!bookmarkNeedsPicture && !shouldCaptureHistoryThumbnail(
                 mode = HistoryThumbnailMode.read(this),
                 hasThumbnail = currentHistoryHasThumbnail,
                 playbackElapsedMs = playbackElapsedMs,
@@ -3527,10 +3538,27 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 progressManager.bookmarkCurrent()
                 // From here on this item has an entry, so its place and picture are kept.
                 currentHistoryId = id
+                // A bookmark with no artwork gets a frame of the video right away.
+                requestHistoryThumbnailCapture(forBookmark = true)
             } else {
                 historyStore.toggleFavorite(id)
+                if (currentCastIsPrivate) {
+                    // A private cast's entry goes with its bookmark, and so does the frame
+                    // captured for it: nothing more is kept, and a new bookmark starts fresh.
+                    currentHistoryId = null
+                    if (historyThumbnailStore.existingUrl(id) == null &&
+                        progressManager.thumbnailUrl?.startsWith("file:") == true
+                    ) {
+                        progressManager.updateThumbnail(null)
+                        currentHistoryHasThumbnail = false
+                    }
+                }
             }
-            controlsViewModel.showNotice(bookmarkNoticeText(nowBookmarked), emphasis = nowBookmarked)
+            controlsViewModel.showNotice(
+                bookmarkNoticeText(nowBookmarked),
+                emphasis = true,
+                icon = if (nowBookmarked) R.drawable.ic_player_bookmark_filled else R.drawable.ic_player_bookmark,
+            )
         }
     }
 
