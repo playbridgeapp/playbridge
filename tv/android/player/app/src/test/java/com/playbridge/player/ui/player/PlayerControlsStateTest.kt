@@ -224,7 +224,7 @@ class PlayerControlsStateTest {
             vm.setPlaying(true)
             vm.showControls(full = true, playing = true)
 
-            // Advance part way through the 5s auto-hide timer before opening the overlay.
+            // Advance part way through the 8s auto-hide timer before opening the overlay.
             testScope.advanceTimeBy(4_000L)
             testScope.runCurrent()
             assertTrue(vm.controlsState.value.isVisible)
@@ -234,7 +234,7 @@ class PlayerControlsStateTest {
 
             // Even if resetAutoHideTimer() or showSeekUI() is invoked while the overlay is open,
             // and 25 seconds pass, controls and the overlay must remain visible.
-            vm.resetAutoHideTimer(durationMs = 5_000L)
+            vm.resetAutoHideTimer(durationMs = 8_000L)
             vm.showSeekUI()
             testScope.advanceTimeBy(25_000L)
             testScope.runCurrent()
@@ -249,7 +249,7 @@ class PlayerControlsStateTest {
             assertEquals(expectedOverlay, vm.controlsState.value.activeOverlay)
 
             // Closing the overlay (via Back or selection) keeps full controls visible,
-            // sets the opener focus target, and restarts the 5s auto-hide timer from zero.
+            // sets the opener focus target, and restarts the 8s auto-hide timer from zero.
             vm.hideOverlay()
             assertEquals(ActiveOverlay.NONE, vm.controlsState.value.activeOverlay)
             assertTrue(vm.controlsState.value.isVisible)
@@ -259,12 +259,12 @@ class PlayerControlsStateTest {
                 vm.controlsState.value.controlActionFocusTarget(mediaKind = "video"),
             )
 
-            // At 4.9s after closing, controls are still visible (timer restarted from zero).
-            testScope.advanceTimeBy(4_900L)
+            // At 7.9s after closing, controls are still visible (timer restarted from zero).
+            testScope.advanceTimeBy(7_900L)
             testScope.runCurrent()
             assertTrue(vm.controlsState.value.isVisible)
 
-            // At 5.0s after closing while playing, controls auto-hide.
+            // At 8.0s after closing while playing, controls auto-hide.
             testScope.advanceTimeBy(200L)
             testScope.runCurrent()
             assertFalse(vm.controlsState.value.isVisible)

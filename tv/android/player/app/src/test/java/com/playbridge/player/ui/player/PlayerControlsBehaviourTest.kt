@@ -71,9 +71,9 @@ class PlayerControlsBehaviourTest {
     }
 
     @Test
-    fun `seek strip hides after 3 seconds and full controls after 5 while playing`() {
+    fun `seek strip hides after 3 seconds and full controls after 8 while playing`() {
         assertEquals(3_000L, autoHideDelayMs(fullControls = false))
-        assertEquals(5_000L, autoHideDelayMs(fullControls = true))
+        assertEquals(8_000L, autoHideDelayMs(fullControls = true))
 
         val scope = TestScope(StandardTestDispatcher())
         val vm = vmWithEngine(scope, FakeEngine())
@@ -85,7 +85,7 @@ class PlayerControlsBehaviourTest {
         assertFalse(vm.controlsState.value.isVisible)
 
         vm.showControls(full = true, playing = true)
-        scope.advanceTimeBy(4_900L); scope.runCurrent()
+        scope.advanceTimeBy(7_900L); scope.runCurrent()
         assertTrue(vm.controlsState.value.isVisible)
         scope.advanceTimeBy(200L); scope.runCurrent()
         assertFalse(vm.controlsState.value.isVisible)
@@ -101,7 +101,7 @@ class PlayerControlsBehaviourTest {
         assertTrue(vm.controlsState.value.isVisible)
 
         vm.setPlaying(true)
-        scope.advanceTimeBy(5_100L); scope.runCurrent()
+        scope.advanceTimeBy(8_100L); scope.runCurrent()
         assertFalse(vm.controlsState.value.isVisible)
     }
 

@@ -37,8 +37,8 @@ internal fun skipTargetMs(segment: SkipSegment, durationMs: Long): Long = when {
     else -> segment.endMs + 1_000L
 }
 
-/** Seek strip hides after 3 s, full controls after 5 s (ControlsRemoteMap). */
-internal fun autoHideDelayMs(fullControls: Boolean): Long = if (fullControls) 5_000L else 3_000L
+/** Seek strip hides after 3 s, full controls after 8 s (ControlsRemoteMap). */
+internal fun autoHideDelayMs(fullControls: Boolean): Long = if (fullControls) 8_000L else 3_000L
 
 /** How long "Press Back again to stop" stays up, and how long a second Back counts. */
 internal const val BACK_CONFIRM_WINDOW_MS = 3_000L
