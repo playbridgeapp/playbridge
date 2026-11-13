@@ -55,9 +55,13 @@ enum Call {
         pairing: String,
     },
     /// Receiver: join the invite that arrived, with the key it was sealed to.
+    /// A `guest` joins with a fresh key, so the sender doesn't count it as its
+    /// own device and it gets none of the sender's sign-ins.
     PairAccept {
         #[serde(flatten)]
         device: DeviceInput,
+        #[serde(default)]
+        guest: bool,
     },
     PairCancel,
     /// Sender: invite the receiver showing `target` (a code or a QR link).
@@ -332,7 +336,7 @@ impl Worker {
                 Err(_) => self.error("join", "invalid invite link", None),
             },
             Call::PairRegister { pairing } => self.pair_register(&pairing).await,
-            Call::PairAccept { device } => {
+            Call::PairAccept { device, guest } => {
                 let Some(pairing) = self.pairing.as_mut() else {
                     return self.error("pair", "no invite to accept", None);
                 };
@@ -344,7 +348,10 @@ impl Worker {
                 match Invite::parse(&invite.link) {
                     // Join with the key the invite was sealed to, so the phone
                     // that sent it can recognise this device as its own.
-                    Ok(parsed) => self.enter(parsed, keys, device),
+                    Ok(parsed) => {
+                        let keys = if guest { MemberKeys::generate() } else { keys };
+                        self.enter(parsed, keys, device)
+                    }
                     Err(_) => self.error("pair", "invalid invite", None),
                 }
             }

@@ -92,8 +92,14 @@ class TogetherClient(
     /** Receiver: show a code and wait for an invite. */
     fun pairRegister(pairing: String) = submit(TogetherJson.command("pair_register") { put("pairing", pairing) })
 
-    /** Receiver: join the invite from the last [TogetherEvent.PairingInvite]. */
-    fun pairAccept(device: TogetherDevice) = submit(TogetherJson.command("pair_accept") { TogetherJson.device(this, device) })
+    /**
+     * Receiver: join the invite from the last [TogetherEvent.PairingInvite]. A [guest]
+     * isn't counted as the inviting phone's own device, so it gets none of its sign-ins.
+     */
+    fun pairAccept(device: TogetherDevice, guest: Boolean = false) = submit(TogetherJson.command("pair_accept") {
+        TogetherJson.device(this, device)
+        if (guest) put("guest", true)
+    })
 
     fun pairCancel() = submit(TogetherJson.command("pair_cancel"))
 

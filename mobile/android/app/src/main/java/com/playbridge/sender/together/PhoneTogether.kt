@@ -84,6 +84,12 @@ object PhoneTogether {
     sealed interface State {
         data object Idle : State
         data object Starting : State
+        /** Asking the pairing service for a code. */
+        data object GettingCode : State
+        /** Showing a code; someone in a party enters it to invite this phone. */
+        data class Code(val code: String, val qrSize: Int, val qrModules: String, val expiresAtMs: Long) : State
+        /** An invite arrived for the code; nothing is joined until [acceptInvite]. */
+        data class Invited(val from: String, val relay: String) : State
         data class InParty(val party: Party) : State
         data class Ended(val message: String) : State
     }
@@ -136,6 +142,7 @@ object PhoneTogether {
 
     fun start(context: Context, watchHere: Boolean) {
         val session = ensureClient(context) ?: return
+        if (isJoiningByCode()) session.pairCancel()
         mutableState.value = State.Starting
         watchOnJoin = watchHere
         if (!session.host(relayUrl(context), device(watchHere))) {
@@ -145,12 +152,43 @@ object PhoneTogether {
 
     fun join(context: Context, link: String, watchHere: Boolean) {
         val session = ensureClient(context) ?: return
+        if (isJoiningByCode()) session.pairCancel()
         mutableState.value = State.Starting
         watchOnJoin = watchHere
         if (!session.join(link.trim(), device(watchHere))) {
             mutableState.value = State.Ended("That invite link isn't valid.")
         }
     }
+
+    /** Shows a code to join a party with, for when sending a link is awkward. */
+    fun showCode(context: Context, watchHere: Boolean) {
+        val session = ensureClient(context) ?: return
+        if (state.value is State.InParty) return
+        watchOnJoin = watchHere
+        mutableState.value = State.GettingCode
+        if (!session.pairRegister(pairingUrl(context))) {
+            mutableState.value = State.Ended("Couldn't get a code.")
+        }
+    }
+
+    /** Drops the code or the invite that arrived for it. */
+    fun cancelCode() {
+        if (!isJoiningByCode()) return
+        client?.pairCancel()
+        mutableState.value = State.Idle
+    }
+
+    /** Joins the party from the pending invite, as a guest of whoever sent it. */
+    fun acceptInvite() {
+        if (state.value !is State.Invited) return
+        mutableState.value = State.Starting
+        if (client?.pairAccept(device(watchOnJoin), guest = true) != true) {
+            mutableState.value = State.Ended("Couldn't join.")
+        }
+    }
+
+    private fun isJoiningByCode(): Boolean =
+        state.value.let { it is State.GettingCode || it is State.Code || it is State.Invited }
 
     fun leave() {
         client?.leave()
@@ -259,8 +297,8 @@ object PhoneTogether {
         }
     }
 
-    /** Invites a receiver showing [target], a code or the link in its QR code. */
-    fun addTvByCode(context: Context, target: String) {
+    /** Invites a device showing [target], a code or the link in its QR code. */
+    fun addByCode(context: Context, target: String) {
         if (party() == null) return
         client?.pairSend(pairingUrl(context), target.trim())
     }
@@ -360,9 +398,23 @@ object PhoneTogether {
             }
             is TogetherEvent.Warning -> updateParty { it.copy(notice = event.message) }
             is TogetherEvent.Live -> updateParty { it.copy(live = event.live) }
-            is TogetherEvent.PairSent -> toast("Invite sent. Confirm on the TV.")
+            is TogetherEvent.PairSent -> toast("Invite sent. Confirm on that device.")
+            is TogetherEvent.PairingCode -> if (state.value is State.GettingCode || state.value is State.Code) {
+                mutableState.value = State.Code(event.code, event.qrSize, event.qrModules, event.expiresAtMs)
+            }
+            is TogetherEvent.PairingInvite -> if (state.value is State.Code) {
+                mutableState.value = State.Invited(event.from, event.relay)
+            }
             is TogetherEvent.Error -> when (event.context) {
-                "pair_send" -> toast("Couldn't invite that TV: ${event.message}")
+                "pair_send" -> toast("Couldn't send the invite: ${event.message}")
+                "pair" -> when (state.value) {
+                    State.GettingCode -> mutableState.value =
+                        State.Ended("Couldn't get a code. Check your connection and try again.")
+                    is State.Code -> mutableState.value =
+                        State.Ended("That code stopped working. Get a new one to join.")
+                    is State.Invited, State.Starting -> mutableState.value = State.Ended("Couldn't join that watch party.")
+                    else -> Unit
+                }
                 "host", "join" -> mutableState.value = State.Ended(event.message.ifBlank { "Couldn't join." })
                 else -> Log.w(TAG, "Watch Together ${event.context} failed")
             }
