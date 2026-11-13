@@ -114,7 +114,7 @@ ThemeData buildPbTheme() {
     highlightColor: PbColors.accent.withValues(alpha: 0.12),
     splashColor: PbColors.accent.withValues(alpha: 0.12),
     iconTheme: const IconThemeData(color: PbColors.text),
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: PbColors.card,
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -193,7 +193,7 @@ ThemeData buildPbTheme() {
       color: PbColors.accent,
       linearTrackColor: PbColors.outlineSoft,
     ),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: PbColors.card,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
