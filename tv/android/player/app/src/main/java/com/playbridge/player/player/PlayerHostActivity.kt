@@ -251,6 +251,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var partyReady = false
     /** Whether the party video is live, once the renderer has said; null until then. */
     private var partyLive: Boolean? = null
+    /** Reported as live only because the length hadn't arrived in time. */
+    private var partyReportedLiveEarly = false
     private val reportPartyLoadedAnyway = Runnable { reportPartyLoaded(force = true) }
     private val partyPlayer = object : TvTogether.PartyPlayer {
         override fun applyPartyCommand(command: TogetherPlayerCommand) = this@PlayerHostActivity.applyPartyCommand(command)
@@ -2344,6 +2346,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     nowMs = SystemClock.elapsedRealtime(),
                 )
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
+                // The length arrived: report the video if it was waiting for it, or correct
+                // an earlier "live" report.
+                val lateItem = partyItem
+                if (lateItem != null && lastDurationMs > 0L && partyLive != true) {
+                    if (!partyLoadedReported) {
+                        reportPartyLoaded(force = false)
+                    } else if (partyReportedLiveEarly) {
+                        partyReportedLiveEarly = false
+                        TvTogether.onLoaded(lateItem, lastDurationMs)
+                    }
+                }
                 if (partyItem != null) {
                     TvTogether.onPlayerState(lastPositionMs, rendererPlaying, state == "buffering")
                 }
@@ -3507,6 +3520,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         partyLoadedReported = false
         partyReady = false
         partyLive = null
+        partyReportedLiveEarly = false
         mainHandler.removeCallbacks(reportPartyLoadedAnyway)
         if (item != null) {
             TvTogether.attach(partyPlayer, item)
@@ -3575,7 +3589,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (partyLoadedReported || !partyReady) return
         // Not told in time whether it's live: a video with a known length isn't.
         val live = partyLive ?: if (force) lastDurationMs <= 0 else return
+        // On demand, but the length isn't in yet: wait for it (the next state event),
+        // or the party takes it for live and stops syncing this TV's position.
+        if (!live && lastDurationMs <= 0L && !force) return
         partyLoadedReported = true
+        partyReportedLiveEarly = (live && partyLive == null) || (!live && lastDurationMs <= 0L)
         mainHandler.removeCallbacks(reportPartyLoadedAnyway)
         TvTogether.onLoaded(item, if (live) 0L else lastDurationMs)
     }
