@@ -49,7 +49,8 @@ void main() {
   test('data URLs are never stored and bookmarks survive a reload', () async {
     SharedPreferences.setMockInitialValues({});
     final store = await HistoryStore.load(recentsEnabled: true);
-    await store.bookmark(url: 'data:text/plain,x', title: 'D', recordable: true);
+    await store.bookmark(
+        url: 'data:text/plain,x', title: 'D', recordable: true);
     expect(store.items, isEmpty);
 
     await store.bookmark(

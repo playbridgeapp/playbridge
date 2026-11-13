@@ -182,8 +182,7 @@ void main() {
     await tester.tap(find.text('Not available now · 1'));
     await tester.pump();
     expect(find.text('Den TV'), findsOneWidget);
-    expect(
-        find.textContaining('not found right now'), findsOneWidget);
+    expect(find.textContaining('not found right now'), findsOneWidget);
     // Pairing needed for the new PlayBridge TV, plain connect for Roku.
     expect(find.text('Pair'), findsOneWidget);
     expect(find.text('Connect'), findsOneWidget);
