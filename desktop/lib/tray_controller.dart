@@ -37,7 +37,9 @@ Menu buildTrayMenu({
       nearbyDeviceKeys.contains(device.identityKey) ||
       device.identityKey == activeDeviceKey;
 
-  final devices = savedDevices.toList()
+  // Only devices found on the network (or the active one) are listed; the
+  // rest are reached through "Find or manage devices…".
+  final devices = savedDevices.where(isAvailable).toList()
     ..sort((a, b) {
       final protocol = a.protocol.index.compareTo(b.protocol.index);
       if (protocol != 0) return protocol;
@@ -48,14 +50,7 @@ Menu buildTrayMenu({
       return name != 0 ? name : a.identityKey.compareTo(b.identityKey);
     });
   return Menu(items: [
-    MenuItem(key: 'show', label: 'Show window'),
-    if (controllerOrigin != null) ...[
-      MenuItem(label: 'Controlled by $controllerOrigin', disabled: true),
-      MenuItem(key: 'linked_unlink', label: 'Unlink'),
-    ],
-    MenuItem.separator(),
-    MenuItem(label: 'Sender', disabled: true),
-    MenuItem(label: senderStatus, disabled: true),
+    // Now playing first, with its controls, then where it plays, then status.
     MenuItem(
       label: hasRemotePlayback
           ? '${remotePlaybackState == 'paused' ? 'Paused' : 'Now playing'}: '
@@ -67,36 +62,33 @@ Menu buildTrayMenu({
       MenuItem(
         key: 'sender_play_pause',
         label: switch (remotePlaybackState) {
-          'playing' => 'Pause playback',
-          'paused' => 'Resume playback',
+          'playing' => 'Pause',
+          'paused' => 'Resume',
           _ => 'Play / pause',
         },
       ),
-      MenuItem(key: 'sender_stop', label: 'Stop playback'),
+      MenuItem(key: 'sender_stop', label: 'Stop'),
     ],
     MenuItem.separator(),
-    MenuItem.submenu(
-      label: 'Saved devices',
-      submenu: Menu(items: [
-        if (devices.isEmpty)
-          MenuItem(label: 'No saved devices', disabled: true),
-        for (final protocol in TvProtocol.values)
-          if (devices.any((device) => device.protocol == protocol)) ...[
-            if (protocol != devices.first.protocol) MenuItem.separator(),
-            MenuItem(label: protocol.label, disabled: true),
-            for (final device in devices.where((d) => d.protocol == protocol))
-              MenuItem.checkbox(
-                key: 'sender_device:${device.identityKey}',
-                label: '${device.name.isEmpty ? 'Unnamed device' : device.name}'
-                    '${isAvailable(device) ? '' : ' · Not found'}',
-                checked: device.identityKey == activeDeviceKey,
-                disabled: device.identityKey == activeDeviceKey,
-              ),
-          ],
-        MenuItem.separator(),
-        MenuItem(key: 'sender_manage', label: 'Find or manage devices…'),
-      ]),
-    ),
+    MenuItem(label: 'Play on', disabled: true),
+    if (devices.isEmpty)
+      MenuItem(
+        label: savedDevices.isEmpty ? 'No saved devices' : 'No devices found',
+        disabled: true,
+      ),
+    for (final protocol in TvProtocol.values)
+      if (devices.any((device) => device.protocol == protocol)) ...[
+        if (protocol != devices.first.protocol) MenuItem.separator(),
+        MenuItem(label: protocol.label, disabled: true),
+        for (final device in devices.where((d) => d.protocol == protocol))
+          MenuItem.checkbox(
+            key: 'sender_device:${device.identityKey}',
+            label: device.name.isEmpty ? 'Unnamed device' : device.name,
+            checked: device.identityKey == activeDeviceKey,
+            disabled: device.identityKey == activeDeviceKey,
+          ),
+      ],
+    MenuItem(key: 'sender_manage', label: 'Find or manage devices…'),
     MenuItem.submenu(
       label:
           'Send mode: ${routeThroughDesktop ? 'Via this desktop' : 'Direct to TV'}',
@@ -119,9 +111,13 @@ Menu buildTrayMenu({
       disabled: !canDisconnect,
     ),
     MenuItem.separator(),
-    MenuItem(label: 'Receiver', disabled: true),
+    MenuItem(label: senderStatus, disabled: true),
     MenuItem(label: receiverStatus, disabled: true),
-    MenuItem.separator(),
+    MenuItem(key: 'show', label: 'Open PlayBridge'),
+    if (controllerOrigin != null) ...[
+      MenuItem(label: 'Controlled by $controllerOrigin', disabled: true),
+      MenuItem(key: 'linked_unlink', label: 'Unlink'),
+    ],
     MenuItem.checkbox(
       key: 'launch_at_login',
       label: 'Launch at login',

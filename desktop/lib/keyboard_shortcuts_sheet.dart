@@ -1,106 +1,146 @@
 import 'package:flutter/material.dart';
 
+import 'ui/pb_theme.dart';
+import 'ui/pb_widgets.dart';
+
 /// Modal cheat sheet for desktop player shortcuts.
 Future<void> showKeyboardShortcutsSheet(BuildContext context) {
   return showDialog<void>(
     context: context,
-    barrierColor: Colors.black54,
-    builder: (ctx) => const _KeyboardShortcutsDialog(),
+    barrierColor: PbColors.scrim,
+    builder: (ctx) => const KeyboardShortcutsDialog(),
   );
 }
 
-class _KeyboardShortcutsDialog extends StatelessWidget {
-  const _KeyboardShortcutsDialog();
+/// Every keyboard shortcut registered in `main.dart` (Space, F, I, Z, G, H,
+/// [, ], arrows, PgUp, PgDn, ?), plus the mouse and drag-and-drop gestures.
+/// Keep in sync with the `Shortcuts` map there; do not list unregistered keys.
+const List<(String, String)> kKeyboardShortcuts = [
+  ('Play or pause', 'Space'),
+  ('Full screen', 'F'),
+  ('Back or forward 10 seconds', '\u2190 \u2192'),
+  ('Hold to move 50 seconds', 'hold \u2190 \u2192'),
+  ('Volume', '\u2191 \u2193'),
+  ('Previous or next chapter', 'PgUp PgDn'),
+  ('Slower or faster', '[ ]'),
+  ('Fit, zoom or fill the picture', 'Z'),
+  ('Subtitles earlier or later', 'G H'),
+  ('Bookmark this video', 'B'),
+  ('Playback stats', 'I'),
+  ('This list', '?'),
+];
 
-  static const _rows = <(String, String)>[
-    ('Space', 'Play / pause'),
-    ('← / →', 'Seek −10s / +10s (hold: −50s / +50s)'),
-    ('↑ / ↓', 'Volume up / down'),
-    ('PgUp / PgDn', 'Previous / next chapter'),
-    ('[ / ]', 'Playback speed down / up'),
-    ('Z', 'Cycle Fit / Zoom / Fill'),
-    ('G / H', 'Subtitle delay −100ms / +100ms'),
-    ('F', 'Toggle fullscreen'),
-    ('I', 'Playback stats & proxy status overlay'),
-    ('?', 'This shortcuts list'),
-    ('Click video', 'Play / pause'),
-    ('Double-click video', 'Fullscreen'),
-    ('Drop files / URLs', 'Play here (or cast if TV linked)'),
-  ];
+const List<String> kShortcutGestures = [
+  'Click the video to play or pause. Double-click for full screen.',
+  'Drop files or links on the window to play them here or send them to the '
+      'connected TV.',
+];
+
+class KeyboardShortcutsDialog extends StatelessWidget {
+  const KeyboardShortcutsDialog({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: const Color(0xFF1A1A1A),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: PbColors.card,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: PbColors.outline),
+      ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 16, 16),
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
-                  const Icon(Icons.keyboard, size: 20, color: Colors.white54),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Keyboard & gestures',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Semantics(
+                      header: true,
+                      child: const Text(
+                        'Keyboard and mouse',
+                        style: TextStyle(
+                            fontSize: 22, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
-                  IconButton(
+                  PbIconButton(
+                    icon: Icons.close,
                     tooltip: 'Close',
+                    variant: PbButtonVariant.secondary,
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, size: 18),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              for (final row in _rows)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
+              const SizedBox(height: 20),
+              LayoutBuilder(
+                builder: (context, c) {
+                  final twoColumns = c.maxWidth >= 560;
+                  final rows = [
+                    for (final r in kKeyboardShortcuts)
+                      _ShortcutRow(label: r.$1, keys: r.$2),
+                  ];
+                  if (!twoColumns) {
+                    return Column(children: rows);
+                  }
+                  final half = (rows.length + 1) ~/ 2;
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SizedBox(
-                        width: 150,
-                        child: Text(
-                          row.$1,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.tealAccent.withValues(alpha: 0.9),
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: Text(
-                          row.$2,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.white70,
-                          ),
-                        ),
-                      ),
+                      Expanded(child: Column(children: rows.sublist(0, half))),
+                      const SizedBox(width: 32),
+                      Expanded(child: Column(children: rows.sublist(half))),
                     ],
-                  ),
-                ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Got it'),
-                ),
+                  );
+                },
               ),
+              const SizedBox(height: 20),
+              for (final g in kShortcutGestures)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(g,
+                      style: const TextStyle(color: PbColors.textSecondary)),
+                ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ShortcutRow extends StatelessWidget {
+  const _ShortcutRow({required this.label, required this.keys});
+
+  final String label;
+  final String keys;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 40),
+        child: Row(
+          children: [
+            Expanded(child: Text(label)),
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: PbColors.background,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                keys,
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
       ),
     );

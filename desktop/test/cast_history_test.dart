@@ -91,7 +91,7 @@ void main() {
   test(
       'receiver carries wire privacy into history storage and preserves existing entries',
       () async {
-    final history = await HistoryStore.load();
+    final history = await HistoryStore.load(recentsEnabled: true);
     const url = 'https://example.com/video';
     await history.addOrBump(url: url, title: 'Existing');
     await history.toggleFavorite(url);
@@ -123,7 +123,8 @@ void main() {
         url: publicItem.url,
         title: publicItem.title,
         skipHistory: publicItem.skipHistory);
-    expect((await HistoryStore.load()).items.single.title, 'Public');
+    expect((await HistoryStore.load(recentsEnabled: true)).items.single.title,
+        'Public');
     expect(history.items.single.isFavorite, isTrue);
   });
 }

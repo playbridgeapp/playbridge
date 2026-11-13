@@ -5,6 +5,7 @@ import 'engines/mpv_engine.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'stream_proxy_server.dart';
+import 'ui/pb_theme.dart';
 
 /// Translucent overlay showing live MPV playback stats (dropped frames, fps,
 /// bitrate, etc.). While mounted it turns on stats collection in the engine and
@@ -68,9 +69,8 @@ class _StatsOverlayState extends State<StatsOverlay> {
           constraints: const BoxConstraints(maxWidth: 520),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.62),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            color: PbColors.playerSurface.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(PbMetrics.rowRadius),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -152,7 +152,7 @@ class _Heading extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         text.toUpperCase(),
         style: const TextStyle(
-          color: Colors.tealAccent,
+          color: PbColors.accent,
           fontSize: 10,
           letterSpacing: 1.2,
           fontWeight: FontWeight.w700,
@@ -177,13 +177,14 @@ class _Row extends StatelessWidget {
             width: 64,
             child: Text(
               label,
-              style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+              style:
+                  const TextStyle(color: PbColors.playerText, fontSize: 11.5),
             ),
           ),
           Text(
             value,
             style: TextStyle(
-              color: warn ? Colors.amberAccent : Colors.white,
+              color: warn ? PbColors.warning : Colors.white,
               fontSize: 11.5,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -218,7 +219,8 @@ class _CopyableUrlState extends State<_CopyableUrl> {
             width: 64,
             child: Text(
               widget.label,
-              style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+              style:
+                  const TextStyle(color: PbColors.playerText, fontSize: 11.5),
             ),
           ),
           Flexible(
@@ -227,7 +229,7 @@ class _CopyableUrlState extends State<_CopyableUrl> {
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
               style: const TextStyle(
-                color: Colors.white70,
+                color: PbColors.playerText,
                 fontSize: 11.5,
                 fontFeatures: [FontFeature.tabularFigures()],
               ),
@@ -243,7 +245,7 @@ class _CopyableUrlState extends State<_CopyableUrl> {
               tooltip: 'Copy URL',
               icon: Icon(
                 _copied ? Icons.check : Icons.copy,
-                color: _copied ? Colors.greenAccent : Colors.white54,
+                color: _copied ? PbColors.success : PbColors.playerText,
               ),
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: widget.url));

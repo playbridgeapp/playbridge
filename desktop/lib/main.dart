@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show ImageFilter, PlatformDispatcher;
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_selector/file_selector.dart';
 
 import 'logging/log_store.dart';
 import 'logging/memory_diagnostics.dart';
@@ -18,8 +18,10 @@ import 'discovery.dart';
 import 'engines/mpv_engine.dart';
 import 'extension_bridge.dart';
 import 'linked_playback_banner.dart';
-import 'favorites_screen.dart';
-import 'history_screen.dart';
+import 'bookmarks_screen.dart';
+import 'devices_screen.dart';
+import 'home_screen.dart';
+import 'bookmark_thumbnail.dart';
 import 'history_store.dart';
 import 'keyboard_shortcuts_sheet.dart';
 import 'media_kit_initializer.dart';
@@ -28,8 +30,8 @@ import 'media_kind.dart';
 import 'media_presentation_surface.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
-import 'pairing_store.dart';
 import 'pair_screen.dart';
+import 'pairing_store.dart';
 import 'playback_clock.dart';
 import 'playback_error_notifier.dart';
 import 'playback_osd.dart';
@@ -37,25 +39,19 @@ import 'playback_speed.dart';
 import 'subtitle_delay.dart';
 import 'video_scaling.dart';
 import 'player_chrome_policy.dart';
-import 'player_control_visibility.dart';
-import 'player_mini_bar.dart';
 import 'playback_surface.dart'
     show subtitleBottomFull, subtitleBottomHidden, subtitleBottomMini;
 import 'player_controller.dart';
 import 'player_surface_click.dart';
 import 'player_engine.dart';
 import 'preplay_overlay.dart';
-import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
 import 'screen_mirror_surface.dart';
-import 'seek_hover_preview.dart';
 import 'settings_screen.dart';
 import 'skip_segment.dart';
 import 'skip_segment_fetcher.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
-import 'engines/tv_cast_media_preparer.dart';
-import 'shader_background.dart';
 import 'stats_overlay.dart';
 import 'still_watching_controller.dart';
 import 'still_watching_prompt.dart';
@@ -67,6 +63,15 @@ import 'tv_sender_controller.dart';
 import 'update/app_version.dart';
 import 'update/update_checker.dart';
 import 'update/update_gate.dart';
+import 'player/player_chrome.dart';
+import 'shell/main_drop_overlay.dart';
+import 'shell/nav_sidebar.dart';
+import 'shell/paste_link_dialog.dart';
+import 'shell/play_request.dart';
+import 'shell/play_target.dart';
+import 'shell/playback_bar.dart';
+import 'shell/receiver_status.dart';
+import 'ui/pb_theme.dart';
 
 Future<void> main(List<String> args) async {
   final launchRequest = InstanceLaunchRequest.fromArgs(args);
@@ -191,20 +196,17 @@ class NextChapterIntent extends Intent {
   const NextChapterIntent();
 }
 
+class BookmarkIntent extends Intent {
+  const BookmarkIntent();
+}
+
 class StatsToggleIntent extends Intent {
   const StatsToggleIntent();
 }
 
-// Navigation destinations — nowPlaying is a mode, not a persistent screen.
-enum _Dest {
-  cast,
-  sendToTv,
-  nowCasting,
-  history,
-  favorites,
-  together,
-  settings
-}
+// Navigation destinations. The local player is a mode (_showingVideo), not a
+// destination; nowCasting is reached from Devices and is not in the sidebar.
+enum _Dest { home, bookmarks, devices, nowCasting, together, settings }
 
 class ReceiverApp extends StatefulWidget {
   const ReceiverApp({
@@ -268,7 +270,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   String? _serverError;
   String? _discoveryError;
 
-  _Dest _dest = _Dest.cast;
+  _Dest _dest = _Dest.home;
   bool _showingVideo = false;
   bool _isFullScreen = false;
 
@@ -282,7 +284,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Timer? _chromeIdleTimer;
   bool _pointerIdle = false;
   int _menusOpen = 0;
-  bool _playlistDrawerOpen = false;
   bool _scrubbing = false;
   final _surfaceClick = PlayerSurfaceClick();
 
@@ -292,6 +293,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _mainDragging = false;
 
+  /// Pointer position over the drop surface while dragging (drives the split
+  /// "Play here" / "Send to TV" highlight).
+  final ValueNotifier<Offset?> _dropPointer = ValueNotifier<Offset?>(null);
+  final GlobalKey _dropAreaKey = GlobalKey(debugLabel: 'main-drop-area');
+
   final _skipFetcher = SkipSegmentFetcher();
   List<SkipSegment> _skipSegments = const [];
   SkipSegment? _lastSkipped;
@@ -300,24 +306,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   int _seekRepeatCount = 0;
   LogicalKeyboardKey? _seekRepeatKey;
 
-  static const _mediaExts = {
-    'mp4',
-    'm4v',
-    'mkv',
-    'webm',
-    'avi',
-    'mov',
-    'wmv',
-    'flv',
-    'mp3',
-    'flac',
-    'm4a',
-    'aac',
-    'ogg',
-    'wav',
-  };
-
-  bool get _chromePinned => _menusOpen > 0 || _playlistDrawerOpen || _scrubbing;
+  bool get _chromePinned => _menusOpen > 0 || _scrubbing;
   bool get _playing => PlayerChromePolicy.isPlaying(_player.state);
   (String?, int) get _currentItem => (_player.playbackId, _player.currentIndex);
   bool get _started => _startedItem == _currentItem;
@@ -607,24 +596,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (playbackError != _lastReportedPlaybackError) {
       _lastReportedPlaybackError = playbackError;
       if (mounted) {
-        final messenger = ScaffoldMessenger.maybeOf(context);
+        // The in-window notice is the cast-failed corner card in UpdateGate.
         if (playbackError != null) {
           unawaited(_notifyPlaybackError(playbackError));
-          messenger?.hideCurrentSnackBar();
-          messenger?.showSnackBar(
-            SnackBar(
-              content: Text(playbackError),
-              duration: const Duration(seconds: 5),
-              action: SnackBarAction(
-                label: 'Dismiss',
-                onPressed: () {
-                  _sender.clearPlaybackError();
-                },
-              ),
-            ),
-          );
         } else {
-          messenger?.hideCurrentSnackBar();
           unawaited(_closePlaybackErrorNotification());
         }
       }
@@ -637,10 +612,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         // Cast started → jump to the Now Playing tab.
         _dest = _Dest.nowCasting;
       } else if (!casting && _dest == _Dest.nowCasting) {
-        // Cast ended while on Now Playing (now hidden) → fall back to Send to TV.
-        _dest = _Dest.sendToTv;
+        // Cast ended while on the now-casting screen → fall back to Devices.
+        _dest = _Dest.devices;
       }
-      // setState also rebuilds the sidebar so the Now Playing item shows/hides.
     });
   }
 
@@ -738,7 +712,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Future<void> _showSenderScreen() async {
     if (!mounted) return;
     setState(() {
-      _dest = _Dest.sendToTv;
+      _dest = _Dest.devices;
       _showingVideo = false;
     });
     await windowManager.show();
@@ -890,14 +864,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _lastPairingPhase = phase;
     if (!pairing || wasPairing) return;
 
+    // The pairing card is drawn over whatever screen is current (including
+    // video), so there is nothing to navigate away from.
     unawaited(_revealWindow(fullScreen: false));
-    if (!mounted) return;
-    setState(() {
-      // Pair UI lives on the Cast tab; leave the video view so the code is
-      // visible even if something was playing.
-      _dest = _Dest.cast;
-      _showingVideo = false;
-    });
   }
 
   @override
@@ -1108,42 +1077,76 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd(playbackSpeedLabel(next));
   }
 
-  /// Drop files/URLs onto the main surface: cast if a TV is linked, else play here.
+  /// Window-wide drop: with a TV selected the surface is split in two and the
+  /// half under the pointer decides; otherwise everything plays here.
   void _onMainDrop(DropDoneDetails detail) {
     setState(() => _mainDragging = false);
-    final files = <File>[];
-    final urls = <String>[];
-    for (final f in detail.files) {
-      final path = f.path;
-      if (path.startsWith('http://') || path.startsWith('https://')) {
-        urls.add(path);
-        continue;
-      }
-      final ext = _fileExt(path);
-      if (_mediaExts.contains(ext)) files.add(File(path));
+    _dropPointer.value = null;
+    final request = classifyPlayablePaths(detail.files.map((f) => f.path));
+    var toTv = playsOnTv(_sender);
+    final size = _dropAreaKey.currentContext?.size;
+    if (toTv && size != null) {
+      toTv = dropZoneAt(detail.localPosition, size) == DropZone.tv;
     }
-    if (files.isEmpty && urls.isEmpty) {
+    unawaited(_playOrSend(request, toTv: toTv));
+  }
+
+  Future<void> _chooseFiles() async {
+    final group = XTypeGroup(
+      label: 'Media',
+      extensions: kPlayableExtensions.toList(),
+    );
+    final picked = await openFiles(acceptedTypeGroups: [group]);
+    if (picked.isEmpty || !mounted) return;
+    await _playOrSend(classifyPlayablePaths(picked.map((f) => f.path)));
+  }
+
+  Future<void> _pasteLink() async {
+    // A context below the Navigator (the app-level ones sit above it).
+    final navContext = _keyboardFocusNode.context;
+    if (navContext == null) return;
+    final link = await showPasteLinkDialog(navContext);
+    if (link == null || !mounted) return;
+    await _playOrSend(PlayRequest(urls: [link]));
+  }
+
+  /// Makes sure the selected TV is connected, reporting progress and failure.
+  Future<bool> _ensureTvReady() async {
+    if (_sender.selectedTvConnected) return true;
+    final name = _sender.selectionName;
+    _showOsd('Connecting to $name\u2026');
+    final ok = await _sender.ensureSelectedConnected();
+    if (!mounted) return false;
+    if (!ok) _showOsd("Couldn't connect to $name");
+    return ok;
+  }
+
+  /// The one entry point for "play this": files and links either go to the
+  /// selected TV ([TvSenderController] cast paths) or play on this computer.
+  /// [toTv] overrides the current "Plays on" choice (used by the split drop).
+  Future<void> _playOrSend(PlayRequest request, {bool? toTv}) async {
+    if (request.isEmpty) {
       _showOsd('No media in drop');
       return;
     }
+    final files = request.files;
+    final urls = request.urls;
 
-    final tvLinked = _sender.isConnected;
-    if (tvLinked) {
+    if (toTv ?? playsOnTv(_sender)) {
+      if (!await _ensureTvReady()) return;
       if (files.isNotEmpty) {
         unawaited(_sender.castLocalFiles(files).then((ok) {
           if (!ok) _showOsd(_sender.lastCastError ?? 'Cast failed');
         }));
       }
       for (final u in urls) {
-        _sender.castUrl(u);
+        unawaited(_sender.castUrl(u));
       }
-      if (files.isNotEmpty || urls.isNotEmpty) {
-        _showOsd('Casting…');
-        setState(() {
-          _dest = _Dest.nowCasting;
-          _showingVideo = false;
-        });
-      }
+      _showOsd('Casting\u2026');
+      setState(() {
+        _dest = _Dest.nowCasting;
+        _showingVideo = false;
+      });
       return;
     }
 
@@ -1163,20 +1166,100 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           localUserInitiated: true,
         ),
     ];
-    if (items.isEmpty) return;
     unawaited(_player.playPlaylist(items, 0, isRemote: true));
     _showOsd(items.length == 1 ? 'Playing' : '${items.length} items');
   }
 
-  static String _fileExt(String path) {
-    final dot = path.lastIndexOf('.');
-    return dot >= 0 ? path.substring(dot + 1).toLowerCase() : '';
+  /// A bookmark or recent item from Home, on the current "Plays on" choice.
+  Future<void> _playHistoryItem(PlayHistoryItem item) async {
+    if (playsOnTv(_sender)) {
+      if (!await _ensureTvReady()) return;
+      unawaited(_sender.castUrl(
+        item.url,
+        headers: item.headers,
+        title: item.title,
+        contentType: item.contentType,
+        playlistBody: item.playlistBody,
+        audioUrl: item.audioUrl,
+      ));
+      _showOsd('Casting\u2026');
+      setState(() {
+        _dest = _Dest.nowCasting;
+        _showingVideo = false;
+      });
+      return;
+    }
+    unawaited(_player.playUrl(
+      item.url,
+      title: item.title,
+      headers: item.headers,
+      playlistBody: item.playlistBody,
+      audioUrl: item.audioUrl,
+      contentType: item.contentType,
+      declaredMediaKind: item.mediaKind,
+      displayDurationMs: item.displayDurationMs,
+      localUserInitiated: true,
+    ));
   }
+
+  /// What is playing now, if it can be bookmarked. Every kind of cast can,
+  /// including local files and private casts; only data URLs cannot.
+  QueueItem? get _bookmarkableItem {
+    final idx = _player.currentIndex;
+    if (idx < 0 || idx >= _player.queue.length) return null;
+    final item = _player.queue[idx];
+    return HistoryStore.canBookmark(item.originalUrl ?? item.url) ? item : null;
+  }
+
+  Future<void> _toggleCurrentBookmark() async {
+    final item = _bookmarkableItem;
+    if (item == null) return;
+    final url = item.originalUrl ?? item.url;
+    final history = widget.history;
+    if (history.isBookmarked(url)) {
+      await history.toggleFavorite(url);
+    } else {
+      // Use the cast's own artwork when it has some; otherwise keep a frame
+      // of the video as the card's picture.
+      final artwork = [item.backdropUrl, item.posterUrl, item.artworkUrl]
+          .whereType<String>()
+          .where((u) => u.isNotEmpty)
+          .firstOrNull;
+      String? thumbnail;
+      if (artwork == null && item.mediaKind == MediaKind.video) {
+        final frame = await _player.engine.captureFrame();
+        if (frame != null) thumbnail = await saveBookmarkThumbnail(frame, url);
+      }
+      await history.bookmark(
+        url: url,
+        title: item.title,
+        imageUrl: artwork,
+        thumbnailPath: thumbnail,
+        // A private cast stays out of Recent even when bookmarked.
+        recordable: !item.skipHistory,
+        playlistBody: item.playlistBody,
+        audioUrl: item.audioUrl,
+        headers: item.originalHeaders ?? item.headers,
+        contentType: item.contentType,
+        mediaKind: item.mediaKind.wireValue,
+        displayDurationMs: item.displayDurationMs,
+      );
+    }
+    if (!mounted) return;
+    setState(() {});
+    _showOsd(history.isBookmarked(url) ? 'Bookmarked' : 'Bookmark removed');
+  }
+
+  void _openDevices() => setState(() {
+        _dest = _Dest.devices;
+        _showingVideo = false;
+      });
 
   @override
   void dispose() {
     _memoryDiagnostics.dispose();
     _osdTimer?.cancel();
+    _dropPointer.dispose();
     _chromeIdleTimer?.cancel();
     _keyboardFocusNode.dispose();
     windowManager.removeListener(this);
@@ -1241,18 +1324,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         title: 'PlayBridge Desktop',
         scaffoldMessengerKey: _messengerKey,
         debugShowCheckedModeBanner: false,
-        theme: ThemeData.dark(useMaterial3: true).copyWith(
-          scaffoldBackgroundColor: Colors.transparent,
-          canvasColor: Colors.transparent,
-          // Brand font shared with the Android apps. Applies app-wide through the
-          // text theme; explicit monospace styles (logs) are unaffected.
-          textTheme: ThemeData.dark(useMaterial3: true).textTheme.apply(
-                fontFamily: 'Poppins',
-              ),
-          primaryTextTheme: ThemeData.dark(useMaterial3: true)
-              .primaryTextTheme
-              .apply(fontFamily: 'Poppins'),
-        ),
+        theme: buildPbTheme(),
         home: Shortcuts(
           shortcuts: {
             const SingleActivator(LogicalKeyboardKey.space):
@@ -1280,6 +1352,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const NextChapterIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyB):
+                const BookmarkIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
                 const ToggleFullScreenIntent(),
             // `?` is Shift+/ on US keyboards.
@@ -1363,6 +1437,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                   return null;
                 },
               ),
+              BookmarkIntent: CallbackAction<BookmarkIntent>(
+                onInvoke: (_) {
+                  unawaited(_toggleCurrentBookmark());
+                  return null;
+                },
+              ),
               StatsToggleIntent: CallbackAction<StatsToggleIntent>(
                 onInvoke: (_) {
                   _showStats.value = !_showStats.value;
@@ -1430,11 +1510,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 },
                 onPointerHover: (_) => _stillWatching.recordUserActivity(),
                 child: Scaffold(
-                  backgroundColor: Colors.transparent,
+                  backgroundColor: PbColors.background,
                   // Deliberately NOT listening to _player here: it notifies on every
-                  // ~200ms position tick, and rebuilding the whole shell (backdrop
-                  // blurs included) at 5Hz steals frame time from the video. The
-                  // controls/status bars listen to the player themselves; structural
+                  // ~200ms position tick, and rebuilding the whole shell at 5Hz steals frame time from the video. The
+                  // controls bar listens to the player itself; structural
                   // changes arrive via the coarse setState in _handlePlayerChange.
                   body: AnimatedBuilder(
                     animation: Listenable.merge([_server, _showStats]),
@@ -1452,54 +1531,22 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                       return Stack(
                         fit: StackFit.expand,
                         children: [
-                          // Aurora background — only rendered when the user is NOT
-                          // watching video. Six-octave FBM + domain warping is expensive,
-                          // and during playback the video texture covers most of it
-                          // anyway, so leaving it running just steals GPU from mpv.
-                          if (!_showingVideo && !screenMirroring)
-                            const Positioned.fill(child: AuroraBackground()),
-
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               if (!hideChrome)
-                                SizedBox(
+                                const SizedBox(
                                   height: titleBarHeight,
-                                  child: ClipRect(
-                                    child: BackdropFilter(
-                                      filter: ImageFilter.blur(
-                                          sigmaX: 30, sigmaY: 30),
-                                      child: DragToMoveArea(
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              begin: Alignment.topCenter,
-                                              end: Alignment.bottomCenter,
-                                              colors: [
-                                                Colors.white
-                                                    .withValues(alpha: 0.10),
-                                                Colors.black
-                                                    .withValues(alpha: 0.20),
-                                              ],
-                                            ),
-                                            border: Border(
-                                              bottom: BorderSide(
-                                                color: Colors.white
-                                                    .withValues(alpha: 0.08),
-                                              ),
-                                            ),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              const SizedBox(width: 78),
-                                              Expanded(
-                                                child: Container(
-                                                    color: Colors.transparent),
-                                              ),
-                                            ],
-                                          ),
+                                  child: DragToMoveArea(
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: PbMetrics.sidebarWidth,
+                                          child: ColoredBox(
+                                              color: PbColors.sidebar),
                                         ),
-                                      ),
+                                        Expanded(child: SizedBox.expand()),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -1511,28 +1558,39 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                       CrossAxisAlignment.stretch,
                                   children: [
                                     if (!hideChrome)
-                                      _NavSidebar(
-                                        dest: _dest,
-                                        showingVideo: _showingVideo,
-                                        hasMedia: hasMedia,
+                                      NavSidebar(
+                                        selected: _showingVideo ||
+                                                screenMirroring ||
+                                                _dest == _Dest.nowCasting
+                                            ? null
+                                            : _sidebarSelection,
+                                        status: _receiverStatus,
                                         screenMirroring: screenMirroring,
-                                        playerState: _player.state,
-                                        senderCasting: _sender.isCasting,
-                                        enableHistory:
-                                            widget.store.enableHistory,
-                                        onDestSelect: (d) => setState(() {
-                                          _dest = d;
+                                        onSelect: (d) => setState(() {
+                                          _dest = switch (d) {
+                                            NavDest.home => _Dest.home,
+                                            NavDest.bookmarks =>
+                                              _Dest.bookmarks,
+                                            NavDest.devices => _Dest.devices,
+                                            NavDest.together => _Dest.together,
+                                            NavDest.settings => _Dest.settings,
+                                          };
                                           _showingVideo = false;
                                         }),
-                                        onShowVideo: () => setState(
-                                            () => _showingVideo = true),
                                       ),
                                     Expanded(
                                       child: DropTarget(
-                                        onDragEntered: (_) => setState(
-                                            () => _mainDragging = true),
-                                        onDragExited: (_) => setState(
-                                            () => _mainDragging = false),
+                                        key: _dropAreaKey,
+                                        onDragEntered: (d) {
+                                          _dropPointer.value = d.localPosition;
+                                          setState(() => _mainDragging = true);
+                                        },
+                                        onDragUpdated: (d) => _dropPointer
+                                            .value = d.localPosition,
+                                        onDragExited: (_) {
+                                          _dropPointer.value = null;
+                                          setState(() => _mainDragging = false);
+                                        },
                                         onDragDone: _onMainDrop,
                                         child: MouseRegion(
                                           cursor: _chromeMode ==
@@ -1613,6 +1671,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   child: ScreenMirrorSurface(
                                                     receiver:
                                                         _server.screenMirror,
+                                                    onToggleFullScreen: () =>
+                                                        unawaited(
+                                                            _toggleFullScreen()),
                                                   ),
                                                 ),
                                               if (_showingVideo &&
@@ -1622,7 +1683,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                       MediaKind.video &&
                                                   _player.engine is MpvEngine)
                                                 Positioned(
-                                                  top: 16,
+                                                  top: 88,
                                                   left: 16,
                                                   child: StatsOverlay(
                                                     engine: _player.engine
@@ -1630,30 +1691,34 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     player: _player,
                                                   ),
                                                 ),
+                                              // Title, controls, skip button and the
+                                              // Subtitles / Queue / More side panels.
                                               if (_showingVideo && hasMedia)
-                                                Positioned(
-                                                  left: 0,
-                                                  right: 0,
-                                                  bottom: 0,
-                                                  child: _PlayerControlsBar(
+                                                Positioned.fill(
+                                                  child: PlayerChrome(
                                                     player: _player,
-                                                    store: widget.store,
+                                                    onBack: () => setState(() =>
+                                                        _showingVideo = false),
+                                                    onBookmark: _bookmarkableItem ==
+                                                            null
+                                                        ? null
+                                                        : _toggleCurrentBookmark,
+                                                    bookmarked: _bookmarkableItem ==
+                                                            null
+                                                        ? false
+                                                        : widget.history.isBookmarked(
+                                                            _bookmarkableItem!
+                                                                    .originalUrl ??
+                                                                _bookmarkableItem!
+                                                                    .url),
                                                     mode: _chromeMode,
                                                     showQueueControls: hasQueue,
-                                                    onTogglePlaylist: () {
-                                                      setState(() =>
-                                                          _playlistDrawerOpen =
-                                                              !_playlistDrawerOpen);
-                                                      _applyChrome();
-                                                    },
-                                                    playlistOpen:
-                                                        _playlistDrawerOpen,
-                                                    onMenuOpened: () {
+                                                    onPanelOpened: () {
                                                       setState(
                                                           () => _menusOpen++);
                                                       _applyChrome();
                                                     },
-                                                    onMenuClosed: () {
+                                                    onPanelClosed: () {
                                                       setState(
                                                         () => _menusOpen =
                                                             (_menusOpen - 1)
@@ -1680,57 +1745,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                             : 'Proxied playback');
                                                       }
                                                     },
-                                                  ),
-                                                ),
-                                              if (_showingVideo &&
-                                                  hasQueue &&
-                                                  _playlistDrawerOpen)
-                                                Positioned(
-                                                  right: 0,
-                                                  top: 0,
-                                                  bottom: 0,
-                                                  width: 360,
-                                                  child: _PlaylistDrawer(
-                                                    player: _player,
-                                                    onClose: () {
-                                                      setState(() =>
-                                                          _playlistDrawerOpen =
-                                                              false);
-                                                      _applyChrome();
-                                                    },
-                                                  ),
-                                                ),
-                                              // Title scrim along the top. Full chrome only —
-                                              // the mini bar has no title.
-                                              if (_showingVideo && hasMedia)
-                                                Positioned(
-                                                  left: 0,
-                                                  right: 0,
-                                                  top: 0,
-                                                  child: _TitleOverlay(
-                                                    player: _player,
-                                                    visible: _chromeMode ==
-                                                        PlayerChromeMode.full,
-                                                  ),
-                                                ),
-                                              if (_showingVideo &&
-                                                  hasMedia &&
-                                                  _prePlayItem == null)
-                                                Positioned(
-                                                  right: 24,
-                                                  bottom: switch (_chromeMode) {
-                                                    PlayerChromeMode.full =>
-                                                      120,
-                                                    PlayerChromeMode.mini => 64,
-                                                    PlayerChromeMode.hidden =>
-                                                      28,
-                                                  },
-                                                  child: _SkipSegmentButton(
-                                                    player: _player,
+                                                    showStats: _showStats,
                                                     segments: _skipSegments,
                                                     lastSkipped: _lastSkipped,
                                                     autoPrefs: _skipAutoPrefs,
                                                     onSkip: _performSkip,
+                                                    prePlayActive:
+                                                        _prePlayItem != null,
                                                   ),
                                                 ),
                                               // Pre-play screen for casts with
@@ -1743,15 +1764,32 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                         _prePlayItem!.url),
                                                     item: _prePlayItem!,
                                                     onStart: _dismissPrePlay,
+                                                    onStartOver: () {
+                                                      unawaited(_player
+                                                          .seek(Duration.zero));
+                                                      _dismissPrePlay();
+                                                    },
                                                   ),
                                                 ),
                                               if (_mainDragging)
                                                 Positioned.fill(
-                                                  child: _MainDropOverlay(
-                                                    targetName: _sender
-                                                            .isConnected
-                                                        ? _sender.activeTv?.name
-                                                        : null,
+                                                  child: ListenableBuilder(
+                                                    listenable:
+                                                        Listenable.merge([
+                                                      _sender,
+                                                      _dropPointer
+                                                    ]),
+                                                    builder: (context, _) =>
+                                                        MainDropOverlay(
+                                                      computerName: widget
+                                                          .store.deviceName,
+                                                      tvName: playsOnTv(_sender)
+                                                          ? _sender
+                                                              .selectionName
+                                                          : null,
+                                                      pointer:
+                                                          _dropPointer.value,
+                                                    ),
                                                   ),
                                                 ),
                                               if (_stillWatching.isPrompting)
@@ -1764,6 +1802,9 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     onContinue: () => unawaited(
                                                         _stillWatching
                                                             .continueWatching()),
+                                                    onStopNow: () => unawaited(
+                                                        _stillWatching
+                                                            .stopWatching()),
                                                   ),
                                                 ),
                                             ],
@@ -1774,18 +1815,39 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                   ],
                                 ),
                               ),
-                              if (!hideChrome)
-                                _StatusBar(
+                              // Playback bar: something is playing but its full
+                              // view (player or remote view) is not on screen.
+                              if (!hideChrome &&
+                                  !screenMirroring &&
+                                  hasMedia &&
+                                  !_showingVideo)
+                                LocalPlaybackBar(
                                   player: _player,
-                                  hostInfo: _hostInfo,
-                                  serverError: _serverError,
-                                  discoveryError: _discoveryError,
-                                  phase: _server.phase,
+                                  onOpen: () =>
+                                      setState(() => _showingVideo = true),
+                                )
+                              else if (!hideChrome &&
+                                  !screenMirroring &&
+                                  !hasMedia &&
+                                  _sender.isCasting &&
+                                  _dest != _Dest.nowCasting)
+                                RemotePlaybackBar(
+                                  sender: _sender,
+                                  onOpen: () =>
+                                      setState(() => _dest = _Dest.nowCasting),
                                 ),
                             ],
                           ),
                           // Self-update dialogs/banners; renders nothing while idle.
-                          UpdateGate(checker: _updateChecker),
+                          UpdateGate(checker: _updateChecker, sender: _sender),
+                          // Phone pairing request, over whatever is on screen.
+                          Positioned.fill(
+                            child: PairRequestOverlay(
+                              phase: _server.phase,
+                              pendingRequest: _server.pendingPairingRequest,
+                              onDeny: _server.denyPairing,
+                            ),
+                          ),
                           if (_osdMessage != null)
                             Positioned.fill(
                                 child: PlaybackOsd(message: _osdMessage!)),
@@ -1800,47 +1862,79 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         ));
   }
 
+  /// Sidebar highlight for the current destination. The remote view has no
+  /// sidebar entry (it opens from the playback bar), so it highlights nothing.
+  NavDest get _sidebarSelection => switch (_dest) {
+        _Dest.home => NavDest.home,
+        _Dest.bookmarks => NavDest.bookmarks,
+        _Dest.devices || _Dest.nowCasting => NavDest.devices,
+        _Dest.together => NavDest.together,
+        _Dest.settings => NavDest.settings,
+      };
+
+  ReceiverStatusInfo get _receiverStatus => describeReceiverStatus(
+        deviceName: widget.store.deviceName,
+        hostInfo: _hostInfo,
+        phase: _server.phase,
+        serverError: _serverError,
+        discoveryError: _discoveryError,
+        tlsError: _server.tlsError,
+      );
+
   Widget _buildScreen() {
     return switch (_dest) {
-      _Dest.cast => PairScreen(
+      _Dest.home => HomeScreen(
           store: widget.store,
+          history: widget.history,
+          sender: _sender,
           deviceName: widget.store.deviceName,
-          hostInfo: _hostInfo,
-          port: _server.wssPort ?? kDefaultPort,
-          phase: _server.phase,
-          discoveryError: _discoveryError,
-          tlsError: _server.tlsError,
-          pendingRequest: _server.pendingPairingRequest,
-          onDeny: _server.denyPairing,
+          status: _receiverStatus,
+          enableHistory:
+              widget.history.recentsEnabled && widget.store.enableHistory,
+          onChooseFiles: () => unawaited(_chooseFiles()),
+          onPasteLink: () => unawaited(_pasteLink()),
+          onFindDevices: _openDevices,
+          onSeeBookmarks: () => setState(() => _dest = _Dest.bookmarks),
+          onPlayHistoryItem: (item) => unawaited(_playHistoryItem(item)),
+          onMessage: _showOsd,
+        ),
+      _Dest.bookmarks => BookmarksScreen(
+          store: widget.history,
+          player: _player,
+          enableHistory:
+              widget.history.recentsEnabled && widget.store.enableHistory,
+          onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
+          onPlayOnTarget: playsOnTv(_sender)
+              ? (item) => unawaited(_playHistoryItem(item))
+              : null,
+          playOnTargetLabel: 'Play on ${_sender.selectionName}',
+        ),
+      _Dest.devices => DevicesScreen(
+          sender: _sender,
+          store: widget.store,
           onPairedDevicesChanged: _server.refreshAuthorizedTokens,
+          onOpenNowCasting: () => setState(() => _dest = _Dest.nowCasting),
         ),
-      _Dest.sendToTv => SendToTvScreen(controller: _sender),
-      _Dest.nowCasting => NowCastingScreen(controller: _sender),
-      _Dest.history => HistoryScreen(
-          store: widget.history,
-          player: _player,
-          onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
+      _Dest.nowCasting => NowCastingScreen(
+          controller: _sender,
+          onBack: () => setState(() => _dest = _Dest.home),
         ),
-      _Dest.favorites => FavoritesScreen(
-          store: widget.history,
-          player: _player,
-          onNavigateToNowPlaying: () => setState(() => _showingVideo = true),
+      _Dest.together => TogetherScreen(
+          together: _together,
+          onOpenVideo: _player.queue.isEmpty
+              ? null
+              : () => setState(() => _showingVideo = true),
         ),
-      _Dest.together => TogetherScreen(together: _together),
       _Dest.settings => SettingsScreen(
           server: _server,
           store: widget.store,
           player: _player,
           showStats: _showStats,
           updateChecker: _updateChecker,
-          onNavigateToCast: () => setState(() => _dest = _Dest.cast),
+          onNavigateToCast: () => setState(() => _dest = _Dest.home),
           onSettingsChanged: () {
             _applyStillWatchingSettings();
-            setState(() {
-              if (!widget.store.enableHistory && _dest == _Dest.history) {
-                _dest = _Dest.cast;
-              }
-            });
+            setState(() {});
           },
           onQuit: () => unawaited(_tray.quit()),
         ),
@@ -1849,1650 +1943,3 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 }
 
 // ─── Navigation sidebar ──────────────────────────────────────────────────────
-
-class _NavSidebar extends StatelessWidget {
-  const _NavSidebar({
-    required this.dest,
-    required this.showingVideo,
-    required this.hasMedia,
-    required this.screenMirroring,
-    required this.playerState,
-    required this.senderCasting,
-    required this.enableHistory,
-    required this.onDestSelect,
-    required this.onShowVideo,
-  });
-
-  final _Dest dest;
-  final bool showingVideo;
-  final bool hasMedia;
-  final bool screenMirroring;
-  final String playerState;
-  final bool senderCasting;
-  final bool enableHistory;
-  final ValueChanged<_Dest> onDestSelect;
-  final VoidCallback onShowVideo;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-        child: Container(
-          width: 196,
-          decoration: BoxDecoration(
-            // Subtle vertical gradient gives the sidebar a glassy, slightly
-            // brighter top-edge highlight — like Apple's NSVisualEffectView.
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.white.withValues(alpha: 0.08),
-                Colors.black.withValues(alpha: 0.28),
-              ],
-            ),
-            border: Border(
-              right: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-                child: Row(
-                  children: [
-                    const Icon(Icons.cast_connected,
-                        size: 16, color: Colors.tealAccent),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'PlayBridge',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // ── Receive: this computer plays what a phone casts to it ──
-              const _NavSectionLabel('Receive'),
-              if (screenMirroring)
-                _NavItem(
-                  icon: Icons.screen_share,
-                  label: 'Screen Mirror',
-                  selected: true,
-                  accent: true,
-                  onTap: () {},
-                ),
-              if (hasMedia)
-                _NavItem(
-                  icon: playerState == 'playing'
-                      ? Icons.play_circle
-                      : Icons.pause_circle_outline,
-                  label: 'Now Playing',
-                  selected: showingVideo && !screenMirroring,
-                  accent: true,
-                  onTap: onShowVideo,
-                ),
-              _NavItem(
-                icon: Icons.cast,
-                label: 'Cast',
-                selected:
-                    !screenMirroring && !showingVideo && dest == _Dest.cast,
-                onTap: () => onDestSelect(_Dest.cast),
-              ),
-              if (enableHistory)
-                _NavItem(
-                  icon: Icons.history,
-                  label: 'History',
-                  selected: !screenMirroring &&
-                      !showingVideo &&
-                      dest == _Dest.history,
-                  onTap: () => onDestSelect(_Dest.history),
-                ),
-              _NavItem(
-                icon: Icons.star_border,
-                label: 'Favorites',
-                selected: !screenMirroring &&
-                    !showingVideo &&
-                    dest == _Dest.favorites,
-                onTap: () => onDestSelect(_Dest.favorites),
-              ),
-              _NavItem(
-                icon: Icons.groups_outlined,
-                label: 'Watch Together',
-                selected:
-                    !screenMirroring && !showingVideo && dest == _Dest.together,
-                onTap: () => onDestSelect(_Dest.together),
-              ),
-              // ── Send: this computer casts to a TV ──
-              const _NavSectionLabel('Send'),
-              _NavItem(
-                icon: Icons.connected_tv,
-                label: 'Send to TV',
-                selected:
-                    !screenMirroring && !showingVideo && dest == _Dest.sendToTv,
-                onTap: () => onDestSelect(_Dest.sendToTv),
-              ),
-              // Only while something is casting — hidden when nothing is playing.
-              if (senderCasting)
-                _NavItem(
-                  icon: Icons.cast_connected,
-                  label: 'Now Playing',
-                  selected: !screenMirroring &&
-                      !showingVideo &&
-                      dest == _Dest.nowCasting,
-                  onTap: () => onDestSelect(_Dest.nowCasting),
-                ),
-              const Spacer(),
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Divider(
-                  height: 1,
-                  color: Colors.white.withValues(alpha: 0.08),
-                ),
-              ),
-              _NavItem(
-                icon: Icons.settings,
-                label: 'Settings',
-                selected:
-                    !screenMirroring && !showingVideo && dest == _Dest.settings,
-                onTap: () => onDestSelect(_Dest.settings),
-              ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Small uppercase section header in the sidebar (e.g. "Receive", "Send").
-class _NavSectionLabel extends StatelessWidget {
-  const _NavSectionLabel(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-      child: Text(
-        label.toUpperCase(),
-        style: TextStyle(
-          fontSize: 10,
-          letterSpacing: 1.0,
-          fontWeight: FontWeight.w700,
-          color: Colors.white.withValues(alpha: 0.38),
-        ),
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.accent = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool accent;
-
-  @override
-  Widget build(BuildContext context) {
-    final fg =
-        selected ? (accent ? Colors.tealAccent : Colors.white) : Colors.white54;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: selected
-                ? BoxDecoration(
-                    color: accent
-                        ? Colors.tealAccent.withValues(alpha: 0.12)
-                        : Colors.white.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  )
-                : null,
-            child: Row(
-              children: [
-                Icon(icon, size: 18, color: fg),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: fg,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Status bar ──────────────────────────────────────────────────────────────
-
-class _StatusBar extends StatelessWidget {
-  const _StatusBar({
-    required this.player,
-    required this.hostInfo,
-    required this.serverError,
-    required this.discoveryError,
-    required this.phase,
-  });
-
-  final PlayerController player;
-  final String hostInfo;
-  final String? serverError;
-  final String? discoveryError;
-  final PairingPhase phase;
-
-  @override
-  Widget build(BuildContext context) {
-    // Self-listening for the live position readout (see _PlayerControlsBar).
-    return ListenableBuilder(
-      listenable: player,
-      builder: (context, _) => _buildBar(context),
-    );
-  }
-
-  Widget _buildBar(BuildContext context) {
-    final pos = Duration(milliseconds: player.positionMs);
-    final dur = Duration(milliseconds: player.durationMs);
-    final phaseLabel = switch (phase) {
-      PairingPhase.idle => 'waiting for phone',
-      PairingPhase.awaitingApproval => 'awaiting approval…',
-      PairingPhase.awaitingCode => 'pairing…',
-      PairingPhase.authenticated => 'paired',
-    };
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.35),
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                serverError != null
-                    ? Icons.error_outline
-                    : Icons.cast_connected,
-                color:
-                    serverError != null ? Colors.redAccent : Colors.greenAccent,
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  serverError != null
-                      ? 'Server failed: $serverError'
-                      : '$phaseLabel  ·  ${player.state}  ·  ${_engineLabel(player.engineType)}'
-                          '${player.currentTitle != null ? '  ·  ${player.currentTitle}' : ''}'
-                          '${discoveryError != null ? '  ·  mDNS: $discoveryError' : ''}',
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: Colors.white54),
-                ),
-              ),
-              if (player.durationMs > 0)
-                Text(
-                  '${_fmt(pos)} / ${_fmt(dur)}',
-                  style: const TextStyle(fontSize: 12, color: Colors.white38),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _engineLabel(EngineType type) {
-    return switch (type) {
-      EngineType.mpvInternal => 'MPV',
-    };
-  }
-
-  static String _fmt(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return h > 0 ? '$h:$m:$s' : '$m:$s';
-  }
-}
-
-class _SkipSegmentButton extends StatelessWidget {
-  const _SkipSegmentButton({
-    required this.player,
-    required this.segments,
-    required this.lastSkipped,
-    required this.autoPrefs,
-    required this.onSkip,
-  });
-
-  final PlayerController player;
-  final List<SkipSegment> segments;
-  final SkipSegment? lastSkipped;
-  final SkipAutoPrefs autoPrefs;
-  final ValueChanged<SkipSegment> onSkip;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: player,
-      builder: (context, _) {
-        final active = activeSkipSegment(
-          segments: segments,
-          positionMs: player.positionMs,
-          lastSkipped: lastSkipped,
-        );
-        if (active == null) return const SizedBox.shrink();
-        if (autoPrefs.enabledFor(active.type)) {
-          WidgetsBinding.instance.addPostFrameCallback((_) => onSkip(active));
-          return const SizedBox.shrink();
-        }
-        return Material(
-          color: Colors.black.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(6),
-          child: InkWell(
-            onTap: () => onSkip(active),
-            borderRadius: BorderRadius.circular(6),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Text(
-                skipButtonLabel(active.type),
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ─── Player controls bar ─────────────────────────────────────────────────────
-
-/// Auto-hiding title scrim along the top of the video — mirrors the controls
-/// bar visibility so the title is visible in fullscreen on hover.
-class _TitleOverlay extends StatelessWidget {
-  const _TitleOverlay({required this.player, required this.visible});
-
-  final PlayerController player;
-  final bool visible;
-
-  @override
-  Widget build(BuildContext context) {
-    final idx = player.currentIndex;
-    final item =
-        (idx >= 0 && idx < player.queue.length) ? player.queue[idx] : null;
-    final title = item?.title ?? player.currentTitle ?? '';
-    if (title.isEmpty) return const SizedBox.shrink();
-
-    final hasEpisode = item?.season != null && item?.episode != null;
-    final subtitle = hasEpisode
-        ? 'S${item!.season} · E${item.episode}'
-            '${item.episodeTitle != null ? '  ${item.episodeTitle}' : ''}'
-        : null;
-
-    return IgnorePointer(
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 150),
-        opacity: visible ? 1.0 : 0.0,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xB3000000), Color(0x00000000)],
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
-              if (subtitle != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.white.withValues(alpha: 0.75),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlayerControlsBar extends StatefulWidget {
-  const _PlayerControlsBar({
-    required this.player,
-    required this.store,
-    required this.mode,
-    required this.showQueueControls,
-    required this.onTogglePlaylist,
-    required this.playlistOpen,
-    required this.onMenuOpened,
-    required this.onMenuClosed,
-    required this.onScrubbing,
-    required this.isFullScreen,
-    required this.onToggleFullScreen,
-    required this.onToggleProxy,
-  });
-
-  final PlayerController player;
-  final PairingStore store;
-  final PlayerChromeMode mode;
-  final bool showQueueControls;
-  final VoidCallback onTogglePlaylist;
-  final bool playlistOpen;
-  final VoidCallback onMenuOpened;
-  final VoidCallback onMenuClosed;
-  final ValueChanged<bool> onScrubbing;
-  final bool isFullScreen;
-  final VoidCallback onToggleFullScreen;
-  final Future<void> Function() onToggleProxy;
-
-  @override
-  State<_PlayerControlsBar> createState() => _PlayerControlsBarState();
-}
-
-class _PlayerControlsBarState extends State<_PlayerControlsBar> {
-  double? _dragValue;
-
-  /// Layout locked for the duration of a scrub so the slider under the pointer
-  /// is not replaced when scrubbing pins chrome to full.
-  PlayerChromeMode? _scrubLayout;
-
-  /// Survives the mini → full swap when a track menu pins chrome.
-  final _audioMenuKey = GlobalKey(debugLabel: 'audio-menu');
-  final _subtitleMenuKey = GlobalKey(debugLabel: 'subtitle-menu');
-
-  void _beginSeek(double value) {
-    _scrubLayout ??= widget.mode == PlayerChromeMode.full
-        ? PlayerChromeMode.full
-        : PlayerChromeMode.mini;
-    if (_dragValue == null) widget.onScrubbing(true);
-    setState(() => _dragValue = value);
-  }
-
-  void _endSeek(double value) {
-    widget.player.seek(Duration(milliseconds: value.toInt()));
-    setState(() {
-      _dragValue = null;
-      _scrubLayout = null;
-    });
-    widget.onScrubbing(false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Self-listening: the shell no longer rebuilds on player ticks, so the
-    // scrubber/buttons subscribe to the player here, scoping the ~5Hz position
-    // rebuilds to just this bar.
-    return ListenableBuilder(
-      listenable: widget.player,
-      builder: (context, _) => _buildBar(context),
-    );
-  }
-
-  Widget _buildBar(BuildContext context) {
-    final p = widget.player;
-    final hasMedia = p.queue.isNotEmpty &&
-        p.currentIndex >= 0 &&
-        p.currentIndex < p.queue.length;
-    final dur = p.durationMs.toDouble();
-    final pos =
-        (_dragValue ?? p.positionMs.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0);
-    final hasDuration = dur > 0;
-    final mediaKind = p.currentMediaKind ?? MediaKind.video;
-    final isImage = mediaKind == MediaKind.image;
-    final layout = _scrubLayout ??
-        (widget.mode == PlayerChromeMode.full
-            ? PlayerChromeMode.full
-            : PlayerChromeMode.mini);
-    final showFull = layout == PlayerChromeMode.full;
-    final interactive =
-        widget.mode != PlayerChromeMode.hidden || _scrubLayout != null;
-    final vis = PlayerControlVisibility.resolve(
-      realAudioCount: realTrackCount(p.tracks.audio),
-      realSubtitleCount: realTrackCount(p.tracks.subtitle),
-      queueLength: p.queue.length,
-      isLinux: Platform.isLinux,
-      hasMedia: hasMedia,
-      isVideo: mediaKind == MediaKind.video,
-      isImage: isImage,
-    );
-
-    if (!showFull) {
-      final trackMenus = p.engineType == EngineType.mpvInternal;
-      return IgnorePointer(
-        ignoring: !interactive,
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 150),
-          opacity: interactive ? 1.0 : 0.0,
-          child: PlayerMiniBar(
-            mediaKind: mediaKind,
-            realAudioCount: realTrackCount(p.tracks.audio),
-            realSubtitleCount: realTrackCount(p.tracks.subtitle),
-            playing: p.state == 'playing',
-            hasDuration: hasDuration,
-            positionMs: pos.toInt(),
-            durationMs: p.durationMs,
-            isFullScreen: widget.isFullScreen,
-            onPlayPause: () => p.state == 'playing' ? p.pause() : p.resume(),
-            onStop: () => p.stop(),
-            onToggleFullScreen: widget.onToggleFullScreen,
-            onSeekChanged: _beginSeek,
-            onSeekEnd: _endSeek,
-            chapters: p.chapters,
-            audioMenu: trackMenus
-                ? _AudioMenuButton(
-                    player: p,
-                    onOpened: widget.onMenuOpened,
-                    onClosed: widget.onMenuClosed,
-                    compact: true,
-                    menuKey: _audioMenuKey,
-                  )
-                : null,
-            subtitleMenu: trackMenus
-                ? _SubtitleMenuButton(
-                    player: p,
-                    onOpened: widget.onMenuOpened,
-                    onClosed: widget.onMenuClosed,
-                    compact: true,
-                    menuKey: _subtitleMenuKey,
-                  )
-                : null,
-          ),
-        ),
-      );
-    }
-
-    return IgnorePointer(
-      ignoring: false,
-      child: AnimatedOpacity(
-        duration: const Duration(milliseconds: 150),
-        opacity: 1.0,
-        child: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.4),
-                border: Border(
-                  top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Scrubber / slideshow progress
-                  if (!isImage || hasDuration)
-                    Row(
-                      children: [
-                        SizedBox(
-                          width: 56,
-                          child: Text(
-                            formatControlElapsed(pos.toInt()),
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.white70),
-                          ),
-                        ),
-                        Expanded(
-                          child: SeekHoverPreview(
-                            durationMs: p.durationMs,
-                            chapters: p.chapters,
-                            // Overlay radius 12 is wider than the thumb.
-                            trackInset: 12,
-                            enabled: hasDuration && !isImage,
-                            child: ExcludeFocus(
-                              child: SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 3,
-                                  trackShape: ChapterSliderTrackShape(
-                                    fractions: chapterFractions(
-                                        p.chapters, p.durationMs),
-                                  ),
-                                  thumbShape: const RoundSliderThumbShape(
-                                      enabledThumbRadius: 6),
-                                  overlayShape: const RoundSliderOverlayShape(
-                                      overlayRadius: 12),
-                                ),
-                                child: Slider(
-                                  min: 0,
-                                  max: hasDuration ? dur : 1,
-                                  value: pos,
-                                  onChanged: hasDuration && !isImage
-                                      ? _beginSeek
-                                      : null,
-                                  onChangeEnd:
-                                      hasDuration && !isImage ? _endSeek : null,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 56,
-                          child: Text(
-                            formatRemainingClock(pos.toInt(), p.durationMs),
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.white70),
-                          ),
-                        ),
-                      ],
-                    ),
-                  Row(
-                    children: [
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: 'Previous',
-                          icon: const Icon(Icons.skip_previous),
-                          onPressed: p.hasPrevious ? () => p.previous() : null,
-                        ),
-                      IconButton(
-                        tooltip: p.state == 'playing' ? 'Pause' : 'Play',
-                        icon: Icon(
-                          p.state == 'playing' ? Icons.pause : Icons.play_arrow,
-                        ),
-                        onPressed: !isImage || hasDuration
-                            ? () =>
-                                p.state == 'playing' ? p.pause() : p.resume()
-                            : null,
-                      ),
-                      IconButton(
-                        tooltip: 'Stop',
-                        icon: const Icon(Icons.stop),
-                        onPressed: () => p.stop(),
-                      ),
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: 'Next',
-                          icon: const Icon(Icons.skip_next),
-                          onPressed: p.hasNext ? () => p.next() : null,
-                        ),
-                      const SizedBox(width: 12),
-                      if (widget.showQueueControls)
-                        Text(
-                          '${p.currentIndex + 1} / ${p.queue.length}',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      const Spacer(),
-                      if (p.engineType == EngineType.mpvInternal &&
-                          !isImage) ...[
-                        if (vis.videoRenderer)
-                          _VideoOutputMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                        if (vis.audioMenu)
-                          _AudioMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                            menuKey: _audioMenuKey,
-                          ),
-                        if (vis.subtitleMenu)
-                          _SubtitleMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                            menuKey: _subtitleMenuKey,
-                          ),
-                        if (vis.speedMenu)
-                          _SpeedMenuButton(
-                            player: p,
-                            enabled: hasMedia,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                        if ((p.playbackRate - 1.0).abs() > 0.001)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Text(
-                              playbackSpeedChip(p.playbackRate),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.tealAccent,
-                              ),
-                            ),
-                          ),
-                        if (vis.playbackSettings)
-                          _PlaybackSettingsButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                      ],
-                      if (vis.proxyToggle)
-                        IconButton(
-                          tooltip: p.isCurrentItemProxied
-                              ? 'Switch to direct playback'
-                              : 'Route through proxy',
-                          icon: Icon(
-                            p.isCurrentItemProxied
-                                ? Icons.shield
-                                : Icons.shield_outlined,
-                            color: p.isCurrentItemProxied
-                                ? Colors.tealAccent
-                                : null,
-                          ),
-                          onPressed: p.proxyToggleInProgress
-                              ? null
-                              : widget.onToggleProxy,
-                        ),
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: widget.playlistOpen
-                              ? 'Hide playlist'
-                              : 'Show playlist',
-                          icon: Icon(
-                            widget.playlistOpen
-                                ? Icons.playlist_remove
-                                : Icons.playlist_play,
-                          ),
-                          onPressed: widget.onTogglePlaylist,
-                        ),
-                      if (vis.externalPlayer)
-                        IconButton(
-                          tooltip: 'Play in external player (mpv/VLC)',
-                          icon: const Icon(Icons.open_in_new),
-                          onPressed: () async {
-                            if (p.state == 'playing') {
-                              p.pause();
-                            }
-                            final currentItem = p.queue[p.currentIndex];
-                            await _openInExternalPlayer(context, currentItem);
-                          },
-                        ),
-                      IconButton(
-                        tooltip: widget.isFullScreen
-                            ? 'Exit fullscreen'
-                            : 'Fullscreen',
-                        icon: Icon(
-                          widget.isFullScreen
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
-                        ),
-                        onPressed: widget.onToggleFullScreen,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _openInExternalPlayer(
-    BuildContext context,
-    QueueItem item,
-  ) async {
-    // Prefer original CDN URL + demuxed handoff fields. A bare proxied
-    // video-only playlist loses companion audio and the quality ladder.
-    final sourceUrl = item.originalUrl ?? item.url;
-    final headers = item.originalHeaders ?? item.headers ?? const {};
-    String proxiedUrl = item.url;
-
-    try {
-      final prepared = await TvCastMediaPreparer.prepare(
-        url: sourceUrl,
-        lanHost: '127.0.0.1',
-        headers: headers,
-        playlistBody: item.playlistBody,
-        audioUrl: item.audioUrl,
-      );
-      proxiedUrl = prepared.url;
-      stdout.writeln(
-        '[external-player] prepared ${prepared.strategy} → $proxiedUrl',
-      );
-    } catch (e) {
-      stdout.writeln('[external-player] prepare failed: $e');
-      // Fall back: proxy the single URL if it is not already loopback.
-      if (!sourceUrl.contains('127.0.0.1') &&
-          !sourceUrl.contains('localhost')) {
-        try {
-          proxiedUrl = await StreamProxyServer.instance.registerSession(
-            sourceUrl,
-            headers,
-            allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
-            remoteOrigin: item.proxyRemoteOrigin,
-          );
-        } catch (e2) {
-          stdout.writeln(
-              '[external-player] Failed to register proxy session: $e2');
-        }
-      }
-    }
-    if (!context.mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF161B22),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: Colors.white10),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.open_in_new, color: Colors.tealAccent),
-              SizedBox(width: 10),
-              Text(
-                'Open in External Player',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Copy the proxied stream URL to play it in your local player:',
-                style: TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.black38,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        proxiedUrl,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'Copy URL',
-                      iconSize: 16,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      icon: const Icon(Icons.copy, color: Colors.white54),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: proxiedUrl));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('URL copied to clipboard!'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Terminal Commands:',
-                style: TextStyle(
-                  color: Colors.tealAccent,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 8),
-              _buildCommandRow(context, 'MPV', 'mpv "$proxiedUrl"'),
-              const SizedBox(height: 6),
-              _buildCommandRow(context, 'VLC', 'vlc "$proxiedUrl"'),
-              const SizedBox(height: 14),
-              const Text(
-                'How to play:\n1. Open your terminal / command prompt.\n2. Copy and paste one of the command lines above, then press Enter.',
-                style:
-                    TextStyle(color: Colors.white54, fontSize: 11, height: 1.4),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(),
-              child:
-                  const Text('Close', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () async {
-                Navigator.of(dialogCtx).pop();
-                await _launchDirectly(proxiedUrl);
-              },
-              child: const Text('Launch Automatically'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildCommandRow(BuildContext context, String app, String command) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black12,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 40,
-            child: Text(
-              app,
-              style: const TextStyle(
-                color: Colors.white38,
-                fontWeight: FontWeight.bold,
-                fontSize: 11,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              command,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontFamily: 'monospace',
-                fontSize: 11,
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          IconButton(
-            tooltip: 'Copy command',
-            iconSize: 14,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            icon: const Icon(Icons.copy, color: Colors.white30),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: command));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('$app command copied to clipboard!'),
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<bool> _launchDirectly(String url) async {
-    if (Platform.isMacOS) {
-      try {
-        await Process.start('open', ['-a', 'mpv', url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('open', ['-a', 'VLC', url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('open', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-    } else if (Platform.isWindows) {
-      try {
-        await Process.start('mpv.exe', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('vlc.exe', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('cmd.exe', ['/c', 'start', '', url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-    } else if (Platform.isLinux) {
-      try {
-        await Process.start('mpv', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('vlc', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-      try {
-        await Process.start('xdg-open', [url]);
-        return true;
-      } catch (_) {
-        // Launcher missing; try the next one. The URL must not be logged.
-      }
-    }
-    debugPrint('[player] no external player could be launched');
-    return false;
-  }
-}
-
-// ─── Audio track menu ─────────────────────────────────────────────────────────
-
-class _VideoOutputMenuButton extends StatelessWidget {
-  const _VideoOutputMenuButton({
-    required this.player,
-    required this.onOpened,
-    required this.onClosed,
-  });
-
-  final PlayerController player;
-  final VoidCallback onOpened;
-  final VoidCallback onClosed;
-
-  @override
-  Widget build(BuildContext context) {
-    final hardware = player.hardwareVideoOutput;
-    return PopupMenuButton<bool>(
-      tooltip: 'Video renderer',
-      enabled: !player.videoOutputChanging,
-      icon: Icon(
-        hardware ? Icons.memory : Icons.developer_board,
-        color: hardware ? Colors.tealAccent : null,
-      ),
-      onOpened: onOpened,
-      onCanceled: onClosed,
-      onSelected: (value) {
-        onClosed();
-        unawaited(player.setHardwareVideoOutput(value));
-      },
-      itemBuilder: (context) => [
-        CheckedPopupMenuItem<bool>(
-          value: false,
-          checked: !hardware,
-          child: const Text('Software renderer'),
-        ),
-        CheckedPopupMenuItem<bool>(
-          value: true,
-          checked: hardware,
-          child: const Text('Hardware renderer'),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Playback speed menu ──────────────────────────────────────────────────────
-
-class _SpeedMenuButton extends StatelessWidget {
-  const _SpeedMenuButton({
-    required this.player,
-    required this.enabled,
-    required this.onOpened,
-    required this.onClosed,
-  });
-
-  final PlayerController player;
-  final bool enabled;
-  final VoidCallback onOpened;
-  final VoidCallback onClosed;
-
-  @override
-  Widget build(BuildContext context) {
-    final current = player.playbackRate;
-    return PopupMenuButton<double>(
-      tooltip: 'Playback speed',
-      icon: const Icon(Icons.speed),
-      enabled: enabled,
-      onOpened: onOpened,
-      onCanceled: onClosed,
-      onSelected: (rate) {
-        onClosed();
-        unawaited(player.setPlaybackRate(rate));
-      },
-      itemBuilder: (context) => [
-        for (final rate in playbackSpeeds)
-          CheckedPopupMenuItem<double>(
-            value: rate,
-            checked: rate == current,
-            child: Text(playbackSpeedLabel(rate)),
-          ),
-      ],
-    );
-  }
-}
-
-// ─── Playback settings (scaling + subtitle delay) ─────────────────────────────
-
-class _PlaybackSettingsButton extends StatelessWidget {
-  const _PlaybackSettingsButton({
-    required this.player,
-    required this.onOpened,
-    required this.onClosed,
-  });
-
-  final PlayerController player;
-  final VoidCallback onOpened;
-  final VoidCallback onClosed;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: 'Picture & subtitle sync',
-      icon: const Icon(Icons.tune),
-      onPressed: () async {
-        onOpened();
-        await showDialog<void>(
-          context: context,
-          barrierColor: Colors.black54,
-          builder: (ctx) => _PlaybackSettingsDialog(player: player),
-        );
-        onClosed();
-      },
-    );
-  }
-}
-
-class _PlaybackSettingsDialog extends StatelessWidget {
-  const _PlaybackSettingsDialog({required this.player});
-
-  final PlayerController player;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: player,
-      builder: (context, _) {
-        final scaling = player.videoScaling;
-        final delay = player.subtitleDelayMs;
-        final subOn = player.subtitleActive;
-        return Dialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.tune, size: 18, color: Colors.white54),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Playback settings',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close, size: 18),
-                      ),
-                    ],
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4, bottom: 8),
-                    child: Text(
-                      'Picture',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white54,
-                      ),
-                    ),
-                  ),
-                  for (final mode in videoScalingModes)
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        scaling == mode
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_off,
-                        size: 18,
-                        color: scaling == mode ? Colors.tealAccent : null,
-                      ),
-                      title: Text(videoScalingLabel(mode)),
-                      subtitle: Text(
-                        videoScalingDescription(mode),
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Colors.white54,
-                        ),
-                      ),
-                      onTap: () => unawaited(player.setVideoScaling(mode)),
-                    ),
-                  if (subOn) ...[
-                    const Padding(
-                      padding: EdgeInsets.only(top: 12, bottom: 8),
-                      child: Text(
-                        'Subtitle delay',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white54,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      subtitleDelayLabel(delay),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        color: delay == 0 ? Colors.white : Colors.tealAccent,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => unawaited(
-                              player
-                                  .adjustSubtitleDelayMs(-subtitleDelayFineMs),
-                            ),
-                            child: const Text('−100ms'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => unawaited(
-                              player.adjustSubtitleDelayMs(subtitleDelayFineMs),
-                            ),
-                            child: const Text('+100ms'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => unawaited(
-                              player.adjustSubtitleDelayMs(
-                                  -subtitleDelayCoarseMs),
-                            ),
-                            child: const Text('−1s'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => unawaited(
-                              player
-                                  .adjustSubtitleDelayMs(subtitleDelayCoarseMs),
-                            ),
-                            child: const Text('+1s'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (delay != 0)
-                      TextButton(
-                        onPressed: () => unawaited(player.resetSubtitleDelay()),
-                        child: const Text('Reset'),
-                      ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-final _compactMenuStyle = IconButton.styleFrom(
-  minimumSize: const Size(32, 32),
-  padding: const EdgeInsets.all(4),
-  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  visualDensity: VisualDensity.compact,
-);
-
-class _AudioMenuButton extends StatelessWidget {
-  const _AudioMenuButton({
-    required this.player,
-    required this.onOpened,
-    required this.onClosed,
-    this.compact = false,
-    this.menuKey,
-  });
-
-  final PlayerController player;
-  final VoidCallback onOpened;
-  final VoidCallback onClosed;
-  final bool compact;
-  final Key? menuKey;
-
-  @override
-  Widget build(BuildContext context) {
-    final real = player.tracks.audio
-        .where((t) => t.id != 'no' && t.id != 'auto')
-        .toList(growable: false);
-    return PopupMenuButton<AudioTrack>(
-      key: menuKey,
-      tooltip: 'Audio track',
-      icon: const Icon(Icons.audiotrack),
-      iconSize: compact ? 18 : null,
-      padding: compact ? const EdgeInsets.all(4) : const EdgeInsets.all(8),
-      style: compact ? _compactMenuStyle : null,
-      enabled: real.length >= 2,
-      onOpened: onOpened,
-      onCanceled: onClosed,
-      onSelected: (t) {
-        onClosed();
-        player.setAudioTrack(t);
-      },
-      itemBuilder: (context) {
-        final current = player.track.audio;
-        return [
-          for (final t in real)
-            CheckedPopupMenuItem<AudioTrack>(
-              value: t,
-              checked: t.id == current.id,
-              child: Text(_label(t.language, t.title, 'Track ${t.id}')),
-            ),
-        ];
-      },
-    );
-  }
-
-  static String _label(String? lang, String? title, String fallback) {
-    final parts = <String>[
-      if (lang != null && lang.isNotEmpty) lang,
-      if (title != null && title.isNotEmpty) title,
-    ];
-    return parts.isEmpty ? fallback : parts.join(' · ');
-  }
-}
-
-/// Full-surface hint while media is dragged onto the main player.
-class _MainDropOverlay extends StatelessWidget {
-  const _MainDropOverlay({this.targetName});
-
-  final String? targetName;
-
-  @override
-  Widget build(BuildContext context) {
-    final casting = targetName != null;
-    return Container(
-      color: Colors.black.withValues(alpha: 0.55),
-      alignment: Alignment.center,
-      child: Container(
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          color: Colors.tealAccent.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: Colors.tealAccent.withValues(alpha: 0.6),
-            width: 2,
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.file_download, size: 40, color: Colors.tealAccent),
-            const SizedBox(height: 12),
-            Text(
-              casting ? 'Drop to cast' : 'Drop to play here',
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              casting
-                  ? 'Send to $targetName'
-                  : 'No receiver is currently connected',
-              style: const TextStyle(fontSize: 13, color: Colors.white70),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Subtitle track menu ──────────────────────────────────────────────────────
-
-class _SubtitleMenuButton extends StatelessWidget {
-  const _SubtitleMenuButton({
-    required this.player,
-    required this.onOpened,
-    required this.onClosed,
-    this.compact = false,
-    this.menuKey,
-  });
-
-  final PlayerController player;
-  final VoidCallback onOpened;
-  final VoidCallback onClosed;
-  final bool compact;
-  final Key? menuKey;
-
-  @override
-  Widget build(BuildContext context) {
-    final real = player.tracks.subtitle
-        .where((t) => t.id != 'no' && t.id != 'auto')
-        .toList(growable: false);
-    return PopupMenuButton<SubtitleTrack>(
-      key: menuKey,
-      tooltip: 'Subtitles',
-      icon: const Icon(Icons.subtitles),
-      iconSize: compact ? 18 : null,
-      padding: compact ? const EdgeInsets.all(4) : const EdgeInsets.all(8),
-      style: compact ? _compactMenuStyle : null,
-      onOpened: onOpened,
-      onCanceled: onClosed,
-      onSelected: (t) {
-        onClosed();
-        player.setSubtitleTrack(t);
-      },
-      itemBuilder: (context) {
-        final current = player.track.subtitle;
-        final off = SubtitleTrack.no();
-        return [
-          CheckedPopupMenuItem<SubtitleTrack>(
-            value: off,
-            checked: current.id == 'no' || current.id.isEmpty,
-            child: const Text('Off'),
-          ),
-          if (real.isNotEmpty) const PopupMenuDivider(),
-          for (final t in real)
-            CheckedPopupMenuItem<SubtitleTrack>(
-              value: t,
-              checked: t.id == current.id,
-              child: Text(_label(t.language, t.title, 'Track ${t.id}')),
-            ),
-        ];
-      },
-    );
-  }
-
-  static String _label(String? lang, String? title, String fallback) {
-    final parts = <String>[
-      if (lang != null && lang.isNotEmpty) lang,
-      if (title != null && title.isNotEmpty) title,
-    ];
-    return parts.isEmpty ? fallback : parts.join(' · ');
-  }
-}
-
-// ─── Playlist drawer ──────────────────────────────────────────────────────────
-
-class _PlaylistDrawer extends StatelessWidget {
-  const _PlaylistDrawer({required this.player, required this.onClose});
-
-  final PlayerController player;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.45),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.playlist_play,
-                        size: 20, color: Colors.white54),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Up next  ·  ${player.queue.length} item${player.queue.length == 1 ? '' : 's'}',
-                        style: const TextStyle(
-                            fontSize: 13, color: Colors.white70),
-                      ),
-                    ),
-                    IconButton(
-                      iconSize: 18,
-                      icon: const Icon(Icons.close),
-                      onPressed: onClose,
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, color: Colors.white12),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: player.queue.length,
-                  itemBuilder: (context, i) {
-                    final item = player.queue[i];
-                    final active = i == player.currentIndex;
-                    return ListTile(
-                      dense: true,
-                      selected: active,
-                      selectedTileColor: Colors.white10,
-                      leading: SizedBox(
-                        width: 28,
-                        child: active
-                            ? const Icon(Icons.equalizer,
-                                size: 18, color: Colors.tealAccent)
-                            : Text(
-                                '${i + 1}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                    color: Colors.white54, fontSize: 12),
-                              ),
-                      ),
-                      title: Text(
-                        item.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: active ? Colors.tealAccent : Colors.white,
-                          fontWeight:
-                              active ? FontWeight.w600 : FontWeight.w400,
-                        ),
-                      ),
-                      onTap: active ? null : () => player.jumpTo(i),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
