@@ -135,8 +135,11 @@ phone checks it, so scanning does not. A code alone
 gets nothing: someone in the room has to send an invite, and the TV owner has to
 accept it.
 
-Codes are only for receivers (TVs, and desktop running as a receiver). Phones
-and desktop senders use the link or scan the QR.
+Codes are for receivers (TVs, and desktop running as a receiver), which count as
+the inviting phone's own device. An Android phone can also show a code to join
+when sending a link is awkward. It accepts as a guest (`pair_accept` with
+`guest`): it joins with a fresh key, so the inviter never counts it as its own
+and it gets none of the inviter's sign-ins.
 
 ### Invite link
 
