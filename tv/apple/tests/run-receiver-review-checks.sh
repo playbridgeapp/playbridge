@@ -14,8 +14,16 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Network/ReceiverCapabilitySubscription.swift" \
   "$source_root/UI/AppFocusModel.swift" \
   "$source_root/UI/AppFocusGeometry.swift" \
+  "$source_root/UI/AppThemeMode.swift" \
+  "$source_root/UI/AppScreen.swift" \
+  "$source_root/UI/HomeFormatting.swift" \
+  "$source_root/UI/SubtitleFontLibrary.swift" \
+  "$source_root/UI/SubtitleStyleSettings.swift" \
+  "$source_root/Together/TogetherModels.swift" \
+  "$source_root/Together/TogetherClient.swift" \
   "$source_root/Models/PairedDevice.swift" \
   "$source_root/Models/PairingCredentialState.swift" \
+  "$source_root/Data/BookmarkThumbnailPolicy.swift" \
   "$source_root/Data/HistoryStore.swift" \
   "$source_root/Player/PlaybackTime.swift" \
   "$source_root/Player/TimelineReport.swift" \
@@ -30,6 +38,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Player/ArtworkURL.swift" \
   "$source_root/Player/TouchScrub.swift" \
   "$source_root/Player/PlayerPlaybackReport.swift" \
+  "$source_root/Player/PhoneConfirmations.swift" \
   "$source_root/Player/PlayerTuning.swift" \
   "$source_root/Player/PlayerSettingsMenu.swift" \
   "$source_root/Player/PlayerAppVolume.swift" \

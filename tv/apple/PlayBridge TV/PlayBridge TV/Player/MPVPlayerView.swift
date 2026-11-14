@@ -31,12 +31,22 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let engineChrome: PlayerEngineChrome
     /// More than one queue item; a one-item queue hides the Playlist button.
     let hasPlaylist: Bool
+    var playlistItems: [PlayerQueueEntry] = []
+    var playlistIndex: Int = 0
+    var onSelectPlaylistItem: ((Int) -> Void)? = nil
     let playbackSpeed: Double
     let subtitleOffsetMs: Int
     let scaling: PlayerScaling
     let hasNextItem: Bool
     let metadata: TransportMetadata
     let playlistVisible: Bool
+    var senderName: String? = nil
+    var isBookmarked: Bool = false
+    var isWatchTogetherParty: Bool = false
+    var bookmarkCaptureToken: Int = 0
+    var onToggleBookmark: (() -> Void)? = nil
+    var onLeaveParty: (() -> Void)? = nil
+    var onBookmarkThumbnailCaptured: ((URL, String) -> Void)? = nil
     /// Settings-tab choices. `PlayerView.applyTuning` is the only writer; the
     /// new values come back through `playbackSpeed` / `subtitleOffsetMs` / `scaling`.
     let onLocalTuning: (PlayerTuning.Command) -> Void
@@ -64,6 +74,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.appMuted = appMuted
         vc.bindEngineChrome(engineChrome)
         vc.hasPlaylist = hasPlaylist
+        vc.playlistItems = playlistItems
+        vc.playlistIndex = playlistIndex
+        vc.onSelectPlaylistItem = onSelectPlaylistItem
         vc.playbackSpeed = playbackSpeed
         vc.subtitleOffsetMs = subtitleOffsetMs
         vc.scaling = scaling
@@ -71,6 +84,14 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.transportMetadata = metadata
         vc.playlistVisible = playlistVisible
         vc.onLocalTuning = onLocalTuning
+        vc.onToggleBookmark = onToggleBookmark
+        vc.onLeaveParty = onLeaveParty
+        vc.onBookmarkThumbnailCaptured = onBookmarkThumbnailCaptured
+        vc.syncBookmarkState(
+            isBookmarked: isBookmarked,
+            isWatchTogetherParty: isWatchTogetherParty,
+            captureToken: bookmarkCaptureToken
+        )
         return vc
     }
 
@@ -85,10 +106,14 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         uiViewController.onBroadcast = onBroadcast
         uiViewController.onLoopChanged = onLoopChanged
         uiViewController.onEndOfFile = onEndOfFile
+        uiViewController.initialLoop = initialLoop
         uiViewController.appLevel = appLevel
         uiViewController.appMuted = appMuted
         uiViewController.bindEngineChrome(engineChrome)
         uiViewController.hasPlaylist = hasPlaylist
+        uiViewController.playlistItems = playlistItems
+        uiViewController.playlistIndex = playlistIndex
+        uiViewController.onSelectPlaylistItem = onSelectPlaylistItem
         uiViewController.playbackSpeed = playbackSpeed
         uiViewController.subtitleOffsetMs = subtitleOffsetMs
         uiViewController.scaling = scaling
@@ -101,7 +126,16 @@ struct MPVPlayerView: UIViewControllerRepresentable {
             }
         }
         uiViewController.playlistVisible = playlistVisible
+        uiViewController.setSenderName(senderName)
         uiViewController.onLocalTuning = onLocalTuning
+        uiViewController.onToggleBookmark = onToggleBookmark
+        uiViewController.onLeaveParty = onLeaveParty
+        uiViewController.onBookmarkThumbnailCaptured = onBookmarkThumbnailCaptured
+        uiViewController.syncBookmarkState(
+            isBookmarked: isBookmarked,
+            isWatchTogetherParty: isWatchTogetherParty,
+            captureToken: bookmarkCaptureToken
+        )
         // Episode advance on the LIVE mpv core: the controller (and its initialised
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
@@ -112,6 +146,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
             uiViewController.skipMetadata = skipMetadata
             uiViewController.mediaIdentity = mediaIdentity
             uiViewController.url = url
+            uiViewController.loadedFileIdentity = -1
             // Mark the request synchronously, but publish the per-item HUD reset only
             // after SwiftUI's update pass. The identity guard cancels superseded loads.
             DispatchQueue.main.async { [weak uiViewController] in
@@ -149,6 +184,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     var mediaIdentity = 0
     var skipMetadata = SkipSegmentMetadata()
     fileprivate let skipLoader = SkipSegmentLoader()
+    private var autoSkippedSegmentStarts: Set<Int> = []
+    private var appliedSubtitleStyle = SubtitleStylePreferences.current()
+    private var appliedFontRevision: Int = 0
+    private var subtitleDefaultsObserver: NSObjectProtocol?
     var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
@@ -176,14 +215,18 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Item generation of the file mpv has actually opened. Touched only on `mpvQueue`.
     /// Stays at the previous item until START_FILE, so a late EOF cannot adopt the next item.
     private var loadedIdentity = -1
+    /// Generation whose `MPV_EVENT_FILE_LOADED` has reached main; stays -1 until
+    /// the new URL finishes opening so pre-load status cannot count as ready/live.
+    fileprivate var loadedFileIdentity = -1
     private var failureLogs = PlaybackFailureLogState()
     private var pendingLoadedIdentity = -1
     private var engineChrome: PlayerEngineChrome?
     private var statusTimer: Timer?
-    private var stallDetector = PlaybackStallDetector()
+    private var freezeRecovery = PlaybackFreezeRecovery()
     private var stallHasFirstFrame = false
     private var stallPlaybackRequested = true
     private var stallCoreIdle = false
+    private var stallEofReached = false
     private var stallBufferEnd = 0.0
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
@@ -196,6 +239,13 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     var hasPlaylist = false {
         didSet { if hasPlaylist != oldValue { playbackState.hasPlaylist = hasPlaylist } }
     }
+    var playlistItems: [PlayerQueueEntry] = [] {
+        didSet { if playlistItems != oldValue { playbackState.playlistItems = playlistItems } }
+    }
+    var playlistIndex: Int = 0 {
+        didSet { if playlistIndex != oldValue { playbackState.playlistIndex = playlistIndex } }
+    }
+    var onSelectPlaylistItem: ((Int) -> Void)?
     var appMuted: Bool = false {
         didSet { if appMuted != oldValue { applyAudibleMute() } }
     }
@@ -222,8 +272,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             }
         }
     }
+    var onLeaveParty: (() -> Void)?
 
     // MARK: MPV
+    /// Coordinates asynchronous `mpv_terminate_destroy` against the next `setupMPV()`
+    /// so tearing down one mpv/MoltenVK instance never overlaps with initializing another.
+    private static let pendingDestroyGroup = DispatchGroup()
     private var mpv: OpaquePointer?
     private let mpvQueue = DispatchQueue(label: "mpv.playbridge.tvos", qos: .userInitiated)
     private var isMpvStopped = false
@@ -246,10 +300,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private var videoDetachedForBackground = false
 
     // MARK: UI
-    private var playbackState = PlayerControlsData()
-    private var hostingController: UIHostingController<PlayerControlsOverlay>?
-    private var hideControlsTimer: Timer?
-    private var holdTimer: Timer?
+    private let overlay = PlayerOverlayController(engine: .mpv)
+    private var playbackState: PlayerControlsData { overlay.playbackState }
     private var virtualScrubTickTimer: Timer?
     private var touchScrub = TouchScrubSession()
     private var panToken: UUID?
@@ -259,27 +311,141 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
     /// Chapter markers of the open file (mpv `chapter-list`). Main-thread only.
-    private var chapterThumbnailer: ChapterThumbnailer?
     private var chapters: [TimelineChapter] = [] {
         didSet { playbackState.chapters = ChapterNavigation.sorted(chapters) }
     }
-    private var controlsRevision = 0
     private var subtitleClearancePoints = 0.0
     private var subtitlePosition = TransportSubtitlePlacement.normalPosition
     /// Only read/written on mpvQueue; reasserted after loadfile replace.
     private var queuedSubtitlePosition = TransportSubtitlePlacement.normalPosition
-    private var consumedPlaybackSelect = false
-    private var feedbackTimer: Timer?
     var transportMetadata = TransportMetadata()
     var onLocalTuning: ((PlayerTuning.Command) -> Void)?
+    var onToggleBookmark: (() -> Void)?
+    var onBookmarkThumbnailCaptured: ((URL, String) -> Void)?
+    private var lastBookmarkCaptureToken = 0
+    func setSenderName(_ name: String?) {
+        playbackState.senderName = name
+    }
+
+    func syncBookmarkState(isBookmarked: Bool, isWatchTogetherParty: Bool, captureToken: Int) {
+        playbackState.isBookmarked = isBookmarked
+        playbackState.isWatchTogetherParty = isWatchTogetherParty
+        if captureToken != lastBookmarkCaptureToken, captureToken > 0 {
+            lastBookmarkCaptureToken = captureToken
+            captureBookmarkFrame(expectedToken: captureToken, attempt: 0)
+        }
+    }
+
+    private func captureBookmarkFrame(expectedToken: Int, attempt: Int) {
+        guard expectedToken == lastBookmarkCaptureToken, let mediaURL = url else { return }
+        #if targetEnvironment(simulator)
+        // MoltenVK's PBO texture readback in mpv screenshot-raw triggers an MTLSimDevice
+        // xpc_shmem crash on tvOS Simulator; use AVAssetImageGenerator on Simulator.
+        let options: [String: Any]? = headers.flatMap { $0.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": $0] }
+        let asset = AVURLAsset(url: mediaURL, options: options)
+        let currentTime = CMTime(seconds: max(0, playbackState.currentTime), preferredTimescale: 600)
+        BookmarkThumbnailCapture.captureAVAssetFrame(asset: asset, at: currentTime, for: mediaURL) { [weak self] saved in
+            guard let self, expectedToken == self.lastBookmarkCaptureToken, self.url == mediaURL else { return }
+            if let saved {
+                self.onBookmarkThumbnailCaptured?(mediaURL, saved)
+            } else if attempt + 1 < BookmarkThumbnailPolicy.maxRetryAttempts {
+                DispatchQueue.main.asyncAfter(deadline: .now() + BookmarkThumbnailPolicy.retryDelaySeconds) { [weak self] in
+                    self?.captureBookmarkFrame(expectedToken: expectedToken, attempt: attempt + 1)
+                }
+            }
+        }
+        #else
+        mpvQueue.async { [weak self] in
+            guard let self, let handle = self.mpv else { return }
+            let image = self.captureMPVScreenshotImage(handle: handle)
+            let saved = image.flatMap { BookmarkThumbnailCapture.saveImage($0, for: mediaURL) }
+            DispatchQueue.main.async {
+                guard expectedToken == self.lastBookmarkCaptureToken, self.url == mediaURL else { return }
+                if let saved {
+                    self.onBookmarkThumbnailCaptured?(mediaURL, saved)
+                } else if attempt + 1 < BookmarkThumbnailPolicy.maxRetryAttempts {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + BookmarkThumbnailPolicy.retryDelaySeconds) { [weak self] in
+                        self?.captureBookmarkFrame(expectedToken: expectedToken, attempt: attempt + 1)
+                    }
+                }
+            }
+        }
+        #endif
+    }
+
+    private func captureMPVScreenshotImage(handle: OpaquePointer) -> UIImage? {
+        let cmdStr = strdup("screenshot-raw")
+        let argStr = strdup("video")
+        defer {
+            free(cmdStr)
+            free(argStr)
+        }
+        var nodes = [
+            mpv_node(u: mpv_node.__Unnamed_union_u(string: cmdStr), format: MPV_FORMAT_STRING),
+            mpv_node(u: mpv_node.__Unnamed_union_u(string: argStr), format: MPV_FORMAT_STRING),
+        ]
+        return nodes.withUnsafeMutableBufferPointer { buf in
+            var nodeList = mpv_node_list(num: Int32(buf.count), values: buf.baseAddress, keys: nil)
+            return withUnsafeMutablePointer(to: &nodeList) { listPtr in
+                var cmdNode = mpv_node(u: mpv_node.__Unnamed_union_u(list: listPtr), format: MPV_FORMAT_NODE_ARRAY)
+                var result = mpv_node()
+                guard mpv_command_node(handle, &cmdNode, &result) >= 0 else { return nil }
+                defer { mpv_free_node_contents(&result) }
+                guard result.format == MPV_FORMAT_NODE_MAP, let list = result.u.list?.pointee else { return nil }
+                var width = 0
+                var height = 0
+                var stride = 0
+                var formatStr = ""
+                var byteData: Data?
+                for i in 0..<Int(list.num) {
+                    guard let keyPtr = list.keys?[i] else { continue }
+                    let key = String(cString: keyPtr)
+                    let val = list.values[i]
+                    switch key {
+                    case "w": if val.format == MPV_FORMAT_INT64 { width = Int(val.u.int64) }
+                    case "h": if val.format == MPV_FORMAT_INT64 { height = Int(val.u.int64) }
+                    case "stride": if val.format == MPV_FORMAT_INT64 { stride = Int(val.u.int64) }
+                    case "format": if val.format == MPV_FORMAT_STRING, let s = val.u.string { formatStr = String(cString: s) }
+                    case "data":
+                        if val.format == MPV_FORMAT_BYTE_ARRAY, let ba = val.u.ba?.pointee, let dataPtr = ba.data, ba.size > 0 {
+                            byteData = Data(bytes: dataPtr, count: ba.size)
+                        }
+                    default: break
+                    }
+                }
+                guard width > 0, height > 0, stride >= width * 4, let byteData, byteData.count >= stride * height else {
+                    return nil
+                }
+                let isBGRA = (formatStr == "bgr0" || formatStr == "bgra")
+                let bitmapInfo: CGBitmapInfo = isBGRA
+                    ? CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue)
+                    : CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue)
+                guard let provider = CGDataProvider(data: byteData as CFData),
+                      let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+                      let cgImage = CGImage(
+                          width: width,
+                          height: height,
+                          bitsPerComponent: 8,
+                          bitsPerPixel: 32,
+                          bytesPerRow: stride,
+                          space: colorSpace,
+                          bitmapInfo: bitmapInfo,
+                          provider: provider,
+                          decode: nil,
+                          shouldInterpolate: true,
+                          intent: .defaultIntent
+                      ) else { return nil }
+                return UIImage(cgImage: cgImage)
+            }
+        }
+    }
     var playlistVisible = false {
         didSet {
             guard oldValue != playlistVisible else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.playbackState.playlistVisible = self.playlistVisible
-                if self.playlistVisible { self.closeInfoPanel() }
-                self.showUI()
+                if self.playlistVisible { self.closeSidePanel() }
                 self.updateSubtitlePosition()
             }
         }
@@ -289,27 +455,20 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// When the current file started loading — used to log time-to-audio for diagnosing delays.
     private var loadStartTime = Date()
 
-    // Custom focusable view that receives Siri Remote presses
-    private class FocusableView: UIView {
-        override var canBecomeFocused: Bool { true }
-    }
     var musicPayload: Playbridge_PlayPayload? {
         didSet {
             if isViewLoaded { musicHost.update(musicPayload, in: self, container: videoView) }
         }
     }
     private let musicHost = MusicPresentationHost()
-    private let videoView = FocusableView()
+    private let videoView = UIView()
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        guard !isPreBuffering, !StillWatchingGate.isPrompting,
-              let controls = hostingController?.view else { return [videoView] }
-        if playbackState.failureSentence != nil || playbackState.menuOpen { return [controls] }
-        // The action focus scope's requested default wins over the renderer or
-        // Skip. focusTransportActions also forces a focus update after layout.
-        if playbackState.showUI && playbackState.transportActionFocused { return [controls] }
-        if playbackState.activeSkipSegment != nil || playbackState.showUI { return [controls] }
-        return [videoView]
+        guard !isPreBuffering, !StillWatchingGate.isPrompting else {
+            return overlay.backgroundFocusView.map { [$0] } ?? [videoView]
+        }
+        let envs = overlay.preferredFocusEnvironments
+        return envs.isEmpty ? [videoView] : envs
     }
 
     // MARK: - Lifecycle
@@ -334,25 +493,15 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.currentTime = initialTime
         playbackState.prebuffering = isPreBuffering
         playbackState.isLooping = initialLoop
+        playbackState.playlistItems = playlistItems
+        playbackState.playlistIndex = playlistIndex
         externalSubtitleCatalog = ExternalSubtitleCatalog(subtitles: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
-        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(openInfoPanelFromSwipe))
-        swipe.direction = .down
-        swipe.delegate = self
         touchPan.delegate = self
         touchPan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
         touchPan.cancelsTouchesInView = false
         view.addGestureRecognizer(touchPan)
-        swipe.require(toFail: touchPan)
-        swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
-        swipe.cancelsTouchesInView = false
-        view.addGestureRecognizer(swipe)
-        // UIHoverGestureRecognizer is unavailable on tvOS. Observe the initial
-        // indirect touch and fail immediately, leaving focus/swipes untouched.
-        view.addGestureRecognizer(RemoteTouchActivityRecognizer { [weak self] in
-            self?.revealTransportFromTouch()
-        })
         startSkipSegments()
         startRemoteSync()
         showUI(autoHide: true)
@@ -409,13 +558,31 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     deinit {
+        if let observer = subtitleDefaultsObserver {
+            NotificationCenter.default.removeObserver(observer)
+            subtitleDefaultsObserver = nil
+        }
         teardown()
+    }
+
+    private func applySubtitleStyleIfNeeded() {
+        guard !isMpvStopped else { return }
+        let updated = SubtitleStyleStore.shared.style
+        let revision = SubtitleStyleStore.shared.fontRevision
+        guard updated != appliedSubtitleStyle || revision != appliedFontRevision else { return }
+        appliedSubtitleStyle = updated
+        appliedFontRevision = revision
+        setPropertyAsync("sub-fonts-dir", value: SubtitleFontLibrary.shared.fontsDirectory.path)
+        for (name, value) in updated.mpvProperties() {
+            setPropertyAsync(name, value: value)
+        }
     }
 
     // MARK: - MPV Initialisation
 
     private func setupMPV() {
         guard !isMpvStopped else { return }
+        _ = Self.pendingDestroyGroup.wait(timeout: .now() + 2.0)
         // Configure the audio session BEFORE mpv initialises its audio unit. If the session is
         // still the default (non-playback) category when mpv's `ao` starts, audio is silent until
         // the route is renegotiated — the "no sound for the first ~minute" symptom.
@@ -481,6 +648,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpv_set_option_string(handle, "demuxer-max-back-bytes", "64MiB")
         mpv_set_option_string(handle, "demuxer-readahead-secs", "30")
         mpv_set_option_string(handle, "audio-buffer", "1.0")
+        mpv_set_option_string(handle, "stream-lavf-o", MPVLavfReconnectOptions.value)
+        mpv_set_option_string(handle, "demuxer-lavf-o", MPVLavfReconnectOptions.value)
 
         // Prefer AVFoundation audio (as on the phone): it avoids AudioUnit's channel-layout
         // query that fails on some HDMI routes. AudioUnit remains the fallback. Check option
@@ -498,11 +667,26 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             mpv_set_option_string(handle, name, value)
         }
 
-        // Subtitle defaults
+        // Subtitle defaults + user style
         mpv_set_option_string(handle, "sub-scale-with-window", "no")
         mpv_set_option_string(handle, "sub-use-margins", "no")
         mpv_set_option_string(handle, "subs-match-os-language", "yes")
         mpv_set_option_string(handle, "subs-fallback", "yes")
+        mpv_set_option_string(handle, "sub-fonts-dir", SubtitleFontLibrary.shared.fontsDirectory.path)
+        appliedSubtitleStyle = SubtitleStyleStore.shared.style
+        appliedFontRevision = SubtitleStyleStore.shared.fontRevision
+        for (name, value) in appliedSubtitleStyle.mpvProperties() {
+            mpv_set_option_string(handle, name, value)
+        }
+        if subtitleDefaultsObserver == nil {
+            subtitleDefaultsObserver = NotificationCenter.default.addObserver(
+                forName: .playBridgeSubtitleStyleDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.applySubtitleStyleIfNeeded()
+            }
+        }
 
         // Error logs are classified in memory and discarded, including in release builds.
         #if DEBUG
@@ -526,6 +710,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpv_observe_property(handle, 0, "track-list", MPV_FORMAT_NONE)
         mpv_observe_property(handle, 0, "paused-for-cache", MPV_FORMAT_FLAG)
         mpv_observe_property(handle, 0, "core-idle", MPV_FORMAT_FLAG)
+        mpv_observe_property(handle, 0, "eof-reached", MPV_FORMAT_FLAG)
         mpv_observe_property(handle, 0, "demuxer-cache-time", MPV_FORMAT_DOUBLE)
         // Re-assert the audio session the moment mpv's audio output actually comes up.
         mpv_observe_property(handle, 0, "current-ao", MPV_FORMAT_STRING)
@@ -592,15 +777,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func showFailureScreen(generation: Int, attempt: UUID) {
-        hideControlsTimer?.invalidate()
-        holdTimer?.invalidate()
+        overlay.cancelForFailure()
         virtualScrubTickTimer?.invalidate()
         playbackState.isVirtualScrubbing = false
         playbackState.scrubMultiplier = 0
-        playbackState.showUI = false
-        playbackState.showInfoPanel = false
-        playbackState.showEngineMenu = false
-        playbackState.activeSkipSegment = nil
         playbackState.cacheStalled = false
         playbackState.isPlaying = false
         playbackState.failureSentence = failureSession.sentence
@@ -608,16 +788,22 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         setPropertyAsync("pause", value: "yes")
         broadcastStatus()
         failureTimer?.invalidate()
-        failureTimer = Timer.scheduledTimer(withTimeInterval: PlaybackFailureModel.autoCloseSeconds, repeats: false) { [weak self] _ in
-            guard let self, self.mediaIdentity == generation, self.failureSession.matches(attempt) else { return }
-            self.closeFailure(event: .autoClose)
+        failureTimer = nil
+        if TogetherPlaybackPolicy.shouldAutoCloseFailure(isWatchTogetherParty: playbackState.isWatchTogetherParty) {
+            failureTimer = Timer.scheduledTimer(withTimeInterval: PlaybackFailureModel.autoCloseSeconds, repeats: false) { [weak self] _ in
+                guard let self, self.mediaIdentity == generation, self.failureSession.matches(attempt) else { return }
+                self.closeFailure(event: .autoClose)
+            }
         }
         setNeedsFocusUpdate()
     }
 
     private func closeFailure(event: PlaybackFailureModel.Event = .close) {
         guard !isMpvStopped,
-              PlaybackFailureModel.phoneReport(for: event) == .idleContext,
+              PlaybackFailureModel.shouldDismissFailure(
+                  event: event,
+                  isWatchTogetherParty: playbackState.isWatchTogetherParty
+              ),
               failureSession.close(attempt: failureSession.attempt) else { return }
         failureTimer?.invalidate()
         failureTimer = nil
@@ -666,19 +852,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private func handleFailureKey(_ key: String) -> Bool {
-        guard !isMpvStopped, !isPreBuffering, !StillWatchingGate.isPrompting,
-              failureSession.sentence != nil, failureSession.matches(failureSession.attempt) else { return false }
-        let actions = PlaybackFailureModel.actions(hasNextItem: hasNextItem)
-        switch key {
-        case "back", "home": closeFailure()
-        case "dpad_center": handleFailureAction(playbackState.failureHighlight)
-        case "dpad_left", "dpad_up", "dpad_right", "dpad_down":
-            let index = actions.firstIndex(of: playbackState.failureHighlight) ?? 0
-            let delta = key == "dpad_left" || key == "dpad_up" ? -1 : 1
-            playbackState.failureHighlight = actions[min(max(index + delta, 0), actions.count - 1)]
-        default: return false
-        }
-        return true
+        guard failureSession.matches(failureSession.attempt) else { return false }
+        return overlay.handleFailureKey(key)
     }
 
     private func configureAudioSession() {
@@ -743,20 +918,25 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         self.mediaTitle = title
 
         chapters = []
-        stopChapterThumbnails()
-        playbackState.showInfoPanel = false
-        playbackState.panelTab = .info
+        playbackState.activeSidePanel = .none
+        playbackState.lastClosedSidePanel = .none
+        playbackState.pendingSeekTime = nil
         playbackState.metadata = transportMetadata
-        playbackState.feedbackSymbol = nil
+        playbackState.transportBadge = .none
+        playbackState.notice = nil
         playbackState.activeSkipSegment = nil
         startSkipSegments()
 
         // Per-item resets (mirrors what a fresh controller would start with).
+        loadedFileIdentity = -1
         didApplyTrackPreferences = false
         ignoreTimeUpdatesUntil = .distantPast
         playbackState.title = title ?? ""
         playbackState.currentTime = initialTime
         playbackState.duration = 0
+        playbackState.isPlaying = false
+        playbackState.cacheStalled = false
+        playbackState.isLooping = initialLoop
         playbackState.userPaused = false
         playbackState.audioTracks = []
         playbackState.subtitleTracks = []
@@ -770,13 +950,17 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         }
     }
 
-    private func loadFile(_ url: URL, fromStart: Bool = false) {
+    private func loadFile(_ url: URL, fromStart: Bool = false, preservingRecovery: Bool = false) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
+        loadedFileIdentity = -1
         clearFailure()
-        stallDetector.reset()
+        if !preservingRecovery {
+            freezeRecovery.resetForNewItem(initialPosition: fromStart ? 0 : initialTime)
+        }
         stallHasFirstFrame = false
         stallPlaybackRequested = true
         stallCoreIdle = false
+        stallEofReached = false
         stallBufferEnd = 0
         let attempt = failureSession.attempt
         pendingExternalSubtitles = subtitles ?? []
@@ -819,7 +1003,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             }
             mpv_set_property_string(handle, "volume", volume)
             let result = self.mpvCommand(handle, loadArguments)
-            if result >= 0 { mpv_set_property_string(handle, "pause", "no") }
+            if result >= 0 {
+                mpv_set_property_string(handle, "pause", self.playbackState.isWatchTogetherParty ? "yes" : "no")
+            }
             if result < 0 {
                 DispatchQueue.main.async { [weak self] in
                     self?.presentFailure(code: result, generation: itemIdentity, attempt: attempt)
@@ -882,6 +1068,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             let reason = end.reason
             let code = end.error
             let category = failureLogs.category
+            let sawTruncation = failureLogs.sawTruncationOrNetworkError
             let generation = loadedIdentity
             let identity = PlayerReportIdentity(engine: PlaybackEngine.mpv.rawValue, generation: generation)
             DispatchQueue.main.async { [weak self] in
@@ -892,12 +1079,29 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                     return
                 }
                 guard reason == MPV_END_FILE_REASON_EOF, self.playbackState.failureSentence == nil else { return }
+                let eofDecision = self.freezeRecovery.evaluateEndOfFile(
+                    reasonIsEOF: true,
+                    duration: self.playbackState.duration,
+                    position: self.playbackState.currentTime,
+                    hadTruncationOrNetworkError: sawTruncation
+                )
+                switch eofDecision {
+                case .reloadAt(let target):
+                    self.recoverAtLastGoodPosition(targetTime: target)
+                    return
+                case .presentFailure:
+                    self.presentFailure(code: code, category: category ?? .network, generation: generation, attempt: attempt)
+                    return
+                case .naturalEOF:
+                    break
+                }
                 self.stallPlaybackRequested = false
-                self.stallDetector.reset()
+                self.freezeRecovery.resetForNewItem()
                 switch self.onEndOfFile?(identity) ?? .ignored {
                 case .repeatCurrentItem:
                     if let url = self.url { self.loadFile(url, fromStart: true) }
-                case .advanceOrLeave: self.onDismiss?()
+                case .advanceOrLeave:
+                    self.onDismiss?()
                 case .ignored: break
                 }
             }
@@ -940,9 +1144,20 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         let cacheStalled = stalled != 0
         let attempt = loadedAttempt
         let generation = loadedIdentity
+        var initialDuration: Double = 0
+        var initialPosition: Double = 0
+        mpv_get_property(handle, "duration", MPV_FORMAT_DOUBLE, &initialDuration)
+        mpv_get_property(handle, "time-pos", MPV_FORMAT_DOUBLE, &initialPosition)
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
                   let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
+            self.loadedFileIdentity = generation
+            if initialDuration.isFinite, initialDuration > 0 {
+                self.playbackState.duration = initialDuration
+            }
+            if initialPosition.isFinite, initialPosition >= 0 {
+                self.playbackState.currentTime = initialPosition
+            }
             self.playbackState.isPlaying = !isPaused
             self.playbackState.cacheStalled = cacheStalled
             self.applyAudibleMute()
@@ -1029,6 +1244,16 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 self.stallCoreIdle = idle
             }
 
+        case "eof-reached":
+            guard prop.format == MPV_FORMAT_FLAG,
+                  let val = prop.data?.assumingMemoryBound(to: Int32.self).pointee else { break }
+            let eof = val != 0
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.mediaIdentity == generation, let attempt,
+                      self.failureSession.matches(attempt) else { return }
+                self.stallEofReached = eof
+            }
+
         case "demuxer-cache-time":
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
@@ -1058,6 +1283,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                       let attempt, self.failureSession.matches(attempt), self.playbackState.failureSentence == nil else { return }
                 self.playbackState.duration = val
                 self.updateActiveSkipSegment()
+                self.broadcastStatus()
             }
 
         case "pause":
@@ -1289,58 +1515,109 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     // MARK: - HUD
 
     private func setupHUD() {
-        let overlay = PlayerControlsOverlay(
-            data: playbackState,
-            onSelectSubtitle: { [weak self] trackId in
-                self?.selectSubtitleTrack(trackId)
-            },
-            onSelectAudio: { [weak self] trackId in
-                self?.selectAudioTrack(trackId)
-            },
-            onTogglePlayPause: { [weak self] in
-                // A Select handled by the UIKit fallback must not also activate
-                // the SwiftUI seek button when that same press ends.
-                guard let self, !self.consumedPlaybackSelect else { return }
-                _ = self.handlePlaybackPress(.select)
-            },
-            onOpenMenu: { [weak self] menu in
-                guard let self, !self.consumedPlaybackSelect else { return }
-                self.openTransportMenu(menu)
-            },
-            onMenuSelect: { [weak self] menu, id in self?.applyTransportMenu(menu, rowID: id) },
-            onTogglePlaylist: { [weak self] in
-                guard let self, !self.consumedPlaybackSelect else { return }
-                self.closeInfoPanel()
-                NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
-            },
-            onLoopToggle: { [weak self] in
-                guard let self, !self.consumedPlaybackSelect else { return }
-                self.setLooping(!self.playbackState.isLooping)
-            },
-            onSkipSegment: { [weak self] in self?.skipActiveSegment() },
-            onFailureAction: { [weak self] in self?.handleFailureAction($0) },
-            onPanelActivate: { [weak self] in
-                guard let self else { return }
-                // Select on the tab bar enters that tab's rows, like Down.
-                if self.playbackState.panelTabBarFocused { self.movePanelRow(1, physical: true) }
-                else { _ = self.activatePanelRow() }
-            },
-            onChromeActivity: { [weak self] in self?.showUI() },
-            onPanelDirection: { [weak self] in self?.panelDirection($0) },
-            onSubtitleClearanceChange: { [weak self] height in
-                self?.subtitleClearancePoints = height
-                self?.updateSubtitlePosition()
-            },
-            engine: .mpv
-        )
-        let hosting = UIHostingController(rootView: overlay)
-        hosting.view.backgroundColor = .clear
-        hosting.view.frame = view.bounds
-        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addChild(hosting)
-        view.addSubview(hosting.view)
-        hosting.didMove(toParent: self)
-        hostingController = hosting
+        overlay.isStopped = { [weak self] in self?.isMpvStopped ?? true }
+        overlay.isPreBuffering = { [weak self] in self?.isPreBuffering ?? false }
+        overlay.isPlaylistVisible = { [weak self] in self?.playlistVisible ?? false }
+        overlay.isMusic = { [weak self] in self?.musicPayload != nil }
+        overlay.isTouchScrubbing = { [weak self] in self?.touchScrub.proposal != nil }
+        overlay.onCancelTouchScrubIfNeeded = { [weak self] full, hasSidePanel, playlistOpen in
+            guard let self, self.touchScrub.proposal != nil && (full || hasSidePanel || playlistOpen) else { return }
+            self.cancelTouchScrub()
+        }
+        overlay.onWillOpenSidePanel = { [weak self] panel in
+            guard let self, panel == .subtitles || panel == .audio else { return }
+            self.mpvQueue.async { [weak self] in self?.updateTracks() }
+        }
+        overlay.onSeek = { [weak self] seconds in
+            self?.seekPanel(to: seconds)
+        }
+        overlay.onSetPaused = { [weak self] paused, openControls in
+            self?.setPlaybackPaused(paused, openControls: openControls)
+        }
+        overlay.onTogglePlayPause = { [weak self] openControls in
+            self?.togglePlayPause(openControls: openControls)
+        }
+        overlay.onSelectSubtitle = { [weak self] trackId in
+            self?.selectSubtitleTrack(trackId)
+        }
+        overlay.onSelectAudio = { [weak self] trackId in
+            self?.selectAudioTrack(trackId)
+        }
+        overlay.onSelectQueueItem = { [weak self] index in
+            self?.onSelectPlaylistItem?(index)
+        }
+        overlay.onLoopToggle = { [weak self] in
+            guard let self else { return }
+            self.setLooping(!self.playbackState.isLooping)
+        }
+        overlay.onSwitchEngine = { [weak self] in
+            guard let self else { return }
+            self.onSwitch?(.avplayer, self.playbackState.currentTime)
+        }
+        overlay.onSkipSegment = { [weak self] in
+            self?.skipActiveSegment()
+        }
+        overlay.onFailureAction = { [weak self] action in
+            self?.handleFailureAction(action)
+        }
+        overlay.onCloseFailure = { [weak self] in
+            self?.closeFailure()
+        }
+        overlay.onHandleFailureKey = { [weak self] key in
+            self?.handleFailureKey(key) ?? false
+        }
+        overlay.onLocalTuning = { [weak self] cmd in
+            self?.onLocalTuning?(cmd)
+        }
+        overlay.onToggleBookmark = { [weak self] in
+            self?.onToggleBookmark?()
+        }
+        overlay.onLeaveParty = { [weak self] in
+            self?.onLeaveParty?()
+        }
+        overlay.onPartyRate = { [weak self] rate in
+            self?.setPropertyAsync("speed", value: PlayerTuning.mpvNumber(rate))
+        }
+        overlay.onPartyGoLive = { [weak self] in
+            guard let self else { return }
+            self.setPlaybackPaused(false, openControls: false)
+        }
+        overlay.onBack = { [weak self] in
+            self?.onBack?()
+        }
+        overlay.onBroadcastStatus = { [weak self] in
+            self?.broadcastStatus()
+        }
+        overlay.onSubtitleClearanceChange = { [weak self] height in
+            self?.subtitleClearancePoints = height
+            self?.updateSubtitlePosition()
+        }
+        overlay.onRemoteDismissScrub = { [weak self] in
+            guard let self else { return false }
+            if self.touchScrub.proposal != nil { self.cancelTouchScrub(); return true }
+            if self.playbackState.isVirtualScrubbing { self.cancelVirtualScrub(); return true }
+            return false
+        }
+        overlay.onRemoteScrubStep = { [weak self] forward in
+            guard let self else { return false }
+            let delta = forward ? PlayerKeyMap.seekStepSeconds : -PlayerKeyMap.seekStepSeconds
+            if self.touchScrub.proposal != nil {
+                self.stepPendingSeek(deltaSeconds: delta)
+                return true
+            }
+            guard self.playbackState.isVirtualScrubbing else { return false }
+            self.showControls(full: false, autoHide: false)
+            self.increaseScrubMultiplier(forward)
+            return true
+        }
+        overlay.onRemoteCommitScrub = { [weak self] in
+            guard let self else { return false }
+            if self.commitTouchScrub(resume: true) { return true }
+            guard self.playbackState.isVirtualScrubbing else { return false }
+            self.commitVirtualScrub()
+            return true
+        }
+        overlay.attach(to: self, container: view)
     }
 
     private func applyPreBufferingState() {
@@ -1349,11 +1626,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         playbackState.skipControlsEnabled = !isPreBuffering
         if isPreBuffering {
             discardTouchScrub()
-            playbackState.showUI = false
-            hideControlsTimer?.invalidate()
+            overlay.hideControls()
         } else {
             activateAudioSession()
-            showUI(autoHide: true)
+            showControls(full: true, autoHide: true)
             NotificationCenter.default.post(
                 name: .playBridgePlaybackActivity, object: nil,
                 userInfo: ["isPlaying": playbackState.failureSentence == nil && playbackState.surfaceState == .playing])
@@ -1377,71 +1653,59 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     private var canAutoHide: Bool {
-        !playbackState.transportActionFocused && TransportVisibility.canAutoHide(userPaused: playbackState.userPaused,
-            scrubbing: playbackState.isScrubbing, panel: playbackState.showInfoPanel,
-            engineMenu: playbackState.showEngineMenu, playlist: playlistVisible, prebuffering: isPreBuffering)
+        !playbackState.userPaused
+            && playbackState.activeSidePanel == .none
+            && playbackState.pendingSeekTime == nil
+            && !playbackState.isScrubbing
+            && !playlistVisible
+            && !isPreBuffering
+    }
+
+    private var currentSurface: PlayerControlsSurface {
+        if playbackState.activeSidePanel != .none { return .panel }
+        if playbackState.showUI && playbackState.isFullControlsVisible { return .controls }
+        if playbackState.showUI { return .seekBar }
+        return .nothing
     }
 
     private func showUI(autoHide: Bool = true) {
-        controlsRevision += 1
-        let revision = controlsRevision
-        DispatchQueue.main.async { [weak self] in
-            guard let self, revision == self.controlsRevision, !self.isMpvStopped, !self.isPreBuffering,
-                  self.playbackState.failureSentence == nil else { return }
-            if self.touchScrub.proposal != nil && (self.playbackState.menuOpen || self.playlistVisible) {
-                self.cancelTouchScrub()
-            }
-            // Only a hidden-to-shown change moves focus into the controls. Forcing a
-            // focus update on every touch would pull a swipe-up from the actions
-            // straight back to the seek bar.
-            let wasHidden = !self.playbackState.showUI
-            self.playbackState.showUI = true
-            if wasHidden { self.setNeedsFocusUpdate() }
-            self.hideControlsTimer?.invalidate()
-            guard autoHide, self.canAutoHide else { return }
-            self.hideControlsTimer = Timer.scheduledTimer(withTimeInterval: TransportVisibility.autoHideSeconds,
-                repeats: false) { [weak self] _ in
-                    guard let self, self.canAutoHide else { return }
-                    self.playbackState.showUI = false
-                    self.setNeedsFocusUpdate()
-                }
-        }
+        overlay.showUI(autoHide: autoHide)
     }
 
-    private func showFeedback(_ symbol: String) {
-        feedbackTimer?.invalidate()
-        playbackState.feedbackSymbol = symbol
-        feedbackTimer = Timer.scheduledTimer(withTimeInterval: TransportVisibility.feedbackSeconds,
-            repeats: false) { [weak self] _ in self?.playbackState.feedbackSymbol = nil }
+    private func showControls(full: Bool, autoHide: Bool = true, resetFocus: Bool = false) {
+        overlay.showControls(full: full, autoHide: autoHide, resetFocus: resetFocus)
     }
 
-    private func revealTransportFromTouch() {
-        guard !StillWatchingGate.isPrompting, !isPreBuffering,
-              playbackState.failureSentence == nil else { return }
-        showUI()
+    private func hideControls() {
+        overlay.hideControls()
     }
 
-    private var canOpenPanelFromSwipe: Bool {
-        !StillWatchingGate.isPrompting && !isPreBuffering && playbackState.failureSentence == nil
-            && !playbackState.menuOpen && !playlistVisible
+    private func showNotice(_ text: String, emphasis: Bool = false, icon: String? = nil, duration: TimeInterval = 2.0) {
+        overlay.showNotice(text, emphasis: emphasis, icon: icon, duration: duration)
+    }
+
+    private func showTransportBadge(_ badge: PlayerTransportBadge) {
+        overlay.showTransportBadge(badge)
+    }
+
+    private func stepPendingSeek(deltaSeconds: Double) {
+        overlay.stepPendingSeek(deltaSeconds: deltaSeconds)
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === touchPan {
             let translation = touchPan.translation(in: view)
             return TouchScrubSession.canBegin(chrome: touchScrubChrome,
-                actionFocused: playbackState.transportActionFocused,
+                actionFocused: playbackState.isFullControlsVisible || playbackState.activeSidePanel != .none,
                 translationX: Double(translation.x), translationY: Double(translation.y))
         }
-        return canOpenPanelFromSwipe
+        return false
     }
 
     private var touchScrubChrome: TransportChrome {
         var chrome = TransportChrome()
         chrome.navigation = engineChrome?.snapshot().chrome(sessionMatches: true,
             stillWatching: StillWatchingGate.isPrompting, playlist: playlistVisible) ?? PlayerChromeState()
-        // A released, still-paused transaction can accept another drag. A live
-        // gesture or a hold scrub cannot; the public Back stack still sees both.
         chrome.navigation.scrubbing = playbackState.isVirtualScrubbing || touchScrub.proposal?.isPanning == true
         chrome.userPaused = playbackState.userPaused
         chrome.skipPillFocused = playbackState.skipPillFocused
@@ -1451,119 +1715,15 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         return chrome
     }
 
-    @objc private func openInfoPanelFromSwipe() {
-        guard canOpenPanelFromSwipe else { return }
-        openInfoPanel()
+    private func openSidePanel(_ panel: PlayerSidePanel) {
+        overlay.openSidePanel(panel)
     }
 
-    private func openInfoPanel(tab: InfoPanelTab? = nil) {
-        cancelTouchScrub()
-        holdTimer?.invalidate()
-        playbackState.transportActionFocused = false
-        if let tab, playbackState.panelTabs.contains(tab) { playbackState.panelTab = tab }
-        playbackState.panelTab = InfoPanelModel.validTab(playbackState.panelTab, tabs: playbackState.panelTabs)
-        playbackState.showInfoPanel = true
-        playbackState.focusPanelSelection()
-        mpvQueue.async { [weak self] in self?.updateTracks() }
-        startChapterThumbnails()
-        showUI(autoHide: false)
-    }
-
-    /// Fetches the chapter card frames once per item, the first time the panel opens.
-    private func startChapterThumbnails() {
-        guard chapterThumbnailer == nil, let url, playbackState.duration > 0 else { return }
-        let times = ChapterNavigation.thumbnailTimes(chapters: chapters,
-            durationMs: PlaybackTime.milliseconds(playbackState.duration))
-        guard !times.isEmpty else { return }
-        let thumbnailer = ChapterThumbnailer()
-        chapterThumbnailer = thumbnailer
-        let generation = mediaIdentity
-        thumbnailer.start(url: url, headers: headers, times: times) { [weak self] startMs, image in
-            guard let self, self.mediaIdentity == generation, self.chapterThumbnailer === thumbnailer else { return }
-            self.playbackState.chapterThumbnails[startMs] = image
-        }
-    }
-
-    private func stopChapterThumbnails() {
-        chapterThumbnailer?.cancel()
-        chapterThumbnailer = nil
-        playbackState.chapterThumbnails = [:]
-    }
-
-    private func closeInfoPanel() {
-        guard playbackState.showInfoPanel else { return }
-        playbackState.showInfoPanel = false
-        playbackState.transportFocusRevision += 1
-        showUI()
-    }
-
-    private func changePanelTab(_ delta: Int) {
-        playbackState.panelTab = InfoPanelModel.movingTab(playbackState.panelTab, delta: delta,
-            tabs: playbackState.panelTabs)
-        // Moving along the tab bar keeps the highlight there (AVPlayer); Down enters the rows.
-        playbackState.focusPanelSelection(keepTabBar: true)
-    }
-
-    private func movePanelRow(_ delta: Int, physical: Bool) {
-        let focus = InfoPanelFocus(row: playbackState.panelHighlight, tabBar: playbackState.panelTabBarFocused)
-            .moving(delta, rowCount: playbackState.panelRows.count, physical: physical,
-                    horizontalRows: playbackState.panelTab == .chapters)
-        playbackState.panelHighlight = focus.row
-        playbackState.panelTabBarFocused = focus.tabBar
-        playbackState.panelFocusRevision += 1
-    }
-
-    /// Physical Left/Right inside the panel: tabs, or cards on the chapter strip.
-    private func panelHorizontal(_ delta: Int) {
-        if InfoPanelModel.horizontalMovesRows(tab: playbackState.panelTab,
-                                              tabBarFocused: playbackState.panelTabBarFocused) {
-            movePanelRow(delta, physical: false)
-        } else {
-            changePanelTab(delta)
-        }
-    }
-
-    private func panelDirection(_ direction: MoveCommandDirection) {
-        // The panel's only direction input: clicks and swipes both arrive here.
-        let now = Date()
-        guard !InfoPanelModel.isMoveEcho(focusMovedAt: playbackState.panelMovedAt, now: now) else { return }
-        playbackState.panelMovedAt = now
-        switch direction {
-        case .left: panelHorizontal(-1)
-        case .right: panelHorizontal(1)
-        case .up:
-            var chrome = TransportChrome()
-            chrome.navigation.infoPanel = true
-            chrome.panelTabBarFocused = playbackState.panelTabBarFocused
-            if TransportKeyRoute.physicalVertical(up: true, chrome: chrome) == .closePanel { closeInfoPanel() }
-            else { movePanelRow(-1, physical: true) }
-        case .down: movePanelRow(1, physical: true)
-        @unknown default: break
-        }
-    }
-
-    @discardableResult
-    private func activatePanelRow() -> Bool {
-        guard playbackState.showInfoPanel else { return false }
-        let rows = playbackState.panelRows
-        guard rows.indices.contains(playbackState.panelHighlight) else { return true }
-        let row = rows[playbackState.panelHighlight]
-        switch playbackState.panelTab {
-        case .info: seekPanel(to: 0)
-        case .chapters: seekPanel(to: Double(row.id) / 1000)
-        case .settings:
-            // The check moves when PlayerView hands the applied value back.
-            if let command = PlayerSettingsItem.command(rowID: row.id, tuning: playbackState.tuning,
-                                                        availability: playbackState.settingsAvailability) {
-                onLocalTuning?(command)
-            }
-        }
-        return true
+    private func closeSidePanel() {
+        overlay.closeSidePanel()
     }
 
     private func seekPanel(to seconds: Double) {
-        // A chapter/action selection replaces a pending ghost scan. The scan
-        // began while playing; return to that intent at the selected position.
         if playbackState.isVirtualScrubbing { cancelVirtualScrub() }
         discardTouchScrub()
         playbackState.currentTime = seconds
@@ -1575,36 +1735,42 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     // MARK: - Playback Controls
 
-    private func togglePlayPause() {
-        // Use cached state (kept current by the "pause" property observer) instead of querying
-        // mpv synchronously, which would block the main thread on mpv's core lock.
-        setPlaybackPaused(playbackState.isPlaying)
+    private func togglePlayPause(openControls: Bool = false) {
+        setPlaybackPaused(playbackState.isPlaying, openControls: openControls)
     }
 
-    private func setPlaybackPaused(_ paused: Bool) {
+    private func setPlaybackPaused(_ paused: Bool, openControls: Bool = false) {
         setPropertyAsync("pause", value: paused ? "yes" : "no")
         playbackState.userPaused = paused
-        showFeedback(paused ? "pause.fill" : "play.fill")
+        if !paused { overlay.clearPhonePaused() }
         if paused {
             mpvQueue.async { [weak self] in self?.updateTracks() }
-            showUI(autoHide: false)
+        }
+        if openControls {
+            showControls(full: true, autoHide: !paused)
+        } else if playbackState.showUI {
+            showControls(full: playbackState.isFullControlsVisible, autoHide: !paused)
         } else {
-            showUI(autoHide: true)
+            showTransportBadge(paused ? .paused : .playing)
         }
     }
 
     private func seekRelative(by delta: Double) {
-        discardTouchScrub()
-        let cap = playbackState.duration > 0 ? max(0, playbackState.duration - 2) : Double.infinity
-        let target = max(0, min(playbackState.currentTime + delta, cap))
-        playbackState.currentTime = target
-        ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
-        seekAsync(to: target)
-        showUI()
+        stepPendingSeek(deltaSeconds: delta)
+    }
+
+    private func recoverAtLastGoodPosition(targetTime: Double) {
+        guard let url, mpv != nil, !isMpvStopped, playbackState.failureSentence == nil else { return }
+        let resumeAt = targetTime.isFinite && targetTime >= 0 ? targetTime : 0
+        initialTime = resumeAt
+        playbackState.userPaused = false
+        playbackState.isPlaying = false
+        loadFile(url, preservingRecovery: true)
+        setPropertyAsync("pause", value: "no", preservingRecovery: true)
     }
 
     private func seekAsync(to seconds: Double) {
-        stallDetector.reset()
+        freezeRecovery.resetForPositionChange(initialPosition: seconds)
         guard seconds.isFinite, let handle = mpv else { return }
         let pos = String(format: "%.2f", max(0, seconds))
         mpvQueue.async { self.mpvCommand(handle, ["seek", pos, "absolute"]) }
@@ -1616,14 +1782,13 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             guard !isMpvStopped, TransportKeyRoute.canTouchScrub(chrome: touchScrubChrome),
-                  !playbackState.transportActionFocused else { return }
-            holdTimer?.invalidate()
+                  playbackState.activeSidePanel == .none, !playbackState.isFullControlsVisible else { return }
+            overlay.cancelHoldRepeat()
             clickDirection = nil
             panToken = touchScrub.begin(position: playbackState.currentTime, duration: playbackState.duration)
             recognizer.setTranslation(.zero, in: view)
             playbackState.touchScrubTime = touchScrub.proposal?.position
-            playbackState.transportFocusRevision += 1
-            showUI(autoHide: false)
+            showControls(full: false, autoHide: false)
             NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
         case .changed:
             guard let token = panToken else { return }
@@ -1636,6 +1801,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             guard let token = panToken, let position = touchScrub.release(token: token) else { return }
             panToken = nil
             applyTouchSeek(position)
+            showControls(full: false, autoHide: true)
         case .cancelled, .failed:
             guard panToken != nil else { return }
             cancelTouchScrub()
@@ -1654,7 +1820,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func resetPanRecognizer() {
         panToken = nil
         clickDirection = nil
-        holdTimer?.invalidate()
+        overlay.cancelHoldRepeat()
         // Cancel UIKit tracking too, so a phone seek cannot be overwritten by
         // later changes/end from the finger that's still on the remote.
         touchPan.isEnabled = false
@@ -1749,222 +1915,38 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         showUI(autoHide: true)
     }
 
-    private var consumedTransportDirection: UIPress.PressType?
-
-    private func updateTransportFocus() {
-        setNeedsFocusUpdate()
-        // SwiftUI must first apply the FocusState/default-focus request to its
-        // UIKit descendants. Then resolve preferredFocusEnvironments immediately.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isMpvStopped else { return }
-            self.hostingController?.view.layoutIfNeeded()
-            self.setNeedsFocusUpdate()
-            self.updateFocusIfNeeded()
-        }
-    }
-
-    private func focusTransportActions(_ target: TransportAction? = nil) {
-        holdTimer?.invalidate()
-        clickDirection = nil
-        if let target { playbackState.transportActionHighlight = target }
-        else if !playbackState.transportActionFocused { playbackState.transportActionHighlight = .loop }
-        // Subtitles and Audio come and go with the track list.
-        if !playbackState.availableActions.contains(playbackState.transportActionHighlight) {
-            playbackState.transportActionHighlight = .loop
-        }
-        playbackState.transportActionFocused = true
-        playbackState.transportActionFocusRevision += 1
-        showUI(autoHide: false)
-        updateTransportFocus()
-    }
-
-    private func focusTransportScrubber() {
-        playbackState.transportActionFocused = false
-        playbackState.transportFocusRevision += 1
-        showUI()
-        updateTransportFocus()
-    }
-
-    private func activateTransportAction() {
-        let action = playbackState.transportActionHighlight
-        if let menu = action.menu {
-            openTransportMenu(menu)
-            return
-        }
-        switch action {
-        case .speed, .switchEngine, .subtitles, .audio: break
-        case .loop: setLooping(!playbackState.isLooping)
-        case .playlist:
-            guard hasPlaylist else { return }
-            NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
-        }
-        showUI()
-    }
-
     // MARK: - Siri Remote
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if StillWatchingGate.isPrompting {
-            NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
-            return
-        }
-        if isPreBuffering { super.pressesBegan(presses, with: event); return }
-        guard let type = presses.first?.type else { super.pressesBegan(presses, with: event); return }
-        NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
-
-        if playbackState.failureSentence != nil {
-            if type == .menu { closeFailure() }
-            else { super.pressesBegan(presses, with: event) }
-            return
-        }
-
-        if type == .menu {
-            // The player owner also knows about the playlist. Use the same Back
-            // levels as the phone so only the top overlay closes on each press.
-            broadcastStatus()
-            onBack?()
-            return
-        }
-
-        // The panel surface receives every arrow as onMoveCommand (panelDirection).
-        if playbackState.showInfoPanel,
-           [.upArrow, .downArrow, .leftArrow, .rightArrow].contains(type) {
+        overlay.handlePressesBegan(presses, with: event) {
             super.pressesBegan(presses, with: event)
-            return
-        }
-
-        if type == .upArrow || type == .downArrow {
-            var chrome = TransportChrome()
-            chrome.navigation = engineChrome?.snapshot().chrome(sessionMatches: true,
-                stillWatching: false, playlist: playlistVisible) ?? PlayerChromeState()
-            chrome.panelTabBarFocused = playbackState.panelTabBarFocused
-            chrome.transportActionFocused = playbackState.transportActionFocused
-            chrome.skipPillFocused = playbackState.skipPillFocused
-            switch TransportKeyRoute.physicalVertical(up: type == .upArrow, chrome: chrome) {
-            case .openPanel: openInfoPanel()
-            case .closePanel: closeInfoPanel()
-            case .moveInPanel: movePanelRow(type == .upArrow ? -1 : 1, physical: true)
-            case .showTransport: showUI()
-            case .focusActions:
-                consumedTransportDirection = type
-                focusTransportActions()
-            case .focusScrubber:
-                consumedTransportDirection = type
-                focusTransportScrubber()
-            case .moveFocus: super.pressesBegan(presses, with: event)
-            }
-            return
-        }
-
-        if type == .playPause {
-            _ = handlePlaybackPress(.playPause)
-            return
-        }
-        if playbackState.showInfoPanel {
-            super.pressesBegan(presses, with: event)
-            return
-        }
-        if playbackState.showEngineMenu || playlistVisible {
-            super.pressesBegan(presses, with: event)
-            return
-        }
-        switch type {
-        case .select:
-            if playbackState.transportActionFocused {
-                consumedPlaybackSelect = true
-                activateTransportAction()
-                return
-            }
-            if handlePlaybackPress(.select) { consumedPlaybackSelect = true }
-            else { super.pressesBegan(presses, with: event) }
-        case .leftArrow, .rightArrow:
-            if playbackState.transportActionFocused {
-                consumedTransportDirection = type
-                let delta = type == .rightArrow ? 1 : -1
-                focusTransportActions(playbackState.transportActionHighlight.moving(delta,
-                    hasPlaylist: hasPlaylist, hasSubtitles: playbackState.hasSubtitles,
-                    hasAudioChoice: playbackState.hasAudioChoice))
-                return
-            }
-            let forward = type == .rightArrow
-            if playbackState.isVirtualScrubbing {
-                showUI(); increaseScrubMultiplier(forward)
-            } else {
-                showUI()
-                holdTimer?.invalidate()
-                if !playbackState.userPaused {
-                    holdTimer = Timer.scheduledTimer(withTimeInterval: TransportScrub.holdThreshold,
-                        repeats: false) { [weak self] _ in self?.startVirtualScrub(forward: forward) }
-                }
-                clickDirection = forward
-            }
-        default: super.pressesBegan(presses, with: event)
-        }
-    }
-
-    @discardableResult
-    private func handlePlaybackPress(_ press: PlayerPlaybackPress) -> Bool {
-        let focusedControl = playbackState.menuOpen || playlistVisible
-            || playbackState.skipPillFocused || playbackState.transportActionFocused
-        switch PlayerRemoteNavigation.physicalPlaybackEffect(for: press,
-            scrubbing: playbackState.isScrubbing, selectActivatesFocusedControl: focusedControl) {
-        case .commitScrub:
-            if !commitTouchScrub(resume: true) { commitVirtualScrub() }
-            return true
-        case .togglePlayback: togglePlayPause(); return true
-        default: return false
         }
     }
 
     private var clickDirection: Bool?
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if let type = presses.first?.type, type == consumedTransportDirection {
-            consumedTransportDirection = nil
-            return
+        overlay.handlePressesEnded(presses, with: event) {
+            super.pressesEnded(presses, with: event)
         }
-        if presses.first?.type == .select, consumedPlaybackSelect {
-            consumedPlaybackSelect = false
-            return
-        }
-        if presses.first?.type == .menu { return }
-        if playbackState.failureSentence != nil { super.pressesEnded(presses, with: event); return }
-        if let type = presses.first?.type, type == .leftArrow || type == .rightArrow,
-           let forward = clickDirection {
-            let shortClick = playbackState.userPaused || holdTimer?.isValid == true
-            holdTimer?.invalidate()
-            clickDirection = nil
-            if shortClick && !playbackState.isVirtualScrubbing && !playbackState.menuOpen && !playlistVisible {
-                if touchScrub.proposal != nil { clickTouchProposal(forward: forward) }
-                else { seekRelative(by: (forward ? 1 : -1) * TransportScrub.clickSkipSeconds) }
-                showFeedback(forward ? "goforward.10" : "gobackward.10")
-            }
-            return
-        }
-        super.pressesEnded(presses, with: event)
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if let type = presses.first?.type, type == consumedTransportDirection {
-            consumedTransportDirection = nil
-            return
-        }
-        if presses.first?.type == .select, consumedPlaybackSelect {
-            consumedPlaybackSelect = false
-            return
-        }
-        if presses.first?.type == .menu { return }
-        holdTimer?.invalidate()
         clickDirection = nil
-        super.pressesCancelled(presses, with: event)
+        overlay.handlePressesCancelled(presses, with: event) {
+            super.pressesCancelled(presses, with: event)
+        }
     }
 
     // MARK: - MPV Helpers
 
-    private func setPropertyAsync(_ name: String, value: String) {
+    private func setPropertyAsync(_ name: String, value: String, preservingRecovery: Bool = false) {
         if name == "pause" {
-            stallPlaybackRequested = value == "no"
-            stallDetector.reset()
+            let unpaused = value == "no"
+            stallPlaybackRequested = unpaused
+            if !preservingRecovery {
+                freezeRecovery.resetForPositionChange(initialPosition: playbackState.currentTime)
+            }
         }
         guard let handle = mpv else { return }
         mpvQueue.async { mpv_set_property_string(handle, name, value) }
@@ -2034,17 +2016,32 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         // Periodic status (covers live position) — 1s cadence matches the Android receiver.
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self, self.playbackState.failureSentence == nil else { return }
-            if !self.isMpvStopped, self.stallDetector.sample(now: ProcessInfo.processInfo.systemUptime,
-                buffering: !self.stallHasFirstFrame || self.playbackState.cacheStalled || self.stallCoreIdle,
-                playbackRequested: self.stallPlaybackRequested && !self.isPreBuffering && !StillWatchingGate.isPrompting,
-                hasFirstFrame: self.stallHasFirstFrame, position: self.playbackState.currentTime,
-                bufferedAhead: max(0, self.stallBufferEnd - self.playbackState.currentTime),
-                seeking: Date() <= self.ignoreTimeUpdatesUntil) {
-                self.presentStall(generation: self.mediaIdentity, attempt: self.failureSession.attempt)
-                return
+            MainActor.assumeIsolated {
+                guard let self, self.playbackState.failureSentence == nil else { return }
+                if !self.isMpvStopped {
+                    let action = self.freezeRecovery.sample(
+                        now: ProcessInfo.processInfo.systemUptime,
+                        buffering: !self.stallHasFirstFrame || self.playbackState.cacheStalled || self.stallCoreIdle,
+                        playbackRequested: self.stallPlaybackRequested && !self.playbackState.userPaused
+                            && !self.isPreBuffering && !StillWatchingGate.isPrompting,
+                        hasFirstFrame: self.stallHasFirstFrame,
+                        eofReached: self.stallEofReached,
+                        position: self.playbackState.currentTime,
+                        bufferedAhead: max(0, self.stallBufferEnd - self.playbackState.currentTime),
+                        seeking: Date() <= self.ignoreTimeUpdatesUntil
+                    )
+                    switch action {
+                    case .presentStall:
+                        self.presentStall(generation: self.mediaIdentity, attempt: self.failureSession.attempt)
+                        return
+                    case .reloadAt(let target):
+                        self.recoverAtLastGoodPosition(targetTime: target)
+                    case .none:
+                        break
+                    }
+                }
+                self.broadcastStatus()
             }
-            self.broadcastStatus()
         }
     }
 
@@ -2052,19 +2049,30 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     private func broadcastStatus() {
         guard !isMpvStopped else { return }
         if playbackState.failureSentence != nil, !failureSession.matches(failureSession.attempt) { return }
-        let state = playbackState.failureSentence == nil ? playbackState.surfaceState.rawValue : "error"
+        let itemLoaded = loadedFileIdentity == mediaIdentity
+        let state: String
+        if playbackState.failureSentence != nil {
+            state = "error"
+        } else if !itemLoaded {
+            state = "buffering"
+        } else {
+            state = playbackState.surfaceState.rawValue
+        }
+        let reportedDuration = itemLoaded ? playbackState.duration : 0
         var json: [String: Any] = [
             "type": "status",
             "state": state,
             "position": PlaybackTime.milliseconds(playbackState.currentTime),
-            "duration": PlaybackTime.milliseconds(playbackState.duration),
+            "duration": PlaybackTime.milliseconds(reportedDuration),
+            "generation": mediaIdentity,
+            "itemLoaded": itemLoaded,
         ]
         if let t = mediaTitle, !t.isEmpty { json["title"] = t }
         if let sentence = playbackState.failureSentence { json["error"] = sentence }
         NotificationCenter.default.post(name: .playBridgePlaybackActivity, object: nil,
-            userInfo: ["isPlaying": state == "playing"])
+            userInfo: ["isPlaying": itemLoaded && state == "playing"])
         if let buffered = TimelineReport.buffered(bufferedSeconds: playbackState.bufferedTime,
-            positionSeconds: playbackState.currentTime, durationSeconds: playbackState.duration) {
+            positionSeconds: playbackState.currentTime, durationSeconds: reportedDuration) {
             json["buffered"] = buffered
         }
         onBroadcast?(json)
@@ -2077,6 +2085,7 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     private func startSkipSegments() {
         let identity = mediaIdentity
+        autoSkippedSegmentStarts = []
         playbackState.skipSegments = []
         skipLoader.start(skipMetadata) { [weak self] in
             guard let self, !self.isMpvStopped, self.mediaIdentity == identity else { return }
@@ -2092,6 +2101,17 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         let active = skipLoader.segments.first {
             $0.contains(seconds: playbackState.currentTime)
                 && $0.targetSeconds(duration: playbackState.duration) != nil
+        }
+        if let active, !isPreBuffering, !StillWatchingGate.isPrompting,
+           !autoSkippedSegmentStarts.contains(active.startMs) {
+            let autoPrefs = AutoSkipPreferences.current()
+            if autoPrefs.shouldAutoSkip(segment: active) {
+                autoSkippedSegmentStarts.insert(active.startMs)
+                playbackState.activeSkipSegment = active
+                skipActiveSegment()
+                overlay.showNotice(autoPrefs.noticeText(for: active), icon: "forward.end.fill", duration: 2.0)
+                return
+            }
         }
         if playbackState.activeSkipSegment != active {
             playbackState.activeSkipSegment = active
@@ -2159,7 +2179,17 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
                 return
             }
-            addDownloadedSubtitle(resource, flag: "select", completion: completion)
+            let senderName = note.userInfo?["senderName"] as? String
+            addDownloadedSubtitle(resource, flag: "select") { [weak self] ok in
+                completion(ok)
+                if ok {
+                    let title = PhoneConfirmations.subtitleChangeTitle(
+                        trackName: resource.hasLabel ? resource.label : nil,
+                        off: false
+                    )
+                    self?.overlay.showPhoneCard(PhoneConfirmations.card(kind: .subtitles, title: title, name: senderName))
+                }
+            }
             return
         }
         if cmd == "loop_on" || cmd == "loop_off" {
@@ -2167,156 +2197,12 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             return
         }
         if StillWatchingGate.isPrompting { return }
-        handleControlCommand(cmd)
+        handleControlCommand(cmd, senderName: note.userInfo?["senderName"] as? String)
     }
 
     func bindEngineChrome(_ chrome: PlayerEngineChrome) {
         engineChrome = chrome
-        chrome.handleFailureKey = { [weak self] key in self?.handleFailureKey(key) ?? false }
-        chrome.snapshot = { [weak self] in
-            guard let self else { return PlayerEngineChromeSnapshot() }
-            return PlayerEngineChromeSnapshot(
-                engineMenu: self.playbackState.showEngineMenu,
-                settingsSheet: false,
-                scrubbing: self.playbackState.isScrubbing,
-                controlsVisible: self.playbackState.showUI && !self.isPreBuffering,
-                infoPanel: self.playbackState.showInfoPanel
-            )
-        }
-        chrome.apply = { [weak self] effect in
-            self?.applyRemoteEffect(effect) ?? false
-        }
-    }
-
-    /// Network Back closes one MPV overlay. Scrub cancel matches the physical Menu path.
-    /// Directional keys move the same menus the focus ring uses.
-    private func applyRemoteEffect(_ effect: PlayerRemoteEffect) -> Bool {
-        if playbackState.failureSentence != nil { return true }
-        switch effect {
-        case .dismissInfoPanel:
-            guard playbackState.showInfoPanel else { return false }
-            closeInfoPanel()
-            return true
-        case .dismissEngineMenu:
-            guard playbackState.showEngineMenu else { return false }
-            playbackState.showEngineMenu = false
-            playbackState.transportFocusRevision += 1
-            showUI()
-            return true
-        case .dismissScrub:
-            if touchScrub.proposal != nil { cancelTouchScrub(); return true }
-            guard playbackState.isVirtualScrubbing else { return false }
-            cancelVirtualScrub()
-            return true
-        case .dismissControls:
-            return hideRemoteControls()
-        case .moveHighlight(let delta):
-            return moveOpenMenu(delta)
-        case .activateHighlight:
-            return activateOpenMenu()
-        case .togglePlayback:
-            togglePlayPause()
-            return true
-        case .seekBackward:
-            seekRelative(by: -TransportScrub.remoteSkipSeconds)
-            return true
-        case .seekForward:
-            seekRelative(by: TransportScrub.remoteSkipSeconds)
-            return true
-        case .scrubBackward:
-            if touchScrub.proposal != nil { seekRelative(by: -TransportScrub.remoteSkipSeconds); return true }
-            guard playbackState.isVirtualScrubbing else { return false }
-            showUI(autoHide: false)
-            increaseScrubMultiplier(false)
-            return true
-        case .scrubForward:
-            if touchScrub.proposal != nil { seekRelative(by: TransportScrub.remoteSkipSeconds); return true }
-            guard playbackState.isVirtualScrubbing else { return false }
-            showUI(autoHide: false)
-            increaseScrubMultiplier(true)
-            return true
-        case .commitScrub:
-            if commitTouchScrub(resume: true) { return true }
-            guard playbackState.isVirtualScrubbing else { return false }
-            commitVirtualScrub()
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func hideRemoteControls() -> Bool {
-        guard playbackState.showUI, !isPreBuffering else { return false }
-        controlsRevision += 1
-        hideControlsTimer?.invalidate()
-        hideControlsTimer = nil
-        playbackState.showUI = false
-        playbackState.transportActionFocused = false
-        setNeedsFocusUpdate()
-        return true
-    }
-
-    private func engineRowIDs() -> [Int] {
-        playbackState.transportMenuRows(engine: .mpv).map(\.id)
-    }
-
-    /// Switch, Speed and Audio pop-ups above the action row.
-    private func openTransportMenu(_ menu: TransportMenu) {
-        playbackState.showInfoPanel = false
-        playbackState.transportMenu = menu
-        playbackState.engineHighlight = TransportMenuModel.initialHighlight(
-            rows: playbackState.transportMenuRows(engine: .mpv))
-        playbackState.showEngineMenu = true
-        if menu == .audio || menu == .subtitles { mpvQueue.async { [weak self] in self?.updateTracks() } }
-        showUI()
-    }
-
-    private func applyTransportMenu(_ menu: TransportMenu, rowID id: Int) {
-        switch menu {
-        case .engine:
-            if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != .mpv {
-                onSwitch?(target, playbackState.currentTime)
-            }
-        case .speed:
-            if let speed = TransportMenuModel.speed(forRow: id) { onLocalTuning?(.speed(speed)) }
-        case .subtitles:
-            selectSubtitleTrack(id)
-        case .audio:
-            selectAudioTrack(id)
-        }
-    }
-
-    private func moveOpenMenu(_ delta: Int) -> Bool {
-        if playbackState.showInfoPanel {
-            movePanelRow(delta, physical: false)
-            return true
-        }
-        if playbackState.showEngineMenu {
-            let count = engineRowIDs().count
-            guard count > 0 else { return false }
-            playbackState.engineHighlight = PlayerHighlightList(
-                count: count, index: playbackState.engineHighlight
-            ).moving(delta).index
-            return true
-        }
-        return false
-    }
-
-    private func activateOpenMenu() -> Bool {
-        if playbackState.showInfoPanel { return activatePanelRow() }
-        if playbackState.showEngineMenu {
-            let ids = engineRowIDs()
-            let index = PlayerHighlightList(count: ids.count, index: playbackState.engineHighlight).moving(0).index
-            guard ids.indices.contains(index) else { return false }
-            playbackState.engineHighlight = index
-            let id = ids[index]
-            playbackState.showEngineMenu = false
-            playbackState.transportFocusRevision += 1
-            showUI()
-            applyTransportMenu(playbackState.transportMenu, rowID: id)
-            return true
-        }
-        return false
+        overlay.bindEngineChrome(chrome)
     }
 
     /// Downloads a subtitle with its own request headers, then hands mpv the local file.
@@ -2432,11 +2318,46 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     /// Map a phone `control` command to the player. Runs on main (posted from the WS server).
     /// Session speed/scaling/subtitle offset are handled by PlayerView; filter/audio_boost remain unsupported.
-    private func handleControlCommand(_ cmd: String) {
+    private func handleControlCommand(_ cmd: String, senderName: String? = nil) {
+        if playbackState.isWatchTogetherParty {
+            switch cmd {
+            case "play":
+                _ = TvTogether.shared.localPlay()
+                return
+            case "pause":
+                _ = TvTogether.shared.localPause()
+                return
+            case "play_pause", "toggle":
+                _ = playbackState.isPlaying ? TvTogether.shared.localPause() : TvTogether.shared.localPlay()
+                return
+            case "seek_forward":
+                let target = playbackState.duration > 0
+                    ? min(playbackState.duration, playbackState.currentTime + TransportScrub.remoteSkipSeconds)
+                    : playbackState.currentTime + TransportScrub.remoteSkipSeconds
+                _ = TvTogether.shared.localSeek(positionMs: Int64(max(0, target * 1000)))
+                return
+            case "seek_back":
+                let target = max(0, playbackState.currentTime - TransportScrub.remoteSkipSeconds)
+                _ = TvTogether.shared.localSeek(positionMs: Int64(max(0, target * 1000)))
+                return
+            case let c where c.hasPrefix("seek_to:"):
+                if let ms = Double(c.dropFirst("seek_to:".count)), ms.isFinite, ms >= 0 {
+                    _ = TvTogether.shared.localSeek(positionMs: Int64(ms))
+                }
+                return
+            default:
+                break
+            }
+        }
         if let paused = PlaybackPauseCommand.targetPaused(
             for: cmd, isPlaying: playbackState.isPlaying) {
             if commitTouchScrub(resume: !paused) { return }
-            setPlaybackPaused(paused)
+            setPlaybackPaused(paused, openControls: false)
+            if paused {
+                overlay.showPhonePaused(name: senderName)
+            } else {
+                overlay.clearPhonePaused()
+            }
             return
         }
         switch cmd {
@@ -2444,9 +2365,21 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             broadcastStatus()
             onExit?()
         case "seek_forward":
-            seekRelative(by: TransportScrub.remoteSkipSeconds)
+            let target = playbackState.duration > 0
+                ? min(playbackState.duration, playbackState.currentTime + TransportScrub.remoteSkipSeconds)
+                : playbackState.currentTime + TransportScrub.remoteSkipSeconds
+            discardTouchScrub()
+            playbackState.currentTime = target
+            ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+            seekAsync(to: target)
+            overlay.showPhoneSeek(name: senderName, targetSeconds: target)
         case "seek_back":
-            seekRelative(by: -TransportScrub.remoteSkipSeconds)
+            let target = max(0, playbackState.currentTime - TransportScrub.remoteSkipSeconds)
+            discardTouchScrub()
+            playbackState.currentTime = target
+            ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
+            seekAsync(to: target)
+            overlay.showPhoneSeek(name: senderName, targetSeconds: target)
         case let c where c.hasPrefix("seek_to:"):
             if let ms = Double(c.dropFirst("seek_to:".count)), ms.isFinite, ms >= 0 {
                 discardTouchScrub()
@@ -2454,31 +2387,49 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 playbackState.currentTime = secs
                 ignoreTimeUpdatesUntil = Date().addingTimeInterval(0.75)
                 seekAsync(to: secs)
+                overlay.showPhoneSeek(name: senderName, targetSeconds: secs)
             }
         case let c where c.hasPrefix("audio_track:"):
             let id = String(c.dropFirst("audio_track:".count))
             setPropertyAsync("aid", value: id)
+            var trackName: String?
             if let i = Int(id) {
                 playbackState.currentAudioIndex = i
                 recordAudioPreference(id: i)
+                trackName = playbackState.audioTracks.first(where: { $0.id == i })?.name
             }
             mpvQueue.async { [weak self] in self?.updateTracks() }
+            overlay.showPhoneCard(PhoneConfirmations.card(
+                kind: .audio,
+                title: PhoneConfirmations.audioChangeTitle(trackName: trackName),
+                name: senderName
+            ))
         case let c where c.hasPrefix("sub_track:"):
             let id = String(c.dropFirst("sub_track:".count))
+            var trackName: String?
+            var isOff = false
             if id == "none" || id == "-1" {
+                isOff = true
                 setPropertyAsync("sid", value: "no")
                 playbackState.currentSubtitleIndex = -1
                 recordSubtitlePreference(id: -1)
-            } else if let external = Int(id), externalSubtitleCatalog.option(for: external) != nil {
+            } else if let external = Int(id), let extOpt = externalSubtitleCatalog.option(for: external) {
+                trackName = extOpt.name
                 selectSubtitleTrack(external)
             } else {
                 setPropertyAsync("sid", value: id)
                 if let i = Int(id) {
                     playbackState.currentSubtitleIndex = i
                     recordSubtitlePreference(id: i)
+                    trackName = playbackState.subtitleTracks.first(where: { $0.id == i })?.name
                 }
             }
             mpvQueue.async { [weak self] in self?.updateTracks() }
+            overlay.showPhoneCard(PhoneConfirmations.card(
+                kind: .subtitles,
+                title: PhoneConfirmations.subtitleChangeTitle(trackName: trackName, off: isOff),
+                name: senderName
+            ))
         case let c where c.hasPrefix("add_subtitle:"):
             let urlStr = String(c.dropFirst("add_subtitle:".count))
             guard let handle = mpv, !urlStr.isEmpty else { break }
@@ -2505,8 +2456,6 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         musicHost.remove()
         invalidateFailure()
         skipLoader.cancel()
-        chapterThumbnailer?.cancel()
-        chapterThumbnailer = nil
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
@@ -2515,15 +2464,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         statusTimer?.invalidate()
         statusTimer = nil
-        hideControlsTimer?.invalidate()
-        hideControlsTimer = nil
-        holdTimer?.invalidate()
-        holdTimer = nil
         virtualScrubTickTimer?.invalidate()
         virtualScrubTickTimer = nil
-        feedbackTimer?.invalidate()
-        feedbackTimer = nil
+        overlay.teardown()
         NotificationCenter.default.removeObserver(self)
+        if let observer = subtitleDefaultsObserver {
+            NotificationCenter.default.removeObserver(observer)
+            subtitleDefaultsObserver = nil
+        }
 
         guard let handle = mpv else {
             // mpv never finished initialising — still balance the callback retain if taken.
@@ -2542,8 +2490,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         // Serialize destruction after pending commands without blocking the main thread.
         // Keep the output layer alive until mpv has released the native window pointer.
         let outputLayer = metalLayer
+        Self.pendingDestroyGroup.enter()
         mpvQueue.async {
             mpv_terminate_destroy(handle)
+            Self.pendingDestroyGroup.leave()
             stagedSubtitles.forEach { try? FileManager.default.removeItem(at: $0) }
             withExtendedLifetime(outputLayer) {}
         }

@@ -11,6 +11,7 @@ struct PairingRequest {
     let deviceUUID: String
     let sasCode: String
     let connection: NWConnection
+    let createdAt: Date = Date()
 }
 
 struct ConnectionHandshake {
@@ -33,7 +34,9 @@ class WebSocketServer: ObservableObject {
     private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
     private var capabilitySubscriptions = ReceiverCapabilitySubscription<ObjectIdentifier>()
     private var connectionAuthorization = ConnectionAuthorization<ObjectIdentifier>()
+    private var connectionDeviceNames: [ObjectIdentifier: String] = [:]
     private var authenticationTimeouts: [ObjectIdentifier: DispatchWorkItem] = [:]
+    @Published var currentSenderName: String? = nil
     private var historyStore: HistoryStore?
     let progressWebhook = PlaybackProgressWebhook()
     var playlistStore: PlaylistStore?
@@ -50,7 +53,41 @@ class WebSocketServer: ObservableObject {
     private var commandResultOrder: [String] = []
     private var pendingCommandIDs: Set<String> = []
 
+    private(set) var playbackSessionID: Int = 0
+    @Published private(set) var playRequestNonce: Int = 0
+    private var reusePlaybackSessionOnce = false
+
+    @MainActor
+    func replaceCurrentPlayRequest(_ next: Playbridge_PlayPayload?) {
+        if currentPlayRequest != nil {
+            historyStore?.flushProgress()
+        }
+        guard let next else {
+            currentPlayRequest = nil
+            return
+        }
+        let transition = TogetherPlaybackPolicy.transition(
+            hasActiveRequest: currentPlayRequest != nil,
+            activeIsImage: currentPlayRequest?.resolvedMediaKind == .image,
+            incomingIsImage: next.resolvedMediaKind == .image,
+            currentNonce: playRequestNonce
+        )
+        reusePlaybackSessionOnce = transition.reuseSession
+        playRequestNonce = transition.nextNonce
+        currentPlayRequest = next
+    }
     @Published var currentPlayRequest: Playbridge_PlayPayload? {
+        willSet {
+            if newValue != nil {
+                if reusePlaybackSessionOnce {
+                    reusePlaybackSessionOnce = false
+                } else {
+                    playbackSessionID &+= 1
+                }
+            } else {
+                reusePlaybackSessionOnce = false
+            }
+        }
         didSet {
             if currentPlayRequest == nil {
                 activePlaybackEngine = nil
@@ -80,6 +117,7 @@ class WebSocketServer: ObservableObject {
     @Published var pendingPairingRequest: PairingRequest?
     @Published var pairedDevicesList: [PairedDevice] = []
     @Published var connectedCount: Int = 0
+    @Published var connectedDeviceNames: [String] = []
     @Published var localIP: String = "0.0.0.0"
     @Published var serverState: String = "Stopped"
     // Bound wss:// port (the port external senders connect to). Nil until TLS starts.
@@ -155,6 +193,8 @@ class WebSocketServer: ObservableObject {
     /// Re-broadcasts `playlist_status` whenever the queue changes — including index moves
     /// driven by the player UI (next/jump), which never pass through the server.
     private var playlistCancellable: AnyCancellable?
+    private var subtitleStyleObserver: NSObjectProtocol?
+    private var fontReceivers: [ObjectIdentifier: SubtitleFontReceiver] = [:]
 
     init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil,
          pageMedia: PageMediaRouter = PageMediaRouter(proxy: TVProxyHost.shared)) {
@@ -171,6 +211,15 @@ class WebSocketServer: ObservableObject {
             .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.broadcastPlaylistStatus() }
 
+        subtitleStyleObserver = NotificationCenter.default.addObserver(
+            forName: .playBridgeSubtitleStyleDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.broadcast(SubtitleStyleStore.shared.wireDictionary())
+            }
+        }
     }
 
     func start(port: UInt16? = nil) {
@@ -286,7 +335,7 @@ class WebSocketServer: ObservableObject {
             listener.service = makeBonjourService(wssPort: port)
             wssPort = port
             UserDefaults.standard.set(Int(port), forKey: receiverPortKey)
-            serverState = "Ready to Connect"
+            serverState = "Ready to connect"
             restartAttempts = 0
             print("[wss] listening on \(port)")
         case .failed(let error):
@@ -362,13 +411,14 @@ class WebSocketServer: ObservableObject {
         activeConnections.removeAll()
         capabilitySubscriptions.removeAll()
         connectionAuthorization.removeAll()
+        connectionDeviceNames.removeAll()
         connectedConnections.removeAll()
         for connection in connections {
             connection.stateUpdateHandler = nil
             connection.viabilityUpdateHandler = nil
             connection.cancel()
         }
-        connectedCount = 0
+        refreshConnectedStats()
         isAuthenticated = false
         pendingPairingRequest = nil
         serverState = "Stopped"
@@ -403,7 +453,7 @@ class WebSocketServer: ObservableObject {
     private func sendPing(to connection: NWConnection) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
         let context = NWConnection.ContentContext(identifier: "keepalive-ping", metadata: [metadata])
-        connection.send(content: nil, contentContext: context, isComplete: true,
+        connection.send(content: Data(), contentContext: context, isComplete: true,
                         completion: .contentProcessed({ [weak self] error in
             if let error = error {
                 print("Keepalive ping failed for \(connection.endpoint): \(error)")
@@ -462,10 +512,10 @@ class WebSocketServer: ObservableObject {
         
         DispatchQueue.main.async {
             self.serverState = "Incorrect code or connection lost"
-            // Wait 3 seconds and reset to "Ready to Connect"
+            // Wait 3 seconds and reset to "Ready to connect"
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 if self.serverState == "Incorrect code or connection lost" {
-                    self.serverState = "Ready to Connect"
+                    self.serverState = "Ready to connect"
                 }
             }
         }
@@ -477,13 +527,15 @@ class WebSocketServer: ObservableObject {
         authenticationTimeouts.removeValue(forKey: id)?.cancel()
         capabilitySubscriptions.remove(id)
         connectionAuthorization.remove(id)
+        connectionDeviceNames.removeValue(forKey: id)
+        fontReceivers.removeValue(forKey: id)?.abandon()
         connection.stateUpdateHandler = nil
         connection.viabilityUpdateHandler = nil
         connection.cancel()
         handleHandshakeFailure(for: connection)
         DispatchQueue.main.async {
             self.connectedConnections.removeAll(where: { $0 === connection })
-            self.connectedCount = self.connectedConnections.count
+            self.refreshConnectedStats()
             self.isAuthenticated = !self.connectedConnections.isEmpty
             if self.pendingPairingRequest?.connection === connection {
                 self.autoTimeoutWork?.cancel()
@@ -557,8 +609,170 @@ class WebSocketServer: ObservableObject {
                     from: connection
                 )
             }
+        case "watch_together_join":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                handleWatchTogetherJoin(json, from: connection)
+            }
+        case "subtitle_style_query":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.send(json: SubtitleStyleStore.shared.wireDictionary(), to: connection)
+                }
+            }
+        case "subtitle_style":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let result = SubtitleStyleStore.shared.applyFromPhoneJSON(json)
+                    if !result.changed {
+                        self.send(json: SubtitleStyleStore.shared.wireDictionary(), to: connection)
+                    }
+                }
+            }
+        case "subtitle_font_begin":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                handleSubtitleFontBegin(json, from: connection)
+            }
+        case "subtitle_font_chunk":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                handleSubtitleFontChunk(json, from: connection)
+            }
+        case "subtitle_font_end":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                handleSubtitleFontEnd(json, from: connection)
+            }
+        case "subtitle_font_remove":
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials),
+               let family = json["family"] as? String {
+                DispatchQueue.main.async {
+                    SubtitleStyleStore.shared.removeFont(family)
+                }
+            }
         default:
             break
+        }
+    }
+
+    private func fontReceiver(for connection: NWConnection) -> SubtitleFontReceiver {
+        let id = ObjectIdentifier(connection)
+        if let existing = fontReceivers[id] {
+            return existing
+        }
+        let receiver = SubtitleFontReceiver(install: SubtitleFontLibrary.shared.add)
+        fontReceivers[id] = receiver
+        return receiver
+    }
+
+    private func sendFontReply(
+        _ result: SubtitleFontReceiver.Result,
+        transferId: String,
+        to connection: NWConnection
+    ) {
+        switch result {
+        case .ack(let received):
+            send(json: [
+                "type": "subtitle_font_ack",
+                "transferId": transferId,
+                "received": received,
+            ], to: connection)
+        case .installed(let family):
+            send(json: [
+                "type": "subtitle_font_result",
+                "transferId": transferId,
+                "ok": true,
+                "family": family,
+            ], to: connection)
+        case .failed(let code):
+            send(json: [
+                "type": "subtitle_font_result",
+                "transferId": transferId,
+                "ok": false,
+                "error": code,
+            ], to: connection)
+        }
+    }
+
+    private func handleSubtitleFontBegin(_ json: [String: Any], from connection: NWConnection) {
+        guard let transferId = json["transferId"] as? String,
+              let sha256 = json["sha256"] as? String,
+              let rawSize = json["size"] as? NSNumber,
+              CFGetTypeID(rawSize) != CFBooleanGetTypeID() else {
+            return
+        }
+        let result = fontReceiver(for: connection).begin(
+            transferId: transferId,
+            size: rawSize.int64Value,
+            sha256: sha256
+        )
+        sendFontReply(result, transferId: transferId, to: connection)
+    }
+
+    private func handleSubtitleFontChunk(_ json: [String: Any], from connection: NWConnection) {
+        guard let transferId = json["transferId"] as? String,
+              let data = json["data"] as? String,
+              let rawOffset = json["offset"] as? NSNumber,
+              CFGetTypeID(rawOffset) != CFBooleanGetTypeID() else {
+            return
+        }
+        let result = fontReceiver(for: connection).chunk(
+            transferId: transferId,
+            offset: rawOffset.intValue,
+            base64: data
+        )
+        sendFontReply(result, transferId: transferId, to: connection)
+    }
+
+    private func handleSubtitleFontEnd(_ json: [String: Any], from connection: NWConnection) {
+        guard let transferId = json["transferId"] as? String else { return }
+        let receiver = fontReceiver(for: connection)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = receiver.end(transferId: transferId)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if case .installed(let family) = result {
+                    SubtitleStyleStore.shared.completeFontInstall(family: family)
+                }
+                self.sendFontReply(result, transferId: transferId, to: connection)
+            }
+        }
+    }
+
+    @MainActor
+    func playForWatchTogether(_ payload: Playbridge_PlayPayload) -> Bool {
+        guard playlistStore?.setPlaylist(items: [payload], startIndex: 0) == true else {
+            return false
+        }
+        let nextItem = playlistStore?.currentItem ?? payload
+        TrackPreferences.shared.reset()
+        progressWebhook.finish(clear: true)
+        currentSenderName = nil
+        skipPreplayForCurrentRequest = true
+        replaceCurrentPlayRequest(nextItem)
+        return true
+    }
+
+    private func handleWatchTogetherJoin(_ json: [String: Any], from connection: NWConnection) {
+        guard let invite = json["invite"] as? String, !invite.isEmpty, invite.count <= 2048 else {
+            send(json: ["type": "watch_together_joined", "ok": false, "error": "invalid_invite"], to: connection)
+            return
+        }
+        let from = ((json["from"] as? String) ?? "").prefix(128)
+        DispatchQueue.main.async {
+            TvTogether.shared.joinFromPhone(invite: invite, from: String(from)) { [weak self] joined, error in
+                var reply: [String: Any] = [
+                    "type": "watch_together_joined",
+                    "ok": joined != nil,
+                ]
+                if let joined {
+                    reply["member"] = joined.member
+                    reply["box_pk"] = joined.boxKey
+                    reply["sign_pk"] = joined.signKey
+                } else {
+                    reply["error"] = error ?? "unavailable"
+                }
+                self?.send(json: reply, to: connection)
+            }
         }
     }
 
@@ -833,6 +1047,7 @@ class WebSocketServer: ObservableObject {
     /// `remote` key (userInfo["key"]). The active player view observes these.
     static let controlCommand = Notification.Name("PlayBridgeControlCommand")
     static let remoteKey = Notification.Name("PlayBridgeRemoteKey")
+    static let queueChange = Notification.Name("PlayBridgeQueueChange")
     /// Posted when a client (re)connects; the active player re-broadcasts status + tracks.
     static let resyncRequest = Notification.Name("PlayBridgeResync")
     /// Absolute app volume. userInfo["level"] is a finite number in [0, 1].
@@ -928,12 +1143,15 @@ class WebSocketServer: ObservableObject {
             guard self.activeConnections[id] != nil,
                   self.pairingCredentials.isTokenAuthorized(token) else { return }
             self.connectionAuthorization.authorize(id, token: token)
+            if let name = self.pairingCredentials.deviceName(forToken: token) {
+                self.connectionDeviceNames[id] = name
+            }
             self.authenticationTimeouts.removeValue(forKey: id)?.cancel()
             self.isAuthenticated = true
             if !self.connectedConnections.contains(where: { $0 === connection }) {
                 self.connectedConnections.append(connection)
             }
-            self.connectedCount = self.connectedConnections.count
+            self.refreshConnectedStats()
             if sendAuthResponse {
                 // Safe on reconnect: the sender has already pinned this TLS identity.
                 let response = TvCapabilities.buildAuthResponsePayload(
@@ -1123,8 +1341,19 @@ class WebSocketServer: ObservableObject {
                     self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                     return
                 }
+                let senderName = self.connectionDeviceNames[ObjectIdentifier(connection)]
                 self.completeCommand(requestID, ok: true, to: connection)
                 self.broadcastPlaylistStatus(to: connection)
+                let addedTitle = valid.count == 1 ? valid.first?.titleOrNil : "\(valid.count) items"
+                NotificationCenter.default.post(
+                    name: Self.queueChange,
+                    object: nil,
+                    userInfo: [
+                        "kind": "add",
+                        "title": addedTitle as Any,
+                        "senderName": senderName as Any,
+                    ]
+                )
             }
         case "playlist_jump":
             guard let p = try? Playbridge_PlaylistJumpPayload(jsonString: payloadJson) else {
@@ -1160,8 +1389,20 @@ class WebSocketServer: ObservableObject {
                             headers: req.headersOrNil
                         )
                     }
-                    self.currentPlayRequest = req
+                    self.replaceCurrentPlayRequest(req)
                     self.completeCommand(requestID, ok: true, to: connection)
+                    let senderName = self.connectionDeviceNames[ObjectIdentifier(connection)]
+                    NotificationCenter.default.post(
+                        name: Self.queueChange,
+                        object: nil,
+                        userInfo: [
+                            "kind": "jump",
+                            "title": req.titleOrNil as Any,
+                            "index": store.currentIndex,
+                            "count": store.items.count,
+                            "senderName": senderName as Any,
+                        ]
+                    )
                 } else {
                     self.completeCommand(requestID, ok: false, error: "item_not_found", to: connection)
                 }
@@ -1188,7 +1429,7 @@ class WebSocketServer: ObservableObject {
                 let previousItemID = store.currentItemID
                 if store.remove(itemIDs: Set(p.itemIds)) {
                     if previousItemID != store.currentItemID {
-                        self.currentPlayRequest = store.currentItem
+                        self.replaceCurrentPlayRequest(store.currentItem)
                     }
                     self.retainPageMedia()
                     self.completeCommand(requestID, ok: true, to: connection)
@@ -1236,6 +1477,7 @@ class WebSocketServer: ObservableObject {
                 self.progressWebhook.finish(clear: true)
                 store.clear()
                 self.currentPlayRequest = nil
+                self.currentSenderName = nil
                 self.pageMedia.releaseAll()
                 self.completeCommand(requestID, ok: true, to: connection)
                 self.broadcastPlaylistStatus(to: connection)
@@ -1248,6 +1490,7 @@ class WebSocketServer: ObservableObject {
                     }
                     return
                 }
+                let senderName = self.connectionDeviceNames[ObjectIdentifier(connection)]
                 DispatchQueue.main.async {
                     if StillWatchingGate.isPrompting {
                         if p.command == "stop" {
@@ -1258,8 +1501,10 @@ class WebSocketServer: ObservableObject {
                         return
                     }
                     NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+                    var info: [String: Any] = ["command": p.command]
+                    if let senderName { info["senderName"] = senderName }
                     NotificationCenter.default.post(
-                        name: Self.controlCommand, object: nil, userInfo: ["command": p.command])
+                        name: Self.controlCommand, object: nil, userInfo: info)
                 }
             }
         case "remote":
@@ -1350,11 +1595,16 @@ class WebSocketServer: ObservableObject {
             self.completeCommand(requestID, ok: ok,
                                  error: ok ? nil : "subtitle_unavailable", to: connection)
         }
+        let senderName = connectionDeviceNames[ObjectIdentifier(connection)]
+        var info: [String: Any] = [
+            "command": p.command,
+            "subtitleResource": resource,
+            "subtitleCompletion": finish,
+        ]
+        if let senderName { info["senderName"] = senderName }
         NotificationCenter.default.post(
             name: Self.controlCommand, object: nil,
-            userInfo: ["command": p.command,
-                       "subtitleResource": resource,
-                       "subtitleCompletion": finish])
+            userInfo: info)
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) { finish(false) }
     }
 
@@ -1405,8 +1655,9 @@ class WebSocketServer: ObservableObject {
                 self.historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
             }
             if let connection { self.completeCommand(requestID, ok: true, to: connection) }
+            self.currentSenderName = connection.flatMap { self.connectionDeviceNames[ObjectIdentifier($0)] }
             self.skipPreplayForCurrentRequest = false
-            self.currentPlayRequest = self.playlistStore?.currentItem ?? payload
+            self.replaceCurrentPlayRequest(self.playlistStore?.currentItem ?? payload)
         }
     }
 
@@ -1447,11 +1698,59 @@ class WebSocketServer: ObservableObject {
                 token: payload.hasProgressWebhook ? payload.progressWebhook.bearerToken : nil,
                 playbackID: self.playlistStore?.playbackID ?? UUID().uuidString)
             self.skipPreplayForCurrentRequest = payload.skipPreplay
+            self.currentSenderName = self.connectionDeviceNames[ObjectIdentifier(connection)]
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
                 if first.recordsHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }
-                self.currentPlayRequest = first
+                self.replaceCurrentPlayRequest(first)
             }
         }
+    }
+
+    func playBookmark(_ item: PlaybackHistoryItem, startOver: Bool) {
+        guard let resume = historyStore?.resumePayload(for: item, startOver: startOver),
+              !resume.items.isEmpty else { return }
+        let payloads: [Playbridge_PlayPayload] = resume.items.enumerated().map { idx, qItem in
+            var p = Playbridge_PlayPayload()
+            p.url = qItem.url
+            if let title = qItem.title { p.title = title }
+            if let headers = qItem.headers, !headers.isEmpty { p.headers = headers }
+            p.subtitleResources = qItem.subtitles.map { sub in
+                var s = Playbridge_SubtitleResource()
+                s.url = sub.url
+                if let label = sub.label { s.label = label }
+                if let h = sub.headers, !h.isEmpty { s.headers = h }
+                return s
+            }
+            if idx == resume.startIndex {
+                p.startPositionMs = resume.startPositionMs
+            } else if let pos = qItem.startPositionMs {
+                p.startPositionMs = pos
+            }
+            if item.isPrivate {
+                p.skipHistory = true
+            }
+            return p
+        }
+        let targetIndex = min(max(0, resume.startIndex), payloads.count - 1)
+        let target = payloads[targetIndex]
+        TrackPreferences.shared.reset()
+        progressWebhook.finish(clear: true)
+        currentSenderName = nil
+        skipPreplayForCurrentRequest = true
+        if payloads.count > 1 {
+            _ = playlistStore?.setPlaylist(items: payloads, startIndex: targetIndex)
+        } else {
+            playlistStore?.clear()
+        }
+        if !item.isPrivate, let url = target.validURL {
+            historyStore?.addToHistory(url: url, title: target.titleOrNil, headers: target.headersOrNil)
+        }
+        replaceCurrentPlayRequest(playlistStore?.currentItem ?? target)
+    }
+
+    private func refreshConnectedStats() {
+        connectedCount = connectedConnections.count
+        connectedDeviceNames = connectedConnections.compactMap { connectionDeviceNames[ObjectIdentifier($0)] }
     }
 
     // MARK: - Send

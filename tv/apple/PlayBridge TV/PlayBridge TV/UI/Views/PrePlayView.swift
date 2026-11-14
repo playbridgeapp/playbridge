@@ -1,132 +1,113 @@
 import SwiftUI
-import Combine
-
-// MARK: - Countdown Ring
-
-private struct CountdownRing: View {
-    let total: Int
-    let remaining: Int
-
-    private var progress: Double {
-        guard total > 0 else { return 0 }
-        return Double(remaining) / Double(total)
-    }
-
-    var body: some View {
-        ZStack {
-            // Track
-            Circle()
-                .stroke(Color.white.opacity(0.15), lineWidth: 4)
-
-            // Progress arc
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(
-                    AngularGradient(
-                        gradient: Gradient(colors: [Color.white.opacity(0.3), Color.white]),
-                        center: .center,
-                        startAngle: .degrees(-90),
-                        endAngle: .degrees(270)
-                    ),
-                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-                .animation(.linear(duration: 1), value: progress)
-
-            // Number
-            Text("\(remaining)")
-                .font(.system(size: 40, weight: .semibold, design: .rounded))
-                .foregroundColor(.white)
-                .contentTransition(.numericText())
-        }
-        .frame(width: 72, height: 72)
-    }
-}
-
-// MARK: - Metadata Chip
-
-private struct MetaChip: View {
-    let label: String
-    var accent: Color = .white
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 26, weight: .semibold))
-            .foregroundColor(accent)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(accent.opacity(0.25), lineWidth: 1)
-            )
-    }
-}
-
-// MARK: - PrePlayView
 
 struct PrePlayView: View {
     let metadata: Playbridge_VisualMetadata
-    let onStart: () -> Void
+    let senderName: String?
+    let savedPositionMs: Int64?
+    let durationMs: Int64?
+    let upNextTitle: String?
+    let upNextSubtitle: String?
+    let onStart: (Int64?) -> Void
     let onBack: () -> Void
 
-    private let totalCountdown = 7
-    private let maxLoadWait: UInt64 = 3_000_000_000  // 3 seconds
+    private let colors = TvColors.dark
+    private let totalCountdown: Double = 5.0
+    private let maxLoadWait: UInt64 = 3_000_000_000
 
-    @State private var isAnimating = false
     @State private var isReady = false
     @State private var backdropLoaded = false
-    @State private var posterLoaded = false
-    @State private var countdown = 7
-    @State private var timerTask: Task<Void, Never>? = nil
-    @State private var readinessTask: Task<Void, Never>? = nil
+    @State private var elapsed: Double = 0
+    @State private var countdownPaused = false
+    @State private var timerTask: Task<Void, Never>?
+    @State private var readinessTask: Task<Void, Never>?
 
-    /// True as soon as all expected images are loaded (or URLs are absent).
+    @FocusState private var focusedButton: ResumeAction?
+
+    private enum ResumeAction: Hashable {
+        case resume
+        case startOver
+    }
+
+    private var resumeInfo: (fraction: Double, stoppedText: String, buttonTitle: String)? {
+        HomeFormatting.prePlayResumeInfo(positionMs: savedPositionMs, durationMs: durationMs)
+    }
+
     private var imagesReady: Bool {
         let needsBackdrop = metadata.hasBackdropURL || metadata.hasPosterURL
-        let needsPoster   = metadata.hasPosterURL
-        let backdropOk    = !needsBackdrop || backdropLoaded
-        let posterOk      = !needsPoster   || posterLoaded
-        return backdropOk && posterOk
+        return !needsBackdrop || backdropLoaded
+    }
+
+    private var secondsRemaining: Int {
+        max(0, Int(ceil(totalCountdown - elapsed)))
+    }
+
+    private var autoProgress: Double {
+        min(1.0, max(0.0, elapsed / totalCountdown))
     }
 
     var body: some View {
         ZStack {
-            // Black base — visible while images load
-            Color.black.ignoresSafeArea()
+            colors.surface.ignoresSafeArea()
 
-            // ── Layer 1: Full-bleed backdrop ──────────────────────────────
             backdrop
 
-            // ── Layer 2: Cinematic gradient scrim ─────────────────────────
-            if isReady { scrim }
-
-            // ── Layer 3: Main content ─────────────────────────────────────
             if isReady {
-                HStack(alignment: .center, spacing: 0) {
-                    contentColumn
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(isAnimating ? 1 : 0)
-                        .offset(x: isAnimating ? 0 : -60)
+                scrim
 
-                    posterColumn
-                        .opacity(isAnimating ? 1 : 0)
-                        .offset(x: isAnimating ? 0 : 60)
+                ZStack(alignment: .topLeading) {
+                    if let senderName, !senderName.isEmpty {
+                        HStack(spacing: TvScale.pt(8)) {
+                            Image(systemName: "iphone")
+                                .font(.system(size: TvScale.pt(14), weight: .semibold))
+                            Text("From \(senderName)")
+                                .font(.system(size: TvScale.pt(16), weight: .medium))
+                        }
+                        .foregroundColor(colors.onAccentContainer)
+                        .padding(.horizontal, TvScale.pt(16))
+                        .frame(height: TvScale.pt(36))
+                        .background(colors.accentContainer)
+                        .clipShape(Capsule())
+                        .padding(.leading, TvSpacing.screenGutter)
+                        .padding(.top, TvScale.pt(40))
+                    }
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Spacer()
+                        metadataColumn
+                        Spacer()
+                        HStack(alignment: .bottom) {
+                            bottomActionArea
+                            Spacer()
+                            if let upNextTitle {
+                                upNextCard(title: upNextTitle, subtitle: upNextSubtitle)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, TvSpacing.screenGutter)
+                    .padding(.bottom, TvScale.pt(48))
                 }
             }
         }
         .ignoresSafeArea()
         .onAppear {
-            // Fallback: reveal after maxLoadWait regardless of image state
-            readinessTask = Task {
-                try? await Task.sleep(nanoseconds: maxLoadWait)
-                if !Task.isCancelled {
-                    await MainActor.run { markReady() }
+            if imagesReady {
+                markReady()
+            } else {
+                readinessTask = Task {
+                    try? await Task.sleep(nanoseconds: maxLoadWait)
+                    if !Task.isCancelled {
+                        await MainActor.run { markReady() }
+                    }
                 }
             }
         }
         .onChange(of: imagesReady) { _, ready in
             if ready { markReady() }
+        }
+        .onChange(of: focusedButton) { _, newFocus in
+            if newFocus == .startOver {
+                countdownPaused = true
+            }
         }
         .onDisappear {
             timerTask?.cancel()
@@ -134,27 +115,22 @@ struct PrePlayView: View {
             readinessTask?.cancel()
             readinessTask = nil
         }
-        .onExitCommand {
-            onBack()
-        }
+        .onExitCommand(perform: onBack)
     }
 
     private func markReady() {
         guard !isReady else { return }
         isReady = true
         readinessTask?.cancel()
-        withAnimation(.spring(response: 0.9, dampingFraction: 0.8)) {
-            isAnimating = true
+        if resumeInfo != nil {
+            focusedButton = .resume
         }
         startCountdown()
     }
 
-    // MARK: - Backdrop
-
     @ViewBuilder
     private var backdrop: some View {
         GeometryReader { proxy in
-            // Sharp, full-resolution backdrop as on Android TV; the scrim keeps text legible.
             let urls = metadata.hasBackdropURL ? ArtworkURL.candidates(metadata.backdropURL, kind: .backdrop)
                 : (metadata.hasPosterURL ? ArtworkURL.candidates(metadata.posterURL, kind: .poster) : [])
             ArtworkImage(urls: urls, onResult: { _ in backdropLoaded = true }) { image in
@@ -164,23 +140,20 @@ struct PrePlayView: View {
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
             } placeholder: {
-                Color.black
+                colors.container
             }
         }
         .ignoresSafeArea()
     }
 
-    // MARK: - Scrim
-
-    /// Android TV's scrim: one left-to-right fade (98% → clear at ~73% width),
-    /// no top/bottom vignettes, so the backdrop reads as clearly as on Android.
     private var scrim: some View {
         LinearGradient(
             stops: [
-                .init(color: .black.opacity(0.98), location: 0.0),
-                .init(color: .black.opacity(0.90), location: 0.243),
-                .init(color: .black.opacity(0.60), location: 0.486),
-                .init(color: .clear, location: 0.729)
+                .init(color: colors.surface.opacity(0.95), location: 0.0),
+                .init(color: colors.surface.opacity(0.92), location: 0.52),
+                .init(color: colors.surface.opacity(0.60), location: 0.65),
+                .init(color: colors.surface.opacity(0.25), location: 0.80),
+                .init(color: .clear, location: 1.0),
             ],
             startPoint: .leading,
             endPoint: .trailing
@@ -188,172 +161,223 @@ struct PrePlayView: View {
         .ignoresSafeArea()
     }
 
-    // MARK: - Left Content Column
-
-    private var contentColumn: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Spacer()
-
-            // Logo or Title
-            if metadata.hasLogoURL, !ArtworkURL.candidates(metadata.logoURL, kind: .logo).isEmpty {
-                ArtworkImage(urls: ArtworkURL.candidates(metadata.logoURL, kind: .logo)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: 520, maxHeight: 140)
-                        .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
-                } placeholder: {
-                    titleText
+    private var metadataColumn: some View {
+        VStack(alignment: .leading, spacing: TvScale.pt(18)) {
+            VStack(alignment: .leading, spacing: TvScale.pt(8)) {
+                if metadata.hasSeason && metadata.hasEpisode {
+                    Text("Season \(metadata.season) · Episode \(metadata.episode)")
+                        .font(.system(size: TvScale.pt(20), weight: .medium))
+                        .foregroundColor(colors.accent)
                 }
-            } else {
-                titleText
+
+                Text(metadata.title)
+                    .font(.system(size: TvScale.pt(64), weight: .bold))
+                    .foregroundColor(colors.onSurface)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+
+                if metadata.hasEpisodeTitle {
+                    Text(metadata.episodeTitle)
+                        .font(.system(size: TvScale.pt(26), weight: .semibold))
+                        .foregroundColor(colors.onSurface)
+                        .lineLimit(1)
+                }
             }
 
-            Spacer().frame(height: 24)
+            HStack(spacing: TvScale.pt(10)) {
+                if metadata.hasYear {
+                    chip(metadata.year)
+                }
+                if metadata.hasRuntime {
+                    chip(metadata.runtime)
+                }
+                if metadata.hasRating {
+                    chip("IMDb \(metadata.rating)")
+                }
+            }
 
-            // Metadata chips row
-            metaChipsRow
-
-            Spacer().frame(height: 20)
-
-            // Episode info (series only)
-            episodeInfo
-
-            Spacer().frame(height: 22)
-
-            // Overview
             if metadata.hasOverview {
                 Text(metadata.overview)
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(5)
-                    .lineSpacing(6)
-                    .frame(maxWidth: 620, alignment: .leading)
+                    .font(.system(size: TvScale.pt(19)))
+                    .foregroundColor(colors.onSurface)
+                    .lineSpacing(TvScale.pt(6))
+                    .lineLimit(4)
+                    .frame(maxWidth: TvScale.pt(540), alignment: .leading)
             }
-
-            Spacer()
-
-            // Bottom: countdown
-            countdownRow
-
-            Spacer().frame(height: 70)
         }
-        .padding(.leading, 90)
-        .padding(.trailing, 40)
+        .frame(maxWidth: TvScale.pt(600), alignment: .leading)
     }
 
-    private var titleText: some View {
-        Text(metadata.title)
-            .font(.system(size: 104, weight: .black, design: .default))
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 6)
-            .lineLimit(2)
-            .minimumScaleFactor(0.6)
+    private func chip(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: TvScale.pt(17), weight: .medium))
+            .foregroundColor(colors.onSurface)
+            .padding(.horizontal, TvScale.pt(14))
+            .frame(height: TvSize.chip)
+            .background(colors.containerHigh)
+            .clipShape(Capsule())
     }
 
     @ViewBuilder
-    private var metaChipsRow: some View {
-        HStack(spacing: 10) {
-            if metadata.hasYear {
-                MetaChip(label: metadata.year)
-            }
-            if metadata.hasRating {
-                MetaChip(label: "IMDb \(metadata.rating)", accent: Color(hue: 0.13, saturation: 0.9, brightness: 0.95))
-            }
-            if metadata.hasRuntime {
-                MetaChip(label: metadata.runtime)
-            }
-        }
-    }
+    private var bottomActionArea: some View {
+        if let info = resumeInfo {
+            VStack(alignment: .leading, spacing: TvScale.pt(16)) {
+                VStack(alignment: .leading, spacing: TvScale.pt(8)) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(colors.bright)
+                            Capsule()
+                                .fill(colors.accent)
+                                .frame(width: geo.size.width * info.fraction)
+                        }
+                    }
+                    .frame(width: TvScale.pt(420), height: TvScale.pt(6))
 
-    @ViewBuilder
-    private var episodeInfo: some View {
-        if metadata.hasSeason && metadata.hasEpisode {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    Text("S\(metadata.season)")
-                        .font(.system(size: 25, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    Text(info.stoppedText)
+                        .font(TvText.caption)
+                        .foregroundColor(colors.onSurfaceMuted)
+                }
 
-                    Text("E\(metadata.episode)")
-                        .font(.system(size: 25, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                HStack(spacing: TvScale.pt(14)) {
+                    Button(action: { onStart(nil) }) {
+                        ZStack(alignment: .leading) {
+                            if !countdownPaused {
+                                GeometryReader { geo in
+                                    colors.accent
+                                        .frame(width: geo.size.width * autoProgress)
+                                }
+                            }
+                            HStack(spacing: TvScale.pt(12)) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: TvScale.pt(20)))
+                                Text(info.buttonTitle)
+                                    .font(.system(size: TvScale.pt(20), weight: .semibold))
+                            }
+                            .foregroundColor(focusedButton == .resume ? colors.onFocusFill : colors.onSurface)
+                            .padding(.horizontal, TvScale.pt(28))
+                        }
+                        .frame(height: TvScale.pt(64))
+                        .fixedSize(horizontal: true, vertical: false)
+                        .background(focusedButton == .resume ? colors.onSurface : colors.containerHigh)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(focusedButton == .resume ? colors.focusRing : Color.clear, lineWidth: TvSize.focusRingWidth)
+                                .padding(-TvSize.focusRingGap)
+                        )
+                    }
+                    .buttonStyle(TvNoChromeButtonStyle())
+                    .focusEffectDisabled()
+                    .focused($focusedButton, equals: .resume)
+                    .appRemoteAction { onStart(nil) }
 
-                    if metadata.hasEpisodeTitle {
-                        Text("·")
-                            .foregroundStyle(.white.opacity(0.3))
-                        Text(metadata.episodeTitle)
-                            .font(.system(size: 30, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .lineLimit(1)
+                    Button(action: { onStart(0) }) {
+                        HStack(spacing: TvScale.pt(10)) {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: TvScale.pt(20), weight: .semibold))
+                            Text("Start over")
+                                .font(.system(size: TvScale.pt(20), weight: .medium))
+                        }
+                        .foregroundColor(focusedButton == .startOver ? colors.onFocusFill : colors.onSurface)
+                        .padding(.horizontal, TvScale.pt(26))
+                        .frame(height: TvScale.pt(64))
+                        .background(focusedButton == .startOver ? colors.focusFill : colors.containerHigh)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(focusedButton == .startOver ? colors.focusRing : Color.clear, lineWidth: TvSize.focusRingWidth)
+                                .padding(-TvSize.focusRingGap)
+                        )
+                    }
+                    .buttonStyle(TvNoChromeButtonStyle())
+                    .focusEffectDisabled()
+                    .focused($focusedButton, equals: .startOver)
+                    .appRemoteAction { onStart(0) }
+                }
+
+                Text(
+                    countdownPaused
+                        ? "Auto-resume paused"
+                        : "Resuming in \(secondsRemaining) \(secondsRemaining == 1 ? "second" : "seconds"). Press OK to go now."
+                )
+                .font(TvText.caption)
+                .foregroundColor(colors.onSurfaceMuted)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: TvScale.pt(14)) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Getting ready…")
+                        .font(.system(size: TvScale.pt(22), weight: .semibold))
+                        .foregroundColor(colors.onSurface)
+                    Spacer()
+                    Text("Starts by itself")
+                        .font(TvText.caption)
+                        .foregroundColor(colors.onSurfaceMuted)
+                }
+                .frame(width: TvScale.pt(600))
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(colors.bright)
+                        Capsule()
+                            .fill(colors.accent)
+                            .frame(width: geo.size.width * autoProgress)
                     }
                 }
+                .frame(width: TvScale.pt(600), height: TvScale.pt(8))
+            }
+            .contentShape(Rectangle())
+            .focusable()
+            .appRemoteAction { onStart(nil) }
+        }
+    }
+
+    private func upNextCard(title: String, subtitle: String?) -> some View {
+        HStack(spacing: TvScale.pt(16)) {
+            RoundedRectangle(cornerRadius: TvScale.pt(10))
+                .fill(colors.bright)
+                .frame(width: TvScale.pt(128), height: TvScale.pt(72))
+                .overlay(
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: TvScale.pt(24)))
+                        .foregroundColor(colors.onSurfaceMuted)
+                )
+
+            VStack(alignment: .leading, spacing: TvScale.pt(2)) {
+                Text(subtitle ?? "Up next")
+                    .font(TvText.small)
+                    .foregroundColor(colors.onSurfaceMuted)
+                    .lineLimit(1)
+                Text(title)
+                    .font(.system(size: TvScale.pt(19), weight: .semibold))
+                    .foregroundColor(colors.onSurface)
+                    .lineLimit(1)
             }
         }
+        .padding(TvScale.pt(16))
+        .frame(width: TvScale.pt(360), alignment: .leading)
+        .background(colors.container)
+        .clipShape(RoundedRectangle(cornerRadius: TvScale.pt(18)))
     }
-
-    private var countdownRow: some View {
-        HStack(spacing: 20) {
-            CountdownRing(total: totalCountdown, remaining: countdown)
-
-            Text("Playing in \(countdown)s")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(.ultraThinMaterial.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Right Poster Column
-
-    @ViewBuilder
-    private var posterColumn: some View {
-        if metadata.hasPosterURL {
-            ArtworkImage(urls: ArtworkURL.candidates(metadata.posterURL, kind: .poster),
-                         onResult: { _ in posterLoaded = true }) { image in
-                image
-                    .resizable()
-                    .aspectRatio(2 / 3, contentMode: .fill)
-                    .frame(width: 360, height: 540)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .shadow(color: .black.opacity(0.7), radius: 40, x: -10, y: 20)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-            } placeholder: {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.05))
-                    .frame(width: 360, height: 540)
-            }
-            .padding(.trailing, 90)
-        }
-    }
-
-    // MARK: - Timer
 
     private func startCountdown() {
         timerTask = Task {
-            while countdown > 0 {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let step: Double = 0.2
+            while elapsed < totalCountdown {
+                try? await Task.sleep(nanoseconds: UInt64(step * 1_000_000_000))
                 if Task.isCancelled { return }
                 await MainActor.run {
-                    countdown -= 1
+                    if !countdownPaused {
+                        elapsed += step
+                    }
                 }
             }
             if !Task.isCancelled {
-                await MainActor.run { onStart() }
+                await MainActor.run {
+                    if !countdownPaused {
+                        onStart(nil)
+                    }
+                }
             }
         }
     }

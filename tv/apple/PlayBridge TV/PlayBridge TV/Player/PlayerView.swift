@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Session-scoped track preferences shared by both engines, so a pick made on one
@@ -32,6 +33,7 @@ struct PlayerView: View {
     @EnvironmentObject var historyStore: HistoryStore
     @EnvironmentObject var playlistStore: PlaylistStore
     @EnvironmentObject var server: WebSocketServer
+    @Environment(\.appRemoteDriver) private var appRemoteDriver
     @AppStorage("preferredPlayer") var preferredPlayer: String = PlaybackEngine.defaultEngine.rawValue
     // Engine chosen via the on-screen switch this session. Takes precedence over both the
     // phone's player_mode and the stored preference, but is not persisted.
@@ -56,7 +58,16 @@ struct PlayerView: View {
     /// Bumped when a page item's proxy registration settles, so the body re-reads its route.
     @State private var pageRouteRevision = 0
     @State private var reportedPageFailure: String?
+    @State private var bookmarkCaptureToken = 0
+    @State private var capturedMissingThumbnailForURL: URL?
+    @State private var lastKnownPositionMs: Int64?
+    @State private var lastKnownDurationMs: Int64?
     @ObservedObject var stillWatching: StillWatchingController
+    @ObservedObject private var together = TvTogether.shared
+    @State private var partySessionActive = false
+    @State private var activePartyPayloadID: String? = nil
+    @State private var suppressPartyLeaveOnDisappear = false
+    @StateObject private var partyCoordinator = PartyPlaybackCoordinator()
     let isPreBuffering: Bool
 
     init(payload: Playbridge_PlayPayload, isPreBuffering: Bool,
@@ -204,6 +215,9 @@ struct PlayerView: View {
             if nextRequest.recordsHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
+            if partySessionActive {
+                suppressPartyLeaveOnDisappear = true
+            }
             onDismiss()
         }
     }
@@ -234,7 +248,25 @@ struct PlayerView: View {
 
     private func broadcast(_ json: [String: Any], for item: Playbridge_PlayPayload) {
         guard server.currentPlayRequest != nil, item.itemID == playlistStore.currentItemID else { return }
-        server.broadcast(json)
+        var wire = json
+        let statusGeneration = wire.removeValue(forKey: "generation") as? Int
+        let itemLoaded = (wire.removeValue(forKey: "itemLoaded") as? Bool) ?? true
+        server.broadcast(wire)
+        if partySessionActive {
+            if wire["type"] as? String == "status" {
+                let state = wire["state"] as? String ?? ""
+                let posMs = Int64(wire["position"] as? Int ?? 0)
+                let durMs = Int64(wire["duration"] as? Int ?? 0)
+                partyCoordinator.onStatus(
+                    state: state,
+                    positionMs: posMs,
+                    durationMs: durMs,
+                    generation: statusGeneration,
+                    itemLoaded: itemLoaded
+                )
+            }
+            return
+        }
         if !isPreBuffering, !item.hasProgressIdentity { server.progressWebhook.finish(clear: false) }
         if !isPreBuffering, item.hasProgressIdentity,
            json["type"] as? String == "status",
@@ -248,12 +280,95 @@ struct PlayerView: View {
                                           content: content, state: json["state"] as? String ?? "",
                                           position: position, duration: duration)
         }
-        guard !isPreBuffering, item.recordsHistory, item.resolvedMediaKind != .image, let url = item.validURL,
+        guard !isPreBuffering, item.resolvedMediaKind != .image, let url = item.validURL,
               url == (playlistStore.currentItem ?? payload).validURL,
               json["type"] as? String == "status",
               let position = json["position"] as? Int,
               let duration = json["duration"] as? Int else { return }
-        historyStore.updateProgress(url: url, positionMs: position, durationMs: duration)
+        lastKnownPositionMs = Int64(position)
+        lastKnownDurationMs = Int64(duration)
+        if item.recordsHistory || historyStore.isBookmarked(url: url) {
+            historyStore.updateProgress(url: url, positionMs: position, durationMs: duration)
+        }
+    }
+
+    private func toggleBookmark(for request: Playbridge_PlayPayload, url: URL) {
+        guard !partySessionActive else { return }
+        let items = playlistStore.items.isEmpty ? [request] : playlistStore.items
+        let queueItems = items.map { item -> BookmarkQueueItemPayload in
+            let itemSubs: [ItemSubtitle] = item.itemSubtitlesOrNil ?? []
+            let subs = itemSubs.map { sub in
+                BookmarkSubtitlePayload(
+                    url: sub.url,
+                    label: sub.label,
+                    language: nil,
+                    headers: (sub.headers?.isEmpty == false) ? sub.headers : nil
+                )
+            }
+            let artwork = (item.hasVisualMetadata && item.visualMetadata.hasPosterURL)
+                ? item.visualMetadata.posterURL
+                : nil
+            return BookmarkQueueItemPayload(
+                url: item.url,
+                title: item.titleOrNil,
+                headers: item.headersOrNil,
+                subtitles: subs,
+                artworkURL: artwork,
+                mediaKind: item.hasMediaKind ? item.mediaKind : nil,
+                startPositionMs: item.hasStartPositionMs ? item.startPositionMs : nil
+            )
+        }
+        let startIndex = max(0, min(playlistStore.currentIndex, max(0, queueItems.count - 1)))
+        let resumePayload = BookmarkResumePayload(
+            items: queueItems,
+            startIndex: startIndex,
+            startPositionMs: lastKnownPositionMs ?? 0
+        )
+        let payloadData = try? JSONEncoder().encode(resumePayload)
+        let bookmarked = historyStore.toggleBookmark(
+            url: url,
+            title: request.titleOrNil,
+            headers: request.headersOrNil,
+            payloadData: payloadData,
+            positionMs: lastKnownPositionMs,
+            durationMs: lastKnownDurationMs
+        )
+        NotificationCenter.default.post(
+            name: PlayerOverlayController.bookmarkPillNotification,
+            object: nil,
+            userInfo: ["bookmarked": bookmarked]
+        )
+        guard bookmarked else { return }
+        capturedMissingThumbnailForURL = url
+        captureBookmarkThumbnail(for: request, url: url)
+    }
+
+    private func captureBookmarkThumbnail(for request: Playbridge_PlayPayload, url: URL) {
+        let thumbnailsEnabled = UserDefaults.standard.object(forKey: "bookmark_thumbnails_enabled") as? Bool ?? true
+        guard thumbnailsEnabled else { return }
+        let artworkURL: URL? = (request.hasVisualMetadata && request.visualMetadata.hasPosterURL)
+            ? URL(string: request.visualMetadata.posterURL)
+            : nil
+        if let artworkURL {
+            BookmarkThumbnailCapture.saveArtworkIfAvailable(artworkURL: artworkURL, for: url) { fileName in
+                if let fileName {
+                    historyStore.setThumbnailFileName(fileName, for: url)
+                } else {
+                    bookmarkCaptureToken += 1
+                }
+            }
+        } else {
+            bookmarkCaptureToken += 1
+        }
+    }
+
+    private func ensureBookmarkThumbnailIfNeeded() {
+        let request = playlistStore.currentItem ?? payload
+        guard let url = URL(string: request.url),
+              capturedMissingThumbnailForURL != url,
+              historyStore.needsBookmarkThumbnail(for: url) else { return }
+        capturedMissingThumbnailForURL = url
+        captureBookmarkThumbnail(for: request, url: url)
     }
 
     private func syncExitFence() {
@@ -263,8 +378,50 @@ struct PlayerView: View {
 
     /// Physical Menu and network Home/Back share this owner path. A second call
     /// while the screen is still up does not finish progress or broadcast idle again.
+    private func handleControlCommandNotification(_ note: Notification) {
+        if let command = note.userInfo?["command"] as? String, let parsed = PlayerTuning.parse(command) {
+            applyTuning(parsed)
+            let senderName = (note.userInfo?["senderName"] as? String) ?? server.currentSenderName
+            let card: PhoneChangeCard?
+            switch parsed {
+            case .speed:
+                card = PhoneConfirmations.card(
+                    kind: .speed,
+                    title: PhoneConfirmations.speedChangeTitle(tuning.speed),
+                    name: senderName
+                )
+            case .subtitleOffsetDelta:
+                card = PhoneConfirmations.card(
+                    kind: .subtitles,
+                    title: PhoneConfirmations.subtitleOffsetTitle(offsetMs: tuning.subtitleOffsetMs),
+                    name: senderName
+                )
+            case .scaling:
+                card = nil
+            }
+            if let card {
+                NotificationCenter.default.post(
+                    name: PlayerOverlayController.phoneCardNotification,
+                    object: nil,
+                    userInfo: ["card": card]
+                )
+            }
+            return
+        }
+        guard stillWatching.isPrompting,
+              let command = note.userInfo?["command"] as? String else { return }
+        switch command {
+        case "play": stillWatching.continueWatching()
+        case "stop":
+            stillWatching.stopNow(onDismiss)
+        default: break
+        }
+    }
+
     private func exitPlayback() {
         guard exitGate.beginExit() else { return }
+        suppressPartyLeaveOnDisappear = false
+        server.currentSenderName = nil
         let webhook = server.progressWebhook
         let history = historyStore
         let leave = onDismiss
@@ -306,6 +463,7 @@ struct PlayerView: View {
         case .dismissPlaylist:
             withAnimation { showPlaylist = false }
         case .exitPlayback:
+            suppressPartyLeaveOnDisappear = false
             let webhook = server.progressWebhook
             let history = historyStore
             let leave = onDismiss
@@ -456,91 +614,132 @@ struct PlayerView: View {
                     )
                     .focused($isPlayerFocused)
                     .id("image-\(playlistStore.currentItemID ?? currentRequest.url)-\(currentGeneration)")
-                } else if currentEngine == .mpv {
-                    MPVPlayerView(
-                        url: currentURL,
-                        headers: playable?.headers,
-                        subtitles: playable?.subtitles,
-                        skipMetadata: skipMetadata(for: currentRequest),
-                        initialTime: initialSeekTime(for: currentRequest),
-                        mediaIdentity: mediaGeneration,
-                        isPreBuffering: isPreBuffering,
-                        title: currentRequest.titleOrNil,
-                        musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
-                        onDismiss: { if isCurrentItem() { handleNext() } },
-                        onExit: { if isCurrentItem() { exitPlayback() } },
-                        onBack: { if isCurrentItem() { handleRemoteNavigation("back") } },
-                        onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
-                        onBroadcast: { frame in
-                            guard isCurrentItem() else { return }
-                            if frame["state"] as? String == "error" { showPlaylist = false }
-                            broadcast(frame, for: currentRequest)
-                        },
-                        onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
-                        onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
-                        initialLoop: settingsReporter.loop,
-                        appLevel: appVolume.level,
-                        appMuted: appVolume.muted,
-                        engineChrome: engineChrome,
-                        hasPlaylist: playlistStore.items.count > 1,
-                        playbackSpeed: tuning.speed,
-                        subtitleOffsetMs: tuning.subtitleOffsetMs,
-                        scaling: tuning.scaling,
-                        hasNextItem: playlistStore.hasNext,
-                        metadata: transportMetadata(for: currentRequest),
-                        playlistVisible: showPlaylist,
-                        onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
-                    )
-                    .ignoresSafeArea()
-                    .focused($isPlayerFocused)
-                    // Stable identity: episode advances reuse the live mpv core
-                    // (updateUIViewController issues `loadfile replace`) instead of
-                    // paying a full mpv re-init per item. Switching engines still
-                    // tears it down via the branch change.
-                    .id("mpv-engine")
                 } else {
-                    NativePlayerView(
-                        url: currentURL,
-                        headers: playable?.headers,
-                        subtitles: playable?.subtitles,
-                        skipMetadata: skipMetadata(for: currentRequest),
-                        initialTime: initialSeekTime(for: currentRequest),
-                        isPreBuffering: isPreBuffering,
-                        title: currentRequest.titleOrNil,
-                        musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
-                        onDismiss: { if isCurrentItem() { handleNext() } },
-                        onExit: { if isCurrentItem() { exitPlayback() } },
-                        onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
-                        onBroadcast: { if isCurrentItem() { broadcast($0, for: currentRequest) } },
-                        onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
-                        onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
-                        initialLoop: settingsReporter.loop,
-                        appLevel: appVolume.level,
-                        appMuted: appVolume.muted,
-                        mediaIdentity: currentGeneration,
-                        engineChrome: engineChrome,
-                        hasPlaylist: playlistStore.items.count > 1,
-                        playbackSpeed: tuning.speed,
-                        subtitleOffsetMs: tuning.subtitleOffsetMs,
-                        scaling: tuning.scaling,
-                        onSidecarOverlayChanged: { active, identity in
-                            if isCurrentItem(), let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
-                                emit(frame, engine: identity.engine)
-                            }
-                        },
-                        onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
-                    )
-                    .ignoresSafeArea()
-                    .focused($isPlayerFocused)
-                    .id("avplayer-\(mediaGeneration)")
-                    .onExitCommand { if isCurrentItem() { exitPlayback() } }
+                    let queueEntries = playlistStore.items.enumerated().map { idx, item in
+                        PlayerQueueEntry(
+                            index: idx,
+                            title: item.titleOrNil ?? item.validURL?.lastPathComponent ?? "Video \(idx + 1)"
+                        )
+                    }
+                    if currentEngine == .mpv {
+                        MPVPlayerView(
+                            url: currentURL,
+                            headers: playable?.headers,
+                            subtitles: playable?.subtitles,
+                            skipMetadata: skipMetadata(for: currentRequest),
+                            initialTime: initialSeekTime(for: currentRequest),
+                            mediaIdentity: mediaGeneration,
+                            isPreBuffering: isPreBuffering,
+                            title: currentRequest.titleOrNil,
+                            musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
+                            onDismiss: { if isCurrentItem() { handleNext() } },
+                            onExit: { if isCurrentItem() { exitPlayback() } },
+                            onBack: { if isCurrentItem() { handleRemoteNavigation("back") } },
+                            onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
+                            onBroadcast: { frame in
+                                guard isCurrentItem() else { return }
+                                if frame["state"] as? String == "error" { showPlaylist = false }
+                                broadcast(frame, for: currentRequest)
+                            },
+                            onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
+                            onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
+                            initialLoop: settingsReporter.loop,
+                            appLevel: appVolume.level,
+                            appMuted: appVolume.muted,
+                            engineChrome: engineChrome,
+                            hasPlaylist: playlistStore.items.count > 1,
+                            playlistItems: queueEntries,
+                            playlistIndex: playlistStore.currentIndex,
+                            onSelectPlaylistItem: { index in if isCurrentItem() { handleJump(to: index) } },
+                            playbackSpeed: tuning.speed,
+                            subtitleOffsetMs: tuning.subtitleOffsetMs,
+                            scaling: tuning.scaling,
+                            hasNextItem: playlistStore.hasNext,
+                            metadata: transportMetadata(for: currentRequest),
+                            playlistVisible: showPlaylist,
+                            senderName: server.currentSenderName,
+                            isBookmarked: historyStore.isBookmarked(url: currentURL),
+                            isWatchTogetherParty: partySessionActive,
+                            bookmarkCaptureToken: bookmarkCaptureToken,
+                            onToggleBookmark: {
+                                if isCurrentItem() { toggleBookmark(for: currentRequest, url: currentURL) }
+                            },
+                            onLeaveParty: { leaveParty() },
+                            onBookmarkThumbnailCaptured: { mediaURL, fileName in
+                                historyStore.setThumbnailFileName(fileName, for: mediaURL)
+                            },
+                            onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
+                        )
+                        .ignoresSafeArea()
+                        .focused($isPlayerFocused)
+                        // Stable identity: episode advances reuse the live mpv core
+                        // (updateUIViewController issues `loadfile replace`) instead of
+                        // paying a full mpv re-init per item. Switching engines still
+                        // tears it down via the branch change.
+                        .id("mpv-engine")
+                    } else {
+                        NativePlayerView(
+                            url: currentURL,
+                            headers: playable?.headers,
+                            subtitles: playable?.subtitles,
+                            skipMetadata: skipMetadata(for: currentRequest),
+                            initialTime: initialSeekTime(for: currentRequest),
+                            isPreBuffering: isPreBuffering,
+                            title: currentRequest.titleOrNil,
+                            musicPayload: currentRequest.resolvedMediaKind == .audio ? currentRequest : nil,
+                            onDismiss: { if isCurrentItem() { handleNext() } },
+                            onExit: { if isCurrentItem() { exitPlayback() } },
+                            onBack: { if isCurrentItem() { handleRemoteNavigation("back") } },
+                            onSwitch: { if isCurrentItem() { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) } },
+                            onBroadcast: { if isCurrentItem() { broadcast($0, for: currentRequest) } },
+                            onLoopChanged: { enabled, identity in isCurrentItem() && emitLoop(enabled, identity: identity) },
+                            onEndOfFile: { identity in isCurrentItem() ? emitEnd(identity) : .ignored },
+                            initialLoop: settingsReporter.loop,
+                            appLevel: appVolume.level,
+                            appMuted: appVolume.muted,
+                            mediaIdentity: currentGeneration,
+                            engineChrome: engineChrome,
+                            hasPlaylist: playlistStore.items.count > 1,
+                            playlistItems: queueEntries,
+                            playlistIndex: playlistStore.currentIndex,
+                            onSelectPlaylistItem: { index in if isCurrentItem() { handleJump(to: index) } },
+                            playbackSpeed: tuning.speed,
+                            subtitleOffsetMs: tuning.subtitleOffsetMs,
+                            scaling: tuning.scaling,
+                            hasNextItem: playlistStore.hasNext,
+                            metadata: transportMetadata(for: currentRequest),
+                            playlistVisible: showPlaylist,
+                            senderName: server.currentSenderName,
+                            isBookmarked: historyStore.isBookmarked(url: currentURL),
+                            isWatchTogetherParty: partySessionActive,
+                            bookmarkCaptureToken: bookmarkCaptureToken,
+                            onToggleBookmark: {
+                                if isCurrentItem() { toggleBookmark(for: currentRequest, url: currentURL) }
+                            },
+                            onLeaveParty: { leaveParty() },
+                            onBookmarkThumbnailCaptured: { mediaURL, fileName in
+                                historyStore.setThumbnailFileName(fileName, for: mediaURL)
+                            },
+                            onSidecarOverlayChanged: { active, identity in
+                                if isCurrentItem(), let frame = settingsReporter.setSidecarOverlay(active, identity: identity) {
+                                    emit(frame, engine: identity.engine)
+                                }
+                            },
+                            onLocalTuning: { if isCurrentItem() { applyTuning($0) } }
+                        )
+                        .ignoresSafeArea()
+                        .focused($isPlayerFocused)
+                        .id("avplayer-\(mediaGeneration)")
+                    }
                 }
             } else {
                 // Unreachable in normal flow: WebSocketServer rejects payloads with invalid URLs
                 // before publishing them, and playlist items go through the same gate. This
                 // branch exists so a stray bad payload dismisses the player instead of crashing.
                 let _ = print("PlayerView: invalid URL in payload, dismissing")
-                Color.black.task { onDismiss() }
+                Color.black.task {
+                    onDismiss()
+                }
             }
 
             if showPlaylist {
@@ -626,13 +825,36 @@ struct PlayerView: View {
         )
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in
             guard let key = note.userInfo?["key"] as? String else { return }
+            appRemoteDriver?.suppressCurrentTurn()
             handleRemoteNavigation(key)
+        }
+        .onAppear {
+            let activeItem = playlistStore.currentItem ?? server.currentPlayRequest ?? payload
+            activatePartySession(for: activeItem)
+        }
+        .onChange(of: server.playRequestNonce) { _, _ in
+            let incomingItem = playlistStore.currentItem ?? server.currentPlayRequest ?? payload
+            resetForReplacedPlayRequest(incoming: incomingItem)
+        }
+        .onChange(of: together.state) { _, _ in
+            if partySessionActive && !together.isInParty {
+                partySessionActive = false
+                partyCoordinator.end(leaveRoom: false)
+                engineChrome.setPartySession(false)
+            }
         }
         .onDisappear {
             historyStore.flushProgress()
+            let leaveRoom = TogetherPlaybackPolicy.shouldLeavePartyOnDismiss(
+                partySessionActive: partySessionActive,
+                suppressLeave: suppressPartyLeaveOnDisappear,
+                currentPlayRequestIsNil: server.currentPlayRequest == nil
+            )
+            partyCoordinator.end(leaveRoom: leaveRoom)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
-            guard !stillWatching.isPrompting else { return }
+            guard !stillWatching.isPrompting,
+                  (sessionEngine ?? playlistStore.currentItem.map(effectiveEngine(for:))) != .mpv else { return }
             if !showPlaylist {
                 playlistHighlight = playlistStore.currentIndex
                 _ = engineChrome.apply(.dismissInfoPanel)
@@ -643,36 +865,229 @@ struct PlayerView: View {
             guard let playing = note.userInfo?["isPlaying"] as? Bool else { return }
             latestPlaybackIsPlaying = playing
             stillWatching.playbackChanged(isPlaying: playing && !isPreBuffering)
+            if playing && !isPreBuffering {
+                ensureBookmarkThumbnailIfNeeded()
+            }
         }
         .onChange(of: isPreBuffering) { wasPreBuffering, preBuffering in
             if wasPreBuffering && !preBuffering {
                 stillWatching.playbackChanged(isPlaying: latestPlaybackIsPlaying)
+                if latestPlaybackIsPlaying {
+                    ensureBookmarkThumbnailIfNeeded()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .playBridgeUserActivity)) { _ in
             stillWatching.onUserActivity()
         }
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.controlCommand)) { note in
-            if let command = note.userInfo?["command"] as? String, let parsed = PlayerTuning.parse(command) {
-                applyTuning(parsed)
-                return
-            }
-            guard stillWatching.isPrompting,
-                  let command = note.userInfo?["command"] as? String else { return }
-            switch command {
-            case "play": stillWatching.continueWatching()
-            case "stop": stillWatching.stopNow(onDismiss)
-            default: break
-            }
+            handleControlCommandNotification(note)
         }
         .onChange(of: stillWatching.didExpire) { _, expired in
-            if expired { stillWatching.stopNow(onDismiss) }
+            if expired {
+                stillWatching.stopNow(onDismiss)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .playBridgeStillWatchingResume)) { _ in
             if stillWatching.isPrompting { stillWatching.continueWatching() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .playBridgeStillWatchingStop)) { _ in
-            if stillWatching.isPrompting { stillWatching.stopNow(onDismiss) }
+            if stillWatching.isPrompting {
+                stillWatching.stopNow(onDismiss)
+            }
+        }
+    }
+    private func leaveParty() {
+        partySessionActive = false
+        partyCoordinator.end(leaveRoom: true)
+        engineChrome.setPartySession(false)
+    }
+
+    private func resetForReplacedPlayRequest(incoming item: Playbridge_PlayPayload) {
+        let incomingItemID = item.hasItemID ? item.itemID : nil
+        let samePartyItemReload = partySessionActive
+            && incomingItemID != nil
+            && incomingItemID == activePartyPayloadID
+            && together.isPartyItem(incomingItemID)
+
+        stillWatching.reset()
+        sessionEngine = nil
+        resumeTime = 0
+        showPlaylist = false
+        playlistHighlight = playlistStore.currentIndex
+        latestPlaybackIsPlaying = false
+        reportedPageFailure = nil
+        capturedMissingThumbnailForURL = nil
+        lastKnownPositionMs = nil
+        lastKnownDurationMs = nil
+        suppressPartyLeaveOnDisappear = false
+        mediaGeneration &+= 1
+        syncExitFence()
+
+        let engine = effectiveEngine(for: item)
+        if !samePartyItemReload {
+            tuning = PlayerTuning()
+            settingsReporter = PlayerSettingsReporter(engine: engine.rawValue, generation: mediaGeneration)
+            let level = PlayerAppVolume.storedLevel()
+            appVolume = PlayerAppVolumeController(engine: engine.rawValue, generation: mediaGeneration, level: level)
+            appVolumeShownLevel = level
+            appVolumeBanner = nil
+        } else {
+            settingsReporter.note(engine: engine.rawValue, generation: mediaGeneration)
+            appVolume.note(engine: engine.rawValue, generation: mediaGeneration)
+        }
+        emitCurrent(engine: engine, generation: mediaGeneration)
+        emitAppVolume(engine: engine, generation: mediaGeneration)
+        activatePartySession(for: item)
+    }
+
+    private func activatePartySession(for item: Playbridge_PlayPayload) {
+        let itemId = item.hasItemID ? item.itemID : nil
+        activePartyPayloadID = itemId
+        let isParty = together.isPartyItem(itemId)
+        partySessionActive = isParty
+        if isParty, let itemId {
+            partyCoordinator.begin(
+                itemID: itemId,
+                expectedGeneration: mediaGeneration,
+                engineChrome: engineChrome
+            )
+            engineChrome.setPartySession(true)
+        } else {
+            partyCoordinator.end(leaveRoom: false)
+            engineChrome.setPartySession(false)
+            together.onOtherPlayback()
+        }
+    }
+}
+
+@MainActor
+private final class PartyPlaybackCoordinator: ObservableObject {
+    private var itemID: String?
+    private var playerToken: UUID?
+    private var expectedGeneration: Int = 0
+    private var loadedReported = false
+    private var ready = false
+    private var liveKnown: Bool?
+    private var reportedLiveEarly = false
+    private var lastDurationMs: Int64 = 0
+    private var fallbackTimer: DispatchWorkItem?
+    private weak var engineChrome: PlayerEngineChrome?
+
+    func begin(itemID: String, expectedGeneration: Int, engineChrome: PlayerEngineChrome) {
+        fallbackTimer?.cancel()
+        fallbackTimer = nil
+        let token = UUID()
+        self.itemID = itemID
+        self.playerToken = token
+        self.expectedGeneration = expectedGeneration
+        self.engineChrome = engineChrome
+        loadedReported = false
+        ready = false
+        liveKnown = nil
+        reportedLiveEarly = false
+        lastDurationMs = 0
+
+        TvTogether.shared.attach(item: itemID, token: token) { [weak self] command in
+            self?.apply(command)
+        }
+    }
+
+    func onStatus(
+        state: String,
+        positionMs: Int64,
+        durationMs: Int64,
+        generation: Int? = nil,
+        itemLoaded: Bool = true
+    ) {
+        guard let item = itemID else { return }
+        let generationMatches = generation == nil || generation == expectedGeneration
+        guard generationMatches, itemLoaded else { return }
+        if durationMs > 0 {
+            lastDurationMs = durationMs
+            if liveKnown == nil { liveKnown = false }
+        }
+        if !ready, TogetherLoadedPlanner.isMediaReady(
+            state: state,
+            durationMs: durationMs,
+            itemLoaded: itemLoaded,
+            generationMatches: generationMatches
+        ) {
+            ready = true
+            let token = playerToken
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.playerToken == token else { return }
+                self.reportLoaded(force: true)
+            }
+            fallbackTimer?.cancel()
+            fallbackTimer = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + TogetherLoadedPlanner.liveWaitSeconds, execute: work)
+        }
+        if !loadedReported {
+            reportLoaded(force: false)
+        } else if let corrected = TogetherLoadedPlanner.lateDurationCorrection(
+            alreadyReported: loadedReported,
+            reportedEarly: reportedLiveEarly,
+            liveKnown: liveKnown,
+            durationMs: durationMs
+        ) {
+            reportedLiveEarly = false
+            TvTogether.shared.onLoaded(item: item, durationMs: corrected)
+        }
+        TvTogether.shared.onPlayerState(
+            item: item,
+            positionMs: positionMs,
+            playing: state == "playing",
+            buffering: state == "buffering"
+        )
+    }
+
+    func end(leaveRoom: Bool) {
+        fallbackTimer?.cancel()
+        fallbackTimer = nil
+        if let token = playerToken {
+            TvTogether.shared.detach(token: token)
+        }
+        playerToken = nil
+        itemID = nil
+        if leaveRoom {
+            TvTogether.shared.leave()
+        }
+    }
+
+    private func reportLoaded(force: Bool) {
+        guard let item = itemID else { return }
+        let decision = TogetherLoadedPlanner.decideLoaded(
+            alreadyReported: loadedReported,
+            ready: ready,
+            liveKnown: liveKnown,
+            durationMs: lastDurationMs,
+            force: force
+        )
+        if case .report(let durationMs, let early) = decision {
+            loadedReported = true
+            reportedLiveEarly = early
+            fallbackTimer?.cancel()
+            fallbackTimer = nil
+            TvTogether.shared.onLoaded(item: item, durationMs: durationMs)
+        }
+    }
+
+    private func apply(_ command: TogetherPlayerCommand) {
+        guard itemID != nil, let chrome = engineChrome else { return }
+        switch command {
+        case .play:
+            chrome.applyPartyPaused(false)
+        case .pause:
+            chrome.applyPartyPaused(true)
+        case .seek(let positionMs):
+            chrome.applyPartySeek(Double(max(0, positionMs)) / 1000.0)
+        case .rate(let rate):
+            chrome.applyPartyRate(rate)
+        case .goLive:
+            chrome.applyPartyGoLive()
+        case .load:
+            break
         }
     }
 }

@@ -18,8 +18,46 @@ final class AppRemoteFocusDriver: ObservableObject {
     weak var anchor: UIView?
     fileprivate weak var window: UIWindow?
     var acceptsInput: () -> Bool = { false }
+    private(set) var isSuppressedForCurrentTurn = false
+
+    func suppressCurrentTurn() {
+        isSuppressedForCurrentTurn = true
+        DispatchQueue.main.async { [weak self] in
+            self?.isSuppressedForCurrentTurn = false
+        }
+    }
+
+    func attachWindow(_ window: UIWindow?) {
+        if let window { self.window = window }
+    }
     var rootBack: () -> Void = {}
     var rootHome: () -> Void = {}
+
+    var hasNonRootScope: Bool {
+        stack.ids.contains { id in
+            guard let scope = scopes[id], !scope.root, let view = scope.view else { return false }
+            return view.window != nil
+        }
+    }
+
+    var presentedController: UIViewController? {
+        var controller = (anchor?.window ?? window)?.rootViewController
+        while let presented = controller?.presentedViewController {
+            guard !presented.isBeingDismissed else { break }
+            controller = presented
+        }
+        return controller === (anchor?.window ?? window)?.rootViewController ? nil : controller
+    }
+
+    func focus(_ id: AppFocusID) {
+        guard let (_, root) = context() else { return }
+        let eligible = Set(scopes.compactMap { scopeID, scope in
+            scope.view.flatMap { visible($0, in: anchor?.window ?? window ?? UIWindow()) && $0.isDescendant(of: root) ? scopeID : nil }
+        })
+        guard let scopeID = stack.active(eligible: eligible), let scope = scopes[scopeID] else { return }
+        scopes[scopeID]?.model.focused = id
+        scope.write(id)
+    }
 
     fileprivate func register(_ view: AppRemoteActionView) { actions[view.id] = WeakAction(view) }
     fileprivate func unregister(_ view: AppRemoteActionView) {
@@ -57,7 +95,7 @@ final class AppRemoteFocusDriver: ObservableObject {
             rootHome()
         } else if key == "back" {
             if scope.root { rootBack() }
-            else { removeScope(scopeID); scope.back() }
+            else { scope.back() }
         } else if key == "dpad_center" {
             // FocusState identity authorizes OK; never infer an action from overlapping rects.
             let focus = AppFocusModel(focused: scope.read())
@@ -124,6 +162,7 @@ private struct AppScopeBinding {
 }
 private struct AppScopeKey: EnvironmentKey { static let defaultValue: AppScopeBinding? = nil }
 private struct AppRevealKey: EnvironmentKey { static let defaultValue: ((AppFocusID) -> Void)? = nil }
+private struct AppDirectionKey: EnvironmentKey { static let defaultValue: ((AppFocusDirection) -> Bool)? = nil }
 
 extension EnvironmentValues {
     var appRemoteDriver: AppRemoteFocusDriver? {
@@ -169,6 +208,7 @@ private struct AppRemoteAction: ViewModifier {
     @Environment(\.appRemoteDriver) private var driver
     @Environment(\.appScopeBinding) private var scope
     @Environment(\.appRemoteReveal) private var reveal
+    @Environment(\.appRemoteDirection) private var environmentDirection
     @State private var generatedID = AppFocusID()
     let suppliedID: AppFocusID?
     let action: () -> Void
@@ -179,7 +219,7 @@ private struct AppRemoteAction: ViewModifier {
         if let scope {
             content.focused(scope.focus, equals: id)
                 .id(id)
-                .background(AppActionRegistration(id: id, scope: scope.id, action: action, direction: direction, reveal: reveal))
+                .background(AppActionRegistration(id: id, scope: scope.id, action: action, direction: direction ?? environmentDirection, reveal: reveal))
                 .onAppear { focusChanged(scope.focus.wrappedValue == id) }
                 .onChange(of: scope.focus.wrappedValue) { old, new in
                     if old == id || new == id { focusChanged(new == id) }
@@ -196,6 +236,10 @@ private extension EnvironmentValues {
     var appRemoteReveal: ((AppFocusID) -> Void)? {
         get { self[AppRevealKey.self] }
         set { self[AppRevealKey.self] = newValue }
+    }
+    var appRemoteDirection: ((AppFocusDirection) -> Bool)? {
+        get { self[AppDirectionKey.self] }
+        set { self[AppDirectionKey.self] = newValue }
     }
 }
 private final class AppRemoteScopeView: UIView {
@@ -234,10 +278,14 @@ private struct AppRemoteScope: ViewModifier {
     let initialFocus: AppFocusID?
     let back: () -> Void
     let home: () -> Void
+    let onFocusChange: ((AppFocusID?) -> Void)?
     private func scoped(_ content: Content) -> some View {
         content.environment(\.appScopeBinding, AppScopeBinding(id: id, focus: $focused))
             .background(AppScopeRegistration(id: id, focus: $focused, root: root, back: back, home: home))
-            .onChange(of: focused) { _, value in driver?.observedFocus(value, scope: id) }
+            .onChange(of: focused) { _, value in
+                driver?.observedFocus(value, scope: id)
+                onFocusChange?(value)
+            }
             .onDisappear { driver?.removeScope(id) }
     }
     func body(content: Content) -> some View {
@@ -245,11 +293,41 @@ private struct AppRemoteScope: ViewModifier {
         else { scoped(content) }
     }
 }
-private final class AppRemoteAnchorView: UIView {
+private final class AppRemoteAnchorView: UIView, UIGestureRecognizerDelegate {
     weak var driver: AppRemoteFocusDriver?
+    var shouldInterceptMenu: () -> Bool = { false }
+    var onMenu: () -> Void = {}
+    private weak var installedWindow: UIWindow?
+    private lazy var menuRecognizer: UITapGestureRecognizer = {
+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleMenuPress))
+        recognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        recognizer.delegate = self
+        return recognizer
+    }()
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if installedWindow !== window {
+            installedWindow?.removeGestureRecognizer(menuRecognizer)
+            installedWindow = window
+            window?.addGestureRecognizer(menuRecognizer)
+        }
         if let window { driver?.window = window }
+    }
+
+    deinit {
+        installedWindow?.removeGestureRecognizer(menuRecognizer)
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === menuRecognizer {
+            return shouldInterceptMenu()
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
+    @objc private func handleMenuPress() {
+        onMenu()
     }
 }
 struct AppRemoteAnchor: UIViewRepresentable {
@@ -257,11 +335,17 @@ struct AppRemoteAnchor: UIViewRepresentable {
     let enabled: () -> Bool
     let onBack: () -> Void
     let onHome: () -> Void
+    var shouldInterceptMenu: () -> Bool = { false }
+    var onMenu: () -> Void = {}
     func makeUIView(context: Context) -> UIView {
         let view = AppRemoteAnchorView(); view.driver = driver; return view
     }
     func updateUIView(_ view: UIView, context: Context) {
         driver.anchor = view
+        if let anchorView = view as? AppRemoteAnchorView {
+            anchorView.shouldInterceptMenu = shouldInterceptMenu
+            anchorView.onMenu = onMenu
+        }
         if let window = view.window { driver.window = window }
         driver.acceptsInput = enabled; driver.rootBack = onBack; driver.rootHome = onHome
     }
@@ -280,8 +364,12 @@ extension View {
         modifier(AppRemoteAction(suppliedID: id, action: action, focusChanged: focusChanged, direction: direction))
     }
     func appRemoteScope(back: @escaping () -> Void = {}, home: @escaping () -> Void = {},
-                        root: Bool = false, initialFocus: AppFocusID? = nil) -> some View {
-        modifier(AppRemoteScope(root: root, initialFocus: initialFocus, back: back, home: home))
+                        root: Bool = false, initialFocus: AppFocusID? = nil,
+                        onFocusChange: ((AppFocusID?) -> Void)? = nil) -> some View {
+        modifier(AppRemoteScope(root: root, initialFocus: initialFocus, back: back, home: home, onFocusChange: onFocusChange))
+    }
+    func appRemoteDirection(_ handler: @escaping (AppFocusDirection) -> Bool) -> some View {
+        environment(\.appRemoteDirection, handler)
     }
     func appRemoteScroll() -> some View { modifier(AppRemoteScroll()) }
     func appRemoteConfirmation(_ title: String, isPresented: Binding<Bool>, message: String,
@@ -310,5 +398,6 @@ private struct AppRemoteConfirmation: View {
         }
         .padding(80)
         .appRemoteScope(back: { dismiss() }, home: { dismiss() }, initialFocus: cancelID)
+        .onExitCommand { dismiss() }
     }
 }
