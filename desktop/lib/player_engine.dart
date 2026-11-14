@@ -220,6 +220,10 @@ abstract class PlayerEngine extends ChangeNotifier {
   /// Native pause intent, independent of buffering. Null lets test/alternate engines use the controller intent.
   bool? get playbackRequested => null;
 
+  /// The current video frame as encoded image bytes, or null when the engine
+  /// cannot capture one (no video, or an engine without frame access).
+  Future<Uint8List?> captureFrame() async => null;
+
   String get state; // idle | buffering | playing | paused | ended
   int get positionMs;
   int get durationMs;

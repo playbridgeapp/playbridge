@@ -1,13 +1,24 @@
 import 'package:flutter/material.dart';
 
+import 'shell/playback_bar.dart' show formatPlaybackClock;
 import 'tv_sender_controller.dart';
+import 'ui/pb_theme.dart';
+import 'ui/pb_widgets.dart';
 
-/// The "Now Playing" tab for the desktop **sender**: shows the now-casting card
-/// (transport + seek) and the playlist currently on the TV, with tap-to-jump.
+/// Below this width the queue moves under the controls instead of beside them.
+const double _kQueueBesideMinWidth = 900;
+
+/// The remote "playing on a TV" view for the desktop **sender**: which TV, the
+/// title, an interactive seek bar, transport, volume, loop/engine controls and
+/// the playlist currently on the TV with tap-to-jump.
 class NowCastingScreen extends StatelessWidget {
-  const NowCastingScreen({super.key, required this.controller});
+  const NowCastingScreen({super.key, required this.controller, this.onBack});
 
   final TvSenderController controller;
+
+  /// Leaves this view for Home; playback on the TV continues. No back button
+  /// is shown when null.
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -18,114 +29,398 @@ class NowCastingScreen extends StatelessWidget {
   }
 
   Widget _build(BuildContext context) {
-    if (!controller.isCasting) {
-      return _EmptyNowPlaying(errorMessage: controller.lastPlaybackError);
+    final c = controller;
+    if (!c.isCasting) {
+      return _EmptyNowPlaying(errorMessage: c.lastPlaybackError);
     }
-    final playlist = controller.castItems;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
-      children: [
-        const Text('Now Playing',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 16),
-        NowCastingCard(controller: controller),
-        if (controller.canPlaylistJump && playlist.length > 1) ...[
-          const SizedBox(height: 24),
-          Row(
+    final playlist = c.castItems;
+    final showQueue = c.canPlaylistJump && playlist.length > 1;
+    final main = _NowCastingMain(controller: c, onBack: onBack);
+    final queue = showQueue ? _QueuePanel(controller: c) : null;
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (queue != null && box.maxWidth >= _kQueueBesideMinWidth) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.playlist_play,
-                  size: 15, color: Colors.white.withValues(alpha: 0.5)),
-              const SizedBox(width: 8),
-              Text(
-                'PLAYLIST  ·  ${playlist.length} ITEMS',
-                style: TextStyle(
-                  fontSize: 11,
-                  letterSpacing: 0.8,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.5),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 40, 32),
+                  child: main,
                 ),
               ),
+              Container(
+                width: 340,
+                color: PbColors.sidebar,
+                child: queue,
+              ),
+            ],
+          );
+        }
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(24, 24, 32, 32),
+          children: [
+            main,
+            if (queue != null) ...[
+              const SizedBox(height: 24),
+              queue,
+            ]
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _NowCastingMain extends StatefulWidget {
+  const _NowCastingMain({required this.controller, this.onBack});
+
+  final TvSenderController controller;
+  final VoidCallback? onBack;
+
+  @override
+  State<_NowCastingMain> createState() => _NowCastingMainState();
+}
+
+class _NowCastingMainState extends State<_NowCastingMain> {
+  double? _dragMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    final title = c.castingTitle ?? 'Now playing';
+    final tvName = c.activeTv?.name ?? c.selectionName;
+    final state = c.remoteState;
+    final playing = state == 'playing';
+    final headline = playing
+        ? 'Playing on $tvName'
+        : state == 'paused'
+            ? 'Paused on $tvName'
+            : 'Casting to $tvName';
+    final queueLength = c.castItems.length;
+    final subtitle = (queueLength > 1 && c.castIndex >= 0)
+        ? '${c.castIndex + 1} of $queueLength in the queue'
+        : c.activeProtocol.label;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 16,
+          runSpacing: 8,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.onBack != null) ...[
+                  PbIconButton(
+                    icon: Icons.chevron_left,
+                    tooltip: 'Back to Home. Playback continues',
+                    variant: PbButtonVariant.secondary,
+                    iconSize: 24,
+                    onPressed: widget.onBack,
+                  ),
+                  const SizedBox(width: 16),
+                ],
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: playing ? PbColors.success : PbColors.warning,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    headline,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: PbColors.text,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            PbButton(
+              label: 'Stop',
+              variant: PbButtonVariant.secondary,
+              onPressed: c.canStop ? c.stopCast : null,
+            ),
+          ],
+        ),
+        const SizedBox(height: 28),
+        Text(
+          title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 28,
+            height: 1.25,
+            fontWeight: FontWeight.w700,
+            color: PbColors.text,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          subtitle,
+          style: const TextStyle(color: PbColors.textSecondary),
+        ),
+        const SizedBox(height: 24),
+        _seekBar(context, c),
+        const SizedBox(height: 16),
+        _controls(c, playing),
+        if (c.canLoop || _hasEngineSwitch(c)) ...[
+          const SizedBox(height: 24),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (c.canLoop)
+                _Chip(
+                  label: c.isLoopEnabled == true ? 'Repeat: on' : 'Repeat: off',
+                  tooltip: c.isLoopEnabled == true ? 'Loop on' : 'Loop off',
+                  onTap: () => c.setLoop(c.isLoopEnabled != true),
+                ),
+              if (_hasEngineSwitch(c))
+                PopupMenuButton<String>(
+                  tooltip: 'Switch player engine',
+                  onSelected: c.switchPlayer,
+                  itemBuilder: (context) => [
+                    for (final eng in c.availablePlayerEngines)
+                      PopupMenuItem(value: eng, child: Text(eng)),
+                  ],
+                  child: const _Chip(label: 'Player engine'),
+                ),
             ],
           ),
-          const SizedBox(height: 8),
-          for (final item in playlist)
-            _PlaylistRow(
-              index: item.index,
-              title: item.title,
-              active: item.index == controller.castIndex,
-              onTap: () => controller.playlistJumpTo(item.index),
+        ],
+      ],
+    );
+  }
+
+  static bool _hasEngineSwitch(TvSenderController c) =>
+      c.canSwitchEngine && c.availablePlayerEngines.length > 1;
+
+  Widget _seekBar(BuildContext context, TvSenderController c) {
+    final dur = c.remoteDurationMs.toDouble();
+    if (dur <= 0) return const SizedBox.shrink();
+    final pos =
+        (_dragMs ?? c.remotePositionMs.toDouble()).clamp(0.0, dur).toDouble();
+    return Column(
+      children: [
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 6,
+            activeTrackColor: PbColors.accent,
+            inactiveTrackColor: PbColors.outlineSoft,
+            thumbColor: Colors.white,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+          ),
+          child: Slider(
+            min: 0,
+            max: dur,
+            value: pos,
+            semanticFormatterCallback: (v) => formatPlaybackClock(v.toInt()),
+            onChanged:
+                c.canSeekAbsolute ? (v) => setState(() => _dragMs = v) : null,
+            onChangeEnd: c.canSeekAbsolute
+                ? (v) {
+                    c.seekToMs(v.toInt());
+                    setState(() => _dragMs = null);
+                  }
+                : null,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(formatPlaybackClock(pos.toInt()),
+                  style: const TextStyle(color: PbColors.textSecondary)),
+              Text(formatPlaybackClock(c.remoteDurationMs),
+                  style: const TextStyle(color: PbColors.textSecondary)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _controls(TvSenderController c, bool playing) {
+    return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 24,
+      runSpacing: 12,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PbIconButton(
+              icon: Icons.replay_10,
+              tooltip: 'Back 10 seconds',
+              variant: PbButtonVariant.secondary,
+              size: 48,
+              iconSize: 22,
+              onPressed: c.canSeekRelative ? c.seekBack : null,
             ),
+            const SizedBox(width: 10),
+            PbIconButton(
+              icon: playing ? Icons.pause : Icons.play_arrow,
+              tooltip: playing ? 'Pause' : 'Play',
+              variant: PbButtonVariant.primary,
+              size: 60,
+              iconSize: 28,
+              onPressed: c.canPlayPause ? c.playPause : null,
+            ),
+            const SizedBox(width: 10),
+            PbIconButton(
+              icon: Icons.forward_10,
+              tooltip: 'Forward 10 seconds',
+              variant: PbButtonVariant.secondary,
+              size: 48,
+              iconSize: 22,
+              onPressed: c.canSeekRelative ? c.seekForward : null,
+            ),
+          ],
+        ),
+        if (c.hasVolume) _volume(c),
+      ],
+    );
+  }
+
+  Widget _volume(TvSenderController c) {
+    final label = c.volumeLabel ?? 'Volume';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (c.canToggleMute)
+          PbIconButton(
+            icon: c.isMuted == true ? Icons.volume_off : Icons.volume_up,
+            tooltip: c.isMuted == true ? 'Unmute' : 'Mute',
+            onPressed: c.toggleMute,
+          ),
+        Text(
+          c.volumeStatus,
+          style: const TextStyle(
+            fontWeight: FontWeight.w500,
+            color: PbColors.text,
+          ),
+        ),
+        const SizedBox(width: 8),
+        if (c.showVolumeSlider)
+          SizedBox(
+            width: 140,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                activeTrackColor: PbColors.text,
+                inactiveTrackColor: PbColors.outlineSoft,
+                thumbColor: Colors.white,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              ),
+              child: Slider(
+                min: 0.0,
+                max: 1.0,
+                value: (c.volumeLevel ?? 1.0).clamp(0.0, 1.0),
+                semanticFormatterCallback: (v) =>
+                    '$label ${(v * 100).round()} percent',
+                onChanged: c.setVolume,
+              ),
+            ),
+          )
+        else if (c.canAdjustVolume) ...[
+          PbIconButton(
+            icon: Icons.volume_down,
+            tooltip: '$label down',
+            onPressed: () => c.adjustVolume(-1),
+          ),
+          PbIconButton(
+            icon: Icons.volume_up,
+            tooltip: '$label up',
+            onPressed: () => c.adjustVolume(1),
+          ),
         ],
       ],
     );
   }
 }
 
-class _PlaylistRow extends StatelessWidget {
-  const _PlaylistRow({
-    required this.index,
-    required this.title,
-    required this.active,
-    required this.onTap,
-  });
+class _Chip extends StatelessWidget {
+  const _Chip({required this.label, this.onTap, this.tooltip});
 
-  final int index;
-  final String title;
-  final bool active;
-  final VoidCallback onTap;
+  final String label;
+  final VoidCallback? onTap;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: active
-            ? Colors.tealAccent.withValues(alpha: 0.10)
-            : Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: active
-              ? Colors.tealAccent.withValues(alpha: 0.35)
-              : Colors.white.withValues(alpha: 0.07),
+    final chip = PbPressable(
+      onTap: onTap,
+      semanticLabel: tooltip ?? label,
+      builder: (context, hovered, focused) => Container(
+        height: PbMetrics.controlHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: hovered ? PbColors.raised : PbColors.card,
+          borderRadius: BorderRadius.circular(PbMetrics.pillRadius),
+          border: focused ? Border.all(color: PbColors.accent, width: 2) : null,
         ),
+        child: Text(label, style: const TextStyle(color: PbColors.text)),
       ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: active ? null : onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 24,
-                  child: active
-                      ? const Icon(Icons.equalizer,
-                          size: 16, color: Colors.tealAccent)
-                      : Text('${index + 1}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white54)),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: active ? Colors.tealAccent : Colors.white,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                  ),
-                ),
-              ],
+    );
+    return chip;
+  }
+}
+
+/// "Queue · N items": the playlist on the TV, tap a row to jump to it.
+class _QueuePanel extends StatelessWidget {
+  const _QueuePanel({required this.controller});
+
+  final TvSenderController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = controller.castItems;
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Queue · ${items.length} items',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: PbColors.text,
             ),
           ),
-        ),
+          const SizedBox(height: 12),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: PbListRow(
+                title: item.title,
+                subtitle: item.index == controller.castIndex ? 'Playing' : null,
+                selected: item.index == controller.castIndex,
+                minHeight: 56,
+                onTap: item.index == controller.castIndex
+                    ? null
+                    : () => controller.playlistJumpTo(item.index),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -145,289 +440,44 @@ class _EmptyNowPlaying extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline,
-                  size: 44, color: Colors.redAccent),
+              const Icon(Icons.error_outline, size: 44, color: PbColors.error),
               const SizedBox(height: 14),
               Text(
                 errorMessage!,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 16,
-                  color: Colors.white,
+                  color: PbColors.text,
                   fontWeight: FontWeight.w500,
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
+              const Text(
                 'Playback failed on the TV.',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.white.withValues(alpha: 0.5),
-                ),
+                style: TextStyle(color: PbColors.textSecondary),
               ),
             ],
           ),
         ),
       );
     }
-    return Center(
+    return const Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.cast,
-              size: 44, color: Colors.white.withValues(alpha: 0.25)),
-          const SizedBox(height: 14),
-          Text('Nothing casting',
-              style: TextStyle(
-                  fontSize: 16, color: Colors.white.withValues(alpha: 0.6))),
-          const SizedBox(height: 6),
-          Text('Cast a file or stream from "Send to TV".',
-              style: TextStyle(
-                  fontSize: 13, color: Colors.white.withValues(alpha: 0.4))),
+          Icon(Icons.cast, size: 44, color: PbColors.outline),
+          SizedBox(height: 14),
+          Text(
+            'Nothing is playing on a TV',
+            style: TextStyle(fontSize: 16, color: PbColors.text),
+          ),
+          SizedBox(height: 6),
+          Text(
+            'Choose a TV on Home, then play something.',
+            style: TextStyle(color: PbColors.textSecondary),
+          ),
         ],
       ),
     );
-  }
-}
-
-/// Now-casting card: title, an interactive seek slider (absolute seek via the
-/// controller), and transport controls. Stateful to hold the seek drag value.
-class NowCastingCard extends StatefulWidget {
-  const NowCastingCard({super.key, required this.controller});
-
-  final TvSenderController controller;
-
-  @override
-  State<NowCastingCard> createState() => _NowCastingCardState();
-}
-
-class _NowCastingCardState extends State<NowCastingCard> {
-  double? _dragMs;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.controller;
-    final title = c.castingTitle ?? 'Now playing';
-    final activeTv = c.activeTv;
-    final receiverLabel = activeTv == null
-        ? c.activeProtocol.label
-        : '${activeTv.name} · ${activeTv.protocol.label}';
-    final playing = c.remoteState == 'playing';
-    final dur = c.remoteDurationMs.toDouble();
-    final hasDuration = dur > 0;
-    final pos = (_dragMs ?? c.remotePositionMs.toDouble())
-        .clamp(0.0, hasDuration ? dur : 1.0);
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.tealAccent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.cast_connected,
-                  size: 18, color: Colors.tealAccent),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      receiverLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withValues(alpha: 0.55),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (hasDuration) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Text(_fmt(pos.toInt()),
-                    style:
-                        const TextStyle(fontSize: 11, color: Colors.white54)),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      activeTrackColor: Colors.tealAccent,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: Colors.tealAccent,
-                      thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 6),
-                      overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 12),
-                    ),
-                    child: Slider(
-                      min: 0,
-                      max: dur,
-                      value: pos,
-                      onChanged: c.canSeekAbsolute
-                          ? (v) => setState(() => _dragMs = v)
-                          : null,
-                      onChangeEnd: c.canSeekAbsolute
-                          ? (v) {
-                              c.seekToMs(v.toInt());
-                              setState(() => _dragMs = null);
-                            }
-                          : null,
-                    ),
-                  ),
-                ),
-                Text(_fmt(c.remoteDurationMs),
-                    style:
-                        const TextStyle(fontSize: 11, color: Colors.white54)),
-              ],
-            ),
-          ],
-          const SizedBox(height: 4),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                tooltip: 'Back 10s',
-                icon: const Icon(Icons.replay_10),
-                onPressed: c.canSeekRelative ? c.seekBack : null,
-              ),
-              IconButton(
-                tooltip: playing ? 'Pause' : 'Play',
-                iconSize: 30,
-                icon: Icon(playing ? Icons.pause_circle : Icons.play_circle),
-                onPressed: c.canPlayPause ? c.playPause : null,
-              ),
-              IconButton(
-                tooltip: 'Forward 10s',
-                icon: const Icon(Icons.forward_10),
-                onPressed: c.canSeekRelative ? c.seekForward : null,
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'Stop',
-                color: Colors.redAccent,
-                icon: const Icon(Icons.stop_circle),
-                onPressed: c.canStop ? c.stopCast : null,
-              ),
-              if (c.canLoop) ...[
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: c.isLoopEnabled == true ? 'Loop on' : 'Loop off',
-                  color: c.isLoopEnabled == true
-                      ? Colors.tealAccent
-                      : Colors.white60,
-                  icon: const Icon(Icons.repeat),
-                  onPressed: () => c.setLoop(c.isLoopEnabled != true),
-                ),
-              ],
-              if (c.canSwitchEngine && c.availablePlayerEngines.length > 1) ...[
-                const SizedBox(width: 8),
-                PopupMenuButton<String>(
-                  tooltip: 'Switch player engine',
-                  icon: const Icon(Icons.tune, size: 20),
-                  onSelected: c.switchPlayer,
-                  itemBuilder: (context) => [
-                    for (final eng in c.availablePlayerEngines)
-                      PopupMenuItem(
-                        value: eng,
-                        child: Text(eng),
-                      ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-          if (c.hasVolume) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                if (c.canToggleMute)
-                  IconButton(
-                    tooltip: c.isMuted == true ? 'Unmute' : 'Mute',
-                    icon: Icon(
-                      c.isMuted == true ? Icons.volume_off : Icons.volume_up,
-                      size: 20,
-                      color:
-                          c.isMuted == true ? Colors.redAccent : Colors.white70,
-                    ),
-                    onPressed: c.toggleMute,
-                  ),
-                Text(
-                  c.volumeStatus,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (c.showVolumeSlider)
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 2,
-                        activeTrackColor: Colors.tealAccent,
-                        inactiveTrackColor: Colors.white24,
-                        thumbColor: Colors.tealAccent,
-                        thumbShape:
-                            const RoundSliderThumbShape(enabledThumbRadius: 5),
-                        overlayShape:
-                            const RoundSliderOverlayShape(overlayRadius: 10),
-                      ),
-                      child: Slider(
-                        min: 0.0,
-                        max: 1.0,
-                        value: (c.volumeLevel ?? 1.0).clamp(0.0, 1.0),
-                        onChanged: c.setVolume,
-                      ),
-                    ),
-                  )
-                else if (c.canAdjustVolume) ...[
-                  IconButton(
-                    tooltip: '${c.volumeLabel ?? "Volume"} down',
-                    icon: const Icon(Icons.volume_down, size: 18),
-                    onPressed: () => c.adjustVolume(-1),
-                  ),
-                  IconButton(
-                    tooltip: '${c.volumeLabel ?? "Volume"} up',
-                    icon: const Icon(Icons.volume_up, size: 18),
-                    onPressed: () => c.adjustVolume(1),
-                  ),
-                ],
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  static String _fmt(int ms) {
-    if (ms <= 0) return '0:00';
-    final d = Duration(milliseconds: ms);
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(h > 0 ? 2 : 1, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 }
