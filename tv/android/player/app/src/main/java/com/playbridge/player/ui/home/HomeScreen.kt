@@ -76,7 +76,6 @@ fun HomeScreen(
     onPlay: (PlaybackHistoryItem) -> Unit,
     onBookmarkActions: (PlaybackHistoryItem) -> Unit,
     onWatchTogether: () -> Unit,
-    onPhones: () -> Unit,
     onSettings: () -> Unit,
     takeInitialFocus: Boolean = true,
 ) {
@@ -93,9 +92,7 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(if (firstRun) 28.dp else 22.dp),
     ) {
         HomeHeader(
-            pairedCount = pairedCount,
             onWatchTogether = onWatchTogether,
-            onPhones = onPhones,
             onSettings = onSettings,
             watchTogetherModifier = if (bookmarks.isEmpty()) Modifier.focusRequester(firstFocus) else Modifier,
         )
@@ -116,9 +113,7 @@ fun HomeScreen(
 
 @Composable
 private fun HomeHeader(
-    pairedCount: Int,
     onWatchTogether: () -> Unit,
-    onPhones: () -> Unit,
     onSettings: () -> Unit,
     watchTogetherModifier: Modifier,
 ) {
@@ -141,12 +136,6 @@ private fun HomeHeader(
                 icon = groupIconPainter(), height = TvSize.pillHeightCompact,
                 modifier = watchTogetherModifier,
             )
-            if (pairedCount > 0) {
-                PillButton(
-                    text = "Phones", onClick = onPhones, style = PillStyle.Secondary,
-                    icon = phoneIconPainter(), height = TvSize.pillHeightCompact,
-                )
-            }
             IconCircleButton(
                 icon = rememberVectorPainter(Icons.Filled.Settings), contentDescription = "Settings",
                 onClick = onSettings, size = TvSize.iconButtonSmall, tone = TvTone.App,

@@ -296,7 +296,6 @@ fun MainContent(
                 onPlay = { onPlayItem(it, false) },
                 onBookmarkActions = { actionsFor = it },
                 onWatchTogether = { currentScreen = Screen.WatchTogether },
-                onPhones = { settingsCategory = SettingsCategory.Phones; currentScreen = Screen.Settings },
                 onSettings = { settingsCategory = SettingsCategory.Playback; currentScreen = Screen.Settings },
                 takeInitialFocus = pendingPairingRequest == null && actionsFor == null,
             )
