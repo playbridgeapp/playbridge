@@ -78,6 +78,10 @@ struct ReceiverReviewTests {
         restored.updateProgress(url: url, positionMs: 570_000, durationMs: 600_000)
         assert(restored.history[0].resumePositionMs == nil)
         restored.clearHistory()
+        // Bookmarked entries survive clearHistory(); unbookmarking removes them before clearing.
+        assert(HistoryStore(defaults: defaults, keyProvider: keyProvider).history.count == 1)
+        restored.toggleFavorite(item: restored.history[0])
+        restored.clearHistory()
         assert(HistoryStore(defaults: defaults, keyProvider: keyProvider).history.isEmpty)
         defaults.set(false, forKey: "enable_history")
         restored.addToHistory(url: url, title: nil, headers: nil)
@@ -1471,10 +1475,10 @@ private func runTransportChromeTests() {
     assert(TransportTimeLabels.elapsed(.greatestFiniteMagnitude) == "0:00")
     assert(TransportTimeLabels.remaining(12, duration: 0).isEmpty)
     // AVPlayer clock and the label riding under the playhead.
-    assert(TransportTimeLabels.clock(0) == "00:00" && TransportTimeLabels.clock(111) == "01:51")
+    assert(TransportTimeLabels.clock(0) == "0:00" && TransportTimeLabels.clock(111) == "1:51")
     assert(TransportTimeLabels.clock(3723) == "1:02:03")
-    assert(TransportTimeLabels.clockRemaining(111, duration: 301) == "-03:10")
-    assert(TransportTimeLabels.clockRemaining(400, duration: 301) == "-00:00")
+    assert(TransportTimeLabels.clockRemaining(111, duration: 301) == "-3:10")
+    assert(TransportTimeLabels.clockRemaining(400, duration: 301) == "-0:00")
     assert(TransportTimeLabels.clockRemaining(12, duration: .nan).isEmpty)
     let start = TransportTimeLabels.playheadLabelLayout(fraction: 0, width: 1000, elapsedWidth: 80, remainingWidth: 90)
     assert(start.x == 0 && start.showsRemaining)
@@ -1523,72 +1527,9 @@ private func runTransportChromeTests() {
     assert(TransportScrub.proposal(origin: .nan, translationX: 0, velocityX: 0, duration: 10) == 0)
     print("PASS: transport click/remote/hold constants, scrub direction, velocity gain, clamps and invalid inputs")
 
-    // AVPlayer's tabs; audio and subtitles are transport buttons.
-    assert(InfoPanelTab.allCases == [.info, .chapters, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false) == [.info])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 1, settingsAvailable: false) == [.info])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false) == [.info, .chapters])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: true) == [.info, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: true) == [.info, .chapters, .settings])
-    // Only tabs with content: a file without metadata keeps Chapters and Settings.
-    assert(InfoPanelModel.visibleTabs(chapterCount: 3, settingsAvailable: true, hasInfo: false) == [.chapters, .settings])
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: false, hasInfo: false) == [.info])
-    assert(InfoPanelModel.validTab(.info, tabs: [.chapters, .settings]) == .chapters)
-    assert(InfoPanelModel.validTab(.settings, tabs: [.chapters, .settings]) == .settings)
     assert(TransportMetadata().isEmpty && !TransportMetadata(year: "1999").isEmpty
         && !TransportMetadata(genres: ["Drama"]).isEmpty)
-    print("PASS: info-panel tab ordering, chapter threshold, optional settings and unconditional audio/subtitles")
-
-    let chapterRows = InfoPanelModel.chapterRows(chapters: [
-        TimelineChapter(startMs: 60000, title: "Chapter 02"),
-        TimelineChapter(startMs: 0, title: nil),
-        TimelineChapter(startMs: 120000, title: "The Heist")], durationMs: 180000, positionMs: 70000)
-    assert(chapterRows.map(\.title) == ["Chapter 1", "Chapter 02", "The Heist"])
-    assert(chapterRows.map(\.id) == [0, 60000, 120000])
-    assert(chapterRows.map(\.trailingText) == ["0:00", "1:00", "2:00"])
-    let longChapterRows = InfoPanelModel.chapterRows(chapters: [
-        TimelineChapter(startMs: 0), TimelineChapter(startMs: 3_723_500)],
-        durationMs: 5_000_000, positionMs: 3_800_000)
-    assert(longChapterRows.map(\.trailingText) == ["0:00", "1:02:03"])
-    assert(longChapterRows.last?.selected == true)
-    assert(InfoPanelRow(id: 1, title: "Audio").trailingText == nil)
-    assert(InfoPanelModel.initialHighlight(rows: chapterRows) == 1)
-    assert(InfoPanelModel.initialHighlight(rows: []) == 0)
-    assert(InfoPanelModel.chapterRows(chapters: [], durationMs: 0, positionMs: 0).isEmpty)
-    let tabs = InfoPanelModel.visibleTabs(chapterCount: 2, settingsAvailable: false)
-    assert(InfoPanelModel.movingTab(.info, delta: -1, tabs: tabs) == .info)
-    assert(InfoPanelModel.movingTab(.info, delta: 1, tabs: tabs) == .chapters)
-    assert(InfoPanelModel.movingTab(.chapters, delta: 1, tabs: tabs) == .chapters)
-    assert(InfoPanelModel.movingTab(.settings, delta: 1, tabs: []) == .info)
     assert(TransportBarMetrics.skipVisibleInset == 240 && TransportBarMetrics.skipHiddenInset == 80)
-    assert(TransportVisibility.autoHideSeconds == 5 && TransportVisibility.feedbackSeconds == 0.8)
-    assert(TransportVisibility.canAutoHide(userPaused: false, scrubbing: false, panel: false,
-        engineMenu: false, playlist: false, prebuffering: false))
-    for gate in 0..<6 {
-        assert(!TransportVisibility.canAutoHide(userPaused: gate == 0, scrubbing: gate == 1,
-            panel: gate == 2, engineMenu: gate == 3, playlist: gate == 4, prebuffering: gate == 5))
-    }
-    let firstRow = InfoPanelFocus()
-    let tabsFocus = firstRow.moving(-1, rowCount: 3, physical: true)
-    assert(tabsFocus == InfoPanelFocus(row: 0, tabBar: true))
-    assert(tabsFocus.moving(1, rowCount: 3, physical: true) == firstRow)
-    assert(firstRow.moving(1, rowCount: 3, physical: true).row == 1)
-    assert(firstRow.moving(-1, rowCount: 3, physical: false) == firstRow)
-    assert(InfoPanelFocus(row: 2).moving(1, rowCount: 3, physical: false).row == 2)
-    assert(firstRow.moving(1, rowCount: 0, physical: true).tabBar)
-    // Chapter cards: Up from any card reaches the tabs, Down stays, Left/Right move cards.
-    let thirdCard = InfoPanelFocus(row: 2)
-    assert(thirdCard.moving(-1, rowCount: 4, physical: true, horizontalRows: true) == InfoPanelFocus(row: 2, tabBar: true))
-    assert(thirdCard.moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
-    assert(InfoPanelFocus(row: 2, tabBar: true).moving(1, rowCount: 4, physical: true, horizontalRows: true) == thirdCard)
-    assert(thirdCard.moving(1, rowCount: 4, physical: false, horizontalRows: true).row == 3)
-    assert(InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: false))
-    assert(!InfoPanelModel.horizontalMovesRows(tab: .chapters, tabBarFocused: true))
-    assert(!InfoPanelModel.horizontalMovesRows(tab: .settings, tabBarFocused: false))
-    let moved = Date(timeIntervalSince1970: 1000)
-    assert(InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.05)))
-    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: moved, now: moved.addingTimeInterval(0.5)))
-    assert(!InfoPanelModel.isMoveEcho(focusMovedAt: .distantPast, now: moved))
     // Duplicate chapter starts collapse; card frames sit a little into each chapter.
     let duplicated = ChapterNavigation.sorted([TimelineChapter(startMs: 240_000, title: "Credits"),
         TimelineChapter(startMs: 0, title: "Opening"), TimelineChapter(startMs: 240_000, title: "Credits")])
@@ -1636,71 +1577,6 @@ private func runTransportChromeTests() {
         sessionMatches: true, engineMenu: true, infoPanel: true)) == .dismissInfoPanel)
     print("PASS: info-panel Back/list priority, shared snapshot flags, paused-HUD exit levels, Home and stale keys")
 
-    func route(_ up: Bool, _ chrome: TransportChrome) -> TransportKeyRoute {
-        TransportKeyRoute.physicalVertical(up: up, chrome: chrome)
-    }
-    var chrome = TransportChrome()
-    assert(route(false, chrome) == .openPanel && route(true, chrome) == .showTransport)
-    // Pause, hold-scrub and Skip focus do not steal Down from Info.
-    for visible in [false, true] {
-        for paused in [false, true] {
-            for scrubbing in [false, true] {
-                for skipFocused in [false, true] {
-                    chrome.navigation.controlsVisible = visible
-                    chrome.navigation.scrubbing = scrubbing
-                    chrome.userPaused = paused
-                    chrome.skipPillFocused = skipFocused
-                    assert(route(false, chrome) == .openPanel)
-                    assert(route(true, chrome) == (visible ? (skipFocused ? .moveFocus : .focusActions) : .showTransport))
-                }
-            }
-        }
-    }
-    chrome.navigation.infoPanel = true
-    assert(route(false, chrome) == .moveInPanel && route(true, chrome) == .moveInPanel)
-    chrome.panelTabBarFocused = true
-    assert(route(true, chrome) == .closePanel && route(false, chrome) == .moveInPanel)
-    chrome.navigation.infoPanel = false
-    for path in [\PlayerChromeState.engineMenu, \.settingsSheet, \.playlist] {
-        var menu = TransportChrome()
-        menu.navigation[keyPath: path] = true
-        // An open list owns Up and Down; Down only opens Info outside lists.
-        assert(route(false, menu) == .moveFocus)
-        assert(route(true, menu) == .moveFocus)
-    }
-
-    for paused in [false, true] {
-        var actions = TransportChrome(userPaused: paused)
-        actions.navigation.sessionMatches = true
-        actions.navigation.controlsVisible = true
-        assert(route(true, actions) == .focusActions)
-        actions.transportActionFocused = true
-        assert(route(true, actions) == .focusActions, "Up stays in the action row")
-        assert(route(false, actions) == .focusScrubber)
-        assert(PlayerRemoteNavigation.effect(for: "back", chrome: actions.navigation) == .dismissControls)
-        actions.navigation.infoPanel = true
-        assert(route(false, actions) == .moveInPanel, "A panel keeps priority over stale action focus")
-        actions.navigation.infoPanel = false
-        actions.navigation.engineMenu = true
-        assert(route(true, actions) == .moveFocus, "An engine menu owns its directions")
-    }
-    assert(TransportAction.available(hasPlaylist: false) == [.loop, .speed, .switchEngine, .audio])
-    assert(TransportAction.available(hasPlaylist: true) == [.loop, .speed, .switchEngine, .audio, .playlist])
-    assert(TransportAction.available(hasPlaylist: true, hasSubtitles: true)
-        == [.loop, .speed, .switchEngine, .subtitles, .audio, .playlist])
-    assert(TransportAction.switchEngine.moving(1, hasPlaylist: false, hasSubtitles: true) == .subtitles)
-    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true) == .audio)
-    // One audio track: no Audio button; Right from the last button stays put.
-    assert(TransportAction.available(hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false)
-        == [.loop, .speed, .switchEngine, .subtitles])
-    assert(TransportAction.available(hasPlaylist: true, hasAudioChoice: false) == [.loop, .speed, .switchEngine, .playlist])
-    assert(TransportAction.subtitles.moving(1, hasPlaylist: false, hasSubtitles: true, hasAudioChoice: false) == .subtitles)
-    assert(TransportAction.switchEngine.moving(1, hasPlaylist: true, hasAudioChoice: false) == .playlist)
-    assert(TransportAction.subtitles.menu == .subtitles)
-    let subtitleRows = TransportMenuModel.subtitleRows(tracks: [(id: 3, name: "English"), (id: 4, name: "SDH")], current: 4)
-    assert(subtitleRows.map(\.id) == [-1, 3, 4] && subtitleRows.map(\.title).first == "Off")
-    assert(TransportMenuModel.initialHighlight(rows: subtitleRows) == 2)
-    assert(TransportMenuModel.subtitleRows(tracks: [], current: -1).first?.selected == true)
     // The episode line is dropped when the title already carries it.
     assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below · S1E5 · Little Pot Rock").isEmpty)
     assert(TransportTimeLabels.distinctSubtitle("S1 E5 · Little Pot Rock", title: "Below") == "S1 E5 · Little Pot Rock")
@@ -1729,33 +1605,9 @@ private func runTransportChromeTests() {
     assert(ArtworkURL.candidates("https://image.tmdb.org/other/w780/b.jpg", kind: .backdrop).count == 1)
     assert(ArtworkURL.candidates("", kind: .poster).isEmpty && ArtworkURL.candidates("file:///x.jpg", kind: .poster).isEmpty)
     assert(!TransportMetadata(posterURL: "https://image.tmdb.org/t/p/w342/p.jpg").isEmpty, "A poster alone fills Info")
-    assert(TransportAction.loop.moving(-1, hasPlaylist: true) == .loop)
-    assert(TransportAction.loop.moving(1, hasPlaylist: false) == .speed)
-    assert(TransportAction.speed.moving(1, hasPlaylist: false) == .switchEngine)
-    assert(TransportAction.audio.moving(1, hasPlaylist: false) == .audio)
-    assert(TransportAction.audio.moving(1, hasPlaylist: true) == .playlist)
-    assert(TransportAction.playlist.moving(-1, hasPlaylist: true) == .audio)
-    assert(TransportAction.playlist.moving(1, hasPlaylist: true) == .playlist)
-    assert(TransportAction.speed.menu == .speed && TransportAction.audio.menu == .audio
-        && TransportAction.switchEngine.menu == .engine)
-    assert(TransportAction.loop.menu == nil && TransportAction.playlist.menu == nil)
-    let speedRows = TransportMenuModel.speedRows(current: 1.25)
-    assert(speedRows.count == PlayerSettingsItem.speeds.count)
-    assert(TransportMenuModel.initialHighlight(rows: speedRows) == PlayerSettingsItem.speeds.firstIndex(of: 1.25))
-    assert(TransportMenuModel.speed(forRow: speedRows[0].id) == PlayerSettingsItem.speeds[0])
-    assert(TransportMenuModel.speed(forRow: -1) == nil && TransportMenuModel.speed(forRow: 99) == nil)
-    let audioRows = TransportMenuModel.audioRows(tracks: [(id: 1, name: "English"), (id: 2, name: "Hindi")], current: 2)
-    assert(audioRows.map(\.id) == [1, 2] && TransportMenuModel.initialHighlight(rows: audioRows) == 1)
-    assert(TransportMenuModel.initialHighlight(rows: TransportMenuModel.audioRows(tracks: [], current: -1)) == 0)
-    // The mpv Settings tab leaves speed to the transport's Speed button.
-    let mpvTab = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false).withoutSpeed
-    assert(!mpvTab.speed && mpvTab.scaling && mpvTab.subtitleOffset && mpvTab.any)
-    assert(PlayerSettingsItem.rows(tuning: PlayerTuning(), availability: mpvTab).first?.section == "Scaling")
-    let engineRows = TransportMenuModel.engineRows(current: .mpv)
-    assert(engineRows.filter(\.selected).map(\.id) == [PlaybackEngine.mpv.menuID])
     assert(PlayerRemoteNavigation.physicalPlaybackEffect(for: .select, scrubbing: false,
         selectActivatesFocusedControl: true) == .ignored, "Action Select never toggles playback")
-    print("PASS: playing/paused transport action focus, Down to scrubber, Back hides, optional Playlist and clamped Left/Right")
+    print("PASS: metadata, artwork, playlist cards and remote navigation")
 
     let ready = TransportChrome(userPaused: true, duration: 100)
     assert(TransportKeyRoute.canTouchScrub(chrome: ready))
@@ -1816,7 +1668,7 @@ private func runTransportChromeTests() {
     }
     for sentence in [open, generic] { assert(!sentence.contains("://") && !sentence.contains("//")) }
     let cases: [(PlaybackFailureMessage.Category, String)] = [
-        (.unsupported, "This video format isn't supported"),
+        (.unsupported, "The link didn't return a playable video or the format isn't supported"),
         (.http(401), "The link was refused (HTTP 401)"), (.http(403), "The link was refused (HTTP 403)"),
         (.http(404), "The video wasn't found (HTTP 404)"), (.http(410), "The video wasn't found (HTTP 410)"),
         (.http(503), "The media couldn't be loaded (HTTP 503)"), (.http(999), generic),
@@ -1830,7 +1682,7 @@ private func runTransportChromeTests() {
         assert(attempt.present(code: -13, category: category, attempt: attempt.attempt))
         assert(attempt.sentence == sentence)
     }
-    assert(PlaybackFailureMessage.sentence(forMpvCode: -17) == "This video format isn't supported")
+    assert(PlaybackFailureMessage.sentence(forMpvCode: -17) == "The link didn't return a playable video or the format isn't supported")
     let logs: [(String, PlaybackFailureMessage.Category)] = [
         ("HTTP error 403 Forbidden https://private.example/token", .http(403)),
         ("Failed to resolve hostname private.example", .network),
@@ -1924,8 +1776,6 @@ private func runPlayerSettingsMenuTests() {
     let mpv = PlayerSettingsAvailability.forEngine("mpv", sidecarOverlayActive: false)
     let avNoSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: false)
     let avSidecar = PlayerSettingsAvailability.forEngine("avplayer", sidecarOverlayActive: true)
-    assert(mpv.any && avNoSidecar.any && !PlayerSettingsAvailability.none.any)
-    assert(InfoPanelModel.visibleTabs(chapterCount: 0, settingsAvailable: mpv.any).last == .settings)
 
     // Menu / row ids → PlayerTuning.Command (the design's examples).
     assert(PlayerSettingsItem.command(id: "speed:1.25", currentOffsetMs: 0) == .speed(1.25))
@@ -1962,31 +1812,7 @@ private func runPlayerSettingsMenuTests() {
     assert(PlayerSettingsItem.sections(availability: avNoSidecar) == [.speed, .scaling])
     assert(PlayerSettingsItem.sections(availability: avSidecar) == [.speed, .scaling, .subtitleSync])
 
-    // mpv Settings-tab rows: index ids, headers, checks, current offset on Reset.
     tuning = PlayerTuning(speed: 1.25, subtitleOffsetMs: 250, scaling: .zoom)
-    let rows = PlayerSettingsItem.rows(tuning: tuning, availability: mpv)
-    assert(rows.count == 8 + 3 + 5)
-    assert(rows.map(\.id) == Array(0..<rows.count))
-    assert(rows.compactMap(\.section) == ["Speed", "Scaling", "Subtitle Sync"])
-    assert(rows[0].section == "Speed" && rows[8].section == "Scaling" && rows[11].section == "Subtitle Sync")
-    assert(rows.filter(\.selected).map(\.title) == ["1.25×", "Zoom"])
-    assert(InfoPanelModel.initialHighlight(rows: rows) == 4, "Opening Settings focuses the current speed")
-    assert(rows.map(\.title) == ["0.25×", "0.5×", "0.75×", "1×", "1.25×", "1.5×", "1.75×", "2×",
-                                 "Fit", "Zoom", "Fill", "−500 ms", "−100 ms", "+100 ms", "+500 ms", "Reset"])
-    assert(rows[15].trailingText == "+250 ms" && rows[14].trailingText == nil)
-    func rowCommand(_ title: String) -> PlayerTuning.Command? {
-        guard let row = rows.first(where: { $0.title == title }) else { return nil }
-        return PlayerSettingsItem.command(rowID: row.id, tuning: tuning, availability: mpv)
-    }
-    assert(rowCommand("1.25×") == .speed(1.25))
-    assert(rowCommand("Zoom") == .scaling(.zoom))
-    assert(rowCommand("+500 ms") == .subtitleOffsetDelta(500))
-    assert(rowCommand("Reset") == .subtitleOffsetDelta(-250))
-    assert(PlayerSettingsItem.command(rowID: -1, tuning: tuning, availability: mpv) == nil)
-    assert(PlayerSettingsItem.command(rowID: rows.count, tuning: tuning, availability: mpv) == nil)
-    assert(PlayerSettingsItem.command(rowID: 11, tuning: tuning, availability: avNoSidecar) == nil,
-           "No Subtitle Sync rows without an offset owner")
-    assert(PlayerSettingsItem.rows(tuning: tuning, availability: .none).isEmpty)
 
     // Labels the menus show beside their titles.
     assert(PlayerSettingsItem.currentLabel(.speed, tuning: tuning) == "1.25×")
@@ -2190,6 +2016,8 @@ private func runMediaContractTests() {
     assert(subscriptions.connections.isEmpty)
     assert(TvCapabilities.defaultFeatures.contains("receiver_capabilities_v1"))
     assert(TvCapabilities.defaultFeatures.contains("player_home_v1"))
+    assert(TvCapabilities.defaultFeatures.contains("subtitle_style_v1"))
+    assert(TvCapabilities.defaultFeatures.contains("subtitle_font_v1"))
     print("PASS: media resolver, media-kind reports, sender IDs/validation and per-socket numeric capabilities snapshot")
 }
 
@@ -2383,6 +2211,19 @@ private func runAppFocusTests() {
     assert(stack.active(eligible: []) == nil)
     print("PASS: app directional geometry, SwiftUI focus IDs, rapid moves, direct OK, Cancel-first modal isolation, scope restoration and input gates")
     pageMediaRoutingChecks()
+    runPlayerKeyMapTests()
+    runPhoneConfirmationTests()
+    runBookmarkTests()
+    runCarryOverPhase5Tests()
+    runPhase5PureLogicTests()
+    runPhase6PureLogicTests()
+    runDevice1FocusAndHomeTests()
+    runDevice4WatchTogetherReplacementTests()
+    runDevice5WatchTogetherPolicyTests()
+    runDevice5eWatchTogetherStaleStatusAndGoLiveTests()
+    runDevice6FocusAndHomeTests()
+    runDevice7SubtitleStyleAndFontTests()
+    runDevice8MPVRecoveryAndFontValidationTests()
 }
 
 // MARK: - Page-controlled media routing
@@ -2660,4 +2501,1299 @@ private func pageMediaRoutingChecks() {
 
 private extension Result {
     var error: Error? { if case .failure(let error) = self { return error } else { return nil } }
+}
+
+private func runPlayerKeyMapTests() {
+    // Timing constants
+    assert(PlayerKeyMap.autoHideDelaySeconds(fullControls: false) == 3.0)
+    assert(PlayerKeyMap.autoHideDelaySeconds(fullControls: true) == 8.0)
+    assert(PlayerKeyMap.scrubCommitDelaySeconds == 0.4)
+    assert(PlayerKeyMap.backConfirmWindowSeconds == 3.0)
+    assert(PlayerKeyMap.seekStepSeconds(repeatCount: 0) == 10.0)
+    assert(PlayerKeyMap.seekStepSeconds(repeatCount: 10) == 10.0)
+    assert(PlayerKeyMap.seekStepSeconds(repeatCount: 11) == 50.0)
+
+    // Nothing visible (bare video)
+    assert(PlayerKeyMap.resolve(key: .ok, context: PlayerKeyContext(surface: .nothing)) == .pauseAndOpenControls)
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .nothing)) == .seek(deltaSeconds: -10))
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .nothing)) == .seek(deltaSeconds: 10))
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .nothing, repeatCount: 11)) == .seek(deltaSeconds: -50))
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .nothing, repeatCount: 11)) == .seek(deltaSeconds: 50))
+    assert(PlayerKeyMap.resolve(key: .up, context: PlayerKeyContext(surface: .nothing)) == .openControls)
+    assert(PlayerKeyMap.resolve(key: .down, context: PlayerKeyContext(surface: .nothing)) == .openControls)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .nothing, backArmed: false, confirmBack: true)) == .armBack)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .nothing, backArmed: true, confirmBack: true)) == .exitPlayer)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .nothing, backArmed: false, confirmBack: false)) == .exitPlayer)
+    assert(PlayerKeyMap.resolve(key: .playPause, context: PlayerKeyContext(surface: .nothing)) == .transport(command: "toggle", quiet: true))
+    assert(PlayerKeyMap.resolve(key: .play, context: PlayerKeyContext(surface: .nothing)) == .transport(command: "play", quiet: true))
+    assert(PlayerKeyMap.resolve(key: .pause, context: PlayerKeyContext(surface: .nothing)) == .transport(command: "pause", quiet: true))
+
+    // Image / Photo navigation on bare surface
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .nothing, isImage: true)) == .stepItem(delta: -1))
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .nothing, isImage: true)) == .stepItem(delta: 1))
+
+    // Seek strip (Tier 1)
+    assert(PlayerKeyMap.resolve(key: .ok, context: PlayerKeyContext(surface: .seekBar)) == .pauseAndOpenControls)
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .seekBar)) == .seek(deltaSeconds: -10))
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .seekBar)) == .seek(deltaSeconds: 10))
+    assert(PlayerKeyMap.resolve(key: .up, context: PlayerKeyContext(surface: .seekBar)) == .openControls)
+    assert(PlayerKeyMap.resolve(key: .down, context: PlayerKeyContext(surface: .seekBar)) == .openControls)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .seekBar)) == .hideSeekBar)
+    assert(PlayerKeyMap.resolve(key: .playPause, context: PlayerKeyContext(surface: .seekBar)) == .transport(command: "toggle", quiet: true))
+
+    // Full controls (Tier 2)
+    assert(PlayerKeyMap.resolve(key: .ok, context: PlayerKeyContext(surface: .controls)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .controls)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .controls)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .up, context: PlayerKeyContext(surface: .controls)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .down, context: PlayerKeyContext(surface: .controls)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .controls)) == .hideControls)
+    assert(PlayerKeyMap.resolve(key: .playPause, context: PlayerKeyContext(surface: .controls)) == .transport(command: "toggle", quiet: false))
+
+    // Side panel
+    assert(PlayerKeyMap.resolve(key: .ok, context: PlayerKeyContext(surface: .panel)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .panel, repeatCount: 0)) == .closePanel)
+    assert(PlayerKeyMap.resolve(key: .left, context: PlayerKeyContext(surface: .panel, repeatCount: 1)) == .ignore)
+    assert(PlayerKeyMap.resolve(key: .right, context: PlayerKeyContext(surface: .panel)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .up, context: PlayerKeyContext(surface: .panel)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .down, context: PlayerKeyContext(surface: .panel)) == .passThrough)
+    assert(PlayerKeyMap.resolve(key: .back, context: PlayerKeyContext(surface: .panel)) == .closePanel)
+    assert(PlayerKeyMap.resolve(key: .playPause, context: PlayerKeyContext(surface: .panel)) == .transport(command: "toggle", quiet: false))
+
+    print("PASS: PlayerKeyMap remote table, auto-hide timings (3 s / 8 s), hold-seek speed-up and two-press Back")
+}
+
+private func runPhoneConfirmationTests() {
+    assert(PhoneConfirmationTiming.durationSeconds == 3.0)
+    assert(PhoneConfirmations.phoneLabel(nil) == "your phone")
+    assert(PhoneConfirmations.phoneLabel("   ") == "your phone")
+    assert(PhoneConfirmations.phoneLabel("Atul's iPhone") == "Atul's iPhone")
+
+    assert(PhoneConfirmations.pausedFromText(nil) == "Paused from your phone")
+    assert(PhoneConfirmations.pausedFromText("Atul's iPhone") == "Paused from Atul's iPhone")
+    assert(PhoneConfirmations.seekingText(nil) == "Your phone is seeking")
+    assert(PhoneConfirmations.seekingText("Atul's iPhone") == "Atul's iPhone is seeking")
+    assert(PhoneConfirmations.changedFromText(nil) == "Changed from your phone")
+    assert(PhoneConfirmations.changedFromText("Atul's iPhone") == "Changed from Atul's iPhone")
+    assert(PhoneConfirmations.castOriginText(nil) == nil)
+    assert(PhoneConfirmations.castOriginText("Atul's iPhone") == "From Atul's iPhone")
+
+    assert(PhoneConfirmations.phoneSeekCaption(name: "Pixel 9", timelineCaption: nil) == "Pixel 9 is seeking")
+    assert(PhoneConfirmations.phoneSeekCaption(name: "Pixel 9", timelineCaption: "Middle Act") == "Pixel 9 is seeking · Middle Act")
+    assert(PhoneConfirmations.phoneSeekCaption(name: nil, timelineCaption: "Intro") == "Your phone is seeking · Intro")
+
+    assert(PhoneConfirmations.subtitleChangeTitle(trackName: nil, off: true) == "Subtitles: Off")
+    assert(PhoneConfirmations.subtitleChangeTitle(trackName: "English", off: false) == "Subtitles: English")
+    assert(PhoneConfirmations.audioChangeTitle(trackName: "Japanese") == "Audio: Japanese")
+    assert(PhoneConfirmations.speedChangeTitle(1.25) == "Speed: 1.25×")
+    assert(PhoneConfirmations.speedChangeTitle(1.0) == "Speed: Normal")
+    assert(PhoneConfirmations.subtitleOffsetTitle(offsetMs: 0) == "Subtitles in sync")
+    assert(PhoneConfirmations.subtitleOffsetTitle(offsetMs: 250) == "Subtitles 0.25 s later")
+    assert(PhoneConfirmations.subtitleOffsetTitle(offsetMs: -150) == "Subtitles 0.15 s earlier")
+    assert(PhoneConfirmations.queueAddedTitle(itemTitle: "Episode 2") == "Added to queue: Episode 2")
+    assert(PhoneConfirmations.queueNextTitle(itemTitle: "Episode 2") == "Playing next: Episode 2")
+    assert(PhoneConfirmations.queuePositionTitle(itemTitle: "Episode 2", index: 1, count: 4) == "Now playing: Episode 2")
+    assert(PhoneConfirmations.queuePositionTitle(itemTitle: nil, index: 1, count: 4) == "Now playing: item 2 of 4")
+
+    let card = PhoneConfirmations.card(kind: .speed, title: "Speed: 1.25×", name: "Atul's iPhone")
+    assert(card.kind == .speed)
+    assert(card.title == "Speed: 1.25×")
+    assert(card.detail == "Changed from Atul's iPhone")
+
+    print("PASS: PhoneConfirmations labels, captions, change cards and 3 s auto-clear timing")
+}
+
+private func runBookmarkTests() {
+    let suite = "ReceiverReviewTests.bookmarks"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("pb-bookmark-tests-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: tempDir)
+    }
+    let keyProvider = TestHistoryKeyProvider(key: SymmetricKey(size: .bits256))
+
+    // 1. Legacy history JSON without new bookmark fields decodes cleanly
+    let legacyURL = URL(string: "https://example.com/legacy.mp4")!
+    let legacyJSON = """
+    [{"url":"\(legacyURL.absoluteString)","title":"Legacy Video","timestamp":0,"isFavorite":true,"headers":{"Authorization":"Bearer tok"}}]
+    """.data(using: .utf8)!
+    defaults.set(legacyJSON, forKey: "pb_playback_history")
+    let store = HistoryStore(defaults: defaults, keyProvider: keyProvider, thumbnailDirectory: tempDir)
+    assert(store.history.count == 1)
+    assert(store.isBookmarked(url: legacyURL))
+    assert(store.history[0].isFavorite && store.history[0].isBookmarked && !store.history[0].isPrivate)
+
+    // 2. clearHistory keeps bookmarks while removing non-bookmarked watch history
+    let watchURL = URL(string: "https://example.com/watch.mp4")!
+    store.addToHistory(url: watchURL, title: "Watch Item", headers: nil)
+    assert(store.history.count == 2)
+    store.clearHistory()
+    assert(store.history.count == 1 && store.history[0].url == legacyURL)
+
+    // 3. Private / history-off cast: stored only while bookmarked, progress updates continue, unbookmark deletes item + thumbnail
+    defaults.set(false, forKey: "enable_history")
+    let privateURL = URL(string: "https://example.com/private.mp4")!
+    store.addToHistory(url: privateURL, title: "Should Not Save", headers: nil)
+    assert(!store.history.contains { $0.url == privateURL })
+
+    let resume = BookmarkResumePayload(
+        items: [
+            BookmarkQueueItemPayload(
+                url: privateURL.absoluteString,
+                title: "Private Movie",
+                headers: ["Cookie": "sid=abc"],
+                subtitles: [BookmarkSubtitlePayload(url: "https://example.com/en.vtt", label: "English", language: "en", headers: nil)],
+                artworkURL: nil,
+                mediaKind: "video",
+                startPositionMs: 0
+            )
+        ],
+        startIndex: 0,
+        startPositionMs: 120_000
+    )
+    let encodedResume = try! JSONEncoder().encode(resume)
+    let added = store.toggleBookmark(
+        url: privateURL,
+        title: "Private Movie",
+        headers: ["Cookie": "sid=abc"],
+        payloadData: encodedResume,
+        positionMs: 120_000,
+        durationMs: 600_000
+    )
+    assert(added && store.isBookmarked(url: privateURL))
+    assert(!store.visibleHistory.contains { $0.url == privateURL }, "Private bookmark stays out of visible history")
+
+    // Progress keeps updating for bookmarked items even when enable_history == false
+    store.updateProgress(url: privateURL, positionMs: 240_000, durationMs: 600_000)
+    let bookmarkedItem = store.bookmarkedItems.first { $0.url == privateURL }!
+    assert(bookmarkedItem.positionMs == 240_000)
+
+    // Resume API returns saved queue/headers/subtitles/position, and startOver resets to 0
+    let restoredResume = store.resumePayload(for: bookmarkedItem, startOver: false)!
+    assert(restoredResume.items.count == 1)
+    assert(restoredResume.items[0].headers?["Cookie"] == "sid=abc")
+    assert(restoredResume.items[0].subtitles.first?.url == "https://example.com/en.vtt")
+    assert(restoredResume.startPositionMs == 240_000)
+    let startOverResume = store.resumePayload(for: bookmarkedItem, startOver: true)!
+    assert(startOverResume.startPositionMs == 0)
+
+    // Thumbnail file creation + deletion on unbookmark
+    let thumbDir = BookmarkThumbnailPolicy.thumbnailsDirectory(baseDirectory: tempDir)
+    try! FileManager.default.createDirectory(at: thumbDir, withIntermediateDirectories: true)
+    let thumbFileName = BookmarkThumbnailPolicy.fileName(for: privateURL)
+    let thumbFileURL = BookmarkThumbnailPolicy.fileURL(for: thumbFileName, directory: tempDir)
+    try! Data([0xFF, 0xD8, 0xFF]).write(to: thumbFileURL)
+    store.setThumbnailFileName(thumbFileName, for: privateURL)
+    assert(FileManager.default.fileExists(atPath: thumbFileURL.path))
+
+    let removed = store.toggleBookmark(url: privateURL, title: "Private Movie", headers: nil)
+    assert(!removed)
+    assert(!store.history.contains { $0.url == privateURL }, "Private cast deleted when unbookmarked")
+    assert(!FileManager.default.fileExists(atPath: thumbFileURL.path), "Thumbnail deleted on unbookmark")
+
+    // 4. isBlankFrame threshold (< 5 per 1000 pixels with luma > 32)
+    var samples = [UInt8](repeating: 10, count: 1000)
+    samples[0] = 40; samples[1] = 40; samples[2] = 40; samples[3] = 40
+    assert(BookmarkThumbnailPolicy.isBlankFrame(lumaSamples: samples), "4/1000 bright pixels is blank")
+    samples[4] = 40
+    assert(!BookmarkThumbnailPolicy.isBlankFrame(lumaSamples: samples), "5/1000 bright pixels is non-blank")
+
+    let rgbaBlack = [UInt8](repeating: 0, count: 16 * 16 * 4)
+    let blackResult = rgbaBlack.withUnsafeBufferPointer { ptr in
+        BookmarkThumbnailPolicy.isBlankFrame(pixelBytes: ptr.baseAddress!, width: 16, height: 16, bytesPerRow: 16 * 4)
+    }
+    assert(blackResult, "All-black RGBA frame is blank")
+
+    let rgbaBright = [UInt8](repeating: 200, count: 16 * 16 * 4)
+    let brightResult = rgbaBright.withUnsafeBufferPointer { ptr in
+        BookmarkThumbnailPolicy.isBlankFrame(pixelBytes: ptr.baseAddress!, width: 16, height: 16, bytesPerRow: 16 * 4)
+    }
+    assert(!brightResult, "Bright RGBA frame is non-blank")
+
+    print("PASS: bookmarks migration, private lifecycle, clearHistory preservation, resume payload, and isBlankFrame")
+}
+
+private func runCarryOverPhase5Tests() {
+    let suite = "ReceiverReviewTests.carryOverPhase5"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("pb-carryover5-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: tempDir)
+    }
+
+    let keyProvider = TestHistoryKeyProvider(key: SymmetricKey(size: .bits256))
+    let store = HistoryStore(defaults: defaults, keyProvider: keyProvider, thumbnailDirectory: tempDir)
+
+    // 1. Bookmark older than 100 plain entries is never trimmed (both in-memory and on reload)
+    let oldBookmarkURL = URL(string: "https://example.com/old-bookmark.mp4")!
+    store.addToHistory(url: oldBookmarkURL, title: "Old Bookmark", headers: nil)
+    store.toggleBookmark(url: oldBookmarkURL, title: "Old Bookmark", headers: nil)
+    for i in 0..<105 {
+        store.addToHistory(url: URL(string: "https://example.com/plain-\(i).mp4")!, title: "Plain \(i)", headers: nil)
+    }
+    assert(store.isBookmarked(url: oldBookmarkURL), "Bookmark older than 100 plain entries must not be trimmed")
+    assert(store.bookmarkedItems.count == 1)
+    let plainCount = store.history.filter { !$0.isBookmarked }.count
+    assert(plainCount == HistoryStore.maxPlainHistoryCount, "Plain history should be capped at 100, got \(plainCount)")
+    let reloaded = HistoryStore(defaults: defaults, keyProvider: keyProvider, thumbnailDirectory: tempDir)
+    assert(reloaded.isBookmarked(url: oldBookmarkURL), "Reloading must not trim bookmarks beyond index 100")
+
+    // 2. Payload cap: slices queue to maxBookmarkQueueItems starting from startIndex
+    let manyItems = (0..<25).map { idx in
+        BookmarkQueueItemPayload(
+            url: "https://example.com/ep-\(idx).mp4",
+            title: "Episode \(idx)",
+            headers: nil,
+            subtitles: [],
+            artworkURL: nil,
+            mediaKind: nil,
+            startPositionMs: nil
+        )
+    }
+    let bigQueue = BookmarkResumePayload(items: manyItems, startIndex: 5, startPositionMs: 42_000)
+    let bigData = try! JSONEncoder().encode(bigQueue)
+    let boundedData = HistoryStore.boundedPayloadData(bigData)!
+    let decodedBounded = try! JSONDecoder().decode(BookmarkResumePayload.self, from: boundedData)
+    assert(decodedBounded.items.count == HistoryStore.maxBookmarkQueueItems)
+    assert(decodedBounded.startIndex == 0)
+    assert(decodedBounded.items.first?.url == "https://example.com/ep-5.mp4")
+
+    // Graceful degradation when byte ceiling is exceeded: degrades to single item, then strips headers
+    let hugeHeaders = ["X-Blob": String(repeating: "a", count: 20_000)]
+    let oversizedItems = [
+        BookmarkQueueItemPayload(url: "https://example.com/1.mp4", title: "One", headers: hugeHeaders, subtitles: [], artworkURL: nil, mediaKind: nil, startPositionMs: nil),
+        BookmarkQueueItemPayload(url: "https://example.com/2.mp4", title: "Two", headers: nil, subtitles: [], artworkURL: nil, mediaKind: nil, startPositionMs: nil),
+    ]
+    let oversizedData = try! JSONEncoder().encode(BookmarkResumePayload(items: oversizedItems, startIndex: 0, startPositionMs: 1000))
+    let degradedData = HistoryStore.boundedPayloadData(oversizedData)!
+    let decodedDegraded = try! JSONDecoder().decode(BookmarkResumePayload.self, from: degradedData)
+    assert(decodedDegraded.items.count == 1)
+    assert(decodedDegraded.items[0].headers == nil, "Oversized headers stripped when single item exceeds byte ceiling")
+    assert(degradedData.count <= HistoryStore.maxBookmarkPayloadBytes)
+
+    // Failed save (oversized blob) never loses existing persisted history
+    let beforeBlob = defaults.data(forKey: "pb_playback_history_encrypted_v1")!
+    let saveResult = store.saveHistory(maxBlobBytes: 64)
+    assert(!saveResult, "Save exceeding maxBlobBytes should fail safely")
+    let afterBlob = defaults.data(forKey: "pb_playback_history_encrypted_v1")!
+    assert(beforeBlob == afterBlob, "Existing persisted history must remain intact on failed save")
+
+    // 3. Purged thumbnail in Caches: clears stale thumbnailFileName and flags needsBookmarkThumbnail
+    let thumbDir = BookmarkThumbnailPolicy.thumbnailsDirectory(baseDirectory: tempDir)
+    try! FileManager.default.createDirectory(at: thumbDir, withIntermediateDirectories: true)
+    let thumbFileName = BookmarkThumbnailPolicy.fileName(for: oldBookmarkURL)
+    let thumbURL = BookmarkThumbnailPolicy.fileURL(for: thumbFileName, directory: tempDir)
+    try! Data([0xFF, 0xD8, 0xFF]).write(to: thumbURL)
+    store.setThumbnailFileName(thumbFileName, for: oldBookmarkURL)
+    assert(store.validThumbnailURL(for: store.bookmarkedItems[0]) == thumbURL)
+    assert(!store.needsBookmarkThumbnail(for: oldBookmarkURL))
+
+    // Simulate OS purging Caches
+    try! FileManager.default.removeItem(at: thumbURL)
+    assert(store.validThumbnailURL(for: store.bookmarkedItems[0]) == nil, "Missing thumbnail file must yield nil for placeholder")
+    assert(store.bookmarkedItems[0].thumbnailFileName == nil, "Stale thumbnailFileName must be cleared")
+    assert(store.needsBookmarkThumbnail(for: oldBookmarkURL), "Bookmark must request a new frame next time it plays")
+
+    print("PASS: carry-over phase 5 (trimKeepingBookmarks, payload/blob bounds, purged thumbnail recovery)")
+}
+
+private func runPhase5PureLogicTests() {
+    // 1. AppThemeMode
+    assert(AppThemeMode.fromStorage(nil) == .dark)
+    assert(AppThemeMode.fromStorage("unknown") == .dark)
+    assert(AppThemeMode.fromStorage("amoled") == .amoled)
+    assert(AppThemeMode.fromStorage("light") == .light)
+    assert(AppThemeMode.amoled.title == "Black, for OLED")
+
+    // 2. HomeFormatting bookmark subtitle, connection summary, pre-play, pairing
+    assert(
+        HomeFormatting.bookmarkSubtitle(positionMs: 402_000, durationMs: 882_000, resumePositionMs: 402_000)
+            == "Resume at 6:42 · 8 min left"
+    )
+    assert(
+        HomeFormatting.bookmarkSubtitle(positionMs: 0, durationMs: 600_000, resumePositionMs: nil)
+            == "From the start · 10 min"
+    )
+    assert(HomeFormatting.connectionSummary(connectedCount: 0, connectedNames: []) == nil)
+    assert(HomeFormatting.connectionSummary(connectedCount: 1, connectedNames: ["Pixel 9"]) == "Pixel 9 connected")
+    assert(HomeFormatting.connectionSummary(connectedCount: 2, connectedNames: ["Pixel 9", "iPhone"]) == "2 phones connected")
+
+    let resume = HomeFormatting.prePlayResumeInfo(positionMs: 70_000, durationMs: 146_000)!
+    assert(resume.stoppedText == "You stopped at 1:10 of 2:26")
+    assert(resume.buttonTitle == "Resume from 1:10")
+    assert(abs(resume.fraction - (70.0 / 146.0)) < 0.001)
+    assert(HomeFormatting.prePlayResumeInfo(positionMs: 10_000, durationMs: 146_000) == nil, "Under 30s does not prompt resume")
+
+    assert(HomeFormatting.formattedSASCode("482915") == "482 915")
+    assert(HomeFormatting.pairingExpiryText(secondsRemaining: 48) == "Expires in 48 seconds")
+    assert(HomeFormatting.pairingExpiryText(secondsRemaining: 1) == "Expires in 1 second")
+
+    // 3. SettingsCategory & SubtitleStyleSettings cycling
+    assert(SettingsCategory.primaryCategories.count == 6)
+    assert(!SettingsCategory.primaryCategories.contains(.advanced))
+    assert(SubtitleSizeOption.medium.next() == .large)
+    assert(SubtitleSizeOption.large.next() == .extraLarge)
+    assert(SubtitleSizeOption.extraLarge.next() == .small)
+    assert(SubtitleEdgeOption.outline.next() == .dropShadow)
+    assert(SubtitleEdgeOption.dropShadow.next() == .none)
+    assert(SubtitleEdgeOption.none.next() == .outline)
+
+    // 4. AutoSkipPreferences decision & notices
+    let introSeg = SkipSegment(type: "intro", startMs: 10_000, endMs: 40_000)
+    let recapSeg = SkipSegment(type: "recap", startMs: 0, endMs: 20_000)
+    let outroSeg = SkipSegment(type: "outro", startMs: 90_000, endMs: 120_000)
+    let previewSeg = SkipSegment(type: "preview", startMs: 110_000, endMs: 120_000)
+    let defaultAutoSkip = AutoSkipPreferences()
+    assert(!defaultAutoSkip.shouldAutoSkip(segment: introSeg))
+    assert(!defaultAutoSkip.shouldAutoSkip(segment: recapSeg))
+    assert(!defaultAutoSkip.shouldAutoSkip(segment: outroSeg))
+    assert(!defaultAutoSkip.shouldAutoSkip(segment: previewSeg))
+    let customAutoSkip = AutoSkipPreferences(intro: true, recap: false, credits: true)
+    assert(customAutoSkip.shouldAutoSkip(segment: introSeg))
+    assert(!customAutoSkip.shouldAutoSkip(segment: recapSeg))
+    assert(customAutoSkip.shouldAutoSkip(segment: outroSeg))
+    assert(!customAutoSkip.shouldAutoSkip(segment: previewSeg))
+    assert(customAutoSkip.noticeText(for: introSeg) == "Skipped intro")
+    assert(customAutoSkip.noticeText(for: recapSeg) == "Skipped recap")
+    assert(customAutoSkip.noticeText(for: outroSeg) == "Skipped credits")
+
+    // 5. SubtitleStylePreferences mpv & preview mappings
+    let subStyle = SubtitleStylePreferences(
+        size: .large,
+        font: .mono,
+        background: .box,
+        edge: .dropShadow,
+        overrideStyled: true
+    )
+    let mpvProps = Dictionary(uniqueKeysWithValues: subStyle.mpvProperties())
+    assert(mpvProps["sub-scale"] == "1.25")
+    assert(mpvProps["sub-font"] == "Menlo")
+    assert(mpvProps["sub-border-style"] == "opaque-box")
+    assert(mpvProps["sub-outline-color"] == "#FF000000")
+    assert(mpvProps["sub-back-color"] == "#00000000")
+    assert(mpvProps["sub-outline-size"] == "3")
+    assert(mpvProps["sub-shadow-offset"] == "0")
+    assert(mpvProps["sub-ass-override"] == "force")
+    assert(subStyle.previewFontSizePoints == 30)
+    assert(subStyle.previewBackgroundOpacity == 1.0)
+
+    print("PASS: phase 5 pure logic (theme modes, Home/PrePlay/Pairing formatting, Settings categories, subtitle options, auto-skip, subtitle style)")
+}
+
+private func runPhase6PureLogicTests() {
+    // 1. TogetherJson command encoding
+    let joinCmd = TogetherJson.command("pair_accept", fields: TogetherJson.deviceFields(
+        TogetherDevice(name: "Living Room", kind: .tv, screen: true)
+    ))
+    assert(joinCmd != nil && joinCmd!.contains("\"command\":\"pair_accept\"") && joinCmd!.contains("\"kind\":\"tv\""))
+
+    let loadedCmd = TogetherJson.command("loaded", fields: ["item": "abc", "duration_ms": 120_000])
+    assert(loadedCmd != nil && loadedCmd!.contains("\"duration_ms\":120000"))
+
+    // 2. TogetherJson event parsing
+    let codeJson = #"{"event":"pairing_code","code":"418207","qr":"https://pair.playbridge.app/p/418207","qr_size":2,"qr_modules":"1001","expires_at":1700000000000}"#
+    assert(TogetherJson.event(from: codeJson) == .pairingCode(
+        code: "418207",
+        qr: "https://pair.playbridge.app/p/418207",
+        qrSize: 2,
+        qrModules: "1001",
+        expiresAtMs: 1_700_000_000_000
+    ))
+
+    let inviteJson = #"{"event":"pairing_invite","from":"Alex","relay":"https://party.playbridge.app"}"#
+    assert(TogetherJson.event(from: inviteJson) == .pairingInvite(from: "Alex", relay: "https://party.playbridge.app"))
+
+    let roomJson = #"{"event":"room","room":"r1","invite":"https://party.playbridge.app/j/r1#k=sec","relay":"https://party.playbridge.app","member":"m1","box_pk":"box1","sign_pk":"sign1","host":false}"#
+    assert(TogetherJson.event(from: roomJson) == .room(
+        roomId: "r1",
+        invite: "https://party.playbridge.app/j/r1#k=sec",
+        relay: "https://party.playbridge.app",
+        member: "m1",
+        boxKey: "box1",
+        signKey: "sign1",
+        host: false
+    ))
+
+    let playerLoadJson = #"{"event":"player","command":{"action":"load","item":{"id":"it1","title":"Movie","source":{"type":"url","url":"https://example.com/v.mp4"},"headers":{},"subtitles":["https://example.com/s.vtt"],"start_ms":5000,"shared_by":"m0"},"headers":{"Cookie":"a=b"},"start_ms":5000}}"#
+    if case .player(.load(let item, let headers, let startMs)) = TogetherJson.event(from: playerLoadJson) {
+        assert(item.id == "it1" && item.title == "Movie" && headers["Cookie"] == "a=b" && startMs == 5000)
+    } else {
+        fatalError("Expected player load event")
+    }
+    assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"seek","position_ms":42000}}"#) == .player(.seek(positionMs: 42_000)))
+    assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"rate","rate":1.05}}"#) == .player(.rate(1.05)))
+    assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"go_live"}}"#) == .player(.goLive))
+    assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull))
+
+    // 3. TogetherFormatting
+    assert(TogetherFormatting.groupPartyCode("418207593") == "418-207-593")
+    assert(TogetherFormatting.waitingLabel(["Sam's TV"]) == "Waiting for Sam's TV…")
+    assert(TogetherFormatting.waitingLabel(["Sam", "Alex"]) == "Waiting for Sam and Alex…")
+    assert(TogetherFormatting.waitingLabel(["A", "B", "C"]) == "Waiting for 3 devices…")
+    assert(TogetherFormatting.expiryLabel(remainingMs: 65_000) == "2 minutes")
+    assert(TogetherFormatting.expiryLabel(remainingMs: 0) == nil)
+
+    // 4. TogetherLoadedPlanner (ready gating, wait for duration, fallback after 2s, late correction)
+    assert(!TogetherLoadedPlanner.isMediaReady(state: "buffering", durationMs: 0))
+    assert(!TogetherLoadedPlanner.isMediaReady(state: "paused", durationMs: 0))
+    assert(TogetherLoadedPlanner.isMediaReady(state: "paused", durationMs: 60_000))
+    assert(TogetherLoadedPlanner.isMediaReady(state: "buffering", durationMs: 60_000))
+    assert(TogetherLoadedPlanner.isMediaReady(state: "playing", durationMs: 0))
+    // Slow on-demand stream stays not-ready while loading/buffering (>2s), so never reported live.
+    let slowVodReady = TogetherLoadedPlanner.isMediaReady(state: "buffering", durationMs: 0)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: slowVodReady, liveKnown: nil, durationMs: 0, force: true) == .wait)
+    // Real live stream enters "playing" at 0ms -> ready becomes true -> forced fallback reports live (nil).
+    let liveReady = TogetherLoadedPlanner.isMediaReady(state: "playing", durationMs: 0)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: liveReady, liveKnown: nil, durationMs: 0, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: liveReady, liveKnown: nil, durationMs: 0, force: true) == .report(durationMs: nil, reportedEarly: true))
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: false, liveKnown: false, durationMs: 60_000, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: nil, durationMs: 0, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: false, durationMs: 0, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: false, durationMs: 120_000, force: false) == .report(durationMs: 120_000, reportedEarly: false))
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: true, durationMs: 120_000, force: false) == .report(durationMs: nil, reportedEarly: false))
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: nil, durationMs: 0, force: true) == .report(durationMs: nil, reportedEarly: true))
+    assert(TogetherLoadedPlanner.lateDurationCorrection(alreadyReported: true, reportedEarly: true, liveKnown: nil, durationMs: 95_000) == 95_000)
+    assert(TogetherLoadedPlanner.lateDurationCorrection(alreadyReported: true, reportedEarly: false, liveKnown: false, durationMs: 95_000) == nil)
+    assert(TogetherLoadedPlanner.lateDurationCorrection(alreadyReported: true, reportedEarly: true, liveKnown: true, durationMs: 95_000) == nil)
+
+    // 5. TogetherClient integer-on-the-wire & concurrent submit/close/deinit safety
+    final class FakeTogetherBoundary: TogetherNativeBoundary, @unchecked Sendable {
+        var isAvailable: Bool { true }
+        private let lock = NSLock()
+        private var nextRaw = 1
+        private var freed = Set<OpaquePointer>()
+        private var cancelled = Set<OpaquePointer>()
+        private(set) var startCount = 0
+        private(set) var freeCount = 0
+        private(set) var doubleFrees = 0
+        private(set) var callsAfterFree = 0
+        private(set) var submittedCommands: [String] = []
+
+        func abiVersion() -> UInt32 { TogetherClient.expectedAbiVersion }
+
+        func start() -> OpaquePointer? {
+            lock.lock()
+            defer { lock.unlock() }
+            nextRaw += 1
+            startCount += 1
+            return OpaquePointer(bitPattern: nextRaw * 8)
+        }
+
+        func submitJson(handle: OpaquePointer, commandJson: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if freed.contains(handle) {
+                callsAfterFree += 1
+                return false
+            }
+            submittedCommands.append(commandJson)
+            return true
+        }
+
+        func nextEvent(handle: OpaquePointer, waitMs: UInt64) -> String? {
+            lock.lock()
+            if freed.contains(handle) {
+                callsAfterFree += 1
+                lock.unlock()
+                return nil
+            }
+            let isCancelled = cancelled.contains(handle)
+            lock.unlock()
+            if !isCancelled {
+                usleep(100)
+            }
+            return nil
+        }
+
+        func cancel(handle: OpaquePointer) {
+            lock.lock()
+            defer { lock.unlock() }
+            if freed.contains(handle) {
+                callsAfterFree += 1
+                return
+            }
+            cancelled.insert(handle)
+        }
+
+        func free(handle: OpaquePointer) {
+            lock.lock()
+            defer { lock.unlock() }
+            if !freed.insert(handle).inserted {
+                doubleFrees += 1
+                return
+            }
+            freeCount += 1
+        }
+
+        func waitUntilAllFreed(timeoutSeconds: TimeInterval = 5.0) -> Bool {
+            let deadline = Date().addingTimeInterval(timeoutSeconds)
+            while Date() < deadline {
+                lock.lock()
+                let done = (freeCount == startCount)
+                lock.unlock()
+                if done { return true }
+                usleep(1000)
+            }
+            return false
+        }
+    }
+
+    // 5a. Integer-on-the-wire check
+    let wireFake = FakeTogetherBoundary()
+    let wireClient = try! TogetherClient(native: wireFake) { _ in }
+    assert(wireClient.snapshot(positionMs: 123_456_789, playing: true, buffering: false))
+    assert(wireClient.seek(positionMs: 98_765_432))
+    assert(wireClient.loaded(item: "it1", durationMs: 5_400_000))
+    assert(wireClient.load(item: TogetherItem(
+        id: "it1",
+        title: "Movie",
+        site: nil,
+        source: .url("https://example.com/v.mp4"),
+        headers: [:],
+        subtitles: [],
+        startMs: 15_000
+    )))
+    wireClient.close()
+    assert(wireFake.waitUntilAllFreed())
+    assert(wireFake.submittedCommands.contains { $0.contains("\"position_ms\":123456789") && !$0.contains("123456789.") && !$0.contains("e+") })
+    assert(wireFake.submittedCommands.contains { $0.contains("\"position_ms\":98765432") && !$0.contains("98765432.") && !$0.contains("e+") })
+    assert(wireFake.submittedCommands.contains { $0.contains("\"duration_ms\":5400000") && !$0.contains("5400000.") && !$0.contains("e+") })
+    assert(wireFake.submittedCommands.contains { $0.contains("\"start_ms\":15000") && !$0.contains("15000.") && !$0.contains("e+") })
+    assert(wireFake.callsAfterFree == 0 && wireFake.doubleFrees == 0 && wireFake.freeCount == 1)
+
+    // 5b. Concurrent submit/close race (200 iterations)
+    let raceFake = FakeTogetherBoundary()
+    let queue = DispatchQueue(label: "test.together.race", attributes: .concurrent)
+    for _ in 0..<200 {
+        let client = try! TogetherClient(native: raceFake) { _ in }
+        let group = DispatchGroup()
+        for j in 0..<4 {
+            group.enter()
+            queue.async {
+                if j == 0 {
+                    client.close()
+                } else {
+                    client.snapshot(positionMs: Int64(j * 1000), playing: true, buffering: false)
+                    client.seek(positionMs: Int64(j * 500))
+                }
+                group.leave()
+            }
+        }
+        group.wait()
+        client.close()
+    }
+    assert(raceFake.waitUntilAllFreed())
+    assert(raceFake.callsAfterFree == 0)
+    assert(raceFake.doubleFrees == 0)
+    assert(raceFake.freeCount == 200)
+
+    // 5c. Immediate dealloc before/during pump start (50 iterations)
+    let deallocFake = FakeTogetherBoundary()
+    for _ in 0..<50 {
+        _ = try! TogetherClient(native: deallocFake) { _ in }
+    }
+    assert(deallocFake.waitUntilAllFreed())
+    assert(deallocFake.callsAfterFree == 0)
+    assert(deallocFake.doubleFrees == 0)
+    assert(deallocFake.freeCount == 50)
+
+    print("PASS: phase 6 Watch Together pure logic (JSON protocol, formatting, loaded duration planner, FFI concurrency & integers)")
+}
+
+private func runDevice1FocusAndHomeTests() {
+    // 1. Home first-run vs connected-empty-bookmarks state
+    assert(HomeFormatting.isFirstRun(pairedCount: 0, bookmarkCount: 0))
+    assert(!HomeFormatting.isFirstRun(pairedCount: 1, bookmarkCount: 0), "Connected/paired phone with no bookmarks must NOT show first-run QR")
+    assert(!HomeFormatting.isFirstRun(pairedCount: 0, bookmarkCount: 1))
+    assert(!HomeFormatting.isFirstRun(pairedCount: 2, bookmarkCount: 3))
+
+    func makeID(_ n: Int) -> AppFocusID {
+        AppFocusID(UUID(uuidString: String(format: "00000000-0000-0000-0001-%012d", n))!)
+    }
+
+    // 2. Settings layout focus graph: sidebar column (x=80) <-> detail pane rows (x=440)
+    let cat0 = makeID(1), cat1 = makeID(2), cat2 = makeID(3)
+    let row0 = makeID(10), row1 = makeID(11), row2 = makeID(12)
+    let settingsFrames: [AppFocusID: CGRect] = [
+        cat0: CGRect(x: 80, y: 180, width: 320, height: 64),
+        cat1: CGRect(x: 80, y: 252, width: 320, height: 64),
+        cat2: CGRect(x: 80, y: 324, width: 320, height: 64),
+        row0: CGRect(x: 440, y: 180, width: 1200, height: 84),
+        row1: CGRect(x: 440, y: 274, width: 1200, height: 84),
+        row2: CGRect(x: 440, y: 368, width: 1200, height: 84),
+    ]
+    var settingsFocus = AppFocusModel(focused: cat0)
+    assert(settingsFocus.move(.down, frames: settingsFrames) == cat1)
+    assert(settingsFocus.move(.down, frames: settingsFrames) == cat2)
+    assert(settingsFocus.move(.up, frames: settingsFrames) == cat1)
+    assert(settingsFocus.move(.right, frames: settingsFrames) == row1)
+    assert(settingsFocus.move(.down, frames: settingsFrames) == row2)
+    assert(settingsFocus.move(.up, frames: settingsFrames) == row1)
+    assert(settingsFocus.move(.left, frames: settingsFrames) == cat1)
+
+    // 3. Home layout focus graph: top bar (Watch Together, Settings) <-> horizontal bookmark tiles
+    let wtBtn = makeID(20), gearBtn = makeID(21)
+    let tile0 = makeID(30), tile1 = makeID(31), tile2 = makeID(32), tile3 = makeID(33)
+    let homeFrames: [AppFocusID: CGRect] = [
+        wtBtn: CGRect(x: 1420, y: 60, width: 220, height: 52),
+        gearBtn: CGRect(x: 1660, y: 60, width: 52, height: 52),
+        tile0: CGRect(x: 80, y: 360, width: 280, height: 158),
+        tile1: CGRect(x: 382, y: 360, width: 280, height: 158),
+        tile2: CGRect(x: 684, y: 360, width: 280, height: 158),
+        tile3: CGRect(x: 986, y: 360, width: 280, height: 158),
+    ]
+    var homeFocus = AppFocusModel(focused: wtBtn)
+    assert(homeFocus.move(.right, frames: homeFrames) == gearBtn)
+    assert(homeFocus.move(.left, frames: homeFrames) == wtBtn)
+    assert(homeFocus.move(.down, frames: homeFrames) != nil)
+    homeFocus.focused = tile0
+    assert(homeFocus.move(.right, frames: homeFrames) == tile1)
+    assert(homeFocus.move(.right, frames: homeFrames) == tile2)
+    assert(homeFocus.move(.right, frames: homeFrames) == tile3)
+    assert(homeFocus.move(.left, frames: homeFrames) == tile2)
+    assert(homeFocus.move(.up, frames: homeFrames) == wtBtn)
+
+    // 4. Overlay scope isolation (BookmarkActionsOverlay / ConnectAnotherPhoneModal)
+    var scopeStack = AppFocusScopeStack()
+    let homeScope = UUID(), overlayScope = UUID()
+    scopeStack.register(homeScope)
+    assert(scopeStack.active(eligible: [homeScope]) == homeScope)
+    scopeStack.register(overlayScope)
+    assert(scopeStack.active(eligible: [homeScope, overlayScope]) == overlayScope)
+    let ovResume = makeID(40), ovStartOver = makeID(41), ovRemove = makeID(42)
+    let overlayFrames: [AppFocusID: CGRect] = [
+        ovResume: CGRect(x: 1500, y: 260, width: 320, height: 64),
+        ovStartOver: CGRect(x: 1500, y: 334, width: 320, height: 64),
+        ovRemove: CGRect(x: 1500, y: 408, width: 320, height: 64),
+    ]
+    var overlayFocus = AppFocusModel(focused: ovResume)
+    assert(overlayFocus.move(.down, frames: overlayFrames) == ovStartOver)
+    assert(overlayFocus.move(.down, frames: overlayFrames) == ovRemove)
+    assert(overlayFocus.move(.left, frames: overlayFrames) == nil, "Overlay scope must not escape to Home")
+    scopeStack.remove(overlayScope)
+    assert(scopeStack.active(eligible: [homeScope, overlayScope]) == homeScope)
+
+    // Round 2: down from right-aligned top bar buttons to ONE left-aligned bookmark tile, and back up.
+    let topWT = makeID(50), topGear = makeID(51), singleTile = makeID(52)
+    let singleBookmarkFrames: [AppFocusID: CGRect] = [
+        topWT: CGRect(x: 1380, y: 60, width: 280, height: 64),
+        topGear: CGRect(x: 1680, y: 60, width: 64, height: 64),
+        singleTile: CGRect(x: 80, y: 360, width: 420, height: 236),
+    ]
+    var singleFocus = AppFocusModel(focused: topWT)
+    assert(singleFocus.move(.down, frames: singleBookmarkFrames) == singleTile)
+    assert(singleFocus.move(.up, frames: singleBookmarkFrames) == topWT)
+    singleFocus = AppFocusModel(focused: topGear)
+    assert(singleFocus.move(.down, frames: singleBookmarkFrames) == singleTile)
+    assert(singleFocus.move(.up, frames: singleBookmarkFrames) == topWT)
+
+    // Round 2: Settings About (bottom of sidebar) -> Right into higher detail pane rows.
+    let sAbout = makeID(60), sAdv = makeID(61), dLicences = makeID(62), dPrivacy = makeID(63)
+    let aboutFrames: [AppFocusID: CGRect] = [
+        sAbout: CGRect(x: 80, y: 620, width: 320, height: 64),
+        sAdv: CGRect(x: 80, y: 740, width: 320, height: 64),
+        dLicences: CGRect(x: 480, y: 360, width: 1200, height: 68),
+        dPrivacy: CGRect(x: 480, y: 440, width: 1200, height: 68),
+    ]
+    var aboutFocus = AppFocusModel(focused: sAbout)
+    assert(aboutFocus.move(.right, frames: aboutFrames) == dPrivacy)
+    assert(aboutFocus.move(.up, frames: aboutFrames) == dLicences)
+    assert(aboutFocus.move(.left, frames: aboutFrames) == sAbout)
+
+    print("PASS: device-round1 Home first-run state, Settings/Home focus graphs, and overlay scope isolation")
+}
+
+private func runDevice4WatchTogetherReplacementTests() {
+    let tokenA = UUID()
+    let tokenB = UUID()
+    let tokenA2 = UUID()
+
+    // Lifecycle order 1: old onDisappear runs BEFORE new onAppear when replacing itemA -> itemB.
+    var attachment = TogetherPlayerAttachment()
+    attachment.attach(item: "item-a", token: tokenA)
+    assert(TogetherSessionMatcher.isPartyItem("item-a", loadingItem: "item-a", playerItem: attachment.item))
+    // Host loads item-b while item-a is attached: loadingItem becomes "item-b".
+    assert(attachment.detach(token: tokenA))
+    assert(attachment.item == nil)
+    assert(TogetherSessionMatcher.isPartyItem("item-b", loadingItem: "item-b", playerItem: attachment.item))
+    attachment.attach(item: "item-b", token: tokenB)
+    assert(attachment.item == "item-b")
+    assert(attachment.token == tokenB)
+
+    // Lifecycle order 2: new onAppear runs BEFORE old onDisappear (SwiftUI fullScreenCover/player replace race).
+    var raced = TogetherPlayerAttachment()
+    raced.attach(item: "item-a", token: tokenA)
+    // Host loads item-b while item-a is still attached: loadingItem == "item-b", playerItem == "item-a".
+    // New PlayerView(item-b).onAppear fires BEFORE old PlayerView(item-a).onDisappear!
+    assert(TogetherSessionMatcher.isPartyItem("item-b", loadingItem: "item-b", playerItem: raced.item))
+    raced.attach(item: "item-b", token: tokenB)
+    // Late onDisappear from retiring item-a must NOT detach item-b or clear party attachment.
+    assert(!raced.detach(token: tokenA))
+    assert(raced.item == "item-b")
+    assert(raced.token == tokenB)
+
+    // Even when reloading the same item ID (item-a -> item-a), retiring tokenA cannot detach new tokenA2.
+    var sameID = TogetherPlayerAttachment()
+    sameID.attach(item: "item-a", token: tokenA)
+    assert(TogetherSessionMatcher.isPartyItem("item-a", loadingItem: "item-a", playerItem: sameID.item))
+    sameID.attach(item: "item-a", token: tokenA2)
+    assert(!sameID.detach(token: tokenA))
+    assert(sameID.item == "item-a")
+    assert(sameID.token == tokenA2)
+
+    // Non-party cast during a party must NOT match and must trigger leave.
+    assert(!TogetherSessionMatcher.isPartyItem(nil, loadingItem: "item-b", playerItem: raced.item))
+    assert(!TogetherSessionMatcher.isPartyItem("", loadingItem: "item-b", playerItem: raced.item))
+    assert(!TogetherSessionMatcher.isPartyItem("non-party-cast", loadingItem: "item-b", playerItem: raced.item))
+
+    // Party load during a normal (non-party) cast: playerItem is nil, loadingItem is set -> matches & joins.
+    assert(TogetherSessionMatcher.isPartyItem("item-party", loadingItem: "item-party", playerItem: nil))
+
+    // Second-item loaded reporting starts fresh (alreadyReported == false, liveKnown == nil): waits for duration.
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: nil, durationMs: 0, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(alreadyReported: false, ready: true, liveKnown: false, durationMs: 35_000, force: false) == .report(durationMs: 35_000, reportedEarly: false))
+
+    print("PASS: device-round4 Watch Together replacement matcher, token-fenced attachment, and second-item loaded checks")
+}
+
+private func runDevice5WatchTogetherPolicyTests() {
+    // Session reuse during Watch Together: reuse player across video/audio loads, recreate only for images.
+    assert(TogetherPlaybackPolicy.shouldReusePlaybackSession(activeIsImage: false, incomingIsImage: false))
+    assert(!TogetherPlaybackPolicy.shouldReusePlaybackSession(activeIsImage: true, incomingIsImage: false))
+    assert(!TogetherPlaybackPolicy.shouldReusePlaybackSession(activeIsImage: false, incomingIsImage: true))
+    assert(!TogetherPlaybackPolicy.shouldReusePlaybackSession(activeIsImage: true, incomingIsImage: true))
+
+    // Leaving party on dismiss: only when user explicitly exits while in a party and not suppressed by EOF.
+    assert(TogetherPlaybackPolicy.shouldLeavePartyOnDismiss(partySessionActive: true, suppressLeave: false, currentPlayRequestIsNil: true))
+    assert(!TogetherPlaybackPolicy.shouldLeavePartyOnDismiss(partySessionActive: true, suppressLeave: true, currentPlayRequestIsNil: true))
+    assert(!TogetherPlaybackPolicy.shouldLeavePartyOnDismiss(partySessionActive: false, suppressLeave: false, currentPlayRequestIsNil: true))
+    assert(!TogetherPlaybackPolicy.shouldLeavePartyOnDismiss(partySessionActive: true, suppressLeave: false, currentPlayRequestIsNil: false))
+
+    // Failure auto-close & dismiss events during Watch Together: never auto-close or dismiss on phoneStop; only explicit TV close exits.
+    assert(!TogetherPlaybackPolicy.shouldAutoCloseFailure(isWatchTogetherParty: true))
+    assert(TogetherPlaybackPolicy.shouldAutoCloseFailure(isWatchTogetherParty: false))
+
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .autoClose, isWatchTogetherParty: true))
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .phoneStop, isWatchTogetherParty: true))
+    assert(PlaybackFailureModel.shouldDismissFailure(event: .close, isWatchTogetherParty: true))
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .tryAgain, isWatchTogetherParty: true))
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .next, isWatchTogetherParty: true))
+
+    assert(PlaybackFailureModel.shouldDismissFailure(event: .autoClose, isWatchTogetherParty: false))
+    assert(PlaybackFailureModel.shouldDismissFailure(event: .phoneStop, isWatchTogetherParty: false))
+    assert(PlaybackFailureModel.shouldDismissFailure(event: .close, isWatchTogetherParty: false))
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .tryAgain, isWatchTogetherParty: false))
+    assert(!PlaybackFailureModel.shouldDismissFailure(event: .next, isWatchTogetherParty: false))
+
+    // Normal cast-over-cast reuse & monotonic nonce advancement (including repeated same-item party loads).
+    let firstCast = TogetherPlaybackPolicy.transition(
+        hasActiveRequest: false, activeIsImage: false, incomingIsImage: false, currentNonce: 0)
+    assert(firstCast == .init(reuseSession: false, nextNonce: 1))
+    let castOverCast = TogetherPlaybackPolicy.transition(
+        hasActiveRequest: true, activeIsImage: false, incomingIsImage: false, currentNonce: firstCast.nextNonce)
+    assert(castOverCast == .init(reuseSession: true, nextNonce: 2))
+    let repeatedPartyLoad = TogetherPlaybackPolicy.transition(
+        hasActiveRequest: true, activeIsImage: false, incomingIsImage: false, currentNonce: castOverCast.nextNonce)
+    assert(repeatedPartyLoad.reuseSession && repeatedPartyLoad.nextNonce == 3)
+    assert(repeatedPartyLoad.nextNonce != castOverCast.nextNonce)
+    let imageOverVideo = TogetherPlaybackPolicy.transition(
+        hasActiveRequest: true, activeIsImage: false, incomingIsImage: true, currentNonce: repeatedPartyLoad.nextNonce)
+    assert(!imageOverVideo.reuseSession && imageOverVideo.nextNonce == 4)
+    let videoOverImage = TogetherPlaybackPolicy.transition(
+        hasActiveRequest: true, activeIsImage: true, incomingIsImage: false, currentNonce: imageOverVideo.nextNonce)
+    assert(!videoOverImage.reuseSession && videoOverImage.nextNonce == 5)
+
+    print("PASS: device-round5 Watch Together session reuse, EOF preservation, and failure dismiss policy checks")
+}
+
+private func runDevice5eWatchTogetherStaleStatusAndGoLiveTests() {
+    // 1. Stale status across reused player session (`playing` with duration 0 before new item loads)
+    // must NOT count as ready or arm the live timer.
+    assert(!TogetherLoadedPlanner.isMediaReady(
+        state: "playing", durationMs: 0, itemLoaded: false, generationMatches: true))
+    assert(!TogetherLoadedPlanner.isMediaReady(
+        state: "playing", durationMs: 6_838_867, itemLoaded: true, generationMatches: false))
+    assert(!TogetherLoadedPlanner.isMediaReady(
+        state: "playing", durationMs: 0, itemLoaded: true, generationMatches: false))
+
+    // Force-timer cannot emit live (`durationMs: nil`) when item never actually loaded.
+    let staleReady = TogetherLoadedPlanner.isMediaReady(
+        state: "playing", durationMs: 0, itemLoaded: false, generationMatches: true)
+    assert(TogetherLoadedPlanner.decideLoaded(
+        alreadyReported: false, ready: staleReady, liveKnown: nil, durationMs: 0, force: true) == .wait)
+
+    // 2. Once slow VOD finishes loading for the new generation (`itemLoaded == true`, paused at duration > 0),
+    // it reports finite duration immediately and never live.
+    let vodReady = TogetherLoadedPlanner.isMediaReady(
+        state: "paused", durationMs: 6_838_867, itemLoaded: true, generationMatches: true)
+    assert(vodReady)
+    assert(TogetherLoadedPlanner.decideLoaded(
+        alreadyReported: false, ready: vodReady, liveKnown: false, durationMs: 6_838_867, force: false)
+        == .report(durationMs: 6_838_867, reportedEarly: false))
+
+    // 3. Real live stream (`itemLoaded == true`, playing OR party-paused awaiting Play, duration == 0)
+    // still arms & reports live.
+    let realLiveReady = TogetherLoadedPlanner.isMediaReady(
+        state: "playing", durationMs: 0, itemLoaded: true, generationMatches: true)
+    assert(realLiveReady)
+    assert(TogetherLoadedPlanner.isMediaReady(
+        state: "paused", durationMs: 0, itemLoaded: true, generationMatches: true))
+    assert(!TogetherLoadedPlanner.isMediaReady(
+        state: "paused", durationMs: 0, itemLoaded: false, generationMatches: true))
+    assert(TogetherLoadedPlanner.decideLoaded(
+        alreadyReported: false, ready: realLiveReady, liveKnown: nil, durationMs: 0, force: false) == .wait)
+    assert(TogetherLoadedPlanner.decideLoaded(
+        alreadyReported: false, ready: realLiveReady, liveKnown: nil, durationMs: 0, force: true)
+        == .report(durationMs: nil, reportedEarly: true))
+
+    // 4. `goLive` must NEVER seek to end of a finite-duration file (even if loaded), nor seek before load.
+    assert(!TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: 6838.867))
+    assert(!TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: 45.0))
+    assert(!TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: 0.1))
+    assert(!TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: false, durationSeconds: 0))
+    assert(!TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: false, durationSeconds: .infinity))
+    assert(TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: 0))
+    assert(TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: .nan))
+    assert(TogetherPlaybackPolicy.shouldSeekToLiveEdge(itemLoaded: true, durationSeconds: .infinity))
+
+    print("PASS: device-round5e stale-status fence and goLive finite-duration guard checks")
+}
+
+private func runDevice6FocusAndHomeTests() {
+    // Items 1 & 2: Watch Together maps every state + unavailable view to its primary action target,
+    // and triggers refocus on every step transition while open.
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "idle") == .joinParty)
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "registering") == .cancelRegistering)
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "code") == .cancelCode)
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "invited") == .joinInvite)
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "inParty") == .leaveParty)
+    assert(TogetherStepFocusTarget.target(isAvailable: true, stepKey: "ended") == .endedOk)
+    assert(TogetherStepFocusTarget.target(isAvailable: false, stepKey: "idle") == .unavailableBack)
+    assert(TogetherStepFocusTarget.target(isAvailable: false, stepKey: "invited") == .unavailableBack)
+
+    assert(TogetherStepFocusTarget.shouldRefocus(previousStepKey: nil, currentStepKey: "idle"))
+    assert(TogetherStepFocusTarget.shouldRefocus(previousStepKey: "idle", currentStepKey: "invited"))
+    assert(TogetherStepFocusTarget.shouldRefocus(previousStepKey: "code", currentStepKey: "invited"))
+    assert(TogetherStepFocusTarget.shouldRefocus(previousStepKey: "invited", currentStepKey: "inParty"))
+    assert(!TogetherStepFocusTarget.shouldRefocus(previousStepKey: "invited", currentStepKey: "invited"))
+
+    // Item 4: Settings focus zone detection, immediate category selection, and Back navigation rules.
+    assert(SettingsFocusNavigation.zone(isCategoryID: true, hasFocus: true) == .sidebar)
+    assert(SettingsFocusNavigation.zone(isCategoryID: true, hasFocus: false) == .sidebar)
+    assert(SettingsFocusNavigation.zone(isCategoryID: false, hasFocus: false) == .sidebar)
+    assert(SettingsFocusNavigation.zone(isCategoryID: false, hasFocus: true) == .detail)
+
+    assert(SettingsFocusNavigation.backOutcome(
+        showingConnectPhone: true, zone: .detail, selectedCategory: .phones
+    ) == .closeOverlay)
+    assert(SettingsFocusNavigation.backOutcome(
+        showingConnectPhone: false, zone: .detail, selectedCategory: .phones
+    ) == .returnToSidebar(.phones))
+    assert(SettingsFocusNavigation.backOutcome(
+        showingConnectPhone: false, zone: .detail, selectedCategory: .subtitles
+    ) == .returnToSidebar(.subtitles))
+    assert(SettingsFocusNavigation.backOutcome(
+        showingConnectPhone: false, zone: .sidebar, selectedCategory: .phones
+    ) == .leaveSettings)
+
+    assert(SettingsFocusNavigation.categorySelectionOnSidebarFocus(focusedCategory: .skip) == .skip)
+    assert(SettingsFocusNavigation.categorySelectionOnSidebarFocus(focusedCategory: .advanced) == .advanced)
+
+    print("PASS: device-round6 Watch Together focus and Settings navigation checks")
+}
+
+private func buildNameTableData(family: String) -> Data {
+    func u16(_ v: UInt16) -> [UInt8] { [UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)] }
+    let utf16 = Array(family.data(using: .utf16BigEndian)!)
+    var nameTable = Data()
+    nameTable.append(contentsOf: u16(0)) // format
+    nameTable.append(contentsOf: u16(1)) // count
+    nameTable.append(contentsOf: u16(6 + 12)) // stringOffset
+    nameTable.append(contentsOf: u16(3)) // Windows
+    nameTable.append(contentsOf: u16(1)) // Unicode BMP
+    nameTable.append(contentsOf: u16(0x409)) // English US
+    nameTable.append(contentsOf: u16(1)) // Font Family name
+    nameTable.append(contentsOf: u16(UInt16(utf16.count)))
+    nameTable.append(contentsOf: u16(0))
+    nameTable.append(contentsOf: utf16)
+    return nameTable
+}
+
+private func makeMinimalTestSfnt(family: String, version: UInt32 = 0x00010000) -> Data {
+    func u16(_ v: UInt16) -> [UInt8] { [UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)] }
+    func u32(_ v: UInt32) -> [UInt8] {
+        [UInt8((v >> 24) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)]
+    }
+    let nameTable = buildNameTableData(family: family)
+    var sfnt = Data()
+    sfnt.append(contentsOf: u32(version))
+    sfnt.append(contentsOf: u16(1)) // numTables
+    sfnt.append(contentsOf: u16(16))
+    sfnt.append(contentsOf: u16(0))
+    sfnt.append(contentsOf: u16(0))
+    sfnt.append(contentsOf: Array("name".utf8))
+    sfnt.append(contentsOf: u32(0)) // checkSum
+    sfnt.append(contentsOf: u32(12 + 16)) // offset
+    sfnt.append(contentsOf: u32(UInt32(nameTable.count)))
+    sfnt.append(nameTable)
+    return sfnt
+}
+
+/// Returns a real system TrueType/OpenType font with its `name` table replaced so CoreText
+/// parses real glyph tables while SubtitleFontParser extracts `family`. Optionally corrupts
+/// glyph/metric tables to simulate a font with a valid header + `name` table and broken glyphs.
+private func makeTestSfnt(family: String, otf: Bool = false, corruptGlyphTables: Bool = false) -> Data {
+    let candidates = otf
+        ? ["/System/Library/Fonts/Supplemental/NotoSansJavanese-Regular.otf", "/System/Library/Fonts/LastResort.otf"]
+        : ["/System/Library/Fonts/Keyboard.ttf", "/System/Library/Fonts/Monaco.ttf", "/System/Library/Fonts/Geneva.ttf"]
+    guard let basePath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }),
+          var fontData = try? Data(contentsOf: URL(fileURLWithPath: basePath)),
+          fontData.count >= 12 else {
+        return makeMinimalTestSfnt(family: family, version: otf ? 0x4F54544F : 0x00010000)
+    }
+    func readU16(_ d: Data, _ o: Int) -> UInt16 { (UInt16(d[o]) << 8) | UInt16(d[o + 1]) }
+    func readU32(_ d: Data, _ o: Int) -> UInt32 {
+        (UInt32(d[o]) << 24) | (UInt32(d[o + 1]) << 16) | (UInt32(d[o + 2]) << 8) | UInt32(d[o + 3])
+    }
+    func writeU32(_ d: inout Data, _ o: Int, _ v: UInt32) {
+        d[o] = UInt8((v >> 24) & 0xFF)
+        d[o + 1] = UInt8((v >> 16) & 0xFF)
+        d[o + 2] = UInt8((v >> 8) & 0xFF)
+        d[o + 3] = UInt8(v & 0xFF)
+    }
+
+    let numTables = Int(readU16(fontData, 4))
+    let pad = (4 - (fontData.count % 4)) % 4
+    if pad > 0 { fontData.append(Data(repeating: 0, count: pad)) }
+    let newNameOffset = UInt32(fontData.count)
+    let nameTable = buildNameTableData(family: family)
+    fontData.append(nameTable)
+
+    for i in 0..<numTables {
+        let rec = 12 + i * 16
+        guard rec + 16 <= fontData.count else { break }
+        let tag = String(bytes: fontData[rec..<(rec + 4)], encoding: .ascii)
+        if tag == "name" {
+            writeU32(&fontData, rec + 8, newNameOffset)
+            writeU32(&fontData, rec + 12, UInt32(nameTable.count))
+        } else if corruptGlyphTables, let tag, ["head", "glyf", "loca", "maxp", "CFF ", "hmtx", "cmap"].contains(tag) {
+            let off = Int(readU32(fontData, rec + 8))
+            let len = Int(readU32(fontData, rec + 12))
+            if off >= 0 && off + len <= fontData.count && len > 0 {
+                fontData.replaceSubrange(off..<(off + len), with: Data(repeating: 0xAB, count: len))
+            }
+        }
+    }
+    return fontData
+}
+
+private func runDevice7SubtitleStyleAndFontTests() {
+    // 1. Style normalization, wire round-trip, and mpv mapping parity
+    let defaultProps = Dictionary(uniqueKeysWithValues: SubtitleStylePreferences().mpvProperties())
+    assert(defaultProps["sub-scale"] == "1.0")
+    assert(defaultProps["sub-border-style"] == "outline-and-shadow")
+    assert(defaultProps["sub-outline-size"] == "2")
+    assert(defaultProps["sub-shadow-offset"] == "1")
+    assert(defaultProps["sub-ass-override"] == "scale")
+
+    let translucentProps = Dictionary(uniqueKeysWithValues: SubtitleStylePreferences(background: .dim).mpvProperties())
+    assert(translucentProps["sub-border-style"] == "opaque-box")
+    assert(translucentProps["sub-outline-color"] == "#80000000")
+    assert(translucentProps["sub-outline-size"] == "3")
+    assert(translucentProps["sub-shadow-offset"] == "0")
+
+    let wireUnknown = SubtitleStylePreferences.fromWire(
+        size: "huge",
+        background: "solid",
+        edge: "unknown",
+        font: "custom",
+        overrideStyled: nil,
+        customFont: nil,
+        installedFonts: ["Cairo"]
+    )
+    assert(wireUnknown.size == .medium)
+    assert(wireUnknown.background == .box)
+    assert(wireUnknown.edge == .outline)
+    assert(wireUnknown.font == .default)
+    assert(wireUnknown.customFont == nil)
+
+    let wireCustom = SubtitleStylePreferences.fromWire(
+        size: "extra_large",
+        background: "translucent",
+        edge: "shadow",
+        font: "custom",
+        overrideStyled: true,
+        customFont: "Cairo",
+        installedFonts: ["Cairo"]
+    )
+    let wireDict = wireCustom.wireDictionary(installedFonts: ["Cairo"])
+    assert(wireDict["type"] as? String == "subtitle_style")
+    assert(wireDict["size"] as? String == "extra_large")
+    assert(wireDict["background"] as? String == "translucent")
+    assert(wireDict["edge"] as? String == "shadow")
+    assert(wireDict["font"] as? String == "custom")
+    assert(wireDict["customFont"] as? String == "Cairo")
+    assert(wireDict["installedFonts"] as? [String] == ["Cairo"])
+    assert(wireDict["overrideStyled"] as? Bool == true)
+    let customMpv = Dictionary(uniqueKeysWithValues: wireCustom.mpvProperties())
+    assert(customMpv["sub-font"] == "Cairo")
+    assert(customMpv["sub-scale"] == "1.5")
+    assert(customMpv["sub-ass-override"] == "force")
+
+    // Legacy storage values ("dim", "box", "dropShadow") still deserialize cleanly
+    assert(SubtitleBackgroundOption(storageValue: "dim") == .dim)
+    assert(SubtitleBackgroundOption(storageValue: "translucent") == .dim)
+    assert(SubtitleBackgroundOption(storageValue: "box") == .box)
+    assert(SubtitleBackgroundOption(storageValue: "solid") == .box)
+    assert(SubtitleEdgeOption(storageValue: "dropShadow") == .dropShadow)
+    assert(SubtitleEdgeOption(storageValue: "shadow") == .dropShadow)
+
+    // 2. sfnt font family parsing (TTF + OTF + malformed rejection)
+    assert(SubtitleFontParser.readFontFamily(makeMinimalTestSfnt(family: "Noto Naskh Arabic")) == "Noto Naskh Arabic")
+    assert(SubtitleFontParser.readFontFamily(makeMinimalTestSfnt(family: "Cairo", version: 0x4F54544F)) == "Cairo")
+    assert(SubtitleFontParser.readFontFamily(Data("not a font".utf8)) == nil)
+    assert(SubtitleFontParser.readFontFamily(Data([0x00, 0x01, 0x00])) == nil)
+
+    // 3. Container library limits (max 5 fonts, 10 MiB/font, 30 MiB total), chunk transfer & path safety
+    let tempBase = FileManager.default.temporaryDirectory
+        .appendingPathComponent("playbridge-font-test-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: tempBase) }
+
+    let library = SubtitleFontLibrary(baseDirectory: tempBase, registerWithCoreText: false)
+    let families = ["Amiri", "Cairo", "Lato", "Noto Sans", "Tajawal"]
+    for name in families {
+        assert(library.add(makeTestSfnt(family: name)) == .added(name))
+    }
+    assert(library.add(makeTestSfnt(family: "Ubuntu")) == .failed("font_limit"))
+    assert(library.add(makeTestSfnt(family: "Cairo", otf: true)) == .added("Cairo"))
+    assert(library.add(Data("not a font".utf8)) == .failed("invalid_font"))
+    assert(library.families() == families)
+
+    assert(library.select(family: "Cairo"))
+    let active1 = library.activeFontURL()
+    assert(active1?.lastPathComponent == "custom-subtitle.otf")
+    assert(library.select(family: "Lato"))
+    let active2 = library.activeFontURL()
+    assert(active2?.lastPathComponent == "custom-subtitle.ttf")
+    assert(!library.select(family: "Ubuntu"))
+
+    // Unsafe family names never turn into directory-traversal paths on disk
+    assert(library.remove(family: "Lato"))
+    let unsafeFont = makeTestSfnt(family: "../../etc/passwd")
+    assert(library.add(unsafeFont) == .added("../../etc/passwd"))
+    let storedURL = library.file(family: "../../etc/passwd")
+    assert(storedURL != nil && storedURL!.deletingLastPathComponent().lastPathComponent == "subtitle-fonts")
+    assert(library.remove(family: "../../etc/passwd"))
+
+    // 10 MiB limit checked before buffering and on add
+    let receiver = SubtitleFontReceiver(install: library.add)
+    assert(receiver.begin(transferId: "oversize", size: Int64(SubtitleFontLimits.maxFontBytes + 1), sha256: "00") == .failed("too_large"))
+    assert(receiver.begin(transferId: "zero", size: 0, sha256: "00") == .failed("too_large"))
+
+    var chunkedFont = makeTestSfnt(family: "Lato")
+    chunkedFont.append(Data(repeating: 0, count: SubtitleFontLimits.chunkBytes))
+    let expectedSha = SubtitleFontLibrary.sha256Hex(chunkedFont)
+    assert(receiver.begin(transferId: "t1", size: Int64(chunkedFont.count), sha256: expectedSha) == .ack(0))
+    // Out-of-order offset aborts transfer
+    assert(receiver.chunk(transferId: "t1", offset: 12, base64: Data([1, 2, 3]).base64EncodedString()) == .failed("invalid_chunk"))
+    assert(receiver.end(transferId: "t1") == .failed("unknown_transfer"))
+
+    // Proper chunked transfer
+    assert(receiver.begin(transferId: "t2", size: Int64(chunkedFont.count), sha256: expectedSha) == .ack(0))
+    var off = 0
+    while off < chunkedFont.count {
+        let end = min(off + SubtitleFontLimits.chunkBytes, chunkedFont.count)
+        let b64 = chunkedFont[off..<end].base64EncodedString()
+        assert(receiver.chunk(transferId: "t2", offset: off, base64: b64) == .ack(end))
+        off = end
+    }
+    assert(receiver.end(transferId: "t2") == .installed("Lato"))
+    assert(library.families().contains("Lato"))
+
+    // 30 MiB library cap
+    let capTemp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("playbridge-font-cap-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: capTemp) }
+    let capLibrary = SubtitleFontLibrary(baseDirectory: capTemp, registerWithCoreText: false)
+    let nineMb = Data(repeating: 0, count: 9 * 1024 * 1024)
+    for fam in ["A", "B", "C"] {
+        assert(capLibrary.add(makeTestSfnt(family: fam) + nineMb) == .added(fam))
+    }
+    assert(capLibrary.add(makeTestSfnt(family: "D") + nineMb) == .failed("font_limit"))
+    assert(capLibrary.add(makeTestSfnt(family: "D")) == .added("D"))
+
+    // 4. SubtitleStyleStore single source of truth + removeFont reverts style
+    let suiteName = "playbridge-style-test-\(UUID().uuidString)"
+    let isolatedDefaults = UserDefaults(suiteName: suiteName)!
+    defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
+    MainActor.assumeIsolated {
+        let store = SubtitleStyleStore(
+            defaults: isolatedDefaults,
+            fontLibrary: library,
+            observeUserDefaults: false
+        )
+        let applied = store.applyFromPhoneJSON([
+            "type": "subtitle_style",
+            "size": "extra_large",
+            "background": "translucent",
+            "edge": "shadow",
+            "font": "custom",
+            "customFont": "Lato",
+            "overrideStyled": true,
+        ])
+        assert(applied.changed)
+        assert(store.style.size == .extraLarge)
+        assert(store.style.background == .dim)
+        assert(store.style.edge == .dropShadow)
+        assert(store.style.font == .custom)
+        assert(store.style.customFont == "Lato")
+        assert(store.style.overrideStyled)
+        assert(isolatedDefaults.string(forKey: "subtitle_size") == "extra_large")
+        assert(isolatedDefaults.string(forKey: "subtitle_bg") == "translucent")
+
+        assert(store.removeFont("Lato"))
+        assert(store.style.font == .default)
+        assert(store.style.customFont == nil)
+        assert(isolatedDefaults.string(forKey: "subtitle_font") == "default")
+    }
+
+    print("PASS: device-round7 subtitle style parity, sfnt validation, chunk transfer and font library")
+}
+
+private func runDevice8MPVRecoveryAndFontValidationTests() {
+    // 1. Lavf reconnect options cover stream + demuxer and exclude reconnect_at_eof
+    let opts = MPVLavfReconnectOptions.value
+    assert(opts.contains("reconnect=1"))
+    assert(opts.contains("reconnect_streamed=1"))
+    assert(opts.contains("reconnect_on_network_error=1"))
+    assert(opts.contains("reconnect_on_http_error"))
+    assert(opts.contains("reconnect_max_retries=3"))
+    assert(!opts.contains("reconnect_at_eof"))
+
+    // 2. Silent freeze (paused-for-cache=false, core-idle=false) still reloads and escalates within budget
+    var r = PlaybackFreezeRecovery()
+    r.resetForNewItem(initialPosition: 0)
+    assert(r.sample(now: 1, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.0, bufferedAhead: 10) == .none)
+    assert(r.sample(now: 2, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 10) == .none)
+    // Position stops at 6.3 even though buffering == false
+    assert(r.sample(now: 3, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 10) == .none)
+    assert(r.sample(now: 4, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 10) == .none)
+    // At freezeSince + 15s -> triggers auto-reload at lastGoodPosition (6.3)
+    assert(r.sample(now: 18, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 10) == .none)
+    let reloadAction = r.sample(now: 19, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 10)
+    assert(reloadAction == .reloadAt(6.3))
+    // Reloading causes position to drop transiently to 0 -> must NOT clear the stall deadline
+    assert(r.sample(now: 20, buffering: true, playbackRequested: true, hasFirstFrame: false, eofReached: false, position: 0.0, bufferedAhead: 0) == .none)
+    // Even if it stalls past the 2nd reload delay, cumulative stall budget (45s from t=4) fires presentStall
+    _ = r.sample(now: 35, buffering: true, playbackRequested: true, hasFirstFrame: false, eofReached: false, position: 6.3, bufferedAhead: 0)
+    assert(r.sample(now: 49, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 6.3, bufferedAhead: 0) == .presentStall)
+
+    // 3. Forward progress after recovery clears the stall/recovery episode cleanly
+    var r2 = PlaybackFreezeRecovery()
+    r2.resetForNewItem(initialPosition: 0)
+    _ = r2.sample(now: 1, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 10)
+    _ = r2.sample(now: 2, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 10)
+    _ = r2.sample(now: 3, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 10)
+    assert(r2.sample(now: 18, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 10) == .reloadAt(10.0))
+    _ = r2.sample(now: 20, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 11.5, bufferedAhead: 10)
+    _ = r2.sample(now: 21, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 12.5, bufferedAhead: 10)
+    // Later in the stream at t=100 -> 130, should NOT prematurely stall from the earlier cleared episode
+    _ = r2.sample(now: 100, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 80.0, bufferedAhead: 0)
+    assert(r2.sample(now: 115, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 80.0, bufferedAhead: 0) == .reloadAt(80.0))
+
+    // 4. Silent eofReached mid-stream triggers quick recovery
+    var r3 = PlaybackFreezeRecovery()
+    r3.resetForNewItem(initialPosition: 0)
+    _ = r3.sample(now: 1, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 12.0, bufferedAhead: 0)
+    _ = r3.sample(now: 2, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: true, position: 12.0, bufferedAhead: 0)
+    assert(r3.sample(now: 5, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: true, position: 12.0, bufferedAhead: 0) == .reloadAt(12.0))
+
+    // 5. Premature VOD EOF vs natural VOD end vs live stream vs short-file declared-duration mismatch
+    var r4 = PlaybackFreezeRecovery()
+    r4.resetForNewItem(initialPosition: 0)
+    assert(r4.evaluateEndOfFile(reasonIsEOF: true, duration: 3620, position: 1376, hadTruncationOrNetworkError: true) == .reloadAt(1376))
+    assert(r4.evaluateEndOfFile(reasonIsEOF: true, duration: 3620, position: 1376, hadTruncationOrNetworkError: true) == .reloadAt(1376))
+    assert(r4.evaluateEndOfFile(reasonIsEOF: true, duration: 3620, position: 1376, hadTruncationOrNetworkError: true) == .presentFailure)
+    // Complete file whose actual content ends early with no truncation/network error simply ends cleanly
+    var rNoTrunc = PlaybackFreezeRecovery()
+    rNoTrunc.resetForNewItem(initialPosition: 0)
+    assert(rNoTrunc.evaluateEndOfFile(reasonIsEOF: true, duration: 40, position: 6.0, hadTruncationOrNetworkError: false) == .naturalEOF)
+    var r5 = PlaybackFreezeRecovery()
+    assert(r5.evaluateEndOfFile(reasonIsEOF: true, duration: 40, position: 39.2) == .naturalEOF)
+    assert(r5.evaluateEndOfFile(reasonIsEOF: true, duration: 10, position: 2.0) == .naturalEOF)
+    assert(r5.evaluateEndOfFile(reasonIsEOF: true, duration: 0, position: 120) == .naturalEOF)
+
+    // 5b. Slow buffering with growing cache for 40 s causes NO reload; flat cache reloads at 15 s
+    var rSlow = PlaybackFreezeRecovery()
+    rSlow.resetForNewItem(initialPosition: 0)
+    assert(rSlow.sample(now: 0, buffering: false, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 0.0) == .none)
+    for t in 1...40 {
+        assert(rSlow.sample(now: Double(t), buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: Double(t) * 0.2) == .none)
+    }
+    var rFlat = PlaybackFreezeRecovery()
+    rFlat.resetForNewItem(initialPosition: 0)
+    assert(rFlat.sample(now: 0, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 1.0) == .none)
+    assert(rFlat.sample(now: 14, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 1.0) == .none)
+    assert(rFlat.sample(now: 15, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 10.0, bufferedAhead: 1.0) == .reloadAt(10.0))
+
+    // 5b2. Per-item hard cap of 6 reloads even when playback makes 2+ seconds progress between cuts
+    var rCap = PlaybackFreezeRecovery()
+    rCap.resetForNewItem(initialPosition: 0)
+    for i in 0..<PlaybackFreezeRecovery.maxTotalRecoveries {
+        let pos = Double(10 + i * 5)
+        assert(rCap.evaluateEndOfFile(reasonIsEOF: true, duration: 1000, position: pos, hadTruncationOrNetworkError: true) == .reloadAt(pos))
+    }
+    assert(rCap.totalRecoveries == PlaybackFreezeRecovery.maxTotalRecoveries)
+    // Seek or pause/unpause must preserve totalRecoveries
+    rCap.resetForPositionChange(initialPosition: 80)
+    assert(rCap.totalRecoveries == PlaybackFreezeRecovery.maxTotalRecoveries)
+    assert(rCap.evaluateEndOfFile(reasonIsEOF: true, duration: 1000, position: 80, hadTruncationOrNetworkError: true) == .presentFailure)
+    // A 7th stall via sample() after progress also surfaces failure immediately at reload delay
+    assert(rCap.sample(now: 1, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 85.0, bufferedAhead: 0) == .none)
+    assert(rCap.sample(now: 16, buffering: true, playbackRequested: true, hasFirstFrame: true, eofReached: false, position: 85.0, bufferedAhead: 0) == .presentStall)
+    // New item / Try again clears the cap
+    rCap.resetForNewItem(initialPosition: 85.0)
+    assert(rCap.totalRecoveries == 0)
+    assert(rCap.evaluateEndOfFile(reasonIsEOF: true, duration: 1000, position: 85, hadTruncationOrNetworkError: true) == .reloadAt(85))
+
+    // 5c. PlaybackFailureLogState keeps truncation signal sticky across trailing buffered playback
+    var logs = PlaybackFailureLogState()
+    logs.beginFile()
+    assert(!logs.sawTruncationOrNetworkError)
+    logs.record(prefix: "ffmpeg", level: 20, text: "mov,mp4,m4a,3gp,3g2,mj2: stream 0, offset 0x156c7c0e: partial file")
+    logs.positionChanged(6.3)
+    assert(logs.sawTruncationOrNetworkError)
+    logs.beginFile()
+    assert(!logs.sawTruncationOrNetworkError)
+
+    // 6. CoreText pre-write font validation rejects header+name with corrupt glyph tables
+    #if canImport(CoreText)
+    let corruptTemp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("playbridge-corrupt-font-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: corruptTemp) }
+    let strictLib = SubtitleFontLibrary(baseDirectory: corruptTemp)
+    let minimalNameOnly = makeMinimalTestSfnt(family: "MinimalNameOnly")
+    assert(SubtitleFontParser.readFontFamily(minimalNameOnly) == "MinimalNameOnly")
+    assert(strictLib.add(minimalNameOnly) == .failed("invalid_font"))
+
+    let corruptGlyphFont = makeTestSfnt(family: "FakeCorruptGlyphs", corruptGlyphTables: true)
+    assert(SubtitleFontParser.readFontFamily(corruptGlyphFont) == "FakeCorruptGlyphs")
+    assert(strictLib.add(corruptGlyphFont) == .failed("invalid_font"))
+    assert(strictLib.families().isEmpty)
+    let fontDir = corruptTemp.appendingPathComponent("subtitle-fonts", isDirectory: true)
+    let stored = (try? FileManager.default.contentsOfDirectory(atPath: fontDir.path)) ?? []
+    assert(stored.filter { $0.hasSuffix(".ttf") || $0.hasSuffix(".otf") }.isEmpty)
+
+    let validFont = makeTestSfnt(family: "ValidRound8Font")
+    assert(strictLib.add(validFont) == .added("ValidRound8Font"))
+    assert(strictLib.families() == ["ValidRound8Font"])
+    #endif
+
+    print("PASS: device-round8 mpv lavf/freeze recovery and CoreText invalid font rejection")
 }

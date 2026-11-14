@@ -341,6 +341,40 @@ Not yet: web-page and Bridged App sources on the phone and TV (direct links
 only), and adding several paired TVs at once (the phone keeps one live TV
 connection).
 
+### Phase 2 status (Apple TV)
+
+Built (Apple TV Simulator tested; iPhone app is separate): the Apple TV receiver
+as a Watch Together screen (`PlayBridgeCastCore.xcframework` built with
+`receiver-proxy-apple,together` and `pb_together_*` FFI).
+
+- **Joining.** Pairing code and QR (`pair.playbridge.app` or a custom pairing
+  URL) with a confirmation prompt showing the host and relay; paired phones also
+  see `watch_together_v1` in capabilities and can add the TV over LAN via
+  `watch_together_join` (`watch_together_joined`). When `PlayBridgeCastCore` is
+  absent on a clean checkout, Watch Together reports that it isn't available on
+  this Apple TV without crashing.
+- **Synced player.** Party videos load paused in either mpv or AVPlayer via
+  `PlayerOverlayController` / `TogetherLoadedPlanner`, outside history,
+  bookmarks and progress webhooks. Video replacements reuse the active playback
+  session (`TogetherPlaybackPolicy`) with generation- and item-loaded-fenced
+  status reporting so stale frames do not misclassify on-demand videos as live,
+  and `go_live` seeks only when a loaded stream lacks a finite duration. Play,
+  pause and seek from the Siri Remote and paired phone remotes forward to the
+  party; inside a party, playback errors stay on screen without auto-closing
+  and natural end-of-video keeps the player open until replaced or explicitly
+  exited, while Leave party disconnects the room and continues local playback
+  as an ordinary video.
+- **Tested.** Host Swift tests (`TogetherModels`, `TogetherLoadedPlanner`,
+  `TogetherClient`, `TogetherPlaybackPolicy`, `TogetherPlayerAttachment`),
+  clean-checkout build without `PlayBridgeCastCore.xcframework`, and live
+  Apple TV Simulator + Watch Together host tests against `party.playbridge.app`
+  / `pair.playbridge.app` (pair, invite, join, load, replace item, failure
+  handling, end-of-video, seek, pause & play, Leave party, no
+  history/bookmarks) on both mpv and AVPlayer.
+- **Not yet tested.** Real Apple TV hardware, phone-initiated LAN
+  `watch_together_join`, a live HLS stream in a party, and the iPhone Watch
+  Together UI (not built).
+
 ### Phase 3 status
 
 Built (macOS tested; Windows and Linux share the code): the desktop as screen,

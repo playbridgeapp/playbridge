@@ -89,6 +89,11 @@ final class PlayerEngineChrome {
     /// An error screen owns Back and its action buttons before ordinary chrome.
     /// The player owner still gives pre-play/still-watching their existing priority.
     var handleFailureKey: (String) -> Bool = { _ in false }
+    var setPartySession: (Bool) -> Void = { _ in }
+    var applyPartyPaused: (Bool) -> Void = { _ in }
+    var applyPartySeek: (Double) -> Void = { _ in }
+    var applyPartyRate: (Double) -> Void = { _ in }
+    var applyPartyGoLive: () -> Void = {}
 }
 
 enum PlayerPlaybackPress {
@@ -286,6 +291,101 @@ enum PlayerRemoteNavigation {
         case .center: return .activateHighlight
         case .left: return .seekBackward
         case .right: return .seekForward
+        }
+    }
+}
+
+// MARK: - Redesign Two-Tier Key Map (ControlsRemoteMap)
+
+enum PlayerRemoteKey: Equatable {
+    case ok, left, right, up, down, back, playPause, play, pause
+}
+
+enum PlayerControlsSurface: Equatable {
+    case nothing, seekBar, controls, panel
+}
+
+enum PlayerKeyAction: Equatable {
+    case seek(deltaSeconds: Double)
+    case stepItem(delta: Int)
+    case pauseAndOpenControls
+    case openControls
+    case transport(command: String, quiet: Bool)
+    case hideSeekBar
+    case hideControls
+    case closePanel
+    case armBack
+    case exitPlayer
+    case ignore
+    case passThrough
+}
+
+struct PlayerKeyContext: Equatable {
+    var surface: PlayerControlsSurface
+    var repeatCount: Int = 0
+    var backArmed: Bool = false
+    var confirmBack: Bool = true
+    var isImage: Bool = false
+    var quietAllowed: Bool = true
+}
+
+enum PlayerKeyMap {
+    static let seekStepSeconds: Double = 10
+    static let seekFastStepSeconds: Double = 50
+    static let seekFastAfterRepeats: Int = 10
+    static let scrubCommitDelaySeconds: Double = 0.4
+    static let backConfirmWindowSeconds: Double = 3.0
+
+    /// Seek strip hides after 3 s; full controls hide after 8 s while playing.
+    static func autoHideDelaySeconds(fullControls: Bool) -> Double {
+        fullControls ? 8.0 : 3.0
+    }
+
+    /// 10 s per press, 50 s per repeat once a key is held past 10 repeats.
+    static func seekStepSeconds(repeatCount: Int) -> Double {
+        repeatCount > seekFastAfterRepeats ? seekFastStepSeconds : seekStepSeconds
+    }
+
+    static func resolve(key: PlayerRemoteKey, context: PlayerKeyContext) -> PlayerKeyAction {
+        let surface = context.surface
+        let bare = surface == .nothing || surface == .seekBar
+        switch key {
+        case .ok:
+            return bare ? .pauseAndOpenControls : .passThrough
+
+        case .left, .right:
+            let direction: Double = (key == .left) ? -1 : 1
+            if bare && context.isImage {
+                return .stepItem(delta: key == .left ? -1 : 1)
+            }
+            if bare {
+                return .seek(deltaSeconds: direction * seekStepSeconds(repeatCount: context.repeatCount))
+            }
+            if surface == .panel && key == .left {
+                return context.repeatCount == 0 ? .closePanel : .ignore
+            }
+            return .passThrough
+
+        case .up, .down:
+            return bare ? .openControls : .passThrough
+
+        case .back:
+            switch surface {
+            case .panel: return .closePanel
+            case .controls: return .hideControls
+            case .seekBar: return .hideSeekBar
+            case .nothing:
+                return (!context.confirmBack || context.backArmed) ? .exitPlayer : .armBack
+            }
+
+        case .playPause, .play, .pause:
+            let command: String = switch key {
+            case .play: "play"
+            case .pause: "pause"
+            case .playPause: "toggle"
+            default: "toggle"
+            }
+            return .transport(command: command, quiet: bare && context.quietAllowed)
         }
     }
 }
