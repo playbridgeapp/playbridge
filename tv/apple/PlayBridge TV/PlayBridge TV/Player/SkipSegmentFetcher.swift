@@ -43,6 +43,37 @@ nonisolated struct SkipSegment: Equatable, Sendable {
     }
 }
 
+nonisolated struct AutoSkipPreferences: Equatable, Sendable {
+    var intro: Bool = false
+    var recap: Bool = false
+    var credits: Bool = false
+
+    static func current(defaults: UserDefaults = .standard) -> AutoSkipPreferences {
+        AutoSkipPreferences(
+            intro: defaults.bool(forKey: "auto_skip_intro"),
+            recap: defaults.bool(forKey: "auto_skip_recap"),
+            credits: defaults.bool(forKey: "auto_skip_credits")
+        )
+    }
+
+    func shouldAutoSkip(segment: SkipSegment) -> Bool {
+        switch segment.type {
+        case "intro": return intro
+        case "recap": return recap
+        case "outro": return credits
+        default: return false
+        }
+    }
+
+    func noticeText(for segment: SkipSegment) -> String {
+        switch segment.type {
+        case "outro": return "Skipped credits"
+        case "recap": return "Skipped recap"
+        default: return "Skipped intro"
+        }
+    }
+}
+
 nonisolated struct SkipSegmentMetadata: Equatable, Sendable {
     var imdbID: String?
     var tmdbID: String?

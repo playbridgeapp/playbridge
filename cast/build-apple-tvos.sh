@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
 
-# Proxy-only Cast Core for the Apple TV receiver: the embedded stream proxy with
-# host (URLSession) upstream callbacks. No browser receiver and no adblock engine.
+# Proxy + Watch Together Cast Core for the Apple TV receiver: the embedded stream proxy
+# with host (URLSession) upstream callbacks and the Watch Together room engine.
+# No browser receiver and no adblock engine.
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 output_root=${1:-"$repo_dir/tv/apple/Native"}
@@ -44,7 +45,7 @@ build_target() {
         rustup run stable cargo build \
         --manifest-path "$repo_dir/Cargo.toml" \
         --package playbridge-cast-core-ffi \
-        --release --locked --no-default-features --features receiver-proxy-apple \
+        --release --locked --no-default-features --features receiver-proxy-apple,together \
         --target "$target" --target-dir "$target_root"
 }
 
@@ -82,7 +83,7 @@ printf '%s\n' \
     > "$framework/PlayBridgeCastCore.xcconfig"
 
 for slice in tvos-arm64 tvos-arm64-simulator; do
-    for symbol in pb_sender_services_start pb_proxy_upstream_set_checked_callbacks; do
+    for symbol in pb_sender_services_start pb_proxy_upstream_set_checked_callbacks pb_together_abi_version pb_together_start; do
         if ! nm -gU "$framework/$slice/libplaybridge_cast_core_ffi.a" 2>/dev/null | grep -Eq "[[:space:]]_${symbol}$"; then
             echo "Missing $symbol in $slice" >&2
             exit 1

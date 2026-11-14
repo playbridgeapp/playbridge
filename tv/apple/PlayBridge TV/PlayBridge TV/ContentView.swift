@@ -5,31 +5,33 @@ import Network
 import SwiftUI
 import UIKit
 
-
-
-
-
-// MARK: - UI Components
-
-
 struct ContentView: View {
     @StateObject private var historyStore: HistoryStore
     @StateObject private var playlistStore: PlaylistStore
     @StateObject private var server: WebSocketServer
     @StateObject private var appRemote = AppRemoteFocusDriver()
     @StateObject private var stillWatching = StillWatchingController()
-    @AppStorage("enable_history") var enableHistory: Bool = true
+    @ObservedObject private var together = TvTogether.shared
+
+    @AppStorage("app_theme") var appThemeRaw: String = AppThemeMode.dark.rawValue
     @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
     @AppStorage("still_watching_threshold_min") var stillWatchingThreshold: Int = StillWatchingController.defaultThreshold
     @AppStorage("still_watching_response_sec") var stillWatchingResponseSeconds: Int = StillWatchingController.defaultResponseSeconds
-    @State private var currentScreen: AppScreen = .pairing
-    @State private var time = 0.0
+
+    @State private var currentScreen: AppScreen = .home
+    @State private var settingsCategory: SettingsCategory = .playback
     @State private var playerStarted: Bool = false
-    @State private var playbackSessionID = 0
     @Environment(\.scenePhase) private var scenePhase
-    let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     private var pairingPending: Bool { server.pendingPairingRequest != nil }
+
+    private var currentTvColors: TvColors {
+        switch AppThemeMode.fromStorage(appThemeRaw) {
+        case .dark: return .dark
+        case .amoled: return .amoled
+        case .light: return .light
+        }
+    }
 
     init() {
         PlaybackEngine.migrateLegacyPreference(in: .standard)
@@ -42,61 +44,30 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            AuroraBackgroundView(time: time)
-                .onReceive(timer) { _ in
-                    // Don't churn SwiftUI state during playback — the player
-                    // covers the aurora completely, and every state tick
-                    // re-evaluates the view tree (incl. PlayerView).
-                    guard server.currentPlayRequest == nil else { return }
-                    time += 0.01
+            Group {
+                switch currentScreen {
+                case .home:
+                    HomeView(
+                        onOpenWatchTogether: { currentScreen = .watchTogether },
+                        onOpenSettings: {
+                            settingsCategory = .playback
+                            currentScreen = .settings
+                        }
+                    )
+                case .settings:
+                    SettingsView(
+                        selectedCategory: $settingsCategory,
+                        onBack: { currentScreen = .home }
+                    )
+                case .watchTogether:
+                    WatchTogetherView(
+                        together: together,
+                        onBack: { currentScreen = .home }
+                    )
                 }
-                .edgesIgnoringSafeArea(.all)
-
-            HStack(spacing: 0) {
-                // Sidebar
-                VStack(alignment: .leading, spacing: 10) {
-                    BrandingView().padding(.bottom, 60).padding(.top, 40)
-
-                    MenuButton(
-                        title: "Pair Device", icon: "sensor.tag.radiowaves.forward",
-                        currentScreen: $currentScreen, screen: .pairing)
-                    if enableHistory {
-                        MenuButton(
-                            title: "History", icon: "clock.arrow.circlepath",
-                            currentScreen: $currentScreen, screen: .history)
-                    }
-                    MenuButton(
-                        title: "Favorites", icon: "star.fill", currentScreen: $currentScreen,
-                        screen: .favorites)
-                    MenuButton(
-                        title: "Settings", icon: "gearshape.fill", currentScreen: $currentScreen,
-                        screen: .settings)
-                    Spacer()
-                }
-                .padding(.horizontal, 40)
-                .frame(width: 400)
-                .background(Color.black.opacity(0.3).edgesIgnoringSafeArea(.all))
-                .focusSection()
-                .disabled(server.currentPlayRequest != nil || pairingPending)
-
-                // Main Content
-                ZStack {
-                    switch currentScreen {
-                    case .pairing: PairingView()
-                    case .history:
-                        LibraryListView(
-                            title: "History", items: historyStore.history)
-                    case .favorites:
-                        LibraryListView(
-                            title: "Favorites",
-                            items: historyStore.history.filter { $0.isFavorite })
-                    case .settings: SettingsView()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .focusSection()
-                .disabled(server.currentPlayRequest != nil || pairingPending)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .focusSection()
             .disabled(server.currentPlayRequest != nil || pairingPending)
 
             // Instant black curtain — covers home screen the moment a request arrives,
@@ -113,23 +84,47 @@ struct ContentView: View {
                     (playlistStore.currentItem ?? request).resolvedMediaKind == .video &&
                     request.hasVisualMetadata &&
                     !server.skipPreplayForCurrentRequest
+
+                let historyEntry = URL(string: request.url).flatMap { u in
+                    historyStore.history.first { $0.url == u }
+                }
+                let savedPositionMs: Int64? = request.startPositionMs > 0
+                    ? request.startPositionMs
+                    : historyEntry?.resumePositionMs
+                let nextIndex = playlistStore.currentIndex + 1
+                let upNextItem: Playbridge_PlayPayload? = nextIndex < playlistStore.items.count
+                    ? playlistStore.items[nextIndex]
+                    : nil
+
                 ZStack {
-                    // PlayerView always renders so it can buffer in the background.
-                    // isPreBuffering=true keeps it muted and UI-hidden during preplay.
                     PlayerView(payload: request, isPreBuffering: isPreBuffering, stillWatching: stillWatching) {
                         server.progressWebhook.finish(clear: true)
                         playlistStore.clear()
                         stillWatching.reset()
                         withAnimation { server.currentPlayRequest = nil }
                     }
-                    .id(playbackSessionID)
+                    .id(server.playbackSessionID)
                     .zIndex(5)
                     .edgesIgnoringSafeArea(.all)
 
                     if isPreBuffering, request.hasVisualMetadata {
                         PrePlayView(
                             metadata: request.visualMetadata,
-                            onStart: {
+                            senderName: server.currentSenderName,
+                            savedPositionMs: savedPositionMs,
+                            durationMs: historyEntry?.durationMs,
+                            upNextTitle: upNextItem?.titleOrNil,
+                            upNextSubtitle: upNextItem.map { _ in "Up next · \(nextIndex + 1) of \(playlistStore.items.count)" },
+                            onStart: { overridePositionMs in
+                                if let overridePositionMs {
+                                    var updated = request
+                                    updated.startPositionMs = overridePositionMs
+                                    server.currentPlayRequest = updated
+                                } else if request.startPositionMs == 0, let savedPositionMs, savedPositionMs > 0 {
+                                    var updated = request
+                                    updated.startPositionMs = savedPositionMs
+                                    server.currentPlayRequest = updated
+                                }
                                 withAnimation { playerStarted = true }
                             },
                             onBack: {
@@ -149,33 +144,62 @@ struct ContentView: View {
             }
 
             if let request = server.pendingPairingRequest {
-                PairingRequestOverlay(request: request)
-                    .zIndex(20)
+                PairingRequestOverlay(
+                    request: request,
+                    overVideo: server.currentPlayRequest != nil
+                )
+                .zIndex(20)
             }
         }
+        .environment(\.tvColors, currentTvColors)
         .background(AppRemoteAnchor(
             driver: appRemote,
             enabled: { AppRemoteInputGate.allows(foreground: scenePhase == .active,
                                                 hasPlayer: server.currentPlayRequest != nil,
                                                 pairingPending: pairingPending) },
-            onBack: { if currentScreen != .pairing { currentScreen = .pairing } },
-            onHome: { currentScreen = .pairing }))
+            onBack: {
+                if case .settings = currentScreen {
+                    currentScreen = .home
+                } else if case .watchTogether = currentScreen {
+                    currentScreen = .home
+                }
+            },
+            onHome: { currentScreen = .home },
+            shouldInterceptMenu: {
+                if let presented = appRemote.presentedController {
+                    return !(presented is UIAlertController)
+                }
+                if pairingPending { return true }
+                if server.currentPlayRequest != nil { return false }
+                if currentScreen != .home { return true }
+                return appRemote.hasNonRootScope
+            },
+            onMenu: {
+                if pairingPending {
+                    server.denyPairing()
+                } else {
+                    appRemote.handle("back")
+                }
+            }
+        ))
         .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.remoteKey)) { note in
-            guard AppRemoteInputGate.allows(foreground: scenePhase == .active,
+            guard !appRemote.isSuppressedForCurrentTurn,
+                  AppRemoteInputGate.allows(foreground: scenePhase == .active,
                                            hasPlayer: server.currentPlayRequest != nil,
                                            pairingPending: pairingPending),
                   let key = note.userInfo?["key"] as? String else { return }
             appRemote.handle(key)
         }
         .onAppear {
+            together.onPlayPartyItem = { [weak server] payload, _ in
+                server?.playForWatchTogether(payload) ?? false
+            }
             server.start()
             UIApplication.shared.isIdleTimerDisabled = false
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                // start() is idempotent, which avoids rebinding a listener already
-                // created by onAppear during the same foreground transition.
                 server.start()
                 stillWatching.foregroundChanged(true)
             case .background:
@@ -185,18 +209,11 @@ struct ContentView: View {
             default: break
             }
         }
-        .onChange(of: enableHistory) { _, newValue in
-            if !newValue && currentScreen == .history {
-                currentScreen = .pairing
-            }
-        }
         .onChange(of: stillWatchingEnabled) { _, _ in stillWatching.settingsChanged() }
         .onChange(of: stillWatchingThreshold) { _, _ in stillWatching.settingsChanged() }
         .onChange(of: stillWatchingResponseSeconds) { _, _ in stillWatching.settingsChanged() }
-        .onReceive(server.$currentPlayRequest) { request in
-            guard request != nil else { return }
+        .onChange(of: server.playRequestNonce) { _, _ in
             playerStarted = false
-            playbackSessionID &+= 1
             stillWatching.reset()
         }
         .appRemoteScope(root: true)
@@ -206,5 +223,3 @@ struct ContentView: View {
         .environmentObject(server)
     }
 }
-
-// MARK: - Focusable Components

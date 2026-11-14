@@ -49,14 +49,14 @@ enum TransportTimeLabels {
         return compact(title).contains(line) ? "" : subtitle
     }
 
-    /// AVPlayer's clock: zero-padded minutes ("01:51"), hours when needed ("1:02:03").
+    /// Clock format without a leading zero on the first field ("1:51", "1:02:03").
     static func clock(_ seconds: Double) -> String {
         let seconds = PlaybackTime.seconds(seconds)
         let hours = seconds / 3600
         let minutes = (seconds % 3600) / 60
         let rest = String(format: "%02d", seconds % 60)
         return hours > 0 ? "\(hours):\(String(format: "%02d", minutes)):\(rest)"
-                         : "\(String(format: "%02d", minutes)):\(rest)"
+                         : "\(minutes):\(rest)"
     }
 
     static func clockRemaining(_ displayTime: Double, duration: Double) -> String {
@@ -143,28 +143,6 @@ enum TransportScrub {
     }
 }
 
-/// AVPlayer's panel tabs. Audio and subtitles are transport buttons, not tabs.
-enum InfoPanelTab: String, CaseIterable {
-    case info = "Info", chapters = "Chapters", settings = "Settings"
-}
-
-enum InfoPanelModel {
-    /// Only tabs with something to show, as AVPlayer's info panel: Info needs
-    /// metadata beyond the title. Never empty; a bare item still gets Info.
-    static func visibleTabs(chapterCount: Int, settingsAvailable: Bool, hasInfo: Bool = true) -> [InfoPanelTab] {
-        var tabs: [InfoPanelTab] = []
-        if hasInfo { tabs.append(.info) }
-        if chapterCount >= 2 { tabs.append(.chapters) }
-        if settingsAvailable { tabs.append(.settings) }
-        return tabs.isEmpty ? [.info] : tabs
-    }
-
-    /// The tab to show: the current one while it is still visible, else the first.
-    static func validTab(_ tab: InfoPanelTab, tabs: [InfoPanelTab]) -> InfoPanelTab {
-        tabs.contains(tab) ? tab : (tabs.first ?? .info)
-    }
-}
-
 /// Display-only metadata; generated protobufs stay outside the host-tested model.
 struct TransportMetadata: Equatable {
     var subtitle = ""
@@ -173,87 +151,12 @@ struct TransportMetadata: Equatable {
     var runtime = ""
     var overview = ""
     var genres: [String] = []
-    /// Poster as sent (see `ArtworkURL`); the Info tab shows it beside the text.
+    /// Poster as sent (see `ArtworkURL`); the Info panel shows it beside the text.
     var posterURL = ""
 
-    /// Nothing for the Info tab to show besides the title.
+    /// Nothing for the Info panel to show besides the title.
     var isEmpty: Bool {
         [subtitle, year, rating, runtime, overview, posterURL].allSatisfy(\.isEmpty) && genres.isEmpty
-    }
-}
-
-struct InfoPanelRow: Equatable {
-    var id: Int
-    var title: String
-    var selected: Bool = false
-    var trailingText: String? = nil
-    /// Header drawn above this row (the Settings tab's Speed / Scaling / Subtitle Sync blocks).
-    var section: String? = nil
-}
-
-extension InfoPanelModel {
-    static func chapterRows(chapters: [TimelineChapter], durationMs: Int, positionMs: Int) -> [InfoPanelRow] {
-        let markers = ChapterNavigation.navigationMarkers(chapters: chapters, durationMs: durationMs)
-        let current = markers.lastIndex { $0.startMs <= positionMs }
-        return markers.enumerated().map { index, marker in
-            // The cards show the title alone, as AVPlayer does ("Chapter N" when untitled).
-            InfoPanelRow(id: marker.startMs, title: marker.title,
-                selected: index == current,
-                trailingText: TransportTimeLabels.elapsed(Double(marker.startMs) / 1000))
-        }
-    }
-
-    static func initialHighlight(rows: [InfoPanelRow]) -> Int {
-        rows.firstIndex { $0.selected } ?? 0
-    }
-
-    /// Physical Left/Right switches tabs, except on the chapter cards where
-    /// it moves between cards (AVPlayer's chapter strip).
-    static func horizontalMovesRows(tab: InfoPanelTab, tabBarFocused: Bool) -> Bool {
-        tab == .chapters && !tabBarFocused
-    }
-
-    /// A second move command this soon after the last applied one is the same key
-    /// press reported twice (Simulator keyboard), never a deliberate second press.
-    static let moveEchoSeconds = 0.08
-
-    static func isMoveEcho(focusMovedAt: Date, now: Date) -> Bool {
-        let elapsed = now.timeIntervalSince(focusMovedAt)
-        return elapsed >= 0 && elapsed < moveEchoSeconds
-    }
-
-    static func movingTab(_ tab: InfoPanelTab, delta: Int, tabs: [InfoPanelTab]) -> InfoPanelTab {
-        guard !tabs.isEmpty else { return .info }
-        let index = tabs.firstIndex(of: tab) ?? 0
-        return tabs[PlayerHighlightList(count: tabs.count, index: index).moving(delta).index]
-    }
-}
-
-/// Physical Up can reach the tabs; network directions stay within the rows.
-/// Chapters are a horizontal card row: Up from any card reaches the tabs and
-/// Down stays on the cards.
-struct InfoPanelFocus: Equatable {
-    var row = 0
-    var tabBar = false
-
-    func moving(_ delta: Int, rowCount: Int, physical: Bool, horizontalRows: Bool = false) -> Self {
-        if physical && tabBar {
-            return delta > 0 ? Self(row: row, tabBar: rowCount == 0) : self
-        }
-        if physical && horizontalRows { return delta < 0 ? Self(row: row, tabBar: true) : self }
-        if physical && delta < 0 && row == 0 { return Self(row: 0, tabBar: true) }
-        return Self(row: PlayerHighlightList(count: rowCount, index: row).moving(delta).index,
-                    tabBar: rowCount == 0)
-    }
-}
-
-enum TransportVisibility {
-    static let autoHideSeconds = 5.0
-    static let feedbackSeconds = 0.8
-
-    static func canAutoHide(userPaused: Bool, scrubbing: Bool, panel: Bool,
-                           engineMenu: Bool, playlist: Bool, prebuffering: Bool) -> Bool {
-        !userPaused && !scrubbing && !panel && !engineMenu && !playlist && !prebuffering
     }
 }
 
@@ -294,7 +197,7 @@ enum PlaybackFailureMessage {
 
     static func sentence(for category: Category) -> String {
         switch category {
-        case .unsupported: return "This video format isn't supported"
+        case .unsupported: return "The link didn't return a playable video or the format isn't supported"
         case .network: return "The TV couldn't reach the video server"
         case .stall: return "The video stopped loading"
         case .decoder: return "The TV couldn't decode this video"
@@ -326,16 +229,34 @@ enum PlaybackFailureMessage {
 /// A recovered subtitle/segment error must not label a later unrelated failure.
 struct PlaybackFailureLogState {
     private(set) var category: PlaybackFailureMessage.Category?
+    /// Sticky per loaded file/attempt so demuxer/HTTP truncation survives trailing buffered frames
+    /// and distinguishes a dropped connection from a complete file shorter than its declared duration.
+    private(set) var sawTruncationOrNetworkError = false
     private var lastPosition = 0.0
 
     mutating func record(prefix: String, level: Int, text: String) {
-        guard (10...20).contains(level),
-              let category = PlaybackFailureMessage.category(prefix: prefix, text: text) else { return }
+        guard (10...20).contains(level) else { return }
+        if prefix == "cplayer" || prefix == "ffmpeg" || prefix.hasPrefix("ffmpeg/") {
+            let markers = [
+                "partial file",
+                "Packet corrupt",
+                "Error during demuxing",
+                "Error when loading",
+                "avformat_open_input() failed",
+                "Input/output error",
+            ]
+            if markers.contains(where: { text.contains($0) }) {
+                sawTruncationOrNetworkError = true
+            }
+        }
+        guard let category = PlaybackFailureMessage.category(prefix: prefix, text: text) else { return }
         self.category = category
+        self.sawTruncationOrNetworkError = true
     }
 
     mutating func beginFile() {
         playbackHealthy()
+        sawTruncationOrNetworkError = false
         lastPosition = 0
     }
 
@@ -387,6 +308,19 @@ enum PlaybackFailureModel {
         case .stalled: return .errorStatus(reason: PlaybackStallDetector.sentence)
         }
     }
+
+    /// Party playback keeps its failure screen up until the user explicitly closes
+    /// or backs out, or until the host loads a new video.
+    static func shouldDismissFailure(event: Event, isWatchTogetherParty: Bool) -> Bool {
+        switch event {
+        case .autoClose, .phoneStop:
+            return !isWatchTogetherParty
+        case .close:
+            return true
+        case .presented, .tryAgain, .next, .stalled:
+            return false
+        }
+    }
 }
 
 /// Main-thread attempt fence shared by initialization, end-file callbacks and
@@ -427,102 +361,6 @@ struct PlaybackFailureSession {
     }
 }
 
-/// Physical transport focus order, matching AVPlayer's transport row (Loop,
-/// Speed, Switch, Subtitles, Audio). Subtitles needs a track, Audio a choice
-/// of two tracks; Playlist is absent for a one-item queue.
-enum TransportAction: CaseIterable {
-    case loop, speed, switchEngine, subtitles, audio, playlist
-
-    static func available(hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> [Self] {
-        var actions: [Self] = [.loop, .speed, .switchEngine]
-        if hasSubtitles { actions.append(.subtitles) }
-        if hasAudioChoice { actions.append(.audio) }
-        if hasPlaylist { actions.append(.playlist) }
-        return actions
-    }
-
-    /// Switch, Speed and Audio open a pop-up menu above the row (AVPlayer's
-    /// contextual menus); Loop and Playlist act directly.
-    var menu: TransportMenu? {
-        switch self {
-        case .speed: return .speed
-        case .switchEngine: return .engine
-        case .subtitles: return .subtitles
-        case .audio: return .audio
-        case .loop, .playlist: return nil
-        }
-    }
-
-    func moving(_ delta: Int, hasPlaylist: Bool, hasSubtitles: Bool = false, hasAudioChoice: Bool = true) -> Self {
-        let actions = Self.available(hasPlaylist: hasPlaylist, hasSubtitles: hasSubtitles,
-                                     hasAudioChoice: hasAudioChoice)
-        let index = actions.firstIndex(of: self) ?? 0
-        return actions[PlayerHighlightList(count: actions.count, index: index).moving(delta).index]
-    }
-}
-
-enum TransportMenu: Equatable {
-    case engine, speed, subtitles, audio
-
-    var title: String {
-        switch self {
-        case .engine: return "Switch Player"
-        case .speed: return "Playback Speed"
-        case .subtitles: return "Subtitles"
-        case .audio: return "Audio"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .engine: return "arrow.triangle.2.circlepath"
-        case .speed: return "speedometer"
-        case .subtitles: return "captions.bubble"
-        case .audio: return "waveform"
-        }
-    }
-}
-
-struct TransportMenuRow: Equatable {
-    var id: Int
-    var title: String
-    var selected = false
-}
-
-enum TransportMenuModel {
-    /// Row ids index `PlayerSettingsItem.speeds`.
-    static func speedRows(current: Double) -> [TransportMenuRow] {
-        PlayerSettingsItem.speeds.enumerated().map { index, value in
-            TransportMenuRow(id: index, title: PlayerSettingsItem.speedLabel(value), selected: value == current)
-        }
-    }
-
-    static func speed(forRow id: Int) -> Double? {
-        PlayerSettingsItem.speeds.indices.contains(id) ? PlayerSettingsItem.speeds[id] : nil
-    }
-
-    /// Off (id -1) first, then embedded and sidecar tracks.
-    static func subtitleRows(tracks: [(id: Int, name: String)], current: Int) -> [TransportMenuRow] {
-        [TransportMenuRow(id: -1, title: "Off", selected: current == -1)]
-            + tracks.map { TransportMenuRow(id: $0.id, title: $0.name, selected: $0.id == current) }
-    }
-
-    static func audioRows(tracks: [(id: Int, name: String)], current: Int) -> [TransportMenuRow] {
-        tracks.map { TransportMenuRow(id: $0.id, title: $0.name, selected: $0.id == current) }
-    }
-
-    static func engineRows(current: PlaybackEngine) -> [TransportMenuRow] {
-        PlaybackEngine.menuOrder(current: current).map {
-            TransportMenuRow(id: $0.menuID, title: $0.name, selected: $0 == current)
-        }
-    }
-
-    /// Opens on the selected row, like the Info panel.
-    static func initialHighlight(rows: [TransportMenuRow]) -> Int {
-        rows.firstIndex { $0.selected } ?? 0
-    }
-}
-
 /// Physical-only context supplements the shared network chrome without adding
 /// pause, gesture or focus state to the wire-key policy.
 struct TransportChrome: Equatable {
@@ -537,33 +375,7 @@ struct TransportChrome: Equatable {
 }
 
 enum TransportKeyRoute: Equatable {
-    case showTransport, openPanel, closePanel, moveInPanel
-    case focusActions, focusScrubber
-    /// Existing menus, the playlist and the Skip pill keep UIKit focus movement.
-    case moveFocus
-
-    /// Call after the controller's still-watching, pre-play and error guards.
-    /// Down from the action row returns to the scrubber; elsewhere it opens
-    /// Info. Explicit Up routing avoids relying on the above-right geometry.
-    static func physicalVertical(up: Bool, chrome: TransportChrome) -> Self {
-        let state = chrome.navigation
-        if state.infoPanel {
-            return up && chrome.panelTabBarFocused ? .closePanel : .moveInPanel
-        }
-        // An open list owns both directions; Down only opens Info outside lists.
-        if state.engineMenu || state.settingsSheet || state.playlist {
-            return .moveFocus
-        }
-        if state.controlsVisible && chrome.transportActionFocused {
-            return up ? .focusActions : .focusScrubber
-        }
-        if !up { return .openPanel }
-        guard state.controlsVisible else { return .showTransport }
-        return chrome.skipPillFocused ? .moveFocus : .focusActions
-    }
-
-    /// Gate for the later touch recognizer. The proposal math also handles an
-    /// unknown duration safely, even if a caller forgets this guard.
+    /// Gate for the touch scrub recognizer.
     static func canTouchScrub(chrome: TransportChrome) -> Bool {
         let state = chrome.navigation
         return chrome.userPaused && chrome.duration.isFinite && chrome.duration > 0

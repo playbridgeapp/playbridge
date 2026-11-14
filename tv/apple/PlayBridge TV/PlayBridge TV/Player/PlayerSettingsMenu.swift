@@ -124,37 +124,7 @@ enum PlayerSettingsItem: Equatable {
         }
     }
 
-    // MARK: Info panel rows (mpv)
-
-    /// Row ids are indices into `items(availability:)`. The first row of each
-    /// section carries its header; Reset shows the current offset.
-    static func rows(tuning: PlayerTuning, availability: PlayerSettingsAvailability) -> [InfoPanelRow] {
-        var previous: Section?
-        return items(availability: availability).enumerated().map { index, item in
-            defer { previous = item.section }
-            return InfoPanelRow(id: index, title: item.title, selected: item.isSelected(tuning),
-                trailingText: item == .subtitleReset ? offsetLabel(tuning.subtitleOffsetMs) : nil,
-                section: previous == item.section ? nil : item.section.rawValue)
-        }
-    }
-
-    static func command(rowID: Int, tuning: PlayerTuning,
-                        availability: PlayerSettingsAvailability) -> PlayerTuning.Command? {
-        let items = items(availability: availability)
-        guard items.indices.contains(rowID) else { return nil }
-        return items[rowID].command(currentOffsetMs: tuning.subtitleOffsetMs)
-    }
-
-    // MARK: Transport-bar menus (AVPlayer)
-
     static func command(id: String, currentOffsetMs: Int) -> PlayerTuning.Command? {
         PlayerSettingsItem(id: id)?.command(currentOffsetMs: currentOffsetMs)
     }
-}
-
-extension PlayerSettingsAvailability {
-    var any: Bool { speed || scaling || subtitleOffset }
-
-    /// The mpv Settings tab: speed has its own transport button and menu.
-    var withoutSpeed: Self { Self(speed: false, scaling: scaling, subtitleOffset: subtitleOffset) }
 }
