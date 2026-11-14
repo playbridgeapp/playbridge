@@ -1,1130 +1,1016 @@
 package com.playbridge.player.ui
 
-import com.playbridge.player.player.SubtitleStyleStore
-import com.playbridge.shared.player.SubtitleStyle
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.*
+import android.widget.Toast
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.*
-import android.app.Activity
-import android.widget.Toast
+import androidx.compose.runtime.withFrameNanos
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.tv.material3.Text
+import com.playbridge.player.BuildConfig
+import com.playbridge.player.FlavorConfig
 import com.playbridge.player.logging.FileLogger
-import com.playbridge.player.server.ServerService
-import com.playbridge.player.ui.theme.AppTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.*
-import androidx.compose.ui.graphics.vector.ImageVector
+import com.playbridge.player.model.PairedDevice
+import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.player.StillWatchingPrefs
 import com.playbridge.player.player.SubtitleRenderingMode
+import com.playbridge.player.player.SubtitleStyleStore
 import com.playbridge.player.data.HistoryThumbnailMode
+import com.playbridge.player.server.ServerService
+import com.playbridge.player.together.TvTogether
+import com.playbridge.player.ui.components.ListRow
+import com.playbridge.player.ui.components.PillButton
+import com.playbridge.player.ui.components.PillStyle
+import com.playbridge.player.ui.components.SectionHeading
+import com.playbridge.player.ui.components.SwitchRow
+import com.playbridge.player.ui.components.TvTone
+import com.playbridge.player.ui.components.ValueRow
+import com.playbridge.player.ui.settings.CategoryRow
+import com.playbridge.player.ui.settings.ConfirmDialog
+import com.playbridge.player.ui.settings.ContentDialog
+import com.playbridge.player.ui.settings.InfoRow
+import com.playbridge.player.ui.settings.NoteText
+import com.playbridge.player.ui.settings.OptionPickerDialog
+import com.playbridge.player.ui.settings.PhoneRow
+import com.playbridge.player.ui.settings.SettingOption
+import com.playbridge.player.ui.settings.SettingsCategory
+import com.playbridge.player.ui.settings.SettingsText
+import com.playbridge.player.ui.settings.TextEntryDialog
+import com.playbridge.player.ui.settings.labelFor
+import com.playbridge.player.ui.theme.AppTheme
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvText
+import com.playbridge.player.ui.theme.TvTheme
+import com.playbridge.shared.player.SubtitleStyle
+import com.playbridge.shared.update.UpdateState
+import java.util.Locale
+import java.util.TimeZone
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+private const val DEFAULT_INTRODB_URL = "https://api.introdb.app"
+private const val DEFAULT_THEINTRODB_URL = "https://api.theintrodb.org"
+
+/** The focus targets the category list and the rows use to hand focus to each other. */
+private class SettingsFocus(
+    val content: FocusRequester,
+    val categories: Map<SettingsCategory, FocusRequester>,
+)
+
+/**
+ * Settings: a category list on the left and the chosen category's rows on the right.
+ * Focus: the list is focused on entry; Right or OK moves into the rows; Left or Back from the rows
+ * returns to the category that owns them; Back from the list leaves Settings (handled by the caller).
+ *
+ * @param pairingStore the store paired phones are read from and forgotten in. Callers that already
+ *   hold one should pass it; the default opens the same underlying data.
+ * @param initialCategory the category shown (and focused) on entry.
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsScreen(
-    onThemeChanged: (AppTheme) -> Unit
+    onThemeChanged: (AppTheme) -> Unit,
+    pairingStore: PairingStore? = null,
+    initialCategory: SettingsCategory = SettingsCategory.Playback,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-    val scope = rememberCoroutineScope()
+    val store = pairingStore ?: remember { PairingStore(context.applicationContext) }
 
-    var selectedCategory by androidx.compose.runtime.saveable.rememberSaveable {
-        mutableStateOf(SettingsCategory.PLAYER)
+    var selected by rememberSaveable { mutableStateOf(initialCategory) }
+    val focus = remember {
+        SettingsFocus(FocusRequester(), SettingsCategory.entries.associateWith { FocusRequester() })
     }
 
-    // Subtitle style: TV-wide, also changed by a paired phone.
-    val subtitleStyles = remember { SubtitleStyleStore.get(context) }
-    val subtitleStyle by subtitleStyles.style.collectAsState()
-    val installedFonts by subtitleStyles.installedFonts.collectAsState()
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { focus.categories.getValue(selected).requestFocus() }
+    }
 
-    // Settings States
-    var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
-    var browserMode by remember { mutableStateOf(prefs.getString("browser_mode_override", "phone") ?: "phone") }
-    var subtitleRenderingMode by remember {
-        mutableStateOf(
-            SubtitleRenderingMode.fromPreference(
-                prefs.getString(
-                    SubtitleRenderingMode.PREFERENCE_KEY,
-                    SubtitleRenderingMode.AUTO.preferenceValue,
-                ),
-            ),
+    Row(
+        Modifier
+            .fillMaxSize()
+            .padding(start = TvSpacing.screenGutter - 8.dp, end = TvSpacing.screenGutter - 8.dp, top = TvSpacing.screenTop),
+    ) {
+        // Category list. Moving focus onto a category shows its rows.
+        Column(
+            Modifier
+                .width(336.dp)
+                .fillMaxHeight()
+                .onPreviewKeyEvent { event ->
+                    if (event.key == Key.DirectionRight && event.type == KeyEventType.KeyDown) {
+                        runCatching { focus.content.requestFocus() }.getOrDefault(false)
+                    } else {
+                        false
+                    }
+                }
+                // Scrolls when the list is taller than the screen, so the focused category is always
+                // brought fully into view; the padding inside keeps its focus ring from being clipped.
+                .verticalScroll(rememberScrollState())
+                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
+        ) {
+            Text(
+                "Settings",
+                style = TvText.screenTitle,
+                color = TvTheme.colors.onSurface,
+                modifier = Modifier.semantics { heading() },
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SettingsCategory.everyday.forEach { category ->
+                    CategoryEntry(category, selected, focus) { selected = category }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "For troubleshooting",
+                    style = TvText.small,
+                    color = TvTheme.colors.onSurfaceMuted,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+                CategoryEntry(SettingsCategory.Advanced, selected, focus) { selected = SettingsCategory.Advanced }
+            }
+        }
+
+        Spacer(Modifier.width(32.dp))
+
+        // Rows of the chosen category. Recreated per category so each starts scrolled to the top.
+        key(selected) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(top = 58.dp)
+                    .focusRequester(focus.content)
+                    .focusProperties {
+                        exit = { direction ->
+                            if (direction == FocusDirection.Left) focus.categories.getValue(selected) else FocusRequester.Default
+                        }
+                    }
+                    .onPreviewKeyEvent { event ->
+                        if (event.key == Key.Back) {
+                            if (event.type == KeyEventType.KeyDown) {
+                                runCatching { focus.categories.getValue(selected).requestFocus() }
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    .focusGroup()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 40.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                when (selected) {
+                    SettingsCategory.Playback -> PlaybackSettings(prefs)
+                    SettingsCategory.Subtitles -> SubtitleSettings()
+                    SettingsCategory.Skip -> SkipSettings(prefs)
+                    SettingsCategory.Phones -> PhoneSettings(store, focus)
+                    SettingsCategory.Appearance -> AppearanceSettings(prefs, store, onThemeChanged)
+                    SettingsCategory.About -> AboutSettings()
+                    SettingsCategory.Advanced -> AdvancedSettings(prefs)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryEntry(
+    category: SettingsCategory,
+    selected: SettingsCategory,
+    focus: SettingsFocus,
+    onSelect: () -> Unit,
+) {
+    CategoryRow(
+        label = category.label,
+        selected = category == selected,
+        onClick = { runCatching { focus.content.requestFocus() } },
+        modifier = Modifier
+            .focusRequester(focus.categories.getValue(category))
+            .onFocusChanged { if (it.isFocused) onSelect() },
+    )
+}
+
+// ─── Row helpers ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun PrefSwitch(
+    prefs: SharedPreferences,
+    key: String,
+    default: Boolean,
+    title: String,
+    description: String,
+    onChanged: (Boolean) -> Unit = {},
+) {
+    var value by remember { mutableStateOf(prefs.getBoolean(key, default)) }
+    SwitchRow(
+        title = title,
+        description = description,
+        checked = value,
+        onCheckedChange = {
+            value = it
+            prefs.edit().putBoolean(key, it).apply()
+            onChanged(it)
+        },
+    )
+}
+
+/** A value row that opens a picker of [options]. */
+@Composable
+private fun PickerRow(
+    title: String,
+    options: List<SettingOption>,
+    selected: String,
+    onSelected: (String) -> Unit,
+    description: String? = null,
+) {
+    var open by remember { mutableStateOf(false) }
+    ValueRow(title = title, value = options.labelFor(selected), onClick = { open = true }, description = description)
+    if (open) {
+        OptionPickerDialog(title, options, selected, onSelected, onDismiss = { open = false })
+    }
+}
+
+/** A value row that opens a text entry. [display] is what the row shows; [initial] is what the field starts with. */
+@Composable
+private fun TextRow(
+    title: String,
+    display: String,
+    initial: String,
+    dialogMessage: String,
+    onSave: (String) -> Unit,
+    description: String? = null,
+    saveLabel: String = "Save",
+) {
+    var open by remember { mutableStateOf(false) }
+    ValueRow(title = title, value = display, onClick = { open = true }, description = description)
+    if (open) {
+        TextEntryDialog(
+            title = title,
+            message = dialogMessage,
+            initial = initial,
+            saveLabel = saveLabel,
+            onSave = {
+                onSave(it)
+                open = false
+            },
+            onDismiss = { open = false },
         )
     }
-    var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
-    var showIpDialog by remember { mutableStateOf(false) }
-    var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
-    var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
-    var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
-    var stillWatchingEnabled by remember { mutableStateOf(prefs.getBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, false)) }
-    var stillWatchingMinutes by remember {
-        mutableStateOf(StillWatchingPrefs.normalizeStillWatchingThreshold(prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, 90)))
-    }
-    var stillWatchingResponseSeconds by remember {
-        mutableStateOf(StillWatchingPrefs.normalizeStillWatchingResponseSeconds(prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, 300)))
-    }
-    var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
-    var historyThumbnailMode by remember {
-        mutableStateOf(
-            HistoryThumbnailMode.fromPreference(
-                prefs.getString(
-                    HistoryThumbnailMode.PREFERENCE_KEY,
-                    HistoryThumbnailMode.SMART.preferenceValue,
-                ),
-            ),
-        )
-    }
-    var isRestarting by remember { mutableStateOf(false) }
-    var showExitDialog by remember { mutableStateOf(false) }
-    var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
+}
 
-    // GeckoView Plugin states
-    var isGeckoInstalled by remember { mutableStateOf(false) }
-    var showGeckoDialog by remember { mutableStateOf(false) }
+@Composable
+private fun GroupHeading(text: String) {
+    SectionHeading(text, Modifier.padding(start = 4.dp, top = TvSpacing.l, bottom = TvSpacing.xs))
+}
 
-    // Skip segments states
-    var skipProvider by remember { mutableStateOf(prefs.getString("skip_segments_provider", "both") ?: "both") }
-    var introDbApiKey by remember { mutableStateOf(prefs.getString("introdb_api_key", "") ?: "") }
-    var introDbApiUrl by remember { mutableStateOf(prefs.getString("introdb_api_url", "https://api.introdb.app") ?: "https://api.introdb.app") }
-    var theIntroDbApiUrl by remember { mutableStateOf(prefs.getString("theintrodb_api_url", "https://api.theintrodb.org") ?: "https://api.theintrodb.org") }
-    var autoSkipIntro by remember { mutableStateOf(prefs.getBoolean("auto_skip_intro", false)) }
-    var autoSkipRecap by remember { mutableStateOf(prefs.getBoolean("auto_skip_recap", false)) }
-    var autoSkipOutro by remember { mutableStateOf(prefs.getBoolean("auto_skip_outro", false)) }
-    var showApiKeyDialog by remember { mutableStateOf(false) }
-    var showApiUrlDialog by remember { mutableStateOf(false) }
-    var showTheIntroDbUrlDialog by remember { mutableStateOf(false) }
-
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+@Composable
+private fun rememberGeckoInstalled(): Boolean {
+    val context = LocalContext.current
+    var installed by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                isGeckoInstalled = try {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                installed = try {
                     context.packageManager.getPackageInfo("com.playbridge.geckoview.plugin", 0)
                     true
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     false
                 }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    return installed
+}
+
+// ─── Playback ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun PlaybackSettings(prefs: SharedPreferences) {
+    var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
+    PickerRow(
+        title = "Video player",
+        description = "Which player plays casts. The phone's choice is used unless you pick one here.",
+        options = listOf(
+            SettingOption("phone", "Phone's choice"),
+            SettingOption("exo", "ExoPlayer"),
+            SettingOption("mpv", "MPV"),
+        ),
+        selected = playerMode,
+        onSelected = {
+            playerMode = it
+            prefs.edit().putString("player_mode", it).apply()
+        },
+    )
+    PrefSwitch(
+        prefs, "frame_rate_matching", false,
+        title = "Match the video's frame rate",
+        description = "Smoother motion on TVs that support it (Android 11 or newer). The screen may go black briefly when a video starts.",
+    )
+    PrefSwitch(
+        prefs, "loudness_enhancer", false,
+        title = "Boost quiet audio",
+        description = "Raises dialogue on videos that play too quietly and evens out loud peaks.",
+    )
+
+    var stillWatching by remember { mutableStateOf(prefs.getBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, false)) }
+    SwitchRow(
+        title = "Ask \"Still watching?\"",
+        description = "Pauses after a long stretch of playback and returns to idle if nobody answers.",
+        checked = stillWatching,
+        onCheckedChange = {
+            stillWatching = it
+            prefs.edit().putBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, it).apply()
+        },
+    )
+    if (stillWatching) {
+        var minutes by remember {
+            mutableStateOf(
+                StillWatchingPrefs.normalizeStillWatchingThreshold(
+                    prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, 90),
+                ),
+            )
+        }
+        PickerRow(
+            title = "Ask after",
+            description = "How long it plays before asking whether to keep going.",
+            options = StillWatchingPrefs.STILL_WATCHING_PRESETS.sorted().map {
+                SettingOption(it.toString(), SettingsText.stillWatchingThresholdLabel(it))
+            },
+            selected = minutes.toString(),
+            onSelected = { value ->
+                value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_PRESETS }?.let {
+                    minutes = it
+                    prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, it).apply()
+                }
+            },
+        )
+        var seconds by remember {
+            mutableStateOf(
+                StillWatchingPrefs.normalizeStillWatchingResponseSeconds(
+                    prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, 300),
+                ),
+            )
+        }
+        PickerRow(
+            title = "Time to answer",
+            description = "How long you have to answer before playback stops.",
+            options = StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS.sorted().map {
+                SettingOption(it.toString(), SettingsText.stillWatchingResponseLabel(it))
+            },
+            selected = seconds.toString(),
+            onSelected = { value ->
+                value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS }?.let {
+                    seconds = it
+                    prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, it).apply()
+                }
+            },
+        )
+    }
+
+    PrefSwitch(
+        prefs, "enable_history", true,
+        title = "Remember what I cast",
+        description = "Keeps future casts and where you stopped, so you can pick up again.",
+    )
+    ClearHistoryRow()
+}
+
+/** Clears stored watch history, keeping bookmarks, after a confirmation. */
+@Composable
+private fun ClearHistoryRow() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val historyStore = remember { com.playbridge.player.data.HistoryStore(context.applicationContext) }
+    var confirm by remember { mutableStateOf(false) }
+    ValueRow(
+        title = "Clear watch history",
+        value = "Clear",
+        onClick = { confirm = true },
+        description = "Forgets where you stopped in videos that aren't bookmarked. Bookmarks are kept.",
+    )
+    if (confirm) {
+        ConfirmDialog(
+            title = "Clear watch history?",
+            message = "Saved places in videos that aren't bookmarked are removed. Your bookmarks and their places are kept.",
+            confirmLabel = "Clear history",
+            onConfirm = {
+                confirm = false
+                scope.launch { historyStore.clearHistory() }
+                Toast.makeText(context, "Watch history cleared", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { confirm = false },
+        )
+    }
+}
+
+// ─── Subtitles ────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SubtitleSettings() {
+    val context = LocalContext.current
+    // Subtitle style is TV-wide and is also changed by a paired phone.
+    val styles = remember { SubtitleStyleStore.get(context) }
+    val style by styles.style.collectAsState()
+    val installedFonts by styles.installedFonts.collectAsState()
+
+    PickerRow(
+        title = "Size",
+        options = listOf(
+            SettingOption(SubtitleStyle.Size.SMALL.wire, "Small"),
+            SettingOption(SubtitleStyle.Size.MEDIUM.wire, "Medium"),
+            SettingOption(SubtitleStyle.Size.LARGE.wire, "Large"),
+            SettingOption(SubtitleStyle.Size.EXTRA_LARGE.wire, "Extra large"),
+        ),
+        selected = style.size.wire,
+        onSelected = { wire ->
+            SubtitleStyle.Size.entries.firstOrNull { it.wire == wire }?.let { styles.set(style.copy(size = it)) }
+        },
+    )
+    if (installedFonts.isNotEmpty()) {
+        PickerRow(
+            title = "Font",
+            description = "Characters a font lacks use the TV's own fonts.",
+            options = listOf(SettingOption(SubtitleStyle.Font.DEFAULT.wire, "Default")) +
+                installedFonts.map { SettingOption(it, it) },
+            selected = style.customFont ?: SubtitleStyle.Font.DEFAULT.wire,
+            onSelected = { choice ->
+                styles.set(
+                    if (choice in installedFonts) {
+                        style.copy(font = SubtitleStyle.Font.CUSTOM, customFont = choice)
+                    } else {
+                        style.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null)
+                    },
+                )
+            },
+        )
+    }
+    PickerRow(
+        title = "Background",
+        description = "A box behind subtitles keeps them readable on bright scenes.",
+        options = listOf(
+            SettingOption(SubtitleStyle.Background.NONE.wire, "None"),
+            SettingOption(SubtitleStyle.Background.TRANSLUCENT.wire, "Semi-transparent black"),
+            SettingOption(SubtitleStyle.Background.SOLID.wire, "Solid black"),
+        ),
+        selected = style.background.wire,
+        onSelected = { wire ->
+            SubtitleStyle.Background.entries.firstOrNull { it.wire == wire }?.let { styles.set(style.copy(background = it)) }
+        },
+    )
+    PickerRow(
+        title = "Edge",
+        description = "The dark edge around subtitle letters.",
+        options = listOf(
+            SettingOption(SubtitleStyle.Edge.OUTLINE.wire, "Outline"),
+            SettingOption(SubtitleStyle.Edge.SHADOW.wire, "Drop shadow"),
+            SettingOption(SubtitleStyle.Edge.NONE.wire, "None"),
+        ),
+        selected = style.edge.wire,
+        onSelected = { wire ->
+            SubtitleStyle.Edge.entries.firstOrNull { it.wire == wire }?.let { styles.set(style.copy(edge = it)) }
+        },
+    )
+    SwitchRow(
+        title = "Use this style on pre-styled subtitles too",
+        description = "Some subtitles (such as ASS) bring their own look. Off keeps it.",
+        checked = style.overrideStyled,
+        onCheckedChange = { styles.set(style.copy(overrideStyled = it)) },
+    )
+    NoteText("You can also change these, and add your own fonts, from a connected phone.")
+}
+
+// ─── Skip ─────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SkipSettings(prefs: SharedPreferences) {
+    PrefSwitch(
+        prefs, "auto_skip_intro", false,
+        title = "Skip intros by themselves",
+        description = "When off, you choose whether to skip.",
+    )
+    PrefSwitch(
+        prefs, "auto_skip_recap", false,
+        title = "Skip recaps by themselves",
+        description = "The \"previously on\" part at the start of an episode.",
+    )
+    PrefSwitch(
+        prefs, "auto_skip_outro", false,
+        title = "Skip end credits by themselves",
+        description = "Goes straight to the next episode in a queue.",
+    )
+    var provider by remember { mutableStateOf(prefs.getString("skip_segments_provider", "both") ?: "both") }
+    PickerRow(
+        title = "Where skip times come from",
+        description = "Community databases of intro and recap times.",
+        options = listOf(
+            SettingOption("both", "Both", "IntroDB first, TheIntroDB fills the gaps (movies too)"),
+            SettingOption("introdb", "IntroDB", "IntroDB only"),
+            SettingOption("theintrodb", "TheIntroDB", "TheIntroDB only"),
+        ),
+        selected = provider,
+        onSelected = {
+            provider = it
+            prefs.edit().putString("skip_segments_provider", it).apply()
+        },
+    )
+    NoteText("Service keys and addresses are under Advanced.")
+}
+
+// ─── Phones ───────────────────────────────────────────────────────────────────
+
+@Composable
+private fun PhoneSettings(store: PairingStore, focus: SettingsFocus) {
+    val devices by store.pairedDevices.collectAsState(initial = null)
+    val connected by ServerService.connectedClientCount.collectAsState()
+    val scope = rememberCoroutineScope()
+    var confirmForgetAll by remember { mutableStateOf(false) }
+    val now = remember { System.currentTimeMillis() }
+    val zone = remember { TimeZone.getDefault() }
+    val locale = remember { Locale.getDefault() }
+
+    // A forgotten phone takes the focused Forget button with it: put focus back in the rows, or on
+    // the category when none are left.
+    var lastCount by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(devices?.size) {
+        val count = devices?.size
+        val previous = lastCount
+        lastCount = count
+        if (previous != null && count != null && count < previous) {
+            withFrameNanos { }
+            val moved = runCatching { focus.content.requestFocus() }.getOrDefault(false)
+            if (!moved) runCatching { focus.categories.getValue(SettingsCategory.Phones).requestFocus() }
         }
     }
 
+    val list = devices ?: return
+    SectionHeading("Paired phones", hint = SettingsText.connectedPhonesLabel(connected))
+    if (list.isEmpty()) {
+        NoteText("No phones are paired with this TV. Open PlayBridge on a phone and choose this TV to connect.")
+    } else {
+        list.forEach { device: PairedDevice ->
+            key(device.id) {
+                PhoneRow(
+                    name = device.name,
+                    subtitle = SettingsText.phoneSubtitle(device, list, now, zone, locale),
+                    onForget = { scope.launch { store.forgetDevice(device) } },
+                )
+            }
+        }
+        Row(Modifier.padding(top = TvSpacing.s)) {
+            PillButton("Forget all", { confirmForgetAll = true }, style = PillStyle.Secondary)
+        }
+        NoteText("A forgotten phone can't reconnect until it is paired with this TV again.")
+    }
+    if (confirmForgetAll) {
+        ConfirmDialog(
+            title = "Forget all phones?",
+            message = "Every paired phone is removed and can't reconnect until it is paired again.",
+            confirmLabel = "Forget all",
+            onConfirm = {
+                confirmForgetAll = false
+                scope.launch { store.forgetAllDevices() }
+            },
+            onDismiss = { confirmForgetAll = false },
+        )
+    }
+}
+
+// ─── Appearance ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun AppearanceSettings(
+    prefs: SharedPreferences,
+    store: PairingStore,
+    onThemeChanged: (AppTheme) -> Unit,
+) {
+    var themeName by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
+    SectionHeading("Theme", Modifier.padding(start = 4.dp, bottom = TvSpacing.xs))
+    AppTheme.entries.forEach { theme ->
+        ListRow(
+            title = SettingsText.themeLabel(theme),
+            selected = theme.name == themeName,
+            tone = TvTone.App,
+            onClick = {
+                themeName = theme.name
+                prefs.edit().putString("app_theme", theme.name).apply()
+                onThemeChanged(theme)
+            },
+        )
+    }
+
+    GroupHeading("This TV")
+    // The name phones see comes from Android's device name, so it is shown, not edited.
+    val appContext = LocalContext.current.applicationContext
+    val tvName = remember { com.playbridge.player.server.advertisedDeviceName(appContext) }
+    InfoRow(
+        title = "TV name",
+        description = "What phones see in their list. It comes from this TV's Android device name.",
+        value = tvName,
+    )
+
+    if (prefs.getBoolean("enable_history", true)) {
+        var mode by remember {
+            mutableStateOf(
+                HistoryThumbnailMode.fromPreference(
+                    prefs.getString(HistoryThumbnailMode.PREFERENCE_KEY, HistoryThumbnailMode.SMART.preferenceValue),
+                ),
+            )
+        }
+        GroupHeading("Pictures")
+        PickerRow(
+            title = "Bookmark pictures",
+            description = when (mode) {
+                HistoryThumbnailMode.SMART -> "Uses a frame from the video when there's no artwork."
+                HistoryThumbnailMode.LIVE -> "Takes a frame after 15 seconds, then refreshes it every 2 minutes."
+                HistoryThumbnailMode.ARTWORK_ONLY -> "Only uses the poster or backdrop that came with the cast."
+            },
+            options = listOf(
+                SettingOption(HistoryThumbnailMode.SMART.preferenceValue, "Smart", "Grabs a missing picture after 15 seconds, with a fallback on exit"),
+                SettingOption(HistoryThumbnailMode.LIVE.preferenceValue, "Live", "Grabs after 15 seconds, then every 2 minutes"),
+                SettingOption(HistoryThumbnailMode.ARTWORK_ONLY.preferenceValue, "Artwork only", "Never grabs a frame from the video"),
+            ),
+            selected = mode.preferenceValue,
+            onSelected = {
+                mode = HistoryThumbnailMode.fromPreference(it)
+                prefs.edit().putString(HistoryThumbnailMode.PREFERENCE_KEY, mode.preferenceValue).apply()
+            },
+        )
+    }
+}
+
+// ─── About ────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AboutSettings() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val geckoInstalled = rememberGeckoInstalled()
+    var showGeckoDialog by remember { mutableStateOf(false) }
+    var showExitDialog by remember { mutableStateOf(false) }
+
+    InfoRow(title = "PlayBridge TV", value = BuildConfig.VERSION_NAME, description = "Build ${BuildConfig.VERSION_CODE} · ${BuildConfig.FLAVOR}")
+
+    val updateChecker = remember { com.playbridge.player.update.UpdateChecker.getInstance(context) }
+    val updateState by updateChecker.state.collectAsState()
+    val busy = SettingsText.isUpdateBusy(updateState)
+    // The update dialog and progress are drawn once at the activity root; here is only the trigger.
+    ValueRow(
+        title = "Check for updates",
+        description = SettingsText.updateStatus(updateState),
+        value = if (updateState is UpdateState.Checking) "Checking…" else "Check now",
+        onClick = { if (!busy) updateChecker.check(manual = true) },
+    )
+
+    // Play flavor: never advertise the sideloaded plugin APK; only show the row when it is already installed.
+    if (geckoInstalled || FlavorConfig.SIDELOAD_LINKS_SUPPORTED) {
+        ValueRow(
+            title = "GeckoView add-on",
+            description = "An optional browser engine for pages that don't work in the system browser.",
+            value = if (geckoInstalled) "Installed" else "Not installed",
+            onClick = {
+                if (geckoInstalled) {
+                    Toast.makeText(context, "GeckoView plugin is ready to use", Toast.LENGTH_SHORT).show()
+                } else {
+                    showGeckoDialog = true
+                }
+            },
+        )
+    }
+    ValueRow(
+        title = "Quit PlayBridge",
+        description = "Phones can't cast to this TV until you open it again.",
+        value = "Quit",
+        onClick = { showExitDialog = true },
+    )
+
+    if (showExitDialog) {
+        ConfirmDialog(
+            title = "Quit PlayBridge?",
+            message = "This stops the server. Phones can't cast to this TV until you open the app again.",
+            confirmLabel = "Quit",
+            onConfirm = {
+                showExitDialog = false
+                exitApp(context, scope)
+            },
+            onDismiss = { showExitDialog = false },
+        )
+    }
+    if (showGeckoDialog) {
+        ConfirmDialog(
+            title = "Install the GeckoView add-on",
+            message = "GeckoView is an optional browser engine that works better with some streaming sites.\n\n" +
+                "You can download it from:\n" + BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL,
+            confirmLabel = "Open download page",
+            onConfirm = {
+                showGeckoDialog = false
+                try {
+                    val intent = Intent(context, com.playbridge.player.browser.BrowserActivity::class.java).apply {
+                        action = "com.playbridge.player.ACTION_BROWSER_INTERNAL"
+                        putExtra("extra_url", BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Failed to launch browser: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { showGeckoDialog = false },
+        )
+    }
+}
+
+private fun exitApp(context: Context, scope: CoroutineScope) {
+    scope.launch {
+        // Stop the foreground service first so the WS server closes cleanly and NSD unregisters.
+        ServerService.stop(context)
+        delay(300)
+        (context as? Activity)?.finishAffinity()
+        // Kill the process so nothing (started-sticky service, retained singletons) lingers.
+        // BootReceiver brings the server back on next boot or app launch.
+        kotlin.system.exitProcess(0)
+    }
+}
+
+// ─── Advanced ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AdvancedSettings(prefs: SharedPreferences) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    NoteText("Most people never need these.")
+
+    // Connection
+    GroupHeading("Connection")
+    var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
+    var restarting by remember { mutableStateOf(false) }
     fun restartServer() {
-        isRestarting = true
+        restarting = true
         scope.launch {
             ServerService.stop(context)
             delay(1500)
             ServerService.start(context)
             delay(1200)
-            isRestarting = false
+            restarting = false
         }
     }
+    TextRow(
+        title = "This TV's address",
+        description = "Chosen automatically. Change it if phones can't find the TV (for example with an emulator).",
+        display = SettingsText.addressLabel(customIp),
+        initial = if (customIp == "auto") "" else customIp,
+        dialogMessage = "Useful for emulator port forwarding. Leave empty for automatic.",
+        saveLabel = "Save and restart",
+        onSave = { typed ->
+            val finalIp = typed.trim().ifEmpty { "auto" }
+            customIp = finalIp
+            prefs.edit().putString("preferred_ip", finalIp).apply()
+            restartServer()
+        },
+    )
+    ValueRow(
+        title = if (restarting) "Restarting…" else "Restart the connection",
+        description = "Restarts the server phones connect to. They reconnect by themselves in a few seconds.",
+        value = "Restart",
+        onClick = { if (!restarting) restartServer() },
+    )
 
-    fun exitApp() {
-        scope.launch {
-            // Stop the FGS first so the WS server closes cleanly and NSD unregisters.
-            ServerService.stop(context)
-            delay(300)
-            (context as? Activity)?.finishAffinity()
-            // Kill the process so nothing (started-sticky service, retained singletons)
-            // lingers. BootReceiver will bring the server back on next boot/app launch.
-            kotlin.system.exitProcess(0)
-        }
+    // Browser
+    GroupHeading("Browser")
+    val geckoInstalled = rememberGeckoInstalled()
+    var browserMode by remember { mutableStateOf(prefs.getString("browser_mode_override", "phone") ?: "phone") }
+    PickerRow(
+        title = "Browser engine",
+        description = "Which browser opens pages cast from a phone. GeckoView needs a separate add-on app.",
+        options = buildList {
+            add(SettingOption("phone", "Phone's choice"))
+            add(SettingOption("webview", "System WebView"))
+            if (geckoInstalled) add(SettingOption("gecko", "GeckoView"))
+        },
+        selected = browserMode,
+        onSelected = {
+            browserMode = it
+            prefs.edit().putString("browser_mode_override", it).apply()
+        },
+    )
+    PrefSwitch(
+        prefs, "hide_soft_keyboard", false,
+        title = "Hide the on-screen keyboard",
+        description = "Don't pop up the TV keyboard in web fields. Type on the phone's keyboard instead (built-in WebView browser).",
+    )
+    BrowserScriptsRow()
+
+    // Subtitles and skip services
+    GroupHeading("Subtitles and skip services")
+    var renderingMode by remember {
+        mutableStateOf(
+            SubtitleRenderingMode.fromPreference(
+                prefs.getString(SubtitleRenderingMode.PREFERENCE_KEY, SubtitleRenderingMode.AUTO.preferenceValue),
+            ),
+        )
     }
+    PickerRow(
+        title = "Subtitle rendering",
+        description = when (renderingMode) {
+            SubtitleRenderingMode.AUTO -> "Uses the player's renderer, with the PlayBridge overlay as a fallback."
+            SubtitleRenderingMode.BUILT_IN -> "Uses MPV/libass or ExoPlayer's built-in subtitle renderer."
+            SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> "Uses PlayBridge's overlay, which handles headers and sizes text to fit."
+        },
+        options = listOf(
+            SettingOption(SubtitleRenderingMode.AUTO.preferenceValue, "Automatic (recommended)"),
+            SettingOption(SubtitleRenderingMode.BUILT_IN.preferenceValue, "Built-in player"),
+            SettingOption(SubtitleRenderingMode.PLAYBRIDGE_OVERLAY.preferenceValue, "PlayBridge overlay"),
+        ),
+        selected = renderingMode.preferenceValue,
+        onSelected = {
+            renderingMode = SubtitleRenderingMode.fromPreference(it)
+            prefs.edit().putString(SubtitleRenderingMode.PREFERENCE_KEY, renderingMode.preferenceValue).apply()
+        },
+    )
+    var apiKey by remember { mutableStateOf(prefs.getString("introdb_api_key", "") ?: "") }
+    TextRow(
+        title = "IntroDB key",
+        description = "Only needed for a private IntroDB account.",
+        display = if (apiKey.isEmpty()) "Not set" else "Set",
+        initial = apiKey,
+        dialogMessage = "Enter your IntroDB API key or Clerk token. Leave empty if using the public API.",
+        onSave = {
+            apiKey = it.trim()
+            prefs.edit().putString("introdb_api_key", apiKey).apply()
+        },
+    )
+    var introDbUrl by remember { mutableStateOf(prefs.getString("introdb_api_url", DEFAULT_INTRODB_URL) ?: DEFAULT_INTRODB_URL) }
+    TextRow(
+        title = "IntroDB address",
+        display = SettingsText.hostOf(introDbUrl),
+        initial = introDbUrl,
+        dialogMessage = "A custom address for skip times. The default is $DEFAULT_INTRODB_URL",
+        onSave = {
+            introDbUrl = it.trim().ifEmpty { DEFAULT_INTRODB_URL }
+            prefs.edit().putString("introdb_api_url", introDbUrl).apply()
+        },
+    )
+    var theIntroDbUrl by remember { mutableStateOf(prefs.getString("theintrodb_api_url", DEFAULT_THEINTRODB_URL) ?: DEFAULT_THEINTRODB_URL) }
+    TextRow(
+        title = "TheIntroDB address",
+        display = SettingsText.hostOf(theIntroDbUrl),
+        initial = theIntroDbUrl,
+        dialogMessage = "A custom address for TheIntroDB skip times. The default is $DEFAULT_THEINTRODB_URL",
+        onSave = {
+            theIntroDbUrl = it.trim().ifEmpty { DEFAULT_THEINTRODB_URL }
+            prefs.edit().putString("theintrodb_api_url", theIntroDbUrl).apply()
+        },
+    )
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        // --- Sidebar ---
-        Column(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(280.dp)
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
-                .padding(top = 48.dp, start = 24.dp, end = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
+    // Watch Together service address (the party screens live on Home)
+    GroupHeading("Watch Together")
+    var pairingUrl by remember { mutableStateOf(TvTogether.pairingUrl(context)) }
+    TextRow(
+        title = "Pairing service",
+        description = "The address of the Watch Together pairing service.",
+        display = pairingUrl.ifEmpty { "Not set" },
+        initial = pairingUrl,
+        dialogMessage = "The address of the Watch Together pairing service, for example https://pair.example.workers.dev",
+        onSave = {
+            TvTogether.setPairingUrl(context, it)
+            pairingUrl = TvTogether.pairingUrl(context)
+        },
+    )
+
+    // Logs
+    GroupHeading("Logs")
+    LogSettings()
+}
+
+/** "Browser scripts from phones": a summary row that opens the existing script manager. */
+@Composable
+private fun BrowserScriptsRow() {
+    val context = LocalContext.current
+    var open by remember { mutableStateOf(false) }
+    var refresh by remember { mutableStateOf(0) }
+    val summary = remember(refresh) {
+        val controller = com.playbridge.player.userscript.UserScriptRuntime.get(context)
+        controller.ensureMigrated()
+        SettingsText.scriptsSummary(controller.isInstallEnabled(), controller.listInstalled().size)
+    }
+    ValueRow(
+        title = "Browser scripts from phones",
+        description = "Each one still asks for approval on this TV.",
+        value = summary,
+        onClick = { open = true },
+    )
+    if (open) {
+        ContentDialog(
+            title = "Browser scripts from phones",
+            onDismiss = {
+                open = false
+                refresh++
+            },
+        ) { UserScriptSettingsSection() }
+    }
+}
+
+@Composable
+private fun LogSettings() {
+    var enabled by remember { mutableStateOf(FileLogger.isEnabled()) }
+    SwitchRow(
+        title = "Keep a log for bug reports",
+        description = "Saves a log on this TV. It can contain stream addresses and request headers " +
+            "(including Debrid tokens), so only turn it on when needed.",
+        checked = enabled,
+        onCheckedChange = {
+            enabled = it
+            FileLogger.setEnabled(it)
+        },
+    )
+    if (!enabled) {
+        NoteText("Logging is off. No log is being saved on this TV.")
+        return
+    }
+    ValueRow(
+        title = "Clear the log",
+        description = "Deletes the saved log files on this TV.",
+        value = "Clear",
+        onClick = { FileLogger.clearLogs() },
+    )
+    NoteText("The log stays on this TV. A connected phone can pull it from Settings → TV → Logs.")
+    RecentLogLines()
+}
+
+/** Collected here so the fast-changing log only recomposes these lines. */
+@Composable
+private fun RecentLogLines() {
+    val recentLogs by FileLogger.recent.collectAsState()
+    if (recentLogs.isEmpty()) {
+        NoteText("No log entries yet.")
+    } else {
+        // A short recent summary is readable at ten-foot distance; the phone can pull the full file.
+        recentLogs.takeLast(12).forEach { line ->
             Text(
-                text = "Settings",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = 16.dp, bottom = 12.dp)
+                text = line,
+                fontFamily = FontFamily.Monospace,
+                style = TvText.micro,
+                color = TvTheme.colors.onSurface,
+                modifier = Modifier.padding(horizontal = 26.dp, vertical = 1.dp),
             )
-
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(SettingsCategory.entries, key = SettingsCategory::name) { category ->
-                    val isSelected = selectedCategory == category
-                    ListItem(
-                        selected = isSelected,
-                        onClick = { selectedCategory = category },
-                        leadingContent = {
-                            Icon(category.icon, contentDescription = null, modifier = Modifier.size(20.dp))
-                        },
-                        headlineContent = {
-                            Text(category.label)
-                        },
-                        colors = ListItemDefaults.colors(
-                            selectedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                            selectedContentColor = MaterialTheme.colorScheme.primary
-                        ),
-                        scale = ListItemDefaults.scale(focusedScale = 1.05f)
-                    )
-                }
-
-            }
-        }
-
-        // --- Content Area ---
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(start = 48.dp, top = 48.dp, end = 64.dp, bottom = 48.dp)
-        ) {
-            // Collected here (composable scope) rather than inside the LazyColumn's
-            // LazyListScope below, where @Composable calls like collectAsState aren't allowed.
-            val recentLogs by FileLogger.recent.collectAsState()
-            var loggingEnabled by remember { mutableStateOf(FileLogger.isEnabled()) }
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
-                contentPadding = PaddingValues(bottom = 64.dp)
-            ) {
-                item {
-                    Text(
-                        text = selectedCategory.label,
-                        style = MaterialTheme.typography.displaySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-
-                when (selectedCategory) {
-                    SettingsCategory.WATCH_TOGETHER -> item { WatchTogetherPanel() }
-                    SettingsCategory.PLAYER -> {
-                        item {
-                            SettingToggleItem(
-                                label = "Still Watching Check",
-                                description = "Pause after extended playback and return to idle if there is no response.",
-                                checked = stillWatchingEnabled,
-                                onCheckedChange = {
-                                    stillWatchingEnabled = it
-                                    prefs.edit().putBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, it).apply()
-                                }
-                            )
-                        }
-                        if (stillWatchingEnabled) item {
-                            SettingDropdownItem(
-                                label = "Check After",
-                                description = "Active playback time before asking whether to continue.",
-                                options = StillWatchingPrefs.STILL_WATCHING_PRESETS.sorted().map { minutes ->
-                                    val label = when {
-                                        minutes < 60 -> "$minutes minutes"
-                                        minutes % 60 == 0 -> "${minutes / 60} ${if (minutes == 60) "hour" else "hours"}"
-                                        else -> "${minutes / 60.0} hours"
-                                    }
-                                    minutes.toString() to label
-                                },
-                                selected = stillWatchingMinutes.toString(),
-                                onSelected = { value ->
-                                    value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_PRESETS }?.let {
-                                        stillWatchingMinutes = it
-                                        prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, it).apply()
-                                    }
-                                }
-                            )
-                        }
-                        if (stillWatchingEnabled) item {
-                            SettingDropdownItem(
-                                label = "Response Time",
-                                description = "Time to respond before playback stops.",
-                                options = StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS.sorted().map { seconds ->
-                                    seconds.toString() to if (seconds < 60) "$seconds seconds" else "${seconds / 60} ${if (seconds == 60) "minute" else "minutes"}"
-                                },
-                                selected = stillWatchingResponseSeconds.toString(),
-                                onSelected = { value ->
-                                    value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS }?.let {
-                                        stillWatchingResponseSeconds = it
-                                        prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, it).apply()
-                                    }
-                                }
-                            )
-                        }
-                        item {
-                            SettingDropdownItem(
-                                label = "Video Player",
-                                description = "Choose preferred player engine.",
-                                options = listOf(
-                                    "phone" to "Use Phone Setting",
-                                    "exo" to "ExoPlayer",
-                                    "mpv" to "MPV",
-                                ),
-                                selected = playerMode,
-                                onSelected = { mode ->
-                                    playerMode = mode
-                                    prefs.edit().putString("player_mode", mode).apply()
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Frame Rate Matching",
-                                description = "Automatically match refresh rate (API 30+).",
-                                checked = frameRateMatching,
-                                onCheckedChange = {
-                                    frameRateMatching = it
-                                    prefs.edit().putBoolean("frame_rate_matching", it).apply()
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Loudness Enhancer",
-                                description = "Boost quiet dialogue and normalize peaks.",
-                                checked = loudnessEnhancer,
-                                onCheckedChange = {
-                                    loudnessEnhancer = it
-                                    prefs.edit().putBoolean("loudness_enhancer", it).apply()
-                                }
-                            )
-                        }
-                    }
-
-                    SettingsCategory.BROWSER -> {
-                        item {
-                            SettingDropdownItem(
-                                label = "Browser Engine",
-                                description = "Choose which browser opens pages cast from your phone.",
-                                options = buildList {
-                                    add("phone" to "Use Phone Setting")
-                                    add("webview" to "System WebView")
-                                    if (isGeckoInstalled) add("gecko" to "GeckoView")
-                                },
-                                selected = browserMode,
-                                onSelected = {
-                                    browserMode = it
-                                    prefs.edit().putString("browser_mode_override", it).apply()
-                                },
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Hide on-screen keyboard",
-                                description = "Don't pop up the TV keyboard when a web field is focused — type from the phone's keyboard instead (built-in WebView browser).",
-                                checked = hideSoftKeyboard,
-                                onCheckedChange = {
-                                    hideSoftKeyboard = it
-                                    prefs.edit().putBoolean("hide_soft_keyboard", it).apply()
-                                }
-                            )
-                        }
-                        item {
-                            UserScriptSettingsSection()
-                        }
-                    }
-
-                    SettingsCategory.INTEGRATIONS -> {
-                        item {
-                            SettingDropdownItem(
-                                label = "Subtitle Size",
-                                description = "How large subtitles appear.",
-                                options = listOf(
-                                    SubtitleStyle.Size.SMALL.wire to "Small",
-                                    SubtitleStyle.Size.MEDIUM.wire to "Medium",
-                                    SubtitleStyle.Size.LARGE.wire to "Large",
-                                    SubtitleStyle.Size.EXTRA_LARGE.wire to "Extra Large",
-                                ),
-                                selected = subtitleStyle.size.wire,
-                                onSelected = { wire ->
-                                    SubtitleStyle.Size.entries.firstOrNull { it.wire == wire }
-                                        ?.let { subtitleStyles.set(subtitleStyle.copy(size = it)) }
-                                },
-                            )
-                        }
-                        if (installedFonts.isNotEmpty()) item {
-                            SettingDropdownItem(
-                                label = "Subtitle Font",
-                                description = "Custom fonts are added and removed from the PlayBridge phone app. Characters a font lacks use the TV's fonts.",
-                                options = listOf(SubtitleStyle.Font.DEFAULT.wire to "Default") +
-                                    installedFonts.map { it to it },
-                                selected = subtitleStyle.customFont ?: SubtitleStyle.Font.DEFAULT.wire,
-                                onSelected = { choice ->
-                                    subtitleStyles.set(
-                                        if (choice in installedFonts) {
-                                            subtitleStyle.copy(font = SubtitleStyle.Font.CUSTOM, customFont = choice)
-                                        } else {
-                                            subtitleStyle.copy(font = SubtitleStyle.Font.DEFAULT, customFont = null)
-                                        },
-                                    )
-                                },
-                            )
-                        }
-                        item {
-                            SettingDropdownItem(
-                                label = "Subtitle Background",
-                                description = "A box behind subtitles keeps them readable on bright scenes.",
-                                options = listOf(
-                                    SubtitleStyle.Background.NONE.wire to "None",
-                                    SubtitleStyle.Background.TRANSLUCENT.wire to "Semi-transparent Black",
-                                    SubtitleStyle.Background.SOLID.wire to "Solid Black",
-                                ),
-                                selected = subtitleStyle.background.wire,
-                                onSelected = { wire ->
-                                    SubtitleStyle.Background.entries.firstOrNull { it.wire == wire }
-                                        ?.let { subtitleStyles.set(subtitleStyle.copy(background = it)) }
-                                },
-                            )
-                        }
-                        item {
-                            SettingDropdownItem(
-                                label = "Subtitle Edge",
-                                description = "The black edge around subtitle letters.",
-                                options = listOf(
-                                    SubtitleStyle.Edge.OUTLINE.wire to "Outline",
-                                    SubtitleStyle.Edge.SHADOW.wire to "Drop Shadow",
-                                    SubtitleStyle.Edge.NONE.wire to "None",
-                                ),
-                                selected = subtitleStyle.edge.wire,
-                                onSelected = { wire ->
-                                    SubtitleStyle.Edge.entries.firstOrNull { it.wire == wire }
-                                        ?.let { subtitleStyles.set(subtitleStyle.copy(edge = it)) }
-                                },
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Restyle Styled Subtitles",
-                                description = "Also apply this style to subtitles with their own styling, such as ASS. Off keeps their original look.",
-                                checked = subtitleStyle.overrideStyled,
-                                onCheckedChange = { subtitleStyles.set(subtitleStyle.copy(overrideStyled = it)) },
-                            )
-                        }
-                        item {
-                            SettingDropdownItem(
-                                label = "Subtitle Rendering",
-                                description = when (subtitleRenderingMode) {
-                                    SubtitleRenderingMode.AUTO -> "Use the player renderer, with the PlayBridge overlay as a fallback."
-                                    SubtitleRenderingMode.BUILT_IN -> "Use MPV/libass or ExoPlayer's built-in subtitle renderer."
-                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> "Use PlayBridge's header-aware overlay with adaptive text sizing."
-                                },
-                                options = listOf(
-                                    SubtitleRenderingMode.AUTO.preferenceValue to "Auto (Recommended)",
-                                    SubtitleRenderingMode.BUILT_IN.preferenceValue to "Built-in Player",
-                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY.preferenceValue to "PlayBridge Overlay",
-                                ),
-                                selected = subtitleRenderingMode.preferenceValue,
-                                onSelected = { value ->
-                                    subtitleRenderingMode = SubtitleRenderingMode.fromPreference(value)
-                                    prefs.edit().putString(SubtitleRenderingMode.PREFERENCE_KEY, subtitleRenderingMode.preferenceValue).apply()
-                                },
-                            )
-                        }
-                        item {
-                            SettingDropdownItem(
-                                label = "Skip Segments Provider",
-                                description = when (skipProvider) {
-                                    "introdb" -> "IntroDB only"
-                                    "theintrodb" -> "TheIntroDB only"
-                                    else -> "Both — IntroDB first, TheIntroDB fills gaps (movies too)"
-                                },
-                                options = listOf("both" to "Both providers", "introdb" to "IntroDB", "theintrodb" to "TheIntroDB"),
-                                selected = skipProvider,
-                                onSelected = {
-                                    skipProvider = it
-                                    prefs.edit().putString("skip_segments_provider", skipProvider).apply()
-                                }
-                            )
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = "IntroDB API Key",
-                                description = if (introDbApiKey.isEmpty()) "Not Configured" else "••••••••",
-                                onClick = { showApiKeyDialog = true }
-                            )
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = "IntroDB API URL",
-                                description = introDbApiUrl,
-                                onClick = { showApiUrlDialog = true }
-                            )
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = "TheIntroDB API URL",
-                                description = theIntroDbApiUrl,
-                                onClick = { showTheIntroDbUrlDialog = true }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Auto-Skip Intro",
-                                description = "Automatically skip show intros.",
-                                checked = autoSkipIntro,
-                                onCheckedChange = {
-                                    autoSkipIntro = it
-                                    prefs.edit().putBoolean("auto_skip_intro", it).apply()
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Auto-Skip Recap",
-                                description = "Automatically skip show recaps.",
-                                checked = autoSkipRecap,
-                                onCheckedChange = {
-                                    autoSkipRecap = it
-                                    prefs.edit().putBoolean("auto_skip_recap", it).apply()
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Auto-Skip Outro",
-                                description = "Automatically skip show outros/credits.",
-                                checked = autoSkipOutro,
-                                onCheckedChange = {
-                                    autoSkipOutro = it
-                                    prefs.edit().putBoolean("auto_skip_outro", it).apply()
-                                }
-                            )
-                        }
-                    }
-
-                    SettingsCategory.NETWORK -> {
-                        item {
-                            SettingClickableItem(
-                                label = "Custom Network IP",
-                                description = if (customIp.isEmpty() || customIp == "auto") "Automatic" else customIp,
-                                onClick = { showIpDialog = true }
-                            )
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = if (isRestarting) "Restarting..." else "Restart Server",
-                                description = "Restart WebSocket server and Discovery.",
-                                enabled = !isRestarting,
-                                onClick = { restartServer() }
-                            )
-                        }
-                    }
-
-
-                    SettingsCategory.APPEARANCE -> {
-                        item {
-                            SettingDropdownItem(
-                                label = "Theme",
-                                description = "App color scheme.",
-                                options = AppTheme.entries.map { it.name to it.label },
-                                selected = themeStr,
-                                onSelected = { selected ->
-                                    themeStr = selected
-                                    prefs.edit().putString("app_theme", selected).apply()
-                                    AppTheme.entries.find { it.name == selected }?.let {
-                                        onThemeChanged(it)
-                                    }
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Save playback history",
-                                description = "Add future casts and progress to Library.",
-                                checked = enableHistory,
-                                onCheckedChange = {
-                                    enableHistory = it
-                                    prefs.edit().putBoolean("enable_history", it).apply()
-                                },
-                            )
-                        }
-                        if (enableHistory) {
-                            item {
-                                SettingDropdownItem(
-                                    label = "History thumbnails",
-                                    description = when (historyThumbnailMode) {
-                                        HistoryThumbnailMode.SMART ->
-                                            "Capture missing artwork after 15 seconds, with an exit fallback."
-                                        HistoryThumbnailMode.LIVE ->
-                                            "Capture after 15 seconds, then refresh every 2 minutes."
-                                        HistoryThumbnailMode.ARTWORK_ONLY ->
-                                            "Use supplied poster and backdrop artwork without capturing frames."
-                                    },
-                                    options = listOf(
-                                        HistoryThumbnailMode.SMART.preferenceValue to "Smart capture",
-                                        HistoryThumbnailMode.LIVE.preferenceValue to "Live playback snapshots",
-                                        HistoryThumbnailMode.ARTWORK_ONLY.preferenceValue to "Artwork only",
-                                    ),
-                                    selected = historyThumbnailMode.preferenceValue,
-                                    onSelected = { selected ->
-                                        historyThumbnailMode =
-                                            HistoryThumbnailMode.fromPreference(selected)
-                                        prefs.edit().putString(
-                                            HistoryThumbnailMode.PREFERENCE_KEY,
-                                            historyThumbnailMode.preferenceValue,
-                                        ).apply()
-                                    },
-                                )
-                            }
-                        }
-                    }
-
-                    SettingsCategory.LOGS -> {
-                        item {
-                            SettingToggleItem(
-                                label = "Enable Logging",
-                                description = "Save app logs to this device for troubleshooting. " +
-                                    "Off by default — logs can contain stream URLs and request " +
-                                    "headers (including Debrid tokens), so only enable when needed.",
-                                checked = loggingEnabled,
-                                onCheckedChange = {
-                                    loggingEnabled = it
-                                    FileLogger.setEnabled(it)
-                                }
-                            )
-                        }
-                        if (loggingEnabled) {
-                            item {
-                                SettingClickableItem(
-                                    label = "Clear Logs",
-                                    description = "Delete persisted log files on this device.",
-                                    onClick = { FileLogger.clearLogs() }
-                                )
-                            }
-                            item {
-                                Text(
-                                    text = "Phone can pull these logs over the network from Settings → TV → Logs.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
-                                )
-                            }
-                            if (recentLogs.isEmpty()) {
-                                item {
-                                    Text(
-                                        text = "No log entries yet.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(16.dp)
-                                    )
-                                }
-                            } else {
-                                // A short recent-error summary is readable at ten-foot distance;
-                                // the phone can still pull the complete diagnostic file.
-                                items(recentLogs.takeLast(12)) { line ->
-                                    Text(
-                                        text = line,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            item {
-                                Text(
-                                    text = "Logging is disabled. No logs are being saved to this device.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(16.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    SettingsCategory.ABOUT -> {
-                        item {
-                            val versionName = try {
-                                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
-                            } catch (_: Exception) { "unknown" }
-                            
-                            SettingClickableItem(
-                                label = "Version",
-                                description = versionName,
-                                enabled = false,
-                                onClick = {}
-                            )
-                        }
-                        item {
-                            val updateChecker = remember {
-                                com.playbridge.player.update.UpdateChecker.getInstance(context)
-                            }
-                            val updateState by updateChecker.state.collectAsState()
-                            val checking = updateState is
-                                com.playbridge.shared.update.UpdateState.Checking
-                            // The dialog/progress UI itself is rendered once at the activity
-                            // root (MainActivity); here we only expose the manual trigger.
-                            SettingClickableItem(
-                                label = "Check for updates",
-                                description = if (checking) "Checking…" else "Tap to check for a newer version",
-                                enabled = !checking,
-                                onClick = { updateChecker.check(manual = true) }
-                            )
-                        }
-                        // Play flavor: never advertise the sideloaded plugin APK; only show
-                        // the row when the plugin is already present (informational).
-                        if (isGeckoInstalled || com.playbridge.player.FlavorConfig.SIDELOAD_LINKS_SUPPORTED) {
-                            item {
-                                SettingClickableItem(
-                                    label = "GeckoView Engine (Optional Plugin)",
-                                    description = if (isGeckoInstalled) "Installed" else "Not Installed (click to learn more/sideload)",
-                                    onClick = {
-                                        if (isGeckoInstalled) {
-                                            Toast.makeText(context, "GeckoView Plugin is ready to use", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            showGeckoDialog = true
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                        item {
-                            SettingClickableItem(
-                                label = "Exit PlayBridge",
-                                description = "Quit the app and stop the server.",
-                                onClick = { showExitDialog = true }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showExitDialog) {
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showExitDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(400.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("Exit PlayBridge?", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "This stops the server — the phone won't be able to cast until you open the app again.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showExitDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            showExitDialog = false
-                            exitApp()
-                        }) {
-                            Text("Exit")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // IP Entry Dialog (Remains mostly same but styled)
-    if (showIpDialog) {
-        var tempIp by remember { mutableStateOf(if (customIp == "auto") "" else customIp) }
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showIpDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(400.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("Enter Custom IP", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Useful for emulator port forwarding. Leave empty for Automatic.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    // Text Field Integration
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = tempIp,
-                        onValueChange = { tempIp = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                            .padding(16.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showIpDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            val finalIp = tempIp.trim().ifEmpty { "auto" }
-                            customIp = finalIp
-                            prefs.edit().putString("preferred_ip", finalIp).apply()
-                            showIpDialog = false
-                            restartServer()
-                        }) {
-                            Text("Save & Restart")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showGeckoDialog) {
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showGeckoDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(450.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("Install GeckoView Plugin", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "GeckoView is an optional browser engine plugin that provides better compatibility with some streaming sites.\n\n" +
-                        "You can download it from:\n" +
-                        com.playbridge.player.BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showGeckoDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            showGeckoDialog = false
-                            try {
-                                val intent = Intent(context, com.playbridge.player.browser.BrowserActivity::class.java).apply {
-                                    action = "com.playbridge.player.ACTION_BROWSER_INTERNAL"
-                                    putExtra("extra_url", com.playbridge.player.BuildConfig.GECKO_PLUGIN_DOWNLOAD_URL)
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Failed to launch browser: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Text("Open Download Page")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showApiKeyDialog) {
-        var tempKey by remember { mutableStateOf(introDbApiKey) }
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showApiKeyDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(400.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("IntroDB API Key", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Enter your IntroDB API key or Clerk token. Leave empty if using the public API.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = tempKey,
-                        onValueChange = { tempKey = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                            .padding(16.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showApiKeyDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            introDbApiKey = tempKey.trim()
-                            prefs.edit().putString("introdb_api_key", introDbApiKey).apply()
-                            showApiKeyDialog = false
-                        }) {
-                            Text("Save")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showApiUrlDialog) {
-        var tempUrl by remember { mutableStateOf(introDbApiUrl) }
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showApiUrlDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(400.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("IntroDB API URL", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Set custom API url for skip segments. Default is https://api.introdb.app",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = tempUrl,
-                        onValueChange = { tempUrl = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                            .padding(16.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showApiUrlDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            val finalUrl = tempUrl.trim().ifEmpty { "https://api.introdb.app" }
-                            introDbApiUrl = finalUrl
-                            prefs.edit().putString("introdb_api_url", finalUrl).apply()
-                            showApiUrlDialog = false
-                        }) {
-                            Text("Save")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showTheIntroDbUrlDialog) {
-        var tempUrl by remember { mutableStateOf(theIntroDbApiUrl) }
-        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showTheIntroDbUrlDialog = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.width(400.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text("TheIntroDB API URL", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        "Set custom API url for TheIntroDB skip segments. Default is https://api.theintrodb.org",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = tempUrl,
-                        onValueChange = { tempUrl = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                            .padding(16.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Button(onClick = { showTheIntroDbUrlDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
-                            Text("Cancel")
-                        }
-                        Button(onClick = {
-                            val finalUrl = tempUrl.trim().ifEmpty { "https://api.theintrodb.org" }
-                            theIntroDbApiUrl = finalUrl
-                            prefs.edit().putString("theintrodb_api_url", finalUrl).apply()
-                            showTheIntroDbUrlDialog = false
-                        }) {
-                            Text("Save")
-                        }
-                    }
-                }
-            }
         }
     }
 }
 
-enum class SettingsCategory(val label: String, val icon: ImageVector) {
-    PLAYER("Playback", Icons.Default.PlayArrow),
-    WATCH_TOGETHER("Watch Together", Icons.Default.Person),
-    BROWSER("Browser", Icons.Default.Search),
-    INTEGRATIONS("Subtitles & Skipping", Icons.Default.Build),
-    APPEARANCE("General", Icons.Default.Add),
-    NETWORK("Network", Icons.Default.Settings),
-    LOGS("Diagnostics", Icons.AutoMirrored.Filled.List),
-    ABOUT("About", Icons.Default.Info)
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** Switch row kept for [UserScriptSettingsSection], which still builds its toggle through this. */
 @Composable
 internal fun SettingToggleItem(
     label: String,
     description: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
 ) {
-    ListItem(
-        selected = false,
-        onClick = { onCheckedChange(!checked) },
-        headlineContent = { Text(label) },
-        supportingContent = { Text(description) },
-        trailingContent = {
-            Switch(checked = checked, onCheckedChange = null)
-        },
-        scale = ListItemDefaults.scale(focusedScale = 1.02f)
-    )
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SettingClickableItem(
-    label: String,
-    description: String,
-    enabled: Boolean = true,
-    onClick: () -> Unit
-) {
-    ListItem(
-        selected = false,
-        onClick = onClick,
-        enabled = enabled,
-        headlineContent = { Text(label) },
-        supportingContent = { Text(description) },
-        scale = ListItemDefaults.scale(focusedScale = 1.02f)
-    )
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun SettingDropdownItem(
-    label: String,
-    description: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = options.find { it.first == selected }?.second ?: selected
-    val parentFocusRequester = remember { FocusRequester() }
-    val optionFocusRequesters = remember(options) {
-        options.associate { (value, _) -> value to FocusRequester() }
-    }
-
-    LaunchedEffect(expanded, selected, options) {
-        if (expanded) {
-            kotlinx.coroutines.android.awaitFrame()
-            optionFocusRequesters[selected]?.requestFocus()
-        }
-    }
-
-    Column {
-        ListItem(
-            selected = false,
-            onClick = { expanded = !expanded },
-            headlineContent = { Text(label) },
-            supportingContent = { Text(description) },
-            trailingContent = {
-                Text(selectedLabel, color = MaterialTheme.colorScheme.primary)
-            },
-            scale = ListItemDefaults.scale(focusedScale = 1.02f),
-            modifier = Modifier.focusRequester(parentFocusRequester)
-        )
-
-        if (expanded) {
-            Surface(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .fillMaxWidth(),
-                shape = MaterialTheme.shapes.small,
-                colors = SurfaceDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column {
-                    options.forEach { (value, displayLabel) ->
-                        ListItem(
-                            selected = value == selected,
-                            onClick = {
-                                onSelected(value)
-                                expanded = false
-                                parentFocusRequester.requestFocus()
-                            },
-                            headlineContent = { Text(displayLabel) },
-                            trailingContent = {
-                                if (value == selected) {
-                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                }
-                            },
-                            colors = ListItemDefaults.colors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                focusedSelectedContainerColor = MaterialTheme.colorScheme.primary,
-                                focusedSelectedContentColor = MaterialTheme.colorScheme.onPrimary,
-                            ),
-                            modifier = Modifier.focusRequester(optionFocusRequesters.getValue(value)),
-                        )
-                    }
-                }
-            }
-        }
-    }
+    SwitchRow(title = label, description = description, checked = checked, onCheckedChange = onCheckedChange)
 }

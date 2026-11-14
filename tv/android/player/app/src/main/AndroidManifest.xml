@@ -216,13 +216,6 @@
             android:exported="false"
             android:process=":mpv" />
 
-        <activity
-            android:name=".preplay.PrePlayActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
-            android:theme="@style/Theme.PlayBridgeTV" />
-
         <!-- No android:process: the visible Gecko client raises the main player's importance. -->
         <service
             android:name=".server.PluginBridgeService"
