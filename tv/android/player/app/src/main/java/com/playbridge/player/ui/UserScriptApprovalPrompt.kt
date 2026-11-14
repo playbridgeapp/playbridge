@@ -4,31 +4,35 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -39,32 +43,38 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.tv.material3.Button
-import androidx.tv.material3.ButtonDefaults
-import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.OutlinedButton
-import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.playbridge.player.R
 import com.playbridge.player.server.ServerService
+import com.playbridge.player.ui.components.PillButton
+import com.playbridge.player.ui.components.PillStyle
+import com.playbridge.player.ui.components.SectionHeading
+import com.playbridge.player.ui.components.SwitchRow
+import com.playbridge.player.ui.components.TvFocusSurface
 import com.playbridge.player.ui.theme.ThemedDialog
+import com.playbridge.player.ui.theme.TvRadius
+import com.playbridge.player.ui.theme.TvSize
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvText
+import com.playbridge.player.ui.theme.TvTheme
 import com.playbridge.player.userscript.InstalledScriptSummary
 import com.playbridge.player.userscript.ScriptApprovalState
+import com.playbridge.player.userscript.USER_SCRIPT_APPROVAL_TIMEOUT_MS
 import com.playbridge.player.userscript.UserScriptReview
 import com.playbridge.player.userscript.UserScriptRuntime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** Full-screen approval for a script a phone wants to install. Deny has the initial focus. */
 @Composable
 fun UserScriptApprovalPrompt(review: UserScriptReview) {
+    val colors = TvTheme.colors
     val denyFocus = remember { FocusRequester() }
     BackHandler { ServerService.denyPendingUserScript() }
     val sender = review.senderName?.takeIf { it.isNotBlank() }
-    // A long @match list is the only thing that scrolls. The all-sites warning is one
-    // line and must stay on screen; a 1080p TV is often only ~540dp tall.
     val scrollMatches = review.matches.size > MATCHES_SHOWN_WITHOUT_SCROLL && !review.runsOnAllSites
     var listFocusable by remember(review) { mutableStateOf(false) }
     LaunchedEffect(review) {
@@ -76,76 +86,139 @@ fun UserScriptApprovalPrompt(review: UserScriptReview) {
         }
         listFocusable = scrollMatches
     }
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .padding(horizontal = 48.dp, vertical = 20.dp),
+            .background(colors.surface)
+            .padding(TvSpacing.screenGutter),
+        horizontalArrangement = Arrangement.spacedBy(56.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = stringResource(R.string.user_script_prompt_title),
-            color = Color.White,
-            fontSize = 36.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (sender != null) {
-            Text(
-                text = stringResource(R.string.user_script_from, sender),
-                color = Color(0xFF00D9FF),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (sender != null) {
+                    Text(
+                        text = stringResource(R.string.user_script_from, sender),
+                        style = TvText.row,
+                        color = colors.onSurfaceMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.user_script_install_title),
+                    style = TvText.pageTitle.copy(fontSize = 44.sp, lineHeight = 50.sp),
+                    color = colors.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.user_script_install_warning),
+                    style = TvText.row.copy(fontWeight = FontWeight.Normal, lineHeight = 29.sp),
+                    color = colors.onSurfaceMuted,
+                )
+            }
+            ExpiryBar(key = review)
+            Row(horizontalArrangement = Arrangement.spacedBy(TvSpacing.m)) {
+                PillButton(
+                    text = stringResource(R.string.user_script_install_deny),
+                    onClick = { ServerService.denyPendingUserScript() },
+                    height = 60.dp,
+                    modifier = Modifier.focusRequester(denyFocus),
+                )
+                PillButton(
+                    text = stringResource(R.string.user_script_install_approve),
+                    onClick = { ServerService.approvePendingUserScript() },
+                    style = PillStyle.Secondary,
+                    height = 60.dp,
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(12.dp))
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            UserScriptMetaRow(
-                review = review,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-            )
-        }
-        Spacer(modifier = Modifier.height(14.dp))
-        // Outside the facts card on purpose: a weighted card clipped this block on 1080p,
-        // hiding "Runs on ALL sites" above the Approve button.
-        Text(
-            text = stringResource(R.string.user_script_matches_label),
-            color = Color.White.copy(alpha = 0.75f),
-            fontSize = 16.sp,
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        UserScriptMatchBody(
+        ScriptFactsCard(
             review = review,
-            scroll = scrollMatches,
-            contentColor = Color.White,
+            scrollMatches = scrollMatches,
             listFocusable = listFocusable,
-            modifier = if (scrollMatches) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth(),
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        UserScriptDecisionRow(
-            denyFocus = denyFocus,
-            onDeny = { ServerService.denyPendingUserScript() },
-            onApprove = { ServerService.approvePendingUserScript() },
-        )
-        Text(
-            text = stringResource(R.string.user_script_timeout),
-            color = Color.White.copy(alpha = 0.7f),
-            fontSize = 16.sp,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.width(460.dp),
         )
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/** "Expires in 45 seconds" with a bar that drains. Only this node recomposes each second. */
+@Composable
+private fun ExpiryBar(key: Any) {
+    val colors = TvTheme.colors
+    var remainingMs by remember(key) { mutableLongStateOf(USER_SCRIPT_APPROVAL_TIMEOUT_MS) }
+    LaunchedEffect(key) {
+        while (remainingMs > 0) {
+            delay(1_000L)
+            remainingMs -= 1_000L
+        }
+    }
+    val seconds = secondsLeft(remainingMs)
+    Column(Modifier.width(520.dp), verticalArrangement = Arrangement.spacedBy(TvSpacing.s)) {
+        Box(
+            Modifier.fillMaxWidth().height(6.dp).drawBehind {
+                val radius = CornerRadius(3.dp.toPx())
+                drawRoundRect(colors.outline, size = size, cornerRadius = radius)
+                val fraction = (remainingMs.toFloat() / USER_SCRIPT_APPROVAL_TIMEOUT_MS).coerceIn(0f, 1f)
+                drawRoundRect(colors.accent, size = Size(size.width * fraction, size.height), cornerRadius = radius)
+            },
+        )
+        Text(
+            text = pluralStringResource(R.plurals.user_script_expires_in, seconds, seconds),
+            style = TvText.caption,
+            color = colors.onSurfaceMuted,
+        )
+    }
+}
+
+/** Script name, where it runs, size and fingerprint. Shared by the prompt and the settings review. */
+@Composable
+private fun ScriptFactsCard(
+    review: UserScriptReview,
+    scrollMatches: Boolean,
+    listFocusable: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = TvTheme.colors
+    Column(
+        modifier = modifier.background(colors.container, TvRadius.cardShape).padding(30.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        Fact(stringResource(R.string.user_script_name)) {
+            Text(review.scriptName, style = TvText.cardTitle.copy(fontSize = 21.sp), color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Fact(stringResource(R.string.user_script_matches_label)) {
+            UserScriptMatchBody(
+                review = review,
+                scroll = scrollMatches,
+                listFocusable = listFocusable,
+                modifier = if (scrollMatches) Modifier.heightIn(max = 150.dp).fillMaxWidth() else Modifier.fillMaxWidth(),
+            )
+        }
+        Fact(stringResource(R.string.user_script_size)) {
+            Text(formatScriptSize(review.sizeBytes), style = TvText.row, color = colors.onSurface)
+        }
+        Fact(stringResource(R.string.user_script_fingerprint)) {
+            Text(
+                groupFingerprint(review.hashPrefix),
+                style = TvText.value,
+                fontFamily = FontFamily.Monospace,
+                color = colors.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Fact(label: String, value: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(TvSpacing.xxs)) {
+        Text(label, style = TvText.small, color = TvTheme.colors.onSurfaceMuted)
+        value()
+    }
+}
+
 @Composable
 fun UserScriptSettingsSection() {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val controller = remember { UserScriptRuntime.get(context) }
     val scope = rememberCoroutineScope()
     var installEnabled by remember { mutableStateOf(false) }
@@ -196,9 +269,9 @@ fun UserScriptSettingsSection() {
         )
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-        SettingToggleItem(
-            label = stringResource(R.string.user_script_toggle),
+    Column(verticalArrangement = Arrangement.spacedBy(TvSpacing.l), modifier = Modifier.fillMaxWidth()) {
+        SwitchRow(
+            title = stringResource(R.string.user_script_toggle),
             description = stringResource(R.string.user_script_toggle_desc),
             checked = installEnabled,
             onCheckedChange = { enabled ->
@@ -206,16 +279,12 @@ fun UserScriptSettingsSection() {
                 controller.setInstallEnabled(enabled)
             },
         )
-        Text(
-            text = stringResource(R.string.user_script_installed_header),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        SectionHeading(text = stringResource(R.string.user_script_installed_header))
         if (scripts.isEmpty()) {
             Text(
                 text = stringResource(R.string.user_script_none),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = TvText.caption,
+                color = TvTheme.colors.onSurfaceMuted,
             )
         } else {
             scripts.forEach { script ->
@@ -229,50 +298,54 @@ fun UserScriptSettingsSection() {
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun InstalledScriptRow(
     script: InstalledScriptSummary,
     onApprove: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = androidx.tv.material3.SurfaceDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ),
+    val colors = TvTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.container, TvRadius.optionShape)
+            .padding(horizontal = 26.dp, vertical = TvSpacing.l),
+        horizontalArrangement = Arrangement.spacedBy(TvSpacing.xxl),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(script.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(TvSpacing.xs)) {
+            Text(script.name, style = TvText.settingTitle, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 text = sitesLabel(script.matches, script.runsOnAllSites),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (script.runsOnAllSites) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = TvText.caption,
+                color = if (script.runsOnAllSites) colors.error else colors.onSurfaceMuted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = stateLabel(script.state),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = TvText.caption,
+                color = if (script.state == ScriptApprovalState.APPROVED) colors.success else colors.warning,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (script.state != ScriptApprovalState.APPROVED) {
-                    Button(onClick = onApprove) {
-                        Text(stringResource(R.string.user_script_approve))
-                    }
-                }
-                OutlinedButton(onClick = onRemove) {
-                    Text(stringResource(R.string.user_script_remove))
-                }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(TvSpacing.m)) {
+            if (script.state != ScriptApprovalState.APPROVED) {
+                PillButton(
+                    text = stringResource(R.string.user_script_approve),
+                    onClick = onApprove,
+                    height = TvSize.pillHeightCompact,
+                )
             }
+            PillButton(
+                text = stringResource(R.string.user_script_remove),
+                onClick = onRemove,
+                style = PillStyle.Secondary,
+                height = TvSize.pillHeightCompact,
+            )
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun UserScriptReviewDialog(
     review: UserScriptReview,
@@ -290,7 +363,6 @@ private fun UserScriptReviewDialog(
         UserScriptReviewCard(
             title = stringResource(R.string.user_script_review_title),
             review = review,
-            showTimeout = false,
             denyFocus = denyFocus,
             onDeny = onDeny,
             onApprove = onApprove,
@@ -298,7 +370,6 @@ private fun UserScriptReviewDialog(
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun UserScriptRemoveDialog(
     name: String,
@@ -312,210 +383,118 @@ private fun UserScriptRemoveDialog(
         } catch (_: Exception) {
         }
     }
+    val colors = TvTheme.colors
     ThemedDialog(onDismissRequest = onCancel) {
-        Surface(shape = RoundedCornerShape(24.dp), modifier = Modifier.widthIn(max = 640.dp)) {
-            Column(
-                modifier = Modifier.padding(32.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.user_script_remove_title),
-                    style = MaterialTheme.typography.headlineSmall,
+        Column(
+            modifier = Modifier
+                .widthIn(max = 640.dp)
+                .background(colors.container, TvRadius.cardShape)
+                .padding(32.dp),
+            verticalArrangement = Arrangement.spacedBy(TvSpacing.l),
+        ) {
+            Text(stringResource(R.string.user_script_remove_title), style = TvText.cardHeadline, color = colors.onSurface)
+            Text(
+                stringResource(R.string.user_script_remove_body, name),
+                style = TvText.row.copy(fontWeight = FontWeight.Normal),
+                color = colors.onSurfaceMuted,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(TvSpacing.m)) {
+                PillButton(
+                    text = stringResource(R.string.user_script_cancel),
+                    onClick = onCancel,
+                    modifier = Modifier.focusRequester(cancelFocus),
                 )
-                Text(
-                    text = stringResource(R.string.user_script_remove_body, name),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = onCancel, modifier = Modifier.focusRequester(cancelFocus)) {
-                        Text(stringResource(R.string.user_script_cancel))
-                    }
-                    Button(
-                        onClick = onRemove,
-                        colors = ButtonDefaults.colors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = MaterialTheme.colorScheme.onError,
-                        ),
-                    ) {
-                        Text(stringResource(R.string.user_script_remove))
-                    }
+                TvFocusSurface(
+                    onClick = onRemove,
+                    modifier = Modifier.height(TvSize.pillHeight),
+                    shape = TvRadius.pill,
+                    container = colors.error,
+                    focusedContainer = colors.error,
+                    ringColor = colors.focusRing,
+                ) {
+                    Text(
+                        stringResource(R.string.user_script_remove),
+                        style = TvText.button,
+                        color = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.padding(horizontal = TvSpacing.xl),
+                    )
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun UserScriptReviewCard(
     title: String,
     review: UserScriptReview,
-    showTimeout: Boolean,
     denyFocus: FocusRequester,
     onDeny: () -> Unit,
     onApprove: () -> Unit,
 ) {
-    val sender = review.senderName?.takeIf { it.isNotBlank() }
-        ?: if (showTimeout) null else stringResource(R.string.user_script_local_source)
+    val colors = TvTheme.colors
+    val sender = review.senderName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.user_script_local_source)
     val scrollMatches = review.matches.size > MATCHES_SHOWN_WITHOUT_SCROLL && !review.runsOnAllSites
-    Surface(
-        shape = RoundedCornerShape(28.dp),
-        modifier = Modifier.widthIn(max = 880.dp),
+    Column(
+        modifier = Modifier
+            .widthIn(max = 640.dp)
+            .background(colors.containerLow, TvRadius.cardShape)
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(TvSpacing.xl),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            if (sender != null) {
-                Text(
-                    text = stringResource(R.string.user_script_from, sender),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            UserScriptMetaRow(review)
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = stringResource(R.string.user_script_matches_label),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            UserScriptMatchBody(
-                review = review,
-                scroll = scrollMatches,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                listFocusable = scrollMatches,
-                // Cap the list so Approve stays on screen. weight() is unsafe here: the
-                // dialog surface is wrap-content and would pass an infinite max height.
-                modifier = if (scrollMatches) Modifier.heightIn(max = 180.dp) else Modifier,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            UserScriptDecisionRow(denyFocus, onDeny, onApprove)
-            if (showTimeout) {
-                Text(
-                    text = stringResource(R.string.user_script_timeout),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(TvSpacing.xs)) {
+            Text(title, style = TvText.cardHeadline, color = colors.onSurface)
+            Text(stringResource(R.string.user_script_from, sender), style = TvText.row, color = colors.onSurfaceMuted)
         }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun UserScriptDecisionRow(
-    denyFocus: FocusRequester,
-    onDeny: () -> Unit,
-    onApprove: () -> Unit,
-) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        OutlinedButton(onClick = onDeny, modifier = Modifier.focusRequester(denyFocus)) {
-            Text(
-                stringResource(R.string.user_script_deny),
-                fontSize = 20.sp,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+        ScriptFactsCard(review = review, scrollMatches = scrollMatches, listFocusable = scrollMatches)
+        Row(horizontalArrangement = Arrangement.spacedBy(TvSpacing.m)) {
+            PillButton(
+                text = stringResource(R.string.user_script_deny),
+                onClick = onDeny,
+                modifier = Modifier.focusRequester(denyFocus),
             )
-        }
-        Button(onClick = onApprove) {
-            Text(
-                stringResource(R.string.user_script_approve),
-                fontSize = 20.sp,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+            PillButton(
+                text = stringResource(R.string.user_script_approve),
+                onClick = onApprove,
+                style = PillStyle.Secondary,
             )
         }
     }
 }
 
 private const val MATCHES_SHOWN_WITHOUT_SCROLL = 3
-private val ScriptWarningRed = Color(0xFFFF5252)
 
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun UserScriptMetaRow(review: UserScriptReview, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        CompactFact(
-            label = stringResource(R.string.user_script_name),
-            value = review.scriptName,
-            modifier = Modifier.weight(1.5f),
-        )
-        CompactFact(
-            label = stringResource(R.string.user_script_size),
-            value = pluralStringResource(R.plurals.user_script_size_bytes, review.sizeBytes, review.sizeBytes),
-            modifier = Modifier.weight(0.9f),
-        )
-        CompactFact(
-            label = stringResource(R.string.user_script_hash),
-            value = review.hashPrefix,
-            monospace = true,
-            modifier = Modifier.weight(1.1f),
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun CompactFact(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    monospace: Boolean = false,
-) {
-    Column(modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun UserScriptMatchBody(
     review: UserScriptReview,
     scroll: Boolean,
-    contentColor: Color,
     listFocusable: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val colors = TvTheme.colors
     when {
         review.runsOnAllSites -> Text(
             text = stringResource(R.string.user_script_all_sites_warning),
-            color = ScriptWarningRed,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 28.sp,
+            style = TvText.cardTitle,
+            color = colors.error,
             modifier = modifier,
         )
         review.matches.isEmpty() -> Text(
             text = stringResource(R.string.user_script_no_valid_matches),
-            color = ScriptWarningRed,
-            fontWeight = FontWeight.Bold,
-            fontSize = 20.sp,
+            style = TvText.row.copy(fontWeight = FontWeight.Bold),
+            color = colors.error,
             modifier = modifier,
         )
         scroll -> LazyColumn(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            itemsIndexed(review.matches) { _, pattern ->
+            items(review.matches) { pattern ->
                 Text(
                     text = pattern,
-                    color = contentColor,
+                    style = TvText.row.copy(fontWeight = FontWeight.Normal),
+                    color = colors.onSurface,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 18.sp,
                     modifier = if (listFocusable) Modifier.focusable() else Modifier,
                 )
             }
@@ -524,9 +503,9 @@ private fun UserScriptMatchBody(
             review.matches.forEach { pattern ->
                 Text(
                     text = pattern,
-                    color = contentColor,
+                    style = TvText.row.copy(fontWeight = FontWeight.Normal),
+                    color = colors.onSurface,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 18.sp,
                 )
             }
         }

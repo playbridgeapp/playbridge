@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -54,11 +53,32 @@ import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.proxy.ReceiverStreamProxy
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
+import com.playbridge.player.ui.player.BACK_CONFIRM_WINDOW_MS
+import com.playbridge.player.ui.player.BookmarkState
+import com.playbridge.player.ui.player.ControlsSurface
+import com.playbridge.player.ui.player.KeyAction
+import com.playbridge.player.ui.player.KeyContext
+import com.playbridge.player.ui.player.PhoneChangeKind
+import com.playbridge.player.ui.player.PhoneOrigin
+import com.playbridge.player.ui.player.PrePlayResume
+import com.playbridge.player.ui.player.audioChangeTitle
+import com.playbridge.player.ui.player.phoneChangeCard
+import com.playbridge.player.ui.player.queuePositionTitle
+import com.playbridge.player.ui.player.speedChangeTitle
+import com.playbridge.player.ui.player.subtitleLiftDp
+import com.playbridge.player.ui.player.subtitleChangeTitle
+import com.playbridge.player.ui.player.subtitleOffsetTitle
 import com.playbridge.player.ui.player.MediaPresentation
+import com.playbridge.player.ui.player.MusicTransport
+import com.playbridge.player.ui.player.RemoteKey
+import com.playbridge.player.ui.player.TransportBadge
+import com.playbridge.player.ui.player.bookmarkNoticeText
+import com.playbridge.player.ui.player.controlsSurface
+import com.playbridge.player.ui.player.photoCounterText
+import com.playbridge.player.ui.player.resolveKeyAction
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlaybackCapabilities
-import com.playbridge.player.ui.player.SettingsTab
 import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.shared.protocol.createSubtitleStyleJson
@@ -75,6 +95,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -127,7 +148,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private lateinit var composeView: ComposeView
     private val controlsViewModel: PlayerControlsViewModel by viewModels()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
+    /** Time (elapsedRealtime) until which a second Back leaves the player; 0 when not armed. */
+    private var backArmedUntilMs = 0L
+    /** History id to bookmarked flag for stored items; just enough for the bookmark button. */
+    private var historySnapshot: Map<String, Boolean> = emptyMap()
+    private var currentCastIsPrivate = false
     private val sessionCoordinator = RendererSessionCoordinator()
     private val failureReporter = RendererFailureReporter()
     private val stallDetector = PlaybackStallDetector()
@@ -181,6 +206,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var startupWatchdog: Runnable? = null
     private var failureFinishRunnable: Runnable? = null
     private var prePlayCountdownJob: Job? = null
+    /** The saved place this session resumes from (a phone's start position or history), for the pre-play choice. */
+    private var prePlayResumeMs: Long? = null
+    private var prePlayResumeDurationMs: Long? = null
     private val historyStore by lazy { HistoryStore(applicationContext) }
     private val historyThumbnailStore by lazy { HistoryThumbnailStore(applicationContext) }
     private val stillWatchingController by lazy {
@@ -189,7 +217,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             pausePlayback = { handleControl("pause") },
             resumePlayback = { handleControl("play") },
             stopPlayback = ::finishPlaybackSession,
-            onPromptChanged = { refreshKeepScreenOn() },
+            onPromptChanged = { prompting ->
+                refreshKeepScreenOn()
+                // The prompt pauses playback and opens the controls beneath it; close them with it.
+                if (!prompting) controlsViewModel.hideControls()
+            },
         ).also { controller ->
             val prefs = getSharedPreferences(StillWatchingPrefs.STILL_WATCHING_PREFS, MODE_PRIVATE)
             controller.updateSettings(
@@ -219,6 +251,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var partyReady = false
     /** Whether the party video is live, once the renderer has said; null until then. */
     private var partyLive: Boolean? = null
+    /** Reported as live only because the length hadn't arrived in time. */
+    private var partyReportedLiveEarly = false
     private val reportPartyLoadedAnyway = Runnable { reportPartyLoaded(force = true) }
     private val partyPlayer = object : TvTogether.PartyPlayer {
         override fun applyPartyCommand(command: TogetherPlayerCommand) = this@PlayerHostActivity.applyPartyCommand(command)
@@ -230,6 +264,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var pendingAudioContextRestore = false
     private var pendingSubtitleContextRestore = false
     private var currentHistoryId: String? = null
+
+    /** Key the bookmark button acts on; set for every cast, including private ones. */
+    private var bookmarkId: String? = null
     private var currentHistoryHasThumbnail = false
     private var thumbnailCaptureInFlightGeneration: Long? = null
     private var thumbnailCaptureGeneration = 0L
@@ -333,6 +370,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     decodeLateSubtitleResource(intent.getStringExtra(ServerService.EXTRA_SUBTITLE_RESOURCE)),
                     intent.getStringExtra(ServerService.EXTRA_SUBTITLE_REQUEST_ID),
                     intent.getLongExtra(ServerService.EXTRA_SUBTITLE_CONNECTION_ID, 0L),
+                    phone = phoneOriginOf(intent),
                 )
                 ServerService.ACTION_REMOTE -> handleRemote(
                     intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY),
@@ -349,7 +387,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 )
                 ServerService.ACTION_PLAYLIST_JUMP -> {
                     val index = intent.getIntExtra(ServerService.EXTRA_PLAYLIST_JUMP_INDEX, -1)
-                    if (index >= 0) lifecycleScope.launch { playbackCoordinator.jumpTo(index) }
+                    val phone = phoneOriginOf(intent)
+                    if (index >= 0) lifecycleScope.launch {
+                        val before = playbackCoordinator.index
+                        playbackCoordinator.jumpTo(index)
+                        announceQueueChange(phone, before)
+                    }
                 }
                 ServerService.ACTION_QUEUE_MUTATE -> lifecycleScope.launch {
                     ServerService.drainPendingQueueCommands().forEach { applyQueueCommand(it) }
@@ -357,6 +400,28 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 ServerService.ACTION_RESYNC -> broadcastCurrentState()
             }
         }
+    }
+
+    /** Who sent an in-process command: set only for commands that came from a paired phone. */
+    private fun phoneOriginOf(intent: Intent): PhoneOrigin? =
+        if (intent.getBooleanExtra(ServerService.EXTRA_FROM_PHONE, false)) {
+            PhoneOrigin(intent.getStringExtra(ServerService.EXTRA_SENDER_NAME))
+        } else {
+            null
+        }
+
+    /** A phone moved the queue: say which item is now playing. Nothing when the position did not change. */
+    private fun announceQueueChange(phone: PhoneOrigin?, indexBefore: Int) {
+        if (phone == null || playbackCoordinator.index == indexBefore) return
+        val index = playbackCoordinator.index
+        val item = playbackCoordinator.playlist.getOrNull(index) ?: return
+        controlsViewModel.showPhoneCard(
+            phoneChangeCard(
+                PhoneChangeKind.QUEUE,
+                queuePositionTitle(item.title, index, playbackCoordinator.playlist.size),
+                phone.name,
+            ),
+        )
     }
 
     private val callback = object : IRendererCallback.Stub() {
@@ -400,6 +465,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     rendererService?.setSubtitleStyle(createSubtitleStyleJson(style), currentSession.sessionId)
                 }
             }
+        }
+        lifecycleScope.launch {
+            // ExoPlayer's own subtitle view (Automatic / Built-in modes) is lifted the same way as the
+            // Compose overlay: one translation while the seek strip or controls are drawn.
+            controlsViewModel.controlsState
+                .map { it.subtitleLiftDp() }
+                .distinctUntilChanged()
+                .collect { liftDp ->
+                    subtitleView.translationY =
+                        -liftDp * com.playbridge.player.ui.theme.designDensity(resources.displayMetrics)
+                }
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBackPressed()
@@ -450,6 +526,19 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 .map { it.skipSegments }
                 .distinctUntilChanged()
                 .collect { broadcastTimelineIfChanged() }
+        }
+        lifecycleScope.launch {
+            // Keeps the bookmark button in step with the stored history (bookmark toggles and
+            // the entry appearing once playback has landed).
+            // Decoded off the main thread: the history list is rewritten every few seconds.
+            historyStore.history
+                .map { items -> items.associate { it.id to it.isFavorite } }
+                .distinctUntilChanged()
+                .flowOn(Dispatchers.Default)
+                .collect { snapshot ->
+                    historySnapshot = snapshot
+                    refreshBookmarkState()
+                }
         }
     }
 
@@ -536,8 +625,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         composeView.setContent {
             PlayBridgeTVTheme {
-                val state by controlsViewModel.controlsState.collectAsState()
+                // Rounded-position state (about 1 change a second); the seek bars read exact
+                // position from seekProgress so this tree does not recompose every tick.
+                val state by controlsViewModel.uiState.collectAsState()
                 val stillWatching by stillWatchingController.state.collectAsState()
+                val together by TvTogether.state.collectAsState()
+                val party = if (state.isPartySession) together as? TvTogether.State.InParty else null
                 Box(Modifier.fillMaxSize()) {
                     MediaPresentation(
                         payload = presentationPayload,
@@ -547,16 +640,36 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         imageOffsetY = imageOffsetY,
                         imageRotation = imageRotation,
                         onImageShown = ::onImageShown,
+                        senderName = state.senderName,
+                        photoCounter = photoCounterText(state),
+                        showPhotoHints = !state.isVisible && state.prePlayMetadata == null,
+                        musicControls = {
+                            MusicTransport(
+                                state = state,
+                                progress = controlsViewModel.seekProgress,
+                                onTogglePlay = controlsViewModel::togglePlayPause,
+                                onPrev = { lifecycleScope.launch { playbackCoordinator.previous() } },
+                                onNext = { lifecycleScope.launch { playbackCoordinator.next() } },
+                                onPlaylist = {
+                                    controlsViewModel.showPlaylist(
+                                        playbackCoordinator.playlist,
+                                        playbackCoordinator.index,
+                                    )
+                                },
+                            )
+                        },
                     )
                     PlayerControlsOverlay(
                     state = state,
+                    progress = controlsViewModel.seekProgress,
                     mediaKind = currentMediaKind.wireValue,
                     subtitleStyle = subtitleStyles.style.collectAsState().value,
                     subtitleTypeface = subtitleTypeface,
                     stillWatchingState = stillWatching,
                     onContinueWatching = stillWatchingController::continueWatching,
+                    onStopWatching = stillWatchingController::stopWatching,
+                    onBookmark = ::toggleBookmark,
                     onTogglePlay = controlsViewModel::togglePlayPause,
-                    onTrackSelection = { controlsViewModel.showSettings(SettingsTab.AUDIO) },
                     onSubtitles = controlsViewModel::showSubtitles,
                     onPlaylist = {
                         controlsViewModel.showPlaylist(
@@ -579,10 +692,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         FileLogger.i(TAG, "Loop changed to $enabled and was added to playback context")
                         broadcastPlayerSettings()
                     },
-                    onSwitchPlayer = controlsViewModel::showSwitchPlayer,
                     onSeek = controlsViewModel::handleScrubbing,
                     onPrePlayStartNow = ::startPrePlayNow,
+                    onPrePlayStartOver = ::startPrePlayOver,
                     onPrePlayBack = ::finishPlaybackSession,
+                    party = party,
+                    onLeaveParty = ::leaveParty,
                     onSettingsTabSelected = controlsViewModel::showSettings,
                     onTrackSelected = ::selectTrack,
                     onSpeedSelected = { speed ->
@@ -1205,6 +1320,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setPlaying(false)
         controlsViewModel.setBuffering(true)
         controlsViewModel.clearPlaybackTransition()
+        controlsViewModel.clearPlaybackError()
         controlsViewModel.hideControls()
         controlsViewModel.clearSubtitle()
         subtitleView.setCues(emptyList())
@@ -1877,7 +1993,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val thumbnailUrl = visualMetadata?.backdrop_url
             ?: visualMetadata?.poster_url
             ?: historyThumbnailStore.existingUrl(historyId)
-        currentHistoryId = historyId.takeUnless { items.any { it.skip_history == true } }
+        bookmarkId = historyId
+        // A private cast has no history entry of its own unless it has been bookmarked.
+        currentCastIsPrivate = items.any { it.skip_history == true }
+        currentHistoryId = historyId.takeUnless {
+            currentCastIsPrivate && historySnapshot[historyId] != true
+        }
+        refreshBookmarkState()
         currentHistoryHasThumbnail = thumbnailUrl != null
         resetHistoryThumbnailCaptureClock()
         progressManager.setCurrentMedia(
@@ -1920,16 +2042,25 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         thumbnailPlaybackElapsedMs +
             (thumbnailPlayingSinceElapsedMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L)
 
-    private fun requestHistoryThumbnailCapture(exitFallback: Boolean = false) {
+    /**
+     * [forBookmark] is the moment an item is bookmarked. A bookmark with no picture always
+     * gets one, whatever the history and thumbnail settings say, and without the usual wait.
+     */
+    private fun requestHistoryThumbnailCapture(
+        exitFallback: Boolean = false,
+        forBookmark: Boolean = false,
+    ) {
         if (currentMediaKind != MediaKind.VIDEO) return
         val historyId = currentHistoryId ?: return
         if (thumbnailCaptureInFlightGeneration != null) return
-        if (!getSharedPreferences("browser_prefs", MODE_PRIVATE)
-                .getBoolean("enable_history", true)
-        ) return
 
         val playbackElapsedMs = historyThumbnailPlaybackElapsedMs(SystemClock.elapsedRealtime())
-        if (!shouldCaptureHistoryThumbnail(
+        val bookmarkNeedsPicture = !currentHistoryHasThumbnail &&
+            (forBookmark || historySnapshot[historyId] == true)
+        if (!bookmarkNeedsPicture && !getSharedPreferences("browser_prefs", MODE_PRIVATE)
+                .getBoolean("enable_history", true)
+        ) return
+        if (!bookmarkNeedsPicture && !shouldCaptureHistoryThumbnail(
                 mode = HistoryThumbnailMode.read(this),
                 hasThumbnail = currentHistoryHasThumbnail,
                 playbackElapsedMs = playbackElapsedMs,
@@ -2004,7 +2135,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     } else {
                         lifecycleScope.launch(Dispatchers.IO) {
                             val thumbnailUrl = try {
-                                historyThumbnailStore.save(historyId, bitmap)
+                                // A black frame is no preview; the next capture tries again.
+                                val pixels = IntArray(bitmap.width * bitmap.height)
+                                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                                if (isBlankFrame(pixels)) null else historyThumbnailStore.save(historyId, bitmap)
                             } finally {
                                 bitmap.recycle()
                             }
@@ -2114,7 +2248,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun restoreProgress(sessionId: Long) {
         val explicitPosition = requestedStartPositionMs
         requestedStartPositionMs = null
+        prePlayResumeMs = null
+        prePlayResumeDurationMs = null
         if (explicitPosition != null && explicitPosition > 0L) {
+            // The phone's start position, or a replay from Home: remembered for the pre-play choice.
+            prePlayResumeMs = explicitPosition
             seekForSession(explicitPosition, sessionId)
             return
         }
@@ -2123,9 +2261,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
         val url = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.url ?: return
         lifecycleScope.launch {
-            progressManager.restoreProgress(url) { position ->
+            val saved = progressManager.restoreProgress(url) { position ->
+                prePlayResumeMs = position
                 seekForSession(position, sessionId)
             }
+            if (prePlayResumeMs != null) prePlayResumeDurationMs = saved?.duration?.takeIf { it > 0L }
         }
     }
 
@@ -2206,6 +2346,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     nowMs = SystemClock.elapsedRealtime(),
                 )
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
+                // The length arrived: report the video if it was waiting for it, or correct
+                // an earlier "live" report.
+                val lateItem = partyItem
+                if (lateItem != null && lastDurationMs > 0L && partyLive != true) {
+                    if (!partyLoadedReported) {
+                        reportPartyLoaded(force = false)
+                    } else if (partyReportedLiveEarly) {
+                        partyReportedLiveEarly = false
+                        TvTogether.onLoaded(lateItem, lastDurationMs)
+                    }
+                }
                 if (partyItem != null) {
                     TvTogether.onPlayerState(lastPositionMs, rendererPlaying, state == "buffering")
                 }
@@ -2467,12 +2618,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 }
             }
             is com.playbridge.shared.protocol.IncomingMessage.PlaylistJump -> {
-                message.payload.item_id?.let {
+                val before = playbackCoordinator.index
+                (message.payload.item_id?.let {
                     playbackCoordinator.jumpToItem(it, message.payload.if_playback_id)
                 } ?: playbackCoordinator.jumpToIndex(
                     message.payload.index,
                     message.payload.if_playback_id,
-                )
+                )).also { announceQueueChange(PhoneOrigin(command.senderName), before) }
             }
             is com.playbridge.shared.protocol.IncomingMessage.QueueRemove ->
                 playbackCoordinator.remove(message.payload.item_ids.toSet(), message.payload.if_playback_id)
@@ -2897,11 +3049,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             lateSubtitleRegisterJob?.cancel()
             lateSubtitleRegisterJob = null
             pageProxyRouter.clearActiveItem()
-            if (message == PlaybackStallDetector.MESSAGE) {
-                controlsViewModel.showPlaybackTransition(PlaybackStallDetector.MESSAGE)
-            } else {
-                showTransition(R.string.player_failed, force = true)
-            }
+            controlsViewModel.showPlaybackError(
+                if (message == PlaybackStallDetector.MESSAGE) {
+                    PlaybackStallDetector.MESSAGE
+                } else {
+                    sessionCoordinator.current().error ?: getString(R.string.player_failed)
+                },
+            )
+            refreshKeepScreenOn()
             finishingSession = true
             val finishRunnable = Runnable {
                 failureFinishRunnable = null
@@ -3012,9 +3167,15 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         stallPlaybackRequested = false
         pendingPlayingState = false
         controlsViewModel.setPlaying(false)
+        // Resuming from a saved place: pre-play offers "Resume from ..." and "Start over".
+        prePlayResumeMs?.takeIf { it > 0L }?.let { position ->
+            controlsViewModel.setPrePlayResume(
+                PrePlayResume(position, prePlayResumeDurationMs ?: lastDurationMs.takeIf { it > 0L }),
+            )
+        }
         prePlayCountdownJob = lifecycleScope.launch {
             controlsViewModel.setPrePlayLaunching(true)
-            for (seconds in 5 downTo 1) {
+            for (seconds in com.playbridge.player.preplay.PREPLAY_COUNTDOWN_SECONDS downTo 1) {
                 if (session?.sessionId != sessionId) return@launch
                 controlsViewModel.setPrePlayCountdown(seconds)
                 delay(1_000L)
@@ -3044,9 +3205,38 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
+    /** Pre-play "Start over": drop the saved place, begin at 0:00 and play. */
+    private fun startPrePlayOver() {
+        val currentSession = session ?: return
+        cancelPrePlayCountdown()
+        prePlayResumeMs = null
+        controlsViewModel.setPrePlayResume(null)
+        seekForSession(0L, currentSession.sessionId)
+        startPrePlayNow()
+    }
+
     private fun cancelPrePlayCountdown() {
         prePlayCountdownJob?.cancel()
         prePlayCountdownJob = null
+    }
+
+    /** Paused UI: full controls normally; with [quiet] (media key, nothing else on screen) only a badge. */
+    private fun showPausedUi(quiet: Boolean, phone: PhoneOrigin? = null) {
+        if (phone != null) {
+            // A phone paused: a confirmation only. The controls stay as they are and nothing takes focus.
+            controlsViewModel.showPhonePaused(phone.name)
+        } else if (quiet) {
+            controlsViewModel.setPlaying(false)
+            controlsViewModel.showTransportBadge(TransportBadge.PAUSED)
+        } else {
+            controlsViewModel.showControls(full = true, playing = false)
+        }
+    }
+
+    /** [phone] needs nothing extra: playing clears the phone's "Paused from ..." pill. */
+    private fun showPlayingUi(quiet: Boolean, phone: PhoneOrigin? = null) {
+        controlsViewModel.setPlaying(true)
+        if (quiet) controlsViewModel.showTransportBadge(TransportBadge.PLAYING)
     }
 
     private fun handleControl(
@@ -3055,6 +3245,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleRequestId: String? = null,
         subtitleConnectionId: Long = 0L,
         fromParty: Boolean = false,
+        quiet: Boolean = false,
+        phone: PhoneOrigin? = null,
     ) {
         // Mode switches must also finish a host still waiting for its renderer to bind.
         if (command == "stop") {
@@ -3074,7 +3266,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     if (lastDurationMs > 0L) {
                         imageTimerRunning = true
                         hostPlaying = true
-                        controlsViewModel.setPlaying(true)
+                        showPlayingUi(quiet, phone)
                         stillWatchingController.onPlayingChanged(true)
                         startImageTimer(currentSession.sessionId)
                     }
@@ -3084,9 +3276,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     hostPlaying = false
                     imageTimerJob?.cancel()
                     stillWatchingController.onPlayingChanged(false)
-                    controlsViewModel.showControls(full = true, playing = false)
+                    showPausedUi(quiet, phone)
                 }
-                "toggle" -> handleControl(if (imageTimerRunning) "pause" else "play")
+                "toggle" -> handleControl(if (imageTimerRunning) "pause" else "play", quiet = quiet, phone = phone)
             }
             broadcastCurrentState()
             return
@@ -3122,7 +3314,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 hostPlaying = true
                 stallPlaybackRequested = true
                 pendingPlayingState = true
-                controlsViewModel.setPlaying(true)
+                showPlayingUi(quiet, phone)
                 runCatchingLogged(TAG, "Control play failed", ::logPlayerFailure) {
                     renderer.play(currentSession.sessionId)
                 }
@@ -3134,7 +3326,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 runCatchingLogged(TAG, "Control pause failed", ::logPlayerFailure) {
                     renderer.pause(currentSession.sessionId)
                 }
-                controlsViewModel.showControls(full = true, playing = false)
+                showPausedUi(quiet, phone)
                 progressManager.saveProgress()
             }
             command == "toggle" -> {
@@ -3145,13 +3337,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     runCatchingLogged(TAG, "Control toggle pause failed", ::logPlayerFailure) {
                         renderer.pause(currentSession.sessionId)
                     }
-                    controlsViewModel.showControls(full = true, playing = false)
+                    showPausedUi(quiet, phone)
                     progressManager.saveProgress()
                 } else {
                     hostPlaying = true
                     stallPlaybackRequested = true
                     pendingPlayingState = true
-                    controlsViewModel.setPlaying(true)
+                    showPlayingUi(quiet, phone)
                     runCatchingLogged(TAG, "Control toggle play failed", ::logPlayerFailure) {
                         renderer.play(currentSession.sessionId)
                     }
@@ -3162,12 +3354,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 .toLongOrNull()
                 ?.let { position ->
                     seekForSession(position, currentSession.sessionId)
-                    controlsViewModel.showSeekUI()
+                    // A phone's seek shows the strip with its target, never the controls.
+                    if (phone != null) controlsViewModel.showPhoneSeek(phone.name, position) else controlsViewModel.showSeekUI()
                 }
             command?.startsWith("audio_track:") == true -> {
                 val trackId = command.removePrefix("audio_track:")
                 runCatchingLogged(TAG, "Remote setAudioTrack failed", ::logPlayerFailure) {
                     renderer.setAudioTrack(trackId, currentSession.sessionId)
+                }
+                phone?.let {
+                    val name = controlsViewModel.controlsState.value.audioTracks.firstOrNull { t -> t.id == trackId }?.name
+                    controlsViewModel.showPhoneCard(phoneChangeCard(PhoneChangeKind.AUDIO, audioChangeTitle(name), it.name))
                 }
             }
             command?.startsWith("sub_track:") == true -> {
@@ -3177,11 +3374,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 } else {
                     selectRendererSubtitle(trackId, renderer, currentSession.sessionId)
                 }
+                phone?.let { announceSubtitleChange(it, trackId) }
             }
             command?.startsWith("add_subtitle:") == true -> {
                 val url = command.removePrefix("add_subtitle:")
                 if (url.isNotBlank()) {
                     selectExternalSubtitle(url, renderer, currentSession.sessionId)
+                    phone?.let { announceSubtitleChange(it, url) }
                 }
             }
             command == "add_subtitle" -> {
@@ -3192,6 +3391,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         subtitleConnectionId, subtitleRequestId,
                     )
                     selectExternalSubtitle(subtitleResource.url, renderer, currentSession.sessionId)
+                    phone?.let { announceSubtitleChange(it, subtitleResource.url) }
                 } else {
                     ServerService.completeLateSubtitleCommand(
                         subtitleConnectionId, subtitleRequestId, false, "invalid_command",
@@ -3205,6 +3405,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     controlsViewModel.setPlaybackSpeed(speed)
                     syncPlaybackContext()
                     broadcastPlayerSettings()
+                    phone?.let {
+                        controlsViewModel.showPhoneCard(phoneChangeCard(PhoneChangeKind.SPEED, speedChangeTitle(speed), it.name))
+                    }
                 }
             command?.startsWith("video_quality:") == true -> {
                 val value = command.removePrefix("video_quality:")
@@ -3223,6 +3426,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     controlsViewModel.adjustSubtitleDelay(delta)
                     syncPlaybackContext()
                     broadcastPlayerSettings()
+                    phone?.let {
+                        val offset = controlsViewModel.controlsState.value.subtitleDelayMs
+                        controlsViewModel.showPhoneCard(
+                            phoneChangeCard(PhoneChangeKind.SUBTITLES, subtitleOffsetTitle(offset), it.name),
+                        )
+                    }
                 }
             command?.startsWith("scaling:") == true -> {
                 val mode = command.removePrefix("scaling:")
@@ -3257,19 +3466,39 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 )
                 broadcastPlayerSettings()
             }
-            command == "seek_back" -> seekRelative(-10_000L, currentSession.sessionId)
-            command == "seek_forward" -> seekRelative(10_000L, currentSession.sessionId)
-            command == "next" -> lifecycleScope.launch { playbackCoordinator.next() }
-            command == "previous" -> lifecycleScope.launch { playbackCoordinator.previous() }
+            command == "seek_back" -> seekRelative(-10_000L, currentSession.sessionId, phone)
+            command == "seek_forward" -> seekRelative(10_000L, currentSession.sessionId, phone)
+            command == "next" -> lifecycleScope.launch {
+                val before = playbackCoordinator.index
+                playbackCoordinator.next()
+                announceQueueChange(phone, before)
+            }
+            command == "previous" -> lifecycleScope.launch {
+                val before = playbackCoordinator.index
+                playbackCoordinator.previous()
+                announceQueueChange(phone, before)
+            }
         }
         refreshKeepScreenOn()
     }
 
-    private fun seekRelative(deltaMs: Long, sessionId: Long) {
+    private fun seekRelative(deltaMs: Long, sessionId: Long, phone: PhoneOrigin? = null) {
         val target = (lastPositionMs + deltaMs).coerceAtLeast(0L)
         val bounded = if (lastDurationMs > 0L) target.coerceAtMost(lastDurationMs) else target
         seekForSession(bounded, sessionId)
-        controlsViewModel.showSeekUI()
+        if (phone != null) controlsViewModel.showPhoneSeek(phone.name, bounded) else controlsViewModel.showSeekUI()
+    }
+
+    /** A phone chose subtitle track [trackId] (a renderer track or an external file): name it on the TV. */
+    private fun announceSubtitleChange(phone: PhoneOrigin, trackId: String) {
+        val off = trackId == "off" || trackId == "none"
+        val name = if (off) null else {
+            subtitleTracks.firstOrNull { it.id == trackId }?.label
+                ?: if (trackId in externalSubtitleUrls) externalSubtitleLabel(trackId) else null
+        }
+        controlsViewModel.showPhoneCard(
+            phoneChangeCard(PhoneChangeKind.SUBTITLES, subtitleChangeTitle(name, off), phone.name),
+        )
     }
 
     override fun getMediaDuration(): Long = lastDurationMs
@@ -3284,15 +3513,69 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun beginPartySession(requestIntent: Intent) {
         val item = requestIntent.getStringExtra(ServerService.EXTRA_WATCH_TOGETHER_ITEM)
         partyItem = item
+        controlsViewModel.setPartySession(item != null)
+        // A new cast: who sent it feeds "From <phone>", and nothing a phone did before applies.
+        controlsViewModel.setSenderName(requestIntent.getStringExtra(ServerService.EXTRA_SENDER_NAME))
+        controlsViewModel.clearPhoneConfirmations()
         partyLoadedReported = false
         partyReady = false
         partyLive = null
+        partyReportedLiveEarly = false
         mainHandler.removeCallbacks(reportPartyLoadedAnyway)
         if (item != null) {
             TvTogether.attach(partyPlayer, item)
         } else {
             TvTogether.detach(partyPlayer)
             TvTogether.onOtherPlayback()
+        }
+        refreshBookmarkState()
+    }
+
+    /**
+     * Bookmark button state. Every kind of cast can be bookmarked, including private casts
+     * and casts made while history is off; only a Watch Together party hides the button.
+     */
+    private fun refreshBookmarkState() {
+        val id = bookmarkId
+        controlsViewModel.setBookmarkState(
+            when {
+                id == null || partyItem != null -> BookmarkState.UNAVAILABLE
+                historySnapshot[id] == true -> BookmarkState.ON
+                else -> BookmarkState.OFF
+            },
+        )
+    }
+
+    private fun toggleBookmark() {
+        val id = bookmarkId ?: return
+        if (partyItem != null) return
+        val nowBookmarked = historySnapshot[id] != true
+        lifecycleScope.launch {
+            if (nowBookmarked) {
+                progressManager.bookmarkCurrent()
+                // From here on this item has an entry, so its place and picture are kept.
+                currentHistoryId = id
+                // A bookmark with no artwork gets a frame of the video right away.
+                requestHistoryThumbnailCapture(forBookmark = true)
+            } else {
+                historyStore.toggleFavorite(id)
+                if (currentCastIsPrivate) {
+                    // A private cast's entry goes with its bookmark, and so does the frame
+                    // captured for it: nothing more is kept, and a new bookmark starts fresh.
+                    currentHistoryId = null
+                    if (historyThumbnailStore.existingUrl(id) == null &&
+                        progressManager.thumbnailUrl?.startsWith("file:") == true
+                    ) {
+                        progressManager.updateThumbnail(null)
+                        currentHistoryHasThumbnail = false
+                    }
+                }
+            }
+            controlsViewModel.showNotice(
+                bookmarkNoticeText(nowBookmarked),
+                emphasis = true,
+                icon = if (nowBookmarked) R.drawable.ic_player_bookmark_filled else R.drawable.ic_player_bookmark,
+            )
         }
     }
 
@@ -3306,9 +3589,22 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (partyLoadedReported || !partyReady) return
         // Not told in time whether it's live: a video with a known length isn't.
         val live = partyLive ?: if (force) lastDurationMs <= 0 else return
+        // On demand, but the length isn't in yet: wait for it (the next state event),
+        // or the party takes it for live and stops syncing this TV's position.
+        if (!live && lastDurationMs <= 0L && !force) return
         partyLoadedReported = true
+        partyReportedLiveEarly = (live && partyLive == null) || (!live && lastDurationMs <= 0L)
         mainHandler.removeCallbacks(reportPartyLoadedAnyway)
         TvTogether.onLoaded(item, if (live) 0L else lastDurationMs)
+    }
+
+    /** "Leave party" on the controls: the video keeps playing here as an ordinary video. */
+    private fun leaveParty() {
+        TvTogether.leave()
+        TvTogether.detach(partyPlayer)
+        partyItem = null
+        controlsViewModel.setPartySession(false)
+        refreshBookmarkState()
     }
 
     private fun forwardToParty(command: String?): Boolean = when {
@@ -3438,16 +3734,23 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             "back" -> {
                 handleBackPressed()
             }
-            "dpad_center" -> {
-                val state = controlsViewModel.controlsState.value
-                if (state.isFullControlsVisible) handleControl("toggle")
-                else handleControl("pause")
-            }
-            "dpad_left" -> handleDirectionalInput(KeyEvent.KEYCODE_DPAD_LEFT)
-            "dpad_right" -> handleDirectionalInput(KeyEvent.KEYCODE_DPAD_RIGHT)
-            "dpad_up" -> handleDirectionalInput(KeyEvent.KEYCODE_DPAD_UP)
-            "dpad_down" -> handleDirectionalInput(KeyEvent.KEYCODE_DPAD_DOWN)
+            // The phone's on-screen remote behaves exactly like the TV remote: the same key
+            // goes through the same dispatch (Compose focus first, then onKeyDown).
+            "dpad_center" -> injectRemoteKey(KeyEvent.KEYCODE_DPAD_CENTER)
+            "dpad_left" -> injectRemoteKey(KeyEvent.KEYCODE_DPAD_LEFT)
+            "dpad_right" -> injectRemoteKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+            "dpad_up" -> injectRemoteKey(KeyEvent.KEYCODE_DPAD_UP)
+            "dpad_down" -> injectRemoteKey(KeyEvent.KEYCODE_DPAD_DOWN)
         }
+    }
+
+    private fun injectRemoteKey(keyCode: Int) {
+        val now = SystemClock.uptimeMillis()
+        // Through the decor view, which hands the event to this activity's own
+        // key dispatch exactly as a physical key press would arrive.
+        val decor = window.decorView
+        decor.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        decor.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
     }
 
     private fun jumpChapter(forward: Boolean): Boolean {
@@ -3490,39 +3793,74 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.showChapterOsd(chapterLabel(target))
     }
 
-    private fun handleDirectionalInput(keyCode: Int, repeatCount: Int = 0): Boolean {
+    /**
+     * Applies the player key map (ui/player/PlayerKeyMap.kt, from ControlsRemoteMap.dc.html) to a
+     * key Compose did not use. Returns true when the key was handled here.
+     */
+    private fun handlePlayerKey(key: RemoteKey, repeatCount: Int = 0): Boolean {
         val state = controlsViewModel.controlsState.value
-        if (state.playbackTransitionMessage != null) return true
-        val playbackShortcutsActive = !state.isVisible ||
-            (!state.isFullControlsVisible && state.activeOverlay == ActiveOverlay.NONE)
-        if (!playbackShortcutsActive) return false
-
-        return when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1L else 1L
-                val multiplier = if (repeatCount > 10) 5L else 1L
-                session?.let { seekRelative(direction * 10_000L * multiplier, it.sessionId) }
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                adjustVolume(AudioManager.ADJUST_RAISE)
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                adjustVolume(AudioManager.ADJUST_LOWER)
-                true
-            }
-            else -> false
-        }
+        if (state.playbackTransitionMessage != null || state.playbackError != null) return true
+        val stillWatchingPrompting = stillWatchingController.state.value.isPrompting
+        val isMediaKey = key == RemoteKey.PLAY_PAUSE || key == RemoteKey.PLAY || key == RemoteKey.PAUSE
+        // Pre-play and the Still Watching prompt own the D-pad; only media keys reach the player.
+        if ((state.prePlayMetadata != null || stillWatchingPrompting) && !isMediaKey) return false
+        val now = SystemClock.elapsedRealtime()
+        val action = resolveKeyAction(
+            key,
+            KeyContext(
+                surface = state.controlsSurface(),
+                repeatCount = repeatCount,
+                backArmed = now < backArmedUntilMs,
+                confirmBack = confirmBackToStop(state, stillWatchingPrompting),
+                isImage = currentMediaKind == MediaKind.IMAGE,
+                quietAllowed = state.prePlayMetadata == null && !stillWatchingPrompting,
+            ),
+        )
+        return applyKeyAction(action, state)
     }
 
-    private fun adjustVolume(direction: Int) {
-        audioManager.adjustStreamVolume(
-            AudioManager.STREAM_MUSIC,
-            direction,
-            AudioManager.FLAG_SHOW_UI,
-        )
+    /** Back on a bare video or music needs a second press; pre-play, prompts, photos and loading leave at once. */
+    private fun confirmBackToStop(state: com.playbridge.player.ui.player.PlayerControlsState, stillWatchingPrompting: Boolean) =
+        state.prePlayMetadata == null &&
+            !stillWatchingPrompting &&
+            state.playbackTransitionMessage == null &&
+            state.playbackError == null &&
+            !state.isBuffering &&
+            currentMediaKind != MediaKind.IMAGE
+
+    private fun applyKeyAction(action: KeyAction, state: com.playbridge.player.ui.player.PlayerControlsState): Boolean {
+        when (action) {
+            is KeyAction.Seek -> if (session != null) controlsViewModel.handleScrubbing(action.deltaMs)
+            is KeyAction.StepItem -> stepPhoto(action.delta, state)
+            KeyAction.PauseAndOpenControls ->
+                if (state.isPlaying) handleControl("pause") else controlsViewModel.showControls(full = true)
+            KeyAction.OpenControls -> controlsViewModel.showControls(full = true)
+            is KeyAction.Transport -> handleControl(action.command, quiet = action.quiet)
+            KeyAction.HideSeekBar, KeyAction.HideControls -> controlsViewModel.hideControls()
+            KeyAction.ClosePanel -> controlsViewModel.hideOverlay()
+            KeyAction.ArmBack -> {
+                backArmedUntilMs = SystemClock.elapsedRealtime() + BACK_CONFIRM_WINDOW_MS
+                controlsViewModel.showNotice("Press Back again to stop", durationMs = BACK_CONFIRM_WINDOW_MS)
+            }
+            KeyAction.ExitPlayer -> {
+                logPlaybackContextCheckpoint("Back finishing player")
+                if (partyItem != null) TvTogether.leave()
+                finishingSession = true
+                finish()
+            }
+            KeyAction.Ignore -> Unit
+            KeyAction.PassThrough -> return false
+        }
+        return true
+    }
+
+    /** Photos: Left and Right go to the previous or next photo in the queue, never past either end. */
+    private fun stepPhoto(delta: Int, state: com.playbridge.player.ui.player.PlayerControlsState) {
+        val target = state.playlistIndex + delta
+        if (target < 0 || target >= state.playlistItems.size) return
+        lifecycleScope.launch {
+            if (delta > 0) playbackCoordinator.next() else playbackCoordinator.previous()
+        }
     }
 
     private fun applyFrameRateMatching() {
@@ -3558,21 +3896,28 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleBackPressed() {
+        // Back is decided by the key map: close a panel, then hide the controls, then (on a bare
+        // video) ask for a second press within BACK_CONFIRM_WINDOW_MS before leaving.
         val state = controlsViewModel.controlsState.value
-        when {
-            state.activeOverlay != ActiveOverlay.NONE -> controlsViewModel.hideOverlay()
-            state.isVisible -> controlsViewModel.hideControls()
-            else -> {
-                logPlaybackContextCheckpoint("Back finishing player")
-                if (partyItem != null) TvTogether.leave()
-                finishingSession = true
-                finish()
-            }
-        }
+        val stillWatchingPrompting = stillWatchingController.state.value.isPrompting
+        val action = resolveKeyAction(
+            RemoteKey.BACK,
+            KeyContext(
+                surface = state.controlsSurface(),
+                backArmed = SystemClock.elapsedRealtime() < backArmedUntilMs,
+                confirmBack = confirmBackToStop(state, stillWatchingPrompting),
+            ),
+        )
+        applyKeyAction(action, state)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         stillWatchingController.onUserActivity()
+        if (keyCode != KeyEvent.KEYCODE_BACK && backArmedUntilMs != 0L) {
+            // Any other key cancels a pending "Press Back again to stop".
+            backArmedUntilMs = 0L
+            controlsViewModel.clearNotice()
+        }
         if (controlsViewModel.controlsState.value.playbackTransitionMessage != null) {
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
@@ -3594,15 +3939,15 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                handleControl("toggle")
+                handlePlayerKey(RemoteKey.PLAY_PAUSE)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                handleControl("play")
+                handlePlayerKey(RemoteKey.PLAY)
                 return true
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                handleControl("pause")
+                handlePlayerKey(RemoteKey.PAUSE)
                 return true
             }
             KeyEvent.KEYCODE_CHANNEL_UP,
@@ -3643,23 +3988,15 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     ChapterKeyAction.NONE -> Unit
                 }
             }
+            // OK, Up, Down, Left, Right: the key map decides. When controls or a panel are open
+            // Compose has already used the key (focus move, button press); what reaches here is
+            // only what it did not use.
             KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER -> {
-                val state = controlsViewModel.controlsState.value
-                if (!state.isVisible || !state.isFullControlsVisible) {
-                    // Preserve the established TV behavior: the first center press pauses and
-                    // reveals the full controls. Center also promotes the lightweight seek UI to
-                    // paused full controls; once those are visible, Compose handles the action.
-                    handleControl("pause")
-                    return true
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (handleDirectionalInput(keyCode, event.repeatCount)) return true
-            }
+            KeyEvent.KEYCODE_ENTER -> if (handlePlayerKey(RemoteKey.OK)) return true
+            KeyEvent.KEYCODE_DPAD_UP -> if (handlePlayerKey(RemoteKey.UP)) return true
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (handlePlayerKey(RemoteKey.DOWN)) return true
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (handlePlayerKey(RemoteKey.LEFT, event.repeatCount)) return true
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (handlePlayerKey(RemoteKey.RIGHT, event.repeatCount)) return true
         }
         return super.onKeyDown(keyCode, event)
     }

@@ -395,9 +395,7 @@ class ServerService : Service() {
     private fun registerNsdService(port: Int, wssPort: Int?) {
         if (registrationListener != null) return // Already registered
 
-        val deviceName = android.provider.Settings.Global.getString(
-            contentResolver, android.provider.Settings.Global.DEVICE_NAME
-        ) ?: android.os.Build.MODEL
+        val deviceName = advertisedDeviceName(this)
 
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val deviceId = pairingStore.getOrCreateDeviceId()
@@ -616,6 +614,15 @@ class ServerService : Service() {
         }
     }
 
+    /** The paired phone's name for a connection, or null when it has none (the player then says "a phone"). */
+    private fun senderNameOf(connectionId: Long): String? = webSocketServer?.pairedDeviceName(connectionId)
+
+    /** Marks an in-process player intent as phone-originated, with the phone's name when known. */
+    private fun Intent.putPhoneOrigin(connectionId: Long) {
+        putExtra(EXTRA_FROM_PHONE, true)
+        senderNameOf(connectionId)?.let { putExtra(EXTRA_SENDER_NAME, it) }
+    }
+
     private fun handleMessage(command: WebSocketServer.RoutedCommand) {
         val msg = command.message
         val isQueueV1 = msg is IncomingMessage.QueueAdd || msg is IncomingMessage.PlaylistJump ||
@@ -776,6 +783,7 @@ class ServerService : Service() {
                 }
                 val intent = Intent(ACTION_CONTROL).apply {
                     putExtra(EXTRA_COMMAND, msg.payload.command)
+                    putPhoneOrigin(command.connectionId)
                     if (msg.payload.command == "add_subtitle" && lateSubtitle != null) {
                         putExtra(EXTRA_SUBTITLE_RESOURCE, encodeSubtitleResourceJson(lateSubtitle))
                         putExtra(EXTRA_SUBTITLE_REQUEST_ID, command.requestId)
@@ -918,7 +926,7 @@ class ServerService : Service() {
                     return
                 }
 
-                when (val error = launchPlaylist(payload)) {
+                when (val error = launchPlaylist(payload, senderName = senderNameOf(command.connectionId))) {
                     null -> completeCommand(command, ok = true)
                     else -> completeCommand(command, ok = false, error = error)
                 }
@@ -949,7 +957,9 @@ class ServerService : Service() {
             }
             is IncomingMessage.PlaylistJump -> {
                 if (command.requestId != null || msg.payload.item_id != null || msg.payload.if_playback_id != null) {
-                    pendingQueueCommands.add(PendingQueueCommand(command.connectionId, command.requestId, msg))
+                    pendingQueueCommands.add(
+                        PendingQueueCommand(command.connectionId, command.requestId, msg, senderNameOf(command.connectionId)),
+                    )
                     sendBroadcast(Intent(ACTION_QUEUE_MUTATE).apply {
                         setPackage(packageName)
                         putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
@@ -959,6 +969,7 @@ class ServerService : Service() {
                 FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${msg.payload.index}")
                 val intent = Intent(ACTION_PLAYLIST_JUMP).apply {
                     putExtra(EXTRA_PLAYLIST_JUMP_INDEX, msg.payload.index)
+                    putPhoneOrigin(command.connectionId)
                     putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
                     setPackage(packageName)
                 }
@@ -1316,9 +1327,14 @@ class ServerService : Service() {
 
     /**
      * Starts [payload] in the player, as for a `playlist` command. Returns null once
-     * launched, else the command error. [watchTogetherItem] marks a Watch Together load.
+     * launched, else the command error. [watchTogetherItem] marks a Watch Together load;
+     * [senderName] is the casting phone's name, for the player's "From <phone>" line.
      */
-    private fun launchPlaylist(payload: playbridge.PlaylistPayload, watchTogetherItem: String? = null): String? {
+    private fun launchPlaylist(
+        payload: playbridge.PlaylistPayload,
+        watchTogetherItem: String? = null,
+        senderName: String? = null,
+    ): String? {
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
 
@@ -1328,7 +1344,10 @@ class ServerService : Service() {
         val playerIntent = try {
             com.playbridge.player.player.PlayerLauncher
                 .buildPlayerIntent(this, payload, tvPref)
-                .apply { watchTogetherItem?.let { putExtra(EXTRA_WATCH_TOGETHER_ITEM, it) } }
+                .apply {
+                    watchTogetherItem?.let { putExtra(EXTRA_WATCH_TOGETHER_ITEM, it) }
+                    senderName?.let { putExtra(EXTRA_SENDER_NAME, it) }
+                }
         } catch (e: Exception) {
             FileLogger.e(TAG, "Couldn't build the player launch: ${e.javaClass.simpleName}")
             return "invalid_command"
@@ -1606,6 +1625,10 @@ class ServerService : Service() {
         const val EXTRA_SUBTITLE_RESOURCE = "subtitle_resource"
         const val EXTRA_SUBTITLE_REQUEST_ID = "subtitle_request_id"
         const val EXTRA_SUBTITLE_CONNECTION_ID = "subtitle_connection_id"
+        /** In-process only: this command came from a paired phone, so the player confirms it on screen. */
+        const val EXTRA_FROM_PHONE = "from_phone"
+        /** The phone's name for [EXTRA_FROM_PHONE] commands and for the cast that started playback; absent when unknown. */
+        const val EXTRA_SENDER_NAME = "sender_name"
 
         fun screenMirrorController(): ScreenMirrorReceiverController? = _screenMirrorController
         const val EXTRA_REMOTE_KEY = "remote_key"
@@ -1907,6 +1930,8 @@ class ServerService : Service() {
             val connectionId: Long,
             val requestId: String?,
             val message: IncomingMessage,
+            /** The phone's name when known, for the player's confirmation of a queue change. */
+            val senderName: String? = null,
         )
 
         val pendingQueueCommands = java.util.concurrent.ConcurrentLinkedQueue<PendingQueueCommand>()

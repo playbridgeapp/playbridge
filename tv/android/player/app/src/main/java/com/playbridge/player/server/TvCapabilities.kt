@@ -13,7 +13,7 @@ import kotlinx.serialization.json.put
 /**
  * The players and browser engines this receiver can actually drive. Reported to the phone
  * at auth so the phone's pickers only ever offer what this TV supports (see the phone-side
- * `TvCapabilityOptions`). IDs match what [com.playbridge.player.preplay.PrePlayActivity] and
+ * `TvCapabilityOptions`). IDs match what [com.playbridge.player.player.PlayerHostActivity] and
  * [ServerService] route on (`player_mode` / `browser_mode`).
  */
 data class TvCapabilities(

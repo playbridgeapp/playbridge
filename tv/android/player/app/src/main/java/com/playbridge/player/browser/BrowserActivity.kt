@@ -285,46 +285,46 @@ class BrowserActivity : ComponentActivity() {
     private fun showDownloadPopup(downloadId: Long, fileName: String) {
         runOnUiThread {
             val dm = getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-            val density = resources.displayMetrics.density
+            // Sizes are written against the 1280 dp design canvas, as in the Compose screens.
+        val density = com.playbridge.player.ui.theme.designDensity(resources.displayMetrics)
             fun dp(v: Int) = (v * density).toInt()
 
             fun dpf(v: Int) = v * density
-            val accent = android.graphics.Color.parseColor("#5B9DFF")
-            val muted = android.graphics.Color.parseColor("#9AA0AA")
-            val barWidth = dp(320)
+            val accent = BrowserChrome.accent
+            val muted = BrowserChrome.muted
+            val barWidth = dp(352)
 
             val card = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
                 background = android.graphics.drawable.GradientDrawable().apply {
                     cornerRadius = dpf(18)
-                    setColor(android.graphics.Color.parseColor("#F0202028"))
-                    setStroke(dp(1), android.graphics.Color.parseColor("#22FFFFFF"))
+                    setColor(BrowserChrome.cardOverlay)
                 }
-                setPadding(dp(18), dp(14), dp(18), dp(16))
+                setPadding(dp(24), dp(22), dp(24), dp(22))
                 elevation = dpf(12)
             }
             val header = android.widget.TextView(this).apply {
-                text = "↓  DOWNLOADING"
+                text = "Downloading"
                 setTextColor(accent)
-                textSize = 10f
-                letterSpacing = 0.12f
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 15f * density)
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
             }
             val title = android.widget.TextView(this).apply {
                 text = fileName
-                setTextColor(android.graphics.Color.WHITE)
-                textSize = 14f
+                setTextColor(BrowserChrome.text)
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 18f * density)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                 layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-                    .apply { topMargin = dp(4) }
+                    .apply { topMargin = dp(12) }
             }
 
             fun roundRect(color: Int) = android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = dpf(3); setColor(color)
             }
             val progressLayer = android.graphics.drawable.LayerDrawable(arrayOf(
-                roundRect(android.graphics.Color.parseColor("#33FFFFFF")),
+                roundRect(BrowserChrome.track),
                 android.graphics.drawable.ClipDrawable(
                     roundRect(accent), android.view.Gravity.START,
                     android.graphics.drawable.ClipDrawable.HORIZONTAL
@@ -342,29 +342,30 @@ class BrowserActivity : ComponentActivity() {
 
             val pctText = android.widget.TextView(this).apply {
                 text = "Starting…"
-                setTextColor(android.graphics.Color.WHITE)
-                textSize = 12f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(muted)
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 15f * density)
             }
             val sizeText = android.widget.TextView(this).apply {
                 setTextColor(muted)
-                textSize = 12f
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 15f * density)
+                maxLines = 1
             }
-            val bottomRow = android.widget.LinearLayout(this).apply {
+            val headerRow = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
                 layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-                    .apply { topMargin = dp(8) }
-                addView(pctText, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                addView(sizeText)
+                addView(header, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(pctText)
             }
+            sizeText.layoutParams = android.widget.LinearLayout.LayoutParams(barWidth, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(12) }
 
-            card.addView(header); card.addView(title); card.addView(bar); card.addView(bottomRow)
+            card.addView(headerRow); card.addView(title); card.addView(bar); card.addView(sizeText)
             rootContainer.addView(card, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 gravity = android.view.Gravity.BOTTOM or android.view.Gravity.END
-                setMargins(0, 0, dp(24), dp(24))
+                setMargins(0, 0, dp(40), dp(36))
             })
 
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -380,24 +381,24 @@ class BrowserActivity : ComponentActivity() {
                         val tot = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                         when (st) {
                             android.app.DownloadManager.STATUS_SUCCESSFUL -> {
-                                header.text = "✓  DOWNLOADED"
+                                header.text = "Downloaded"
                                 bar.progress = 100
-                                pctText.text = "Saved to Downloads"; sizeText.text = ""
+                                pctText.text = "100%"; sizeText.text = "Saved to Downloads"
                                 finishCard(6000)
                             }
                             android.app.DownloadManager.STATUS_FAILED -> {
-                                header.text = "✕  FAILED"
-                                pctText.text = "Download failed"; sizeText.text = ""
+                                header.text = "Download failed"
+                                pctText.text = ""; sizeText.text = "The file could not be saved"
                                 finishCard(4000)
                             }
                             else -> {
                                 if (tot > 0) {
                                     bar.progress = (dl * 100 / tot).toInt()
                                     pctText.text = "${bar.progress}%"
-                                    sizeText.text = "${fmtSize(dl)} / ${fmtSize(tot)}"
+                                    sizeText.text = downloadDetail(dl, tot)
                                 } else {
-                                    pctText.text = "Starting…"
-                                    sizeText.text = fmtSize(dl)
+                                    pctText.text = ""
+                                    sizeText.text = downloadDetail(dl, 0)
                                 }
                                 reschedule = true
                             }
@@ -408,14 +409,6 @@ class BrowserActivity : ComponentActivity() {
             }
             handler.post(poll)
         }
-    }
-
-    private fun fmtSize(bytes: Long): String {
-        if (bytes <= 0) return "0 B"
-        val units = arrayOf("B", "KB", "MB", "GB")
-        var v = bytes.toDouble(); var i = 0
-        while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
-        return String.format("%.1f %s", v, units[i])
     }
 
     private fun enterFullscreen(view: View, callback: WebChromeClient.CustomViewCallback) {
@@ -609,7 +602,8 @@ class BrowserActivity : ComponentActivity() {
                 return@runOnUiThread
             }
 
-            val density = resources.displayMetrics.density
+            // Sizes are written against the 1280 dp design canvas, as in the Compose screens.
+        val density = com.playbridge.player.ui.theme.designDensity(resources.displayMetrics)
             fun dp(v: Int) = (v * density).toInt()
 
             var ov = customOverlayView
@@ -618,7 +612,7 @@ class BrowserActivity : ComponentActivity() {
             if (ov == null || tv == null) {
                 ov = android.widget.FrameLayout(this)
                 tv = android.widget.TextView(this).apply {
-                    textSize = 24f
+                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 24f * density)
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                     gravity = android.view.Gravity.CENTER
                     setLineSpacing(dp(4).toFloat(), 1f)
@@ -664,8 +658,8 @@ class BrowserActivity : ComponentActivity() {
 
             val defaultBgColor = when (style) {
                 "fullscreen" -> android.graphics.Color.BLACK
-                "half-screen" -> android.graphics.Color.parseColor("#E6121416")
-                else -> android.graphics.Color.parseColor("#D2141618")
+                "half-screen" -> BrowserChrome.cardOverlay
+                else -> BrowserChrome.cardOverlay
             }
             val bgColor = if (bgColorStr != null) {
                 try { android.graphics.Color.parseColor(bgColorStr) } catch (e: Exception) { defaultBgColor }
@@ -688,9 +682,9 @@ class BrowserActivity : ComponentActivity() {
             }
 
             val textColor = if (textColorStr != null) {
-                try { android.graphics.Color.parseColor(textColorStr) } catch (e: Exception) { android.graphics.Color.WHITE }
+                try { android.graphics.Color.parseColor(textColorStr) } catch (e: Exception) { BrowserChrome.text }
             } else {
-                android.graphics.Color.WHITE
+                BrowserChrome.text
             }
             tv.setTextColor(textColor)
             tv.text = text
@@ -1048,14 +1042,14 @@ class BrowserActivity : ComponentActivity() {
         private var scale = 1f
 
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(200, 255, 100, 100)
+            color = BrowserChrome.accent
             style = Paint.Style.FILL
         }
 
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = BrowserChrome.onAccentRing
             style = Paint.Style.STROKE
-            strokeWidth = 3f
+            strokeWidth = 4f
         }
 
         private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
