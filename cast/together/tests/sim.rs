@@ -58,6 +58,16 @@ impl SimPlayer {
                 self.seeks += 1;
             }
             PlayerCommand::SetRate(rate) => self.rate = rate,
+            PlayerCommand::Clear => {
+                self.item = None;
+                self.secrets.clear();
+                self.position = 0.0;
+                self.playing = false;
+                self.rate = 1.0;
+                self.loading_until = None;
+                self.buffering_until = 0.0;
+                self.loaded = None;
+            }
         }
     }
 
@@ -219,6 +229,15 @@ impl Sim {
         self.queue.push((self.now + self.latency, to, frame));
     }
 
+    fn disconnect(&mut self, index: usize) {
+        let id = self.id(index);
+        self.devices[index].connected = false;
+        self.order.retain(|m| *m != id);
+        for other in self.others(index) {
+            self.deliver_later(other, ServerFrame::Left { member: id });
+        }
+    }
+
     /// The relay receiving a frame from a device.
     fn relay(&mut self, from: usize, frame: ClientFrame) {
         let me = self.id(from);
@@ -295,6 +314,9 @@ impl Sim {
             self.dispatch(to, outputs);
         }
         for index in 0..self.devices.len() {
+            if !self.devices[index].connected {
+                continue;
+            }
             let local = self.local(index);
             self.devices[index].player.step(local, STEP_MS);
             let mut outputs = Vec::new();
@@ -661,12 +683,19 @@ fn the_party_stops_at_the_end_of_the_video() {
     sim.run(2_000.0);
     sim.command(phone, Command::Load(item("v1")));
     sim.run(30_000.0);
-    let timeline = sim.devices[phone].engine.timeline().unwrap().clone();
-    assert!(!timeline.playing, "the room pauses at the end");
-    assert_eq!(timeline.position_ms, 20_000.0);
+    assert!(sim.saw(phone, |e| matches!(
+        e,
+        Event::TimelineChanged(tl) if !tl.playing && tl.ended && tl.position_ms == 20_000.0
+    )));
+    assert!(sim.saw(
+        phone,
+        |e| matches!(e, Event::Ended { item } if item == "v1")
+    ));
+    assert!(sim.saw(phone, |e| matches!(e, Event::VideoCleared)));
+    assert!(sim.devices[phone].engine.timeline().is_none());
     for tv in [tv1, tv2] {
-        assert!(sim.position(tv) <= 20_000.0);
-        assert!(sim.position(tv) > 19_000.0);
+        assert_eq!(sim.devices[tv].player.item, None);
+        assert!(!sim.devices[tv].player.playing);
     }
     // Nothing keeps bouncing: no pauses for buffering after the end.
     assert!(!sim.saw(
@@ -791,6 +820,44 @@ fn live_streams_share_play_and_pause_but_not_position() {
 }
 
 #[test]
+fn a_length_learned_late_brings_position_sync_back() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv = sim.add("Living room", false, true, 0.0);
+    let mac = sim.add("Office Mac", false, true, 0.0);
+    // The Mac's player took too long to learn the length and reported a live stream.
+    sim.devices[mac].player.live = true;
+    sim.run(2_000.0);
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(8_000.0);
+    assert!(
+        !sim.saw(phone, |e| matches!(e, Event::Live(true))),
+        "the TV knows its length"
+    );
+
+    // Unsynced, the Mac runs two minutes ahead.
+    sim.devices[mac].player.position += 120_000.0;
+    sim.run(3_000.0);
+    assert!(
+        sim.devices[mac].player.seeks == 0,
+        "a live player never seeks"
+    );
+
+    // Then it learns the length and says so.
+    sim.devices[mac].player.live = false;
+    let item_id = sim.devices[mac].player.item.clone().unwrap();
+    let duration = sim.devices[mac].player.duration;
+    sim.devices[mac].player.loaded = Some((item_id, Some(duration)));
+    sim.run(5_000.0);
+    let mac_pos = sim.devices[mac].player.position;
+    let tv_pos = sim.devices[tv].player.position;
+    assert!(
+        (mac_pos - tv_pos).abs() < 500.0,
+        "mac {mac_pos} vs tv {tv_pos}"
+    );
+}
+
+#[test]
 fn a_guest_cannot_pose_as_the_host() {
     let mut sim = Sim::new();
     let _phone = sim.add("Host phone", true, false, 0.0);
@@ -859,4 +926,224 @@ fn replayed_messages_are_dropped() {
         .engine
         .handle(ServerFrame::Msg { from, seq, ct }, local_tv);
     assert!(again.contains(&Output::Event(Event::Rejected("replayed message"))));
+}
+
+#[test]
+fn stopping_clears_the_video_respects_permissions_and_keeps_members() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let guest = sim.add("Guest", false, false, 0.0);
+    sim.run(2_000.0);
+
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(4_000.0);
+    assert!(sim.devices[tv1].player.playing);
+
+    // Under default policy and Ask policy, a guest cannot stop.
+    sim.command(guest, Command::Clear);
+    sim.run(1_000.0);
+    assert!(sim.devices[tv1].player.item.is_some());
+
+    sim.command(phone, Command::SetPolicy(ChangePolicy::Ask));
+    sim.run(1_000.0);
+    sim.command(guest, Command::Clear);
+    sim.run(1_000.0);
+    assert!(sim.devices[tv1].player.item.is_some());
+
+    // Host stops -> screen clears player, party and members remain, late joiner sees no video.
+    sim.command(phone, Command::Clear);
+    sim.run(2_000.0);
+    assert_eq!(sim.devices[tv1].player.item, None);
+    assert!(sim.saw(phone, |e| matches!(e, Event::VideoCleared)));
+    assert!(sim.saw(tv1, |e| matches!(e, Event::VideoCleared)));
+    assert!(!sim.saw(tv1, |e| matches!(e, Event::MemberLeft(_))));
+
+    let late = sim.add("Late TV", false, true, 0.0);
+    sim.run(2_000.0);
+    assert_eq!(sim.devices[late].player.item, None);
+    assert!(!sim.saw(late, |e| matches!(e, Event::VideoChanged(_))));
+
+    // Loading a second video after Stop works like the first.
+    sim.command(phone, Command::Load(item("v2")));
+    sim.run(4_000.0);
+    assert_eq!(sim.devices[tv1].player.item.as_deref(), Some("v2"));
+    assert_eq!(sim.devices[late].player.item.as_deref(), Some("v2"));
+    assert!(sim.devices[tv1].player.playing);
+
+    // Under Anyone (unlocked), a guest can stop; when locked, only host can.
+    sim.command(phone, Command::SetPolicy(ChangePolicy::Anyone));
+    sim.run(1_000.0);
+    sim.command(phone, Command::Lock(true));
+    sim.run(1_000.0);
+    sim.command(guest, Command::Clear);
+    sim.run(1_000.0);
+    assert_eq!(sim.devices[tv1].player.item.as_deref(), Some("v2"));
+
+    sim.command(phone, Command::Lock(false));
+    sim.run(1_000.0);
+    sim.command(guest, Command::Clear);
+    sim.run(1_000.0);
+    assert_eq!(sim.devices[tv1].player.item, None);
+}
+
+#[test]
+fn stopping_works_while_loading_and_during_a_live_stream() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    sim.run(2_000.0);
+
+    // Stop while TV is still loading (LOAD_MS is 300ms).
+    sim.command(phone, Command::Load(item("v1")));
+    sim.run(100.0);
+    assert!(sim.devices[tv1].player.loading_until.is_some());
+    sim.command(phone, Command::Clear);
+    sim.run(2_000.0);
+    assert_eq!(sim.devices[tv1].player.item, None);
+    assert!(sim.devices[tv1].engine.timeline().is_none());
+
+    // Stop during a live item clears Live(false) and returns to preplay.
+    sim.devices[tv1].player.live = true;
+    sim.command(phone, Command::Load(item("live1")));
+    sim.run(4_000.0);
+    assert!(sim.devices[tv1].player.playing);
+    assert!(sim.saw(phone, |e| matches!(e, Event::Live(true))));
+    sim.command(phone, Command::Clear);
+    sim.run(1_000.0);
+    assert_eq!(sim.devices[tv1].player.item, None);
+    assert!(sim.saw(phone, |e| matches!(e, Event::Live(false))));
+    assert!(sim.saw(tv1, |e| matches!(e, Event::VideoCleared)));
+}
+
+#[test]
+fn ended_event_fires_before_auto_clear_and_not_on_manual_pause() {
+    let mut sim = Sim::new();
+    let phone = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let guest = sim.add("Guest", false, true, 0.0);
+    sim.devices[tv1].player.duration = 4_000;
+    sim.devices[guest].player.duration = 4_000;
+    sim.run(2_000.0);
+
+    sim.command(phone, Command::Load(item("short")));
+    sim.run(3_000.0);
+    sim.command(phone, Command::Pause);
+    sim.run(1_000.0);
+    assert!(!sim.saw(phone, |e| matches!(e, Event::Ended { .. })));
+    assert!(!sim.saw(phone, |e| matches!(e, Event::VideoCleared)));
+    assert_eq!(sim.devices[tv1].player.item.as_deref(), Some("short"));
+
+    sim.command(phone, Command::Play);
+    sim.run(4_000.0);
+
+    for idx in [phone, tv1, guest] {
+        let ended_pos = sim.devices[idx]
+            .events
+            .iter()
+            .position(|e| matches!(e, Event::Ended { item } if item == "short"))
+            .expect("Ended fires at end of video");
+        let cleared_pos = sim.devices[idx]
+            .events
+            .iter()
+            .position(|e| matches!(e, Event::VideoCleared))
+            .expect("VideoCleared auto-fires after Ended");
+        assert!(
+            ended_pos < cleared_pos,
+            "Ended must arrive before VideoCleared"
+        );
+    }
+    assert_eq!(sim.devices[tv1].player.item, None);
+    assert_eq!(sim.devices[guest].player.item, None);
+    assert!(!sim.saw(tv1, |e| matches!(e, Event::MemberLeft(_))));
+
+    // Late joiner sees empty pre-play state, and a second video plays normally.
+    let late = sim.add("Late TV", false, true, 0.0);
+    sim.run(1_000.0);
+    assert_eq!(sim.devices[late].player.item, None);
+
+    sim.command(phone, Command::Load(item("next")));
+    sim.run(2_000.0);
+    assert_eq!(sim.devices[tv1].player.item.as_deref(), Some("next"));
+    assert_eq!(sim.devices[late].player.item.as_deref(), Some("next"));
+}
+
+#[test]
+fn delegate_clears_at_end_when_host_disconnects() {
+    let mut sim = Sim::new();
+    let host = sim.add("Host phone", true, false, 0.0);
+    let tv_keys = MemberKeys::generate();
+    let tv_sign_pk = tv_keys.signing_public();
+    let delegate_tv = sim.add_with("Delegate TV", tv_keys, true, 0.0);
+    let guest = sim.add("Guest", false, true, 0.0);
+    sim.devices[delegate_tv].player.duration = 4_000;
+    sim.devices[guest].player.duration = 4_000;
+    sim.run(2_000.0);
+
+    let tv_id = sim.id(delegate_tv);
+    sim.command(
+        host,
+        Command::Delegate {
+            member: tv_id,
+            sign_pk: tv_sign_pk,
+        },
+    );
+    sim.run(500.0);
+
+    sim.command(host, Command::Load(item("short")));
+    sim.run(2_500.0);
+    // Host disconnects while video plays; delegate takes over and auto-clears at end.
+    sim.disconnect(host);
+    sim.run(4_000.0);
+    assert!(sim.saw(
+        delegate_tv,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
+    assert!(sim.saw(delegate_tv, |e| matches!(e, Event::VideoCleared)));
+    assert!(sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
+    assert_eq!(sim.devices[delegate_tv].player.item, None);
+    assert_eq!(sim.devices[guest].player.item, None);
+}
+
+#[test]
+fn guest_only_room_emits_ended_without_clearing_in_sim() {
+    let mut sim = Sim::new();
+    let host = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    let guest = sim.add("Guest", false, true, 0.0);
+    sim.devices[tv1].player.duration = 4_000;
+    sim.devices[guest].player.duration = 4_000;
+    sim.run(2_000.0);
+
+    sim.command(host, Command::Load(item("short")));
+    sim.run(2_500.0);
+    // Host leaves before the video ends; no host/delegate remains, so Ended fires without Clear.
+    sim.disconnect(host);
+    sim.run(4_000.0);
+    assert!(sim.saw(
+        tv1,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
+    assert!(sim.saw(
+        guest,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
+    assert!(!sim.saw(tv1, |e| matches!(e, Event::VideoCleared)));
+    assert!(!sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
+}
+
+#[test]
+fn live_stream_never_auto_clears() {
+    let mut sim = Sim::new();
+    let host = sim.add("Host phone", true, false, 0.0);
+    let tv1 = sim.add("Living room", false, true, 0.0);
+    sim.devices[tv1].player.live = true;
+    sim.run(2_000.0);
+
+    sim.command(host, Command::Load(item("live")));
+    sim.run(60_000.0);
+    assert_eq!(sim.devices[tv1].player.item.as_deref(), Some("live"));
+    assert!(sim.devices[tv1].player.playing);
+    assert!(!sim.saw(host, |e| matches!(e, Event::Ended { .. })));
+    assert!(!sim.saw(host, |e| matches!(e, Event::VideoCleared)));
 }

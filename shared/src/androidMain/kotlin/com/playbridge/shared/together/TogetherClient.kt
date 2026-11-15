@@ -124,6 +124,7 @@ class TogetherClient(
     })
 
     fun load(item: TogetherItem) = submit(TogetherJson.command("load") { put("item", TogetherJson.item(item)) })
+    fun clear() = submit(TogetherJson.command("clear"))
     fun requestPlay(item: TogetherItem) = submit(TogetherJson.command("request_play") { put("item", TogetherJson.item(item)) })
     fun play() = submit(TogetherJson.command("play"))
     fun pause() = submit(TogetherJson.command("pause"))

@@ -76,6 +76,7 @@ struct TogetherItem: Equatable, CustomStringConvertible {
 
 enum TogetherPlayerCommand: Equatable, CustomStringConvertible {
     case load(item: TogetherItem, headers: [String: String], startMs: Int64)
+    case clear
     case play
     case pause
     case seek(positionMs: Int64)
@@ -86,6 +87,8 @@ enum TogetherPlayerCommand: Equatable, CustomStringConvertible {
         switch self {
         case .load(let item, _, let startMs):
             return "Load(\(item.id), startMs=\(startMs))"
+        case .clear:
+            return "Clear"
         case .play:
             return "Play"
         case .pause:
@@ -129,6 +132,9 @@ enum TogetherEvent: Equatable {
     case memberLeft(member: String)
     case member(member: String, name: String, kind: TogetherDeviceKind, host: Bool)
     case video(item: TogetherItem)
+    case videoCleared
+    case ended(item: String)
+    case duration(Int64?)
     case timeline(item: String, playing: Bool, positionMs: Int64, rev: Int64)
     case waiting(members: [String])
     case continueWithoutAvailable(members: [String])
@@ -240,6 +246,14 @@ enum TogetherJson {
             guard let itemObj = object["item"] as? [String: Any],
                   let item = parseItem(itemObj) else { return nil }
             return .video(item: item)
+        case "video_cleared":
+            return .videoCleared
+        case "ended":
+            guard let item = string(object, "item") else { return nil }
+            return .ended(item: item)
+        case "duration":
+            let ms = (object["duration_ms"] as? NSNumber)?.int64Value
+            return .duration(ms)
         case "timeline":
             guard let item = string(object, "item") else { return nil }
             return .timeline(
@@ -337,6 +351,8 @@ enum TogetherJson {
             return .rate(rate)
         case "go_live":
             return .goLive
+        case "clear":
+            return .clear
         default:
             return nil
         }

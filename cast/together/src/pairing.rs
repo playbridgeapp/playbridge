@@ -250,7 +250,14 @@ async fn decode<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> 
             .get("error")
             .and_then(|e| e.as_str())
             .unwrap_or("error");
-        return Err(Error::Relay(format!("{} ({code})", status.as_u16())));
+        return Err(match code {
+            "rate_limited" => Error::Refused("Too many tries. Wait a minute and try again."),
+            "pairing_unavailable" => {
+                Error::Refused("Pairing isn't available right now. Try again later.")
+            }
+            "lobby_full" => Error::Refused("That device has too many invites waiting."),
+            _ => Error::Relay(format!("{} ({code})", status.as_u16())),
+        });
     }
     response.json().await.map_err(network)
 }

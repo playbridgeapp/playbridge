@@ -34,8 +34,26 @@ class TogetherJsonTest {
             TogetherEvent.Stopped("r1", TogetherStop.RoomFull),
             TogetherJson.event("""{"event":"stopped","room":"r1","reason":"room_full"}"""),
         )
+        assertEquals(
+            TogetherEvent.Stopped("r1", TogetherStop.RoomLimit, 600),
+            TogetherJson.event("""{"event":"stopped","room":"r1","reason":"room_limit","retry_after":600}"""),
+        )
+        assertEquals(TogetherEvent.Unreachable, TogetherJson.event("""{"event":"unreachable"}"""))
         assertNull(TogetherJson.event("""{"event":"something_new"}"""))
         assertNull(TogetherJson.event("not json"))
+    }
+
+    @Test
+    fun saysWhenALimitedPartyMayTryAgain() {
+        assertEquals("in a minute", togetherRetryIn(30))
+        assertEquals("in 12 minutes", togetherRetryIn(700))
+        assertEquals("in about an hour", togetherRetryIn(3_700))
+        assertEquals("in about 5 hours", togetherRetryIn(18_000))
+        assertEquals(
+            "The watch party relay is busy today. Try again in about 2 hours.",
+            togetherLimitMessage(TogetherStop.RelayBusy, 7_000),
+        )
+        assertNull(togetherLimitMessage(TogetherStop.RoomFull, 0))
     }
 
     @Test
@@ -50,11 +68,19 @@ class TogetherJsonTest {
     }
 
     @Test
-    fun parsesLiveStreams() {
+    fun parsesLiveStreamsClearEndedAndDuration() {
         assertEquals(TogetherEvent.Live(true), TogetherJson.event("""{"event":"live","live":true}"""))
         assertEquals(
             TogetherEvent.Player(TogetherPlayerCommand.GoLive),
             TogetherJson.event("""{"event":"player","command":{"action":"go_live"}}"""),
+        )
+        assertEquals(TogetherEvent.Duration(95_000L), TogetherJson.event("""{"event":"duration","duration_ms":95000}"""))
+        assertEquals(TogetherEvent.Duration(null), TogetherJson.event("""{"event":"duration","duration_ms":null}"""))
+        assertEquals(TogetherEvent.Ended("v1"), TogetherJson.event("""{"event":"ended","item":"v1"}"""))
+        assertEquals(TogetherEvent.VideoCleared, TogetherJson.event("""{"event":"video_cleared"}"""))
+        assertEquals(
+            TogetherEvent.Player(TogetherPlayerCommand.Clear),
+            TogetherJson.event("""{"event":"player","command":{"action":"clear"}}"""),
         )
     }
 

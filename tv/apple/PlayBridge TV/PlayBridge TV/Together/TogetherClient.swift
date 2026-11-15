@@ -213,6 +213,11 @@ final class TogetherClient {
     }
 
     @discardableResult
+    func clear() -> Bool {
+        submit(TogetherJson.command("clear"))
+    }
+
+    @discardableResult
     func requestPlay(item: TogetherItem) -> Bool {
         submit(TogetherJson.command("request_play", fields: ["item": TogetherJson.itemObject(item)]))
     }

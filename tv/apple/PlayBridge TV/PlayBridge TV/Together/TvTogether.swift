@@ -83,12 +83,15 @@ final class TvTogether: ObservableObject {
 
     /// Called when the party loads a video. Wired by `ContentView` / `WebSocketServer`.
     var onPlayPartyItem: ((_ payload: Playbridge_PlayPayload, _ itemID: String) -> Bool)?
+    /// Called when the party clears the current video before the player attaches.
+    var onClearPartyItem: (() -> Void)?
 
     private var client: TogetherClient?
     private var pendingPhoneJoin: ((RoomJoinedInfo?, String?) -> Void)?
     private var me: String?
     private var room: String?
     private var loadingItem: String?
+    private var recentlyClearedItems: Set<String> = []
     private var attachment = TogetherPlayerAttachment()
     private var playerItem: String? { attachment.item }
     private var partyCommandHandler: ((TogetherPlayerCommand) -> Void)?
@@ -106,7 +109,11 @@ final class TvTogether: ObservableObject {
     var activeItemID: String? { loadingItem ?? attachment.item }
 
     func isPartyItem(_ itemID: String?) -> Bool {
-        TogetherSessionMatcher.isPartyItem(itemID, loadingItem: loadingItem, playerItem: attachment.item)
+        if TogetherSessionMatcher.isPartyItem(itemID, loadingItem: loadingItem, playerItem: attachment.item) {
+            return true
+        }
+        guard let itemID else { return false }
+        return recentlyClearedItems.contains(itemID)
     }
 
     private init() {
@@ -157,6 +164,7 @@ final class TvTogether: ObservableObject {
         client?.leave()
         state = .idle
         loadingItem = nil
+        recentlyClearedItems.removeAll()
         attachment.reset()
         partyCommandHandler = nil
     }
@@ -185,6 +193,11 @@ final class TvTogether: ObservableObject {
     // MARK: - Player Bridge
 
     func attach(item: String, token: UUID, handler: @escaping (TogetherPlayerCommand) -> Void) {
+        recentlyClearedItems.remove(item)
+        guard loadingItem == item else {
+            handler(.clear)
+            return
+        }
         attachment.attach(item: item, token: token)
         partyCommandHandler = handler
     }
@@ -309,6 +322,14 @@ final class TvTogether: ObservableObject {
                 party.title = item.title
             }
 
+        case .videoCleared:
+            clearActiveItem()
+
+        case .ended(let item):
+            if loadingItem == item || attachment.item == item {
+                clearActiveItem()
+            }
+
         case .waiting(let members):
             updateParty { party in
                 party.waitingFor = members
@@ -337,6 +358,7 @@ final class TvTogether: ObservableObject {
             noticeClearTask = nil
             room = nil
             loadingItem = nil
+            recentlyClearedItems.removeAll()
             attachment.reset()
             partyCommandHandler = nil
             if isInParty {
@@ -368,11 +390,32 @@ final class TvTogether: ObservableObject {
     }
 
     private func onPlayerCommand(_ command: TogetherPlayerCommand) {
-        if case .load(let item, let headers, let startMs) = command {
+        switch command {
+        case .load(let item, let headers, let startMs):
             load(item: item, headers: headers, startMs: startMs)
-            return
+        case .clear:
+            clearActiveItem()
+        default:
+            partyCommandHandler?(command)
         }
-        partyCommandHandler?(command)
+    }
+
+    private func clearActiveItem() {
+        if let cleared = loadingItem ?? attachment.item {
+            recentlyClearedItems.insert(cleared)
+        }
+        loadingItem = nil
+        attachment.reset()
+        updateParty { party in
+            party.title = nil
+            party.waitingFor = []
+        }
+        if let handler = partyCommandHandler {
+            partyCommandHandler = nil
+            handler(.clear)
+        } else {
+            onClearPartyItem?()
+        }
     }
 
     private func load(item: TogetherItem, headers: [String: String], startMs: Int64) {
@@ -387,6 +430,7 @@ final class TvTogether: ObservableObject {
             return
         }
 
+        recentlyClearedItems.remove(item.id)
         loadingItem = item.id
         var payload = Playbridge_PlayPayload()
         payload.url = url

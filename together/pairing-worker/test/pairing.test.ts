@@ -98,6 +98,26 @@ describe("pairing worker", () => {
     expect(status).toBe(429);
   });
 
+  it("refuses invites beyond the queue and stops a released code's alarm", async () => {
+    const { code, token } = await register();
+    let status = 0;
+    for (let i = 0; i < 6; i++) {
+      status = (await call(`/lobby/${code}/invite`, { method: "POST", body: JSON.stringify({ sealed: "eA" }), ip: freshIp() })).status;
+    }
+    expect(status).toBe(409);
+    expect((await call(`/lobby/${code}`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } })).status).toBe(204);
+    expect(await runDurableObjectAlarm(env.LOBBIES.get(env.LOBBIES.idFromName(code)))).toBe(false);
+  });
+
+  it("tells a rate-limited caller how long to wait", async () => {
+    const ip = freshIp();
+    let response: Response | undefined;
+    for (let i = 0; i < 31; i++) response = await call("/lobby/ZZZZZZ", { ip });
+    expect(response!.status).toBe(429);
+    expect(response!.headers.get("retry-after")).toBe("60");
+    expect(await response!.json()).toEqual({ error: "rate_limited", retry_after: 60 });
+  });
+
   it("reports its version", async () => {
     expect(await (await call("/version")).json()).toEqual({ service: "playbridge-together-pairing", protocol: 1 });
   });

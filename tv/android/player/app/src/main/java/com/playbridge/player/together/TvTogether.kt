@@ -14,6 +14,7 @@ import com.playbridge.shared.together.TogetherEvent
 import com.playbridge.shared.together.TogetherPlayerCommand
 import com.playbridge.shared.together.TogetherSource
 import com.playbridge.shared.together.TogetherStop
+import com.playbridge.shared.together.togetherLimitMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -153,6 +154,10 @@ object TvTogether {
 
     /** The player started [item] for the party. */
     fun attach(partyPlayer: PartyPlayer, item: String) {
+        if (loadingItem != item) {
+            main.post { partyPlayer.applyPartyCommand(TogetherPlayerCommand.Clear) }
+            return
+        }
         player = partyPlayer
         playerItem = item
     }
@@ -220,6 +225,7 @@ object TvTogether {
             }
             is TogetherEvent.Connected -> updateParty { it.copy(connected = true, notice = null) }
             TogetherEvent.Disconnected -> updateParty { it.copy(connected = false, notice = "Reconnecting…") }
+            TogetherEvent.Unreachable -> updateParty { it.copy(notice = "Can't reach ${it.relay}. Still trying…") }
             is TogetherEvent.Member -> updateParty {
                 it.copy(
                     members = it.members + (event.member to event.name),
@@ -227,7 +233,10 @@ object TvTogether {
                 )
             }
             is TogetherEvent.MemberLeft -> updateParty { it.copy(members = it.members - event.member) }
-            is TogetherEvent.Video -> updateParty { it.copy(title = event.item.title) }
+            is TogetherEvent.Video -> updateParty { it.copy(title = event.item.title, waitingFor = emptyList(), notice = null) }
+            TogetherEvent.VideoCleared -> clearActiveItem()
+            is TogetherEvent.Ended ->
+                if (loadingItem == event.item || playerItem == event.item) clearActiveItem()
             is TogetherEvent.Waiting -> updateParty { party ->
                 party.copy(waitingFor = event.members.filter { it != me }.map { party.members[it] ?: "a device" })
             }
@@ -256,6 +265,8 @@ object TvTogether {
                         TogetherStop.Expired -> State.Ended("This watch party has ended.")
                         TogetherStop.Unauthorized -> State.Ended("This invite isn't valid any more.")
                         TogetherStop.Replaced -> State.Ended("This TV joined the party somewhere else.")
+                        TogetherStop.RoomLimit, TogetherStop.RelayBusy ->
+                            State.Ended(togetherLimitMessage(event.reason, event.retryAfterSecs).orEmpty())
                         TogetherStop.Error -> State.Ended("The watch party connection failed.")
                     }
                 }
@@ -269,10 +280,20 @@ object TvTogether {
         mutableState.update { current -> if (current is State.InParty) change(current) else current }
     }
 
+    private fun clearActiveItem() {
+        loadingItem = null
+        updateParty { it.copy(title = null, waitingFor = emptyList(), notice = null) }
+        val target = player ?: return
+        main.post { target.applyPartyCommand(TogetherPlayerCommand.Clear) }
+    }
+
     private fun onPlayerCommand(command: TogetherPlayerCommand) {
         if (command is TogetherPlayerCommand.Load) {
             load(command)
             return
+        }
+        if (command is TogetherPlayerCommand.Clear) {
+            loadingItem = null
         }
         val target = player ?: return
         main.post { target.applyPartyCommand(command) }

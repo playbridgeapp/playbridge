@@ -3638,6 +3638,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             // TvTogether starts a new video through ServerService.
             is TogetherPlayerCommand.Load -> Unit
+            TogetherPlayerCommand.Clear -> {
+                partyItem = null
+                mainHandler.removeCallbacks(reportPartyLoadedAnyway)
+                finishingSession = true
+                finish()
+            }
         }
     }
 
