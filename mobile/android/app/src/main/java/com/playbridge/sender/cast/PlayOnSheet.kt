@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SettingsRemote
@@ -133,6 +134,9 @@ internal fun WebSocketClient.ConnectionState.needsPairingPage(): Boolean =
         this is WebSocketClient.ConnectionState.WaitingForApproval ||
         this is WebSocketClient.ConnectionState.PairingDenied
 
+/** CompositionLocal opening the Watch Together party screen from Play on. */
+val LocalOpenWatchParty = androidx.compose.runtime.compositionLocalOf<(() -> Unit)?> { null }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayOnSheet(
@@ -143,6 +147,7 @@ fun PlayOnSheet(
     playBridgeOnly: Boolean = false,
     picking: Boolean = true,
     startPairing: Boolean = false,
+    onOpenParty: (() -> Unit)? = LocalOpenWatchParty.current,
 ) {
     val viewModel: ConnectionViewModel = koinViewModel()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
@@ -167,6 +172,12 @@ fun PlayOnSheet(
     val scope = rememberCoroutineScope()
     val coordinator: com.playbridge.sender.connection.ConnectionCoordinator = koinInject()
     val openRemote = LocalPlayOnRemote.current
+    val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsState()
+    val partySelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsState()
+    val partyQueue by com.playbridge.sender.together.PhoneTogether.queue.collectAsState()
+    val ownTvIdentities by com.playbridge.sender.together.PhoneTogether.ownTvIdentities.collectAsState()
+    val activeParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+    val watchPartySelected = activeParty != null && partySelected && !playBridgeOnly
     var page by remember { mutableStateOf(if (startPairing) PlayOnPage.Pair else PlayOnPage.Devices) }
     var managed by remember { mutableStateOf<PlayOnDevice?>(null) }
     var unavailableExpanded by remember { mutableStateOf(false) }
@@ -231,6 +242,7 @@ fun PlayOnSheet(
         }
     }
     fun pick(device: TvDevice) {
+        com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
         val target = ConnectionMerge.withDiscoveredEndpoint(device, discovered)
         notice = null
         pendingGoogle = null
@@ -336,6 +348,7 @@ fun PlayOnSheet(
                         pick(target)
                     } else {
                         pendingNative = null; pendingGoogle = null
+                        com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
                         viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
                     }
                 }) { Text("Switch") }
@@ -398,7 +411,62 @@ fun PlayOnSheet(
                             // VPN: the full tip only when it is likely the cause (nothing reachable after a search) or asked for.
                             val nothingFound = !scanning && groups.nearby.isEmpty() && groups.saved.isEmpty()
                             LocalNetworkBanners(network, vpnBanner = vpnInfo || nothingFound, vpnDismissible = false)
-                            if (nowDevice != null) {
+                            if (watchPartySelected && activeParty != null) {
+                                val watching = partyWatchingCount(activeParty)
+                                val statusLine = activeParty.item?.let {
+                                    "Playing ${it.title} · ${partyQueue.size} up next"
+                                } ?: "Nothing playing · ${partyQueue.size} up next"
+                                androidx.compose.material3.Card(
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                                        containerColor = PartyTargetColors.Surface,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                    ),
+                                    border = BorderStroke(1.dp, PartyTargetColors.Border),
+                                ) {
+                                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                            Box(
+                                                Modifier.size(44.dp).background(PartyTargetColors.Accent.copy(alpha = 0.16f), RoundedCornerShape(12.dp)),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Icon(Icons.Default.Groups, null, Modifier.size(24.dp), tint = PartyTargetColors.Accent)
+                                            }
+                                            Column(Modifier.weight(1f)) {
+                                                Text("Watch party", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                                Text(
+                                                    "Selected · $watching watching",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = PartyTargetColors.Accent,
+                                                )
+                                                Text(
+                                                    statusLine,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            if (onOpenParty != null) {
+                                                androidx.compose.material3.FilledTonalButton(
+                                                    onClick = { onDismiss(); onOpenParty() },
+                                                    modifier = Modifier.weight(1f),
+                                                ) { Text("Open party") }
+                                            }
+                                            androidx.compose.material3.TextButton(
+                                                onClick = {
+                                                    com.playbridge.sender.together.PhoneTogether.leave()
+                                                    onDismiss()
+                                                },
+                                            ) {
+                                                Text("Leave party", color = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if (nowDevice != null) {
                                 PlayOnNowCard(
                                     device = nowDevice,
                                     connection = connection,
@@ -406,14 +474,17 @@ fun PlayOnSheet(
                                     castState = castState,
                                     mediaTitle = title,
                                     nativeStatus = nativeRow?.status,
-                                    nativeSelected = nativeSelected,
+                                    nativeSelected = nativeSelected && !watchPartySelected,
                                     streamRoute = streamRoute?.label,
                                     onRemote = openRemote?.let { { onDismiss(); it() } },
                                     onConfigure = if (nativeSelected && connected && external == null &&
                                         (TvCapabilityOptions.playerOptions(tv).size > 2 || coordinator.tvSupportsSubtitleStyle)) {
                                         { page = PlayOnPage.Configure }
                                     } else null,
-                                    onCastHere = viewModel::selectNativeRoute,
+                                    onCastHere = {
+                                        com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
+                                        viewModel.selectNativeRoute()
+                                    },
                                     onOpenPlayBridge = { viewModel.openPlayBridge() },
                                     onDisconnect = {
                                         pendingNative = null
@@ -429,20 +500,47 @@ fun PlayOnSheet(
                                     } else null,
                                 )
                             }
-                            PlayOnSectionLabel("Devices")
-                            if (showThisDevice) PlayOnRow("This phone", "Play here", phone = true,
-                                selected = route is CastSessionManager.Route.ThisDevice && external == null, onClick = {
-                                    val warning = if (route is CastSessionManager.Route.ThisDevice && external == null) null
+                            PlayOnSectionLabel(if (watchPartySelected) "Play somewhere else" else "Devices")
+                            if (activeParty != null && !watchPartySelected && !playBridgeOnly) {
+                                val watching = partyWatchingCount(activeParty)
+                                PlayOnRow(
+                                    name = "Watch party",
+                                    subtitle = "$watching watching · Tap to switch back",
+                                    onClick = {
+                                        viewModel.selectWatchPartyTarget()
+                                        onDismiss()
+                                    },
+                                    icon = Icons.Default.Groups,
+                                    accentOverride = PartyTargetColors.Accent,
+                                    highlight = true,
+                                    highlightColor = PartyTargetColors.Surface,
+                                    badge = "Party",
+                                )
+                            }
+                            if (showThisDevice) PlayOnRow(
+                                name = "This phone",
+                                subtitle = if (activeParty != null) "Play here, outside the party" else "Play here",
+                                phone = true,
+                                selected = !watchPartySelected && route is CastSessionManager.Route.ThisDevice && external == null,
+                                onClick = {
+                                    val warning = if (!watchPartySelected && route is CastSessionManager.Route.ThisDevice && external == null) null
                                         else viewModel.thisPhoneSwitchWarning()
                                     if (warning != null) {
                                         switchTarget = null
                                         switchWarning = warning
                                     } else {
                                         pendingNative = null; pendingGoogle = null
+                                        com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
                                         viewModel.selectThisDevice(); onPickedThisDevice?.invoke(); if (picking) onDismiss()
                                     }
-                                })
-                            saved.forEach { row -> PlayOnDeviceRow(row, onClick = { requestPick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
+                                },
+                            )
+                            fun rowSubtitleOverride(row: PlayOnDevice): String? {
+                                if (activeParty == null) return null
+                                val inParty = isOwnTvMemberMatch(row.device, activeParty, ownTvIdentities)
+                                return if (inParty) "In the party · casting to it takes it out" else null
+                            }
+                            saved.forEach { row -> PlayOnDeviceRow(row, subtitleOverride = rowSubtitleOverride(row), onClick = { requestPick(row.device) }, onMore = { managed = row; page = PlayOnPage.Actions }) }
                             // Nearby always shows so a search can be retried once the scan window ends.
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = 48.dp),
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -456,8 +554,15 @@ fun PlayOnSheet(
                                     Text("Search again", Modifier.padding(start = 6.dp))
                                 }
                             }
-                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, onClick = { requestPick(row.device) },
+                            groups.nearby.forEach { row -> PlayOnDeviceRow(row, nearby = true, subtitleOverride = rowSubtitleOverride(row), onClick = { requestPick(row.device) },
                                 onLongClick = { managed = row; page = PlayOnPage.Actions }) }
+                            if (watchPartySelected) {
+                                Text(
+                                    "Picking another device keeps you in the party. The Watch party row moves to the top of this list so you can switch back.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             if (groups.nearby.isEmpty()) Text(if (scanning) "Looking for TVs on this Wi-Fi…" else "No new devices found.",
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (unavailable.isNotEmpty()) {
@@ -567,17 +672,18 @@ fun PlayOnSheet(
 }
 
 @Composable
-private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, onClick: () -> Unit, onMore: (() -> Unit)? = null,
+private fun PlayOnDeviceRow(row: PlayOnDevice, nearby: Boolean = false, subtitleOverride: String? = null, onClick: () -> Unit, onMore: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = onMore) {
     val protocol = row.device.resolvedProtocol
     val ready = !nearby && row.reachable && row.remoteStatus != "TV remote only"
-    PlayOnRow(row.device.playOnName, when {
+    val subtitle = subtitleOverride ?: when {
         row.remoteStatus == "TV remote only" -> "PlayBridge · TV remote only"
         nearby && protocol == CastProtocol.PLAYBRIDGE -> "PlayBridge · Tap to pair"
         nearby -> protocol.displayName
         row.reachable -> "${protocol.displayName} · Ready"
         else -> "${protocol.displayName} · ${usedRelative(row.device.lastConnected)}"
-    }, onClick = onClick, icon = row.device.playOnIcon, ready = ready, dimmed = !nearby && !row.reachable,
+    }
+    PlayOnRow(row.device.playOnName, subtitle, onClick = onClick, icon = row.device.playOnIcon, ready = ready, dimmed = !nearby && !row.reachable,
         onMore = onMore, onLongClick = onLongClick, badge = if (nearby && protocol == CastProtocol.PLAYBRIDGE) "New" else null,
         highlight = nearby && protocol == CastProtocol.PLAYBRIDGE)
 }
@@ -602,8 +708,9 @@ internal fun PlayOnSectionLabel(text: String, modifier: Modifier = Modifier) {
 private fun PlayOnRow(name: String, subtitle: String?, onClick: () -> Unit, phone: Boolean = false,
     icon: ImageVector = Icons.Default.Tv, ready: Boolean = false, dimmed: Boolean = false,
     selected: Boolean = false, badge: String? = null, highlight: Boolean = false, danger: Boolean = false,
+    accentOverride: Color? = null, highlightColor: Color? = null,
     onMore: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null) {
-    val accent = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val accent = accentOverride ?: if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     ListItem(headlineContent = { Text(name, fontWeight = FontWeight.SemiBold, color = if (danger) accent else Color.Unspecified) },
         supportingContent = subtitle?.let { {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -614,17 +721,17 @@ private fun PlayOnRow(name: String, subtitle: String?, onClick: () -> Unit, phon
         leadingContent = { Icon(if (phone) Icons.Default.Smartphone else icon, null, tint = accent) },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (selected) Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary)
-                if (badge != null) Text(badge, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium,
+                if (selected) Icon(Icons.Default.Check, "Selected", tint = accent)
+                if (badge != null) Text(badge, color = accent, style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold, modifier = Modifier
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f), RoundedCornerShape(50))
+                        .background(accent.copy(alpha = 0.16f), RoundedCornerShape(50))
                         .padding(horizontal = 12.dp, vertical = 5.dp))
                 if (onMore != null) IconButton(onClick = onMore) { Icon(Icons.Default.MoreVert, "More options for $name") }
             }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(14.dp))
-            .then(if (highlight) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) else Modifier)
+            .then(if (highlight) Modifier.background(highlightColor ?: accent.copy(alpha = 0.10f)) else Modifier)
             // Long-press opens the device's details (address, ID) — handy when two devices share a name.
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = onLongClick?.let { "Device details" })
             .then(if (dimmed) Modifier.alpha(0.55f) else Modifier))

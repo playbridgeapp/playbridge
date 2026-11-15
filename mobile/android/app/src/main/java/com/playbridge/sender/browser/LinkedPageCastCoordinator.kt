@@ -15,23 +15,20 @@ import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createPlaylistJumpCommandJson
 import com.playbridge.shared.protocol.createQueueAddCommandJson
 import java.util.Locale
-import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import playbridge.PlayPayload
 import playbridge.SubtitleResource
+import playbridge.VisualMetadata
 
 data class LinkedPageCastUiState(
     val active: Boolean = false,
@@ -159,107 +156,41 @@ internal const val LINKED_SAFETY_RESYNC_MILLIS = 30_000L
 internal fun linkedResyncDue(awaitingPlaylistEcho: Boolean, nowMillis: Long, lastResyncAtMillis: Long): Boolean =
     awaitingPlaylistEcho || nowMillis - lastResyncAtMillis >= LINKED_SAFETY_RESYNC_MILLIS
 
-/** Owns the single page-linked playlist authority while Android owns the TV session. */
-class LinkedPageCastCoordinator(
+/** Owns the single page-linked playlist authority while Android owns the TV or Watch Party session. */
+class LinkedPageCastCoordinator internal constructor(
     private val webSocketClient: WebSocketClient,
     private val connectionCoordinator: ConnectionCoordinator,
     private val connectionStore: ConnectionStore,
     private val settingsRepository: SettingsRepository,
     private val externalQueueCoordinator: ExternalQueueCoordinator,
     private val scope: CoroutineScope,
+    private val partyGateway: PartyPlaybackGateway,
 ) {
-    private data class PendingNeed(
-        val requestId: String,
-        val count: Int,
-        var lastDispatchedAtMillis: Long = System.currentTimeMillis(),
+    constructor(
+        webSocketClient: WebSocketClient,
+        connectionCoordinator: ConnectionCoordinator,
+        connectionStore: ConnectionStore,
+        settingsRepository: SettingsRepository,
+        externalQueueCoordinator: ExternalQueueCoordinator,
+        scope: CoroutineScope,
+    ) : this(
+        webSocketClient = webSocketClient,
+        connectionCoordinator = connectionCoordinator,
+        connectionStore = connectionStore,
+        settingsRepository = settingsRepository,
+        externalQueueCoordinator = externalQueueCoordinator,
+        scope = scope,
+        partyGateway = PhoneTogetherGateway,
     )
-    private data class Active(
-        val openBridgeRequestId: String,
-        val sessionId: String,
-        val origin: String,
-        val tabId: Int,
-        val navigationGeneration: Long,
-        val receiver: TvDevice,
-        val ids: MutableList<String>,
-        val createdAtMillis: Long = System.currentTimeMillis(),
-        var lastPageActivityAtMillis: Long = System.currentTimeMillis(),
-        val allowedPrivateOrigins: MutableSet<String> = linkedSetOf(),
-        var pendingNeed: PendingNeed? = null,
-        var lastAcceptedNeedId: String? = null,
-        var endOfList: Boolean = false,
-        var awaitingPlaylistEcho: Boolean = true,
-        var hasSeenPlayer: Boolean = false,
-        var lastStateStructure: Int? = null,
-        var lastStateEmittedAtMillis: Long = 0,
-        var lastResyncAtMillis: Long = System.currentTimeMillis(),
-    )
-
-    @Volatile
-    private var active: Active? = null
-    private val operationMutex = Mutex()
-    private val cancelledOpenRequests = linkedSetOf<String>()
     private val _uiState = MutableStateFlow(LinkedPageCastUiState())
     val uiState: StateFlow<LinkedPageCastUiState> = _uiState.asStateFlow()
 
-    init {
-        scope.launch {
-            combine(
-                connectionCoordinator.tvPlaylistState,
-                connectionCoordinator.tvPlayback,
-                connectionCoordinator.tvActiveContext,
-            ) { playlist, playback, context -> Triple(playlist, playback, context) }
-                .collect { (playlist, playback, context) ->
-                    val session = active ?: return@collect
-                    if (context == "player") session.hasSeenPlayer = true
-                    if (context == "idle" && session.hasSeenPlayer) {
-                        finish("receiver_stopped")
-                        return@collect
-                    }
-                    if (playlist != null) {
-                        if (playlist.totalCount >= session.ids.size) session.awaitingPlaylistEcho = false
-                        emitState(session, playlist.currentIndex, playlist.totalCount, playlist.items.map { it.title }, playback)
-                        maybeRequestItems(session, playlist.currentIndex, playlist.totalCount)
-                    } else {
-                        emitState(session, 0, session.ids.size, emptyList(), playback)
-                    }
-                }
-        }
-        scope.launch {
-            webSocketClient.connectionState.collect { state ->
-                val session = active
-                if (state is WebSocketClient.ConnectionState.Connected && session != null) {
-                    session.lastResyncAtMillis = System.currentTimeMillis()
-                    webSocketClient.send(createContextQueryJson())
-                }
-            }
-        }
-        scope.launch {
-            connectionStore.tvDevice.collect { device ->
-                val session = active ?: return@collect
-                if (device == null || !ConnectionMerge.isSameDevice(device, session.receiver)) {
-                    finish("receiver_changed")
-                }
-            }
-        }
-        scope.launch {
-            while (true) {
-                delay(LINKED_ECHO_RESYNC_MILLIS)
-                val session = active
-                val now = System.currentTimeMillis()
-                if (session != null && sessionExpired(session)) {
-                    finish("session_expired")
-                } else if (session != null &&
-                    webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected &&
-                    linkedResyncDue(session.awaitingPlaylistEcho, now, session.lastResyncAtMillis)
-                ) {
-                    // Each query makes the receiver resend its whole snapshot (~4 KB), so ask
-                    // quickly only until the new queue is confirmed, then rarely as a safety net.
-                    session.lastResyncAtMillis = now
-                    webSocketClient.send(createContextQueryJson())
-                }
-            }
-        }
-    }
+    private val engine = LinkedSessionEngine(
+        prefetchWindow = { settingsRepository.tvPrefetchWindow.first().coerceIn(1, 10) },
+        postLinkedMessage = Components::postLinkedMessage,
+        scope = scope,
+        onUiStateChange = { _uiState.value = it },
+    )
 
     fun parseOpen(message: JSONObject): LinkedPageCastOpenRequest? = parseOpenMessage(message)
 
@@ -275,315 +206,38 @@ class LinkedPageCastCoordinator(
         collectRequestedPrivateOrigins(items, declared)
     }
 
-    fun allowPrivateOriginsForActive(origin: String, origins: Collection<String>): Boolean {
-        val session = active?.takeIf { it.origin == origin } ?: return false
-        val combined = session.allowedPrivateOrigins + origins
-        val normalized = MediaNetworkPolicy.normalizePrivateOrigins(combined) ?: return false
-        session.allowedPrivateOrigins.clear()
-        session.allowedPrivateOrigins.addAll(normalized)
-        return true
-    }
+    fun allowPrivateOriginsForActive(origin: String, origins: Collection<String>): Boolean =
+        engine.allowPrivateOriginsForActive(origin, origins)
 
-    fun isMessageForActiveSession(message: JSONObject, origin: String): Boolean {
-        val session = active ?: return false
-        return linkedMessageMatchesSession(session.binding(), message, origin)
-    }
+    fun isMessageForActiveSession(message: JSONObject, origin: String): Boolean =
+        engine.isMessageForActiveSession(message, origin)
 
-    private fun Active.binding() = LinkedSessionBinding(sessionId, origin, tabId, navigationGeneration)
+    fun cancelOpen(targetBridgeRequestId: String, reason: String = "navigation") =
+        engine.cancelOpen(targetBridgeRequestId, reason)
 
-    fun cancelOpen(targetBridgeRequestId: String, reason: String = "navigation") {
-        synchronized(cancelledOpenRequests) {
-            cancelledOpenRequests += targetBridgeRequestId
-            while (cancelledOpenRequests.size > MAX_CANCELLED_OPEN_REQUESTS) {
-                cancelledOpenRequests.remove(cancelledOpenRequests.first())
-            }
-        }
-        if (active?.openBridgeRequestId == targetBridgeRequestId) finish(reason)
-        result(targetBridgeRequestId, false, "session_ended")
-    }
-
-    fun isOpenCancelled(bridgeRequestId: String): Boolean = synchronized(cancelledOpenRequests) {
-        bridgeRequestId in cancelledOpenRequests
-    }
+    fun isOpenCancelled(bridgeRequestId: String): Boolean =
+        engine.isOpenCancelled(bridgeRequestId)
 
     fun open(request: LinkedPageCastOpenRequest, receiver: TvDevice) {
-        scope.launch {
-            operationMutex.withLock {
-                if (isOpenCancelled(request.bridgeRequestId)) return@withLock
-                if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
-                    result(request.bridgeRequestId, false, "connect_failed")
-                    return@withLock
-                }
-                active?.let { old -> event(old, "ended", JSONObject().put("reason", "superseded")) }
-                externalQueueCoordinator.stop()
-                val binding = request.linkedSessionBinding()
-                val next = Active(
-                    openBridgeRequestId = request.bridgeRequestId,
-                    sessionId = binding.sessionId,
-                    origin = binding.origin,
-                    tabId = binding.tabId,
-                    navigationGeneration = binding.navigationGeneration,
-                    receiver = receiver,
-                    ids = request.items.mapTo(mutableListOf()) { it.id },
-                    allowedPrivateOrigins = request.items.flatMapTo(linkedSetOf()) { it.payload.allowed_private_origins },
-                    hasSeenPlayer = connectionCoordinator.tvActiveContext.value == "player",
-                )
-                active = next
-                _uiState.value = LinkedPageCastUiState(true, PageCastConsentStore.displayName(request.origin))
-                connectionCoordinator.tvPlaylistState.value = null
-                val sent = webSocketClient.send(
-                    createPlaylistCommandJson(
-                        pageCastPlaylistPayload(
-                            items = request.items.map { it.payload },
-                            startIndex = request.startIndex,
-                            metadata = request.playlistMetadata,
-                            skipPreplay = request.skipPreplay,
-                        ),
-                    ),
-                )
-                if (!sent || isOpenCancelled(request.bridgeRequestId)) {
-                    active = null
-                    _uiState.value = LinkedPageCastUiState()
-                    if (!isOpenCancelled(request.bridgeRequestId)) {
-                        result(request.bridgeRequestId, false, "connect_failed")
-                    }
-                    return@withLock
-                }
-                result(request.bridgeRequestId, true)
-            }
-        }
+        engine.open(request, NativeTvLinkedSessionSink(receiver))
     }
 
-    fun handle(message: JSONObject) {
-        val bridgeRequestId = message.optString("bridgeRequestId")
-        val type = message.optString("type")
-        val session = active
-        val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
-        if (session == null || origin == null || !linkedMessageMatchesSession(session.binding(), message, origin)) {
-            result(bridgeRequestId, false, "session_ended")
-            return
-        }
-        scope.launch {
-            operationMutex.withLock {
-                if (active !== session) {
-                    result(bridgeRequestId, false, "session_ended")
-                    return@withLock
-                }
-                val selectedReceiver = connectionStore.tvDevice.first()
-                if (selectedReceiver == null ||
-                    !ConnectionMerge.isSameDevice(selectedReceiver, session.receiver)
-                ) {
-                    result(bridgeRequestId, false, "receiver_changed")
-                    finish("receiver_changed")
-                    return@withLock
-                }
-                if (message.toString().toByteArray().size > MAX_REQUEST_BYTES) {
-                    result(bridgeRequestId, false, "resource_limit")
-                    return@withLock
-                }
-                session.lastPageActivityAtMillis = System.currentTimeMillis()
-                when (type) {
-                    "linked_ping" -> result(bridgeRequestId, true)
-                    "linked_replace" -> replace(session, bridgeRequestId, message.optJSONObject("payload"))
-                    "linked_append" -> append(session, bridgeRequestId, message.optJSONObject("payload"))
-                    "linked_supply" -> supply(session, bridgeRequestId, message.optJSONObject("payload"))
-                    "linked_jump" -> jump(session, bridgeRequestId, message.optJSONObject("payload"))
-                    "linked_unlink" -> {
-                        result(bridgeRequestId, true)
-                        finish(message.optString("reason", "unlinked"))
-                    }
-                    else -> result(bridgeRequestId, false, "invalid_request")
-                }
-            }
-        }
+    /** Opens a linked session targeting the active Watch Party. */
+    fun openParty(request: LinkedPageCastOpenRequest) {
+        engine.open(request, WatchPartyLinkedSessionSink(partyGateway))
     }
 
-    fun reject(bridgeRequestId: String, error: String) = result(bridgeRequestId, false, error)
+    fun handle(message: JSONObject) = engine.handle(message)
 
-    fun supersedeIfActive() {
-        if (active != null) finish("superseded")
-    }
+    fun accept(bridgeRequestId: String) = engine.accept(bridgeRequestId)
 
-    fun unlink(reason: String = "unlinked") {
-        if (active != null) finish(reason)
-    }
+    fun reject(bridgeRequestId: String, error: String) = engine.reject(bridgeRequestId, error)
 
-    fun activeOrigin(): String? = active?.origin
+    fun supersedeIfActive() = engine.supersedeIfActive()
 
-    private suspend fun replace(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val items = parseItems(payload?.optJSONArray("items"), session.allowedPrivateOrigins)
-        val startIndex = payload?.optInt("startIndex", 0) ?: 0
-        if (items == null || startIndex !in items.indices) {
-            result(bridgeRequestId, false, "invalid_request")
-            return
-        }
-        val metadata = payload?.optJSONObject("metadata")?.let {
-            if (it.toString().toByteArray().size > MAX_METADATA_BYTES) {
-                result(bridgeRequestId, false, "resource_limit")
-                return
-            }
-            com.playbridge.shared.protocol.decodeVisualMetadataJson(it.toString())
-        }
-        val skipPreplayValue = payload?.opt("skipPreplay")
-        val skipPreplay = if (skipPreplayValue == null || skipPreplayValue == JSONObject.NULL) {
-            false
-        } else {
-            skipPreplayValue as? Boolean ?: run {
-                result(bridgeRequestId, false, "invalid_request")
-                return
-            }
-        }
-        connectionCoordinator.tvPlaylistState.value = null
-        val sent = webSocketClient.send(
-            createPlaylistCommandJson(
-                pageCastPlaylistPayload(
-                    items = items.map { it.payload },
-                    startIndex = startIndex,
-                    metadata = metadata,
-                    skipPreplay = skipPreplay,
-                ),
-            ),
-        )
-        if (!sent) {
-            result(bridgeRequestId, false, "connect_failed")
-            finish("queue_update_failed")
-            return
-        }
-        session.ids.clear()
-        session.ids.addAll(items.map { it.id })
-        session.pendingNeed = null
-        session.endOfList = false
-        session.awaitingPlaylistEcho = true
-        result(bridgeRequestId, true)
-    }
+    fun unlink(reason: String = "unlinked") = engine.unlink(reason)
 
-    private suspend fun append(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val items = parseItems(payload?.optJSONArray("items"), session.allowedPrivateOrigins)
-        if (items == null || items.any { it.id in session.ids }) {
-            result(bridgeRequestId, false, "invalid_request")
-            return
-        }
-        if (session.ids.size + items.size > MAX_SESSION_ITEMS) {
-            result(bridgeRequestId, false, "resource_limit")
-            return
-        }
-        if (!sendQueueItems(items)) {
-            result(bridgeRequestId, false, "connect_failed")
-            finish("queue_update_failed")
-            return
-        }
-        session.ids += items.map { it.id }
-        result(bridgeRequestId, true)
-    }
-
-    private suspend fun supply(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val pending = session.pendingNeed
-        val requestId = payload?.optString("requestId")
-        when (linkedSupplyDisposition(requestId, pending?.requestId, session.lastAcceptedNeedId)) {
-            LinkedSupplyDisposition.ALREADY_ACCEPTED -> {
-                result(bridgeRequestId, true)
-                return
-            }
-            LinkedSupplyDisposition.STALE -> {
-                Log.w(TAG, "Rejected linked_supply because its request is stale")
-                result(bridgeRequestId, false, "stale_request")
-                return
-            }
-            LinkedSupplyDisposition.ACCEPT -> Unit
-        }
-        val acceptedPending = checkNotNull(pending)
-        val acceptedPayload = checkNotNull(payload)
-        val endOfList = acceptedPayload.optBoolean("endOfList", false)
-        val array = acceptedPayload.optJSONArray("items") ?: JSONArray()
-        if (array.length() == 0 && !endOfList) {
-            result(bridgeRequestId, false, "invalid_request")
-            return
-        }
-        if (array.length() == 0) {
-            session.pendingNeed = null
-            session.endOfList = true
-            session.lastAcceptedNeedId = acceptedPending.requestId
-            result(bridgeRequestId, true)
-            return
-        }
-        val items = parseItems(array, session.allowedPrivateOrigins)
-        if (items == null || items.size > acceptedPending.count || items.any { it.id in session.ids }) {
-            result(bridgeRequestId, false, "invalid_request")
-            return
-        }
-        if (session.ids.size + items.size > MAX_SESSION_ITEMS) {
-            result(bridgeRequestId, false, "resource_limit")
-            return
-        }
-        if (!sendQueueItems(items)) {
-            result(bridgeRequestId, false, "connect_failed")
-            finish("queue_update_failed")
-            return
-        }
-        session.ids += items.map { it.id }
-        session.pendingNeed = null
-        session.endOfList = endOfList
-        session.lastAcceptedNeedId = acceptedPending.requestId
-        result(bridgeRequestId, true)
-    }
-
-    private fun sendQueueItems(items: List<LinkedPageCastItem>): Boolean {
-        for (item in items) {
-            if (!webSocketClient.send(createQueueAddCommandJson(item.payload))) return false
-        }
-        return true
-    }
-
-    private fun jump(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val index = payload?.optInt("index", -1) ?: -1
-        if (index !in session.ids.indices) {
-            result(bridgeRequestId, false, "invalid_request")
-            return
-        }
-        session.pendingNeed = null
-        val sent = webSocketClient.send(createPlaylistJumpCommandJson(index))
-        result(bridgeRequestId, sent, if (sent) null else "connect_failed")
-    }
-
-    private suspend fun maybeRequestItems(session: Active, currentIndex: Int, totalCount: Int) {
-        if (active !== session) return
-        session.pendingNeed?.let { pending ->
-            if (System.currentTimeMillis() - pending.lastDispatchedAtMillis < NEED_ITEMS_RETRY_MILLIS) return
-            pending.lastDispatchedAtMillis = System.currentTimeMillis()
-            dispatchNeedItems(session, pending, totalCount)
-            return
-        }
-        val window = settingsRepository.tvPrefetchWindow.first().coerceIn(1, 10)
-        val count = linkedQueueDemand(
-            prefetchWindow = window,
-            currentIndex = currentIndex,
-            totalCount = totalCount,
-            requestPending = session.pendingNeed != null,
-            endOfList = session.endOfList,
-            awaitingPlaylistEcho = session.awaitingPlaylistEcho,
-        )
-        if (count <= 0) return
-        val request = PendingNeed(UUID.randomUUID().toString(), count)
-        session.pendingNeed = request
-        dispatchNeedItems(session, request, totalCount)
-    }
-
-    private fun dispatchNeedItems(session: Active, request: PendingNeed, totalCount: Int) {
-        event(
-            session,
-            "needitems",
-            JSONObject()
-                .put("requestId", request.requestId)
-                .put("afterIndex", (totalCount - 1).coerceAtLeast(0))
-                .put("afterItemId", session.ids.getOrNull(totalCount - 1))
-                .put("count", request.count),
-        )
-    }
-
-    private fun sessionExpired(session: Active): Boolean {
-        val now = System.currentTimeMillis()
-        return linkedSessionExpired(now, session.lastPageActivityAtMillis, session.createdAtMillis)
-    }
+    fun activeOrigin(): String? = engine.activeOrigin()
 
     private fun collectRequestedPrivateOrigins(
         items: List<LinkedPageCastItem>,
@@ -601,86 +255,222 @@ class LinkedPageCastCoordinator(
         return MediaNetworkPolicy.normalizePrivateOrigins(origins)
     }
 
-    private fun emitState(
-        session: Active,
-        currentIndex: Int,
-        totalCount: Int,
-        titles: List<String>,
-        playback: com.playbridge.sender.cast.TvPlaybackStatus?,
-    ) {
-        val now = System.currentTimeMillis()
-        val structuralState = listOf(
-            playback?.state,
-            playback?.title,
-            playback?.durationMs,
-            currentIndex,
-            totalCount,
-            session.ids.take(minOf(totalCount, session.ids.size)),
-            titles,
-        ).hashCode()
-        if (session.lastStateStructure == structuralState &&
-            now - session.lastStateEmittedAtMillis < STATE_EVENT_INTERVAL_MILLIS
-        ) return
-        session.lastStateStructure = structuralState
-        session.lastStateEmittedAtMillis = now
-        val queue = JSONArray()
-        repeat(minOf(totalCount, session.ids.size)) { index ->
-            queue.put(JSONObject().put("index", index).put("id", session.ids[index]).put("title", titles.getOrNull(index)))
+    private inner class NativeTvLinkedSessionSink(
+        private val receiver: TvDevice,
+    ) : LinkedSessionSink {
+        private val ids = mutableListOf<String>()
+        private var awaitingPlaylistEcho: Boolean = true
+        private var hasSeenPlayer: Boolean = false
+        private var lastResyncAtMillis: Long = System.currentTimeMillis()
+        override var controllerName: String? = null
+            private set
+        override val showTvUiState: Boolean = true
+
+        override val knownIds: Set<String>
+            get() = ids.toSet()
+
+        override suspend fun prepareOpen(request: LinkedPageCastOpenRequest): SinkFailure? =
+            if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                SinkFailure("connect_failed")
+            } else {
+                null
+            }
+
+        override suspend fun start(
+            request: LinkedPageCastOpenRequest,
+            host: LinkedSinkHost,
+            sessionScope: CoroutineScope,
+        ): SinkOpenOutcome {
+            if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+                return SinkOpenOutcome.Failed(SinkFailure("connect_failed"))
+            }
+            controllerName = PageCastConsentStore.displayName(request.origin)
+            _uiState.value = LinkedPageCastUiState(true, controllerName)
+            externalQueueCoordinator.stop()
+            ids.clear()
+            ids.addAll(request.items.map { it.id })
+            awaitingPlaylistEcho = true
+            hasSeenPlayer = connectionCoordinator.tvActiveContext.value == "player"
+            lastResyncAtMillis = System.currentTimeMillis()
+            connectionCoordinator.tvPlaylistState.value = null
+            val sent = webSocketClient.send(
+                createPlaylistCommandJson(
+                    pageCastPlaylistPayload(
+                        items = request.items.map { it.payload },
+                        startIndex = request.startIndex,
+                        metadata = request.playlistMetadata,
+                        skipPreplay = request.skipPreplay,
+                    ),
+                ),
+            )
+            if (!sent) {
+                return SinkOpenOutcome.Failed(SinkFailure("connect_failed"))
+            }
+            startObservers(host, sessionScope)
+            return SinkOpenOutcome.Ok
         }
-        event(
-            session,
-            "statechange",
-            JSONObject()
-                .put("state", playback?.state ?: "connecting")
-                .put("positionMs", playback?.positionMs ?: 0L)
-                .put("durationMs", playback?.durationMs ?: 0L)
-                .put("title", playback?.title)
-                .put("currentIndex", currentIndex)
-                .put("totalCount", totalCount)
-                .put("items", queue),
-        )
-    }
 
-    @Synchronized
-    private fun finish(reason: String) {
-        val session = active ?: return
-        active = null
-        _uiState.value = LinkedPageCastUiState()
-        event(session, "ended", JSONObject().put("reason", reason))
-    }
+        private fun startObservers(host: LinkedSinkHost, sessionScope: CoroutineScope) {
+            sessionScope.launch {
+                combine(
+                    connectionCoordinator.tvPlaylistState,
+                    connectionCoordinator.tvPlayback,
+                    connectionCoordinator.tvActiveContext,
+                ) { playlist, playback, context -> Triple(playlist, playback, context) }
+                    .collect { (playlist, _, context) ->
+                        host.runWithLock {
+                            if (context == "player") hasSeenPlayer = true
+                            if (context == "idle" && hasSeenPlayer) {
+                                host.finish("receiver_stopped")
+                                return@runWithLock
+                            }
+                            if (playlist != null && playlist.totalCount >= ids.size) {
+                                awaitingPlaylistEcho = false
+                            }
+                            host.emitSnapshot(currentSnapshot(), evaluateDemand = playlist != null)
+                        }
+                    }
+            }
+            sessionScope.launch {
+                webSocketClient.connectionState.collect { state ->
+                    if (state is WebSocketClient.ConnectionState.Connected) {
+                        host.runWithLock {
+                            lastResyncAtMillis = host.nowMillis()
+                            webSocketClient.send(createContextQueryJson())
+                        }
+                    }
+                }
+            }
+            sessionScope.launch {
+                connectionStore.tvDevice.collect { device ->
+                    if (device == null || !ConnectionMerge.isSameDevice(device, receiver)) {
+                        host.runWithLock {
+                            host.finish("receiver_changed")
+                        }
+                    }
+                }
+            }
+        }
 
-    private fun result(bridgeRequestId: String, ok: Boolean, error: String? = null) {
-        Components.postLinkedMessage(
-            JSONObject()
-                .put("type", "linked_result")
-                .put("bridgeRequestId", bridgeRequestId)
-                .put("ok", ok)
-                .apply { if (error != null) put("error", error) },
-        )
-    }
+        override suspend fun validateAvailable(): SinkFailure? {
+            val selectedReceiver = connectionStore.tvDevice.first()
+            if (selectedReceiver == null || !ConnectionMerge.isSameDevice(selectedReceiver, receiver)) {
+                return SinkFailure("receiver_changed", endSessionReason = "receiver_changed")
+            }
+            return null
+        }
 
-    private fun event(session: Active, name: String, detail: JSONObject) {
-        Components.postLinkedMessage(
-            JSONObject()
-                .put("type", "linked_event")
-                .put("sessionId", session.sessionId)
-                .put("event", name)
-                .put("detail", detail),
-        )
+        override suspend fun append(items: List<LinkedPageCastItem>): SinkBatchOutcome {
+            if (!sendQueueItems(items)) {
+                return SinkBatchOutcome.Failed(
+                    SinkFailure("connect_failed", endSessionReason = "queue_update_failed"),
+                )
+            }
+            ids += items.map { it.id }
+            return SinkBatchOutcome.Ok
+        }
+
+        override suspend fun supply(items: List<LinkedPageCastItem>, endOfList: Boolean): SinkBatchOutcome {
+            if (!sendQueueItems(items)) {
+                return SinkBatchOutcome.Failed(
+                    SinkFailure("connect_failed", endSessionReason = "queue_update_failed"),
+                )
+            }
+            ids += items.map { it.id }
+            return SinkBatchOutcome.Ok
+        }
+
+        override suspend fun replace(
+            items: List<LinkedPageCastItem>,
+            startIndex: Int,
+            metadata: VisualMetadata?,
+            skipPreplay: Boolean,
+        ): SinkOpenOutcome {
+            connectionCoordinator.tvPlaylistState.value = null
+            val sent = webSocketClient.send(
+                createPlaylistCommandJson(
+                    pageCastPlaylistPayload(
+                        items = items.map { it.payload },
+                        startIndex = startIndex,
+                        metadata = metadata,
+                        skipPreplay = skipPreplay,
+                    ),
+                ),
+            )
+            if (!sent) {
+                return SinkOpenOutcome.Failed(
+                    SinkFailure("connect_failed", endSessionReason = "queue_update_failed"),
+                )
+            }
+            ids.clear()
+            ids.addAll(items.map { it.id })
+            awaitingPlaylistEcho = true
+            return SinkOpenOutcome.Ok
+        }
+
+        override suspend fun jump(index: Int): SinkFailure? {
+            if (index !in ids.indices) return SinkFailure("invalid_request")
+            return if (webSocketClient.send(createPlaylistJumpCommandJson(index))) {
+                null
+            } else {
+                SinkFailure("connect_failed")
+            }
+        }
+
+        override fun currentSnapshot(): SinkPlaybackState {
+            val playlist = connectionCoordinator.tvPlaylistState.value
+            val playback = connectionCoordinator.tvPlayback.value
+            val currentIndex = playlist?.currentIndex ?: 0
+            val totalCount = playlist?.totalCount ?: ids.size
+            val titles = playlist?.items?.map { it.title }.orEmpty()
+            val items = List(minOf(totalCount, ids.size)) { index ->
+                SinkPlaylistItem(ids[index], titles.getOrNull(index))
+            }
+            return SinkPlaybackState(
+                state = playback?.state ?: "connecting",
+                positionMs = playback?.positionMs ?: 0L,
+                durationMs = playback?.durationMs ?: 0L,
+                title = playback?.title,
+                currentIndex = currentIndex,
+                totalCount = totalCount,
+                items = items,
+                awaitingPlaylistEcho = awaitingPlaylistEcho,
+            )
+        }
+
+        override fun isDemandSuppressed(): Boolean = false
+
+        override suspend fun onHeartbeatTick(nowMillis: Long) {
+            if (webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected &&
+                linkedResyncDue(awaitingPlaylistEcho, nowMillis, lastResyncAtMillis)
+            ) {
+                // Each query makes the receiver resend its whole snapshot (~4 KB), so ask
+                // quickly only until the new queue is confirmed, then rarely as a safety net.
+                lastResyncAtMillis = nowMillis
+                webSocketClient.send(createContextQueryJson())
+            }
+        }
+
+        private fun sendQueueItems(items: List<LinkedPageCastItem>): Boolean {
+            for (item in items) {
+                if (!webSocketClient.send(createQueueAddCommandJson(item.payload))) return false
+            }
+            return true
+        }
     }
 
     companion object {
         private const val TAG = "LinkedPageCast"
         private const val MAX_ITEMS = 50
-        private const val MAX_SESSION_ITEMS = 200
+        internal const val MAX_SESSION_ITEMS = 200
         private const val MAX_SUBTITLES = 16
         private const val MAX_HEADERS = 16
         private const val MAX_HEADER_BYTES = 16 * 1024
-        private const val MAX_METADATA_BYTES = 16 * 1024
-        private const val MAX_REQUEST_BYTES = 64 * 1024
+        internal const val MAX_METADATA_BYTES = 16 * 1024
+        internal const val MAX_REQUEST_BYTES = 64 * 1024
         private const val MAX_CANCELLED_OPEN_REQUESTS = 64
-        private const val NEED_ITEMS_RETRY_MILLIS = 5_000L
-        private const val STATE_EVENT_INTERVAL_MILLIS = 1_000L
+        internal const val NEED_ITEMS_RETRY_MILLIS = 5_000L
+        internal const val STATE_EVENT_INTERVAL_MILLIS = 1_000L
         private val ALLOWED_HEADERS = setOf(
             "authorization", "cookie", "referer", "origin", "user-agent", "accept", "accept-language",
         )

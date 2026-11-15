@@ -193,6 +193,10 @@ fun DownloadsScreen(
             showMessage("This file is no longer on your phone")
             return
         }
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            showMessage("Downloaded files on this phone can't be played in a watch party. Change where to play to open or cast them.")
+            return
+        }
         if (!hasCastTarget) {
             playLocally(item)
             return

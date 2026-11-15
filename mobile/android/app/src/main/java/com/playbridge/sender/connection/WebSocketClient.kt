@@ -941,6 +941,17 @@ class WebSocketClient(
     fun isConnected(): Boolean {
         return _connectionState.value is ConnectionState.Connected
     }
+
+    val connectedTvUuid: String
+        get() = targetConnection?.tvUuid.orEmpty()
+
+    fun connectedTvEndpointKey(): String? {
+        val conn = targetConnection ?: return null
+        return com.playbridge.sender.model.EndpointKey(
+            protocol = com.playbridge.sender.model.CastProtocol.PLAYBRIDGE,
+            stableId = conn.tvUuid.ifEmpty { "${conn.ip}:${conn.port}" },
+        ).toString()
+    }
     
     fun destroy() {
         disconnect()

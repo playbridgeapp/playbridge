@@ -73,22 +73,26 @@ internal val TvDevice.playOnName: String get() = name.replace(".local)", ")").re
 internal data class PlayOnStatus(
     val state: State = State.THIS_PHONE,
     val deviceName: String = THIS_PHONE_NAME,
-    /** Receiver kind for a chosen TV ("PlayBridge", "Google Cast", …); null on this phone. */
+    /** Receiver kind for a chosen TV ("PlayBridge", "Google Cast", …); null on this phone or party. */
     val receiver: String? = null,
     val secure: Boolean = false,
+    val partyWatchingCount: Int = 0,
+    val partyPlayingTitle: String? = null,
 ) {
-    enum class State { THIS_PHONE, CONNECTING, RECONNECTING, OFFLINE, CONNECTED }
+    enum class State { THIS_PHONE, CONNECTING, RECONNECTING, OFFLINE, CONNECTED, WATCH_PARTY }
 
     val tvChosen: Boolean get() = state != State.THIS_PHONE
-    val isConnected: Boolean get() = state == State.CONNECTED
+    val isConnected: Boolean get() = state == State.CONNECTED || state == State.WATCH_PARTY
+    val isWatchParty: Boolean get() = state == State.WATCH_PARTY
     /** A plain-WebSocket PlayBridge link keeps its encryption warning. */
-    val unencrypted: Boolean get() = isConnected && !secure
+    val unencrypted: Boolean get() = state == State.CONNECTED && !secure
     val statusLine: String get() = when (state) {
         State.THIS_PHONE -> "Plays here · Tap to pick a TV"
         State.CONNECTING -> "Connecting…"
         State.RECONNECTING -> "Reconnecting…"
         State.OFFLINE -> "Not connected"
         State.CONNECTED -> "${receiver ?: "TV"} · ${if (unencrypted) "Not encrypted" else "Connected"}"
+        State.WATCH_PARTY -> partyPlayingTitle?.let { "Playing $it · Tap to switch" } ?: "Tap to switch or open party"
     }
 
     companion object {
@@ -98,7 +102,8 @@ internal data class PlayOnStatus(
 
 /**
  * Presentation follows the selected route, never the socket alone: on [CastSessionManager.Route.ThisDevice]
- * the chip says This phone even while an idle native link is still open.
+ * the chip says This phone even while an idle native link is still open. When [partyWatchingCount] is
+ * non-null (a watch party is the selected target), the Watch party chip takes precedence.
  */
 internal fun playOnStatus(
     route: CastSessionManager.Route,
@@ -109,7 +114,18 @@ internal fun playOnStatus(
     socketSecure: Boolean = false,
     connecting: Boolean = false,
     reconnecting: Boolean = false,
-): PlayOnStatus = when (route) {
+    partyWatchingCount: Int? = null,
+    partyPlayingTitle: String? = null,
+): PlayOnStatus = if (partyWatchingCount != null) {
+    PlayOnStatus(
+        state = PlayOnStatus.State.WATCH_PARTY,
+        deviceName = "Watch party · $partyWatchingCount",
+        receiver = "Watch party",
+        secure = true,
+        partyWatchingCount = partyWatchingCount,
+        partyPlayingTitle = partyPlayingTitle,
+    )
+} else when (route) {
     is CastSessionManager.Route.External -> {
         val name = externalDevice?.playOnName ?: route.name.removeSuffix(".local")
         val receiver = externalDevice?.resolvedProtocol?.displayName

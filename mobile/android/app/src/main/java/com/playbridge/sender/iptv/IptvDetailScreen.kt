@@ -123,6 +123,14 @@ fun IptvDetailScreen(
 
     fun castChannel(channel: IptvChannelEntity) {
         val headers = decodeHeaders(channel.headersJson)
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            connectionViewModel.castWebStream(
+                url = channel.url,
+                headers = headers,
+                title = channel.name,
+            )
+            return
+        }
         // Cast to the active TV/DLNA target if one is connected; otherwise play in the
         // built-in player on this device (same fallback as Phone Files).
         val casted = connectionViewModel.castWebStream(

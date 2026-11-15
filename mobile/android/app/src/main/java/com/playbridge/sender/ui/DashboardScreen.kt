@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
@@ -428,21 +429,33 @@ private fun DashboardTopBar(
 @Composable
 internal fun DashboardDeviceChip(status: PlayOnStatus, onClick: () -> Unit) {
     val accent = when (status.state) {
+        PlayOnStatus.State.WATCH_PARTY -> com.playbridge.sender.cast.PartyTargetColors.Accent
         PlayOnStatus.State.CONNECTED -> if (status.unencrypted) ChipAmber else ChipGreen
         PlayOnStatus.State.CONNECTING, PlayOnStatus.State.RECONNECTING -> ChipAmber
         PlayOnStatus.State.OFFLINE -> MaterialTheme.colorScheme.error
         PlayOnStatus.State.THIS_PHONE -> null
     }
     val icon = when {
+        status.isWatchParty -> Icons.Default.Groups
         !status.tvChosen -> Icons.Default.Smartphone
         status.receiver == null || status.receiver == CastProtocol.PLAYBRIDGE.displayName -> Icons.Default.Tv
         else -> Icons.Default.Cast
     }
+    val chipSurfaceColor = if (status.isWatchParty) {
+        com.playbridge.sender.cast.PartyTargetColors.Surface
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
+    val chipBorderColor = if (status.isWatchParty) {
+        com.playbridge.sender.cast.PartyTargetColors.Border
+    } else {
+        accent?.copy(alpha = 0.35f) ?: MaterialTheme.colorScheme.outlineVariant
+    }
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(30.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, accent?.copy(alpha = 0.35f) ?: MaterialTheme.colorScheme.outlineVariant),
+        color = chipSurfaceColor,
+        border = BorderStroke(1.dp, chipBorderColor),
         modifier = Modifier
             .fillMaxWidth()
             .height(60.dp)

@@ -91,7 +91,18 @@ fun CollectionDetailScreen(
     // Play a single item: cast to the active target, else fall back to the built-in player.
     fun playItem(item: CollectionItemEntity) {
         val headers = decodeHeaders(item.headersJson)
-        val casted = when (CollectionPlayRouter.routeOf(item.kind)) {
+        val route = CollectionPlayRouter.routeOf(item.kind)
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            when (route) {
+                CollectionRoute.LOCAL -> scope.launch {
+                    snackbar.showSnackbar("Local files can't be played in a watch party. Change where to play to open or cast them.")
+                }
+                CollectionRoute.WEB ->
+                    connectionViewModel.castWebStream(item.url, headers, item.title, item.mimeType)
+            }
+            return
+        }
+        val casted = when (route) {
             CollectionRoute.LOCAL ->
                 connectionViewModel.castLocalFile(item.url, item.mimeType, item.title)
             CollectionRoute.WEB ->

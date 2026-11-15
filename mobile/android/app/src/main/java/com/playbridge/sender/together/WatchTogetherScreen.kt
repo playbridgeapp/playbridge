@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,19 +29,29 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -183,6 +194,8 @@ private fun StartView(coordinator: ConnectionCoordinator) {
         onClick = { PhoneTogether.start(context, watchHere) },
         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
     ) { Text("Start a watch party") }
+
+    PartyLinksNote()
 
     Panel(title = "Join a party") {
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -431,9 +444,14 @@ private fun InvitedView(invite: PhoneTogether.State.Invited) {
 @Composable
 private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordinator) {
     val canControl = !party.locked || party.host
+    val queue by PhoneTogether.queue.collectAsState()
+    val queueNotice by PhoneTogether.queueNotice.collectAsState()
 
     PartyHeader(party)
-    NowPlaying(party, canControl)
+    NowPlaying(party, canControl, hasQueueNext = queue.isNotEmpty())
+    if (party.canChangeVideo || queue.isNotEmpty() || queueNotice != null) {
+        UpNextPanel(party, queue, queueNotice)
+    }
     Panel(title = "In the party") { Members(party) }
     Panel(title = "Add a device") { AddDevice(coordinator) }
     Panel { WatchHereRow(party.watching, PhoneTogether::setWatchHere) }
@@ -443,7 +461,7 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
         onClick = PhoneTogether::leave,
         modifier = Modifier.fillMaxWidth(),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-    ) { Text("Leave the watch party") }
+    ) { Text("Leave party") }
 
     party.requests.firstOrNull()?.let { request ->
         AlertDialog(
@@ -577,7 +595,7 @@ internal fun mapNowPlayingState(party: PhoneTogether.Party, positionMs: Long): N
 }
 
 @Composable
-private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
+private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean, hasQueueNext: Boolean = false) {
     // Ticks the displayed position while playing.
     var now by remember(party.item?.id) { mutableLongStateOf(party.positionNow()) }
     LaunchedEffect(party) {
@@ -600,6 +618,7 @@ private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            PartyLinksNote()
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
@@ -653,7 +672,7 @@ private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
+                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!ui.live) {
@@ -675,6 +694,15 @@ private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
                 if (!ui.live) {
                     IconButton(onClick = { PhoneTogether.seekBy(10_000) }, enabled = canControl, modifier = Modifier.size(52.dp)) {
                         Icon(Icons.Default.Forward10, contentDescription = "Forward 10 seconds", modifier = Modifier.size(30.dp))
+                    }
+                }
+                if (party.canChangeVideo) {
+                    IconButton(
+                        onClick = { PhoneTogether.playNextInQueueNow() },
+                        enabled = hasQueueNext,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(Icons.Default.SkipNext, contentDescription = "Play the next video now", modifier = Modifier.size(28.dp))
                     }
                 }
             }
@@ -712,6 +740,160 @@ private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
         party.notice?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
         }
+    }
+}
+
+@Composable
+private fun UpNextPanel(
+    party: PhoneTogether.Party,
+    queue: List<PartyQueueItem>,
+    queueNotice: String?,
+) {
+    var draggedId by remember { mutableStateOf<String?>(null) }
+    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+    var itemHeightPx by remember { mutableIntStateOf(0) }
+
+    Panel {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "UP NEXT · ${queue.size}",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (queue.isNotEmpty() && party.canChangeVideo) {
+                TextButton(onClick = PhoneTogether::clearQueue) {
+                    Text("Clear")
+                }
+            }
+        }
+        queueNotice?.let { notice ->
+            Text(notice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (queue.isEmpty()) {
+            Text(
+                "Nothing queued yet. Tap Add to party queue from the cast sheet to build Up next.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                queue.forEachIndexed { index, item ->
+                    androidx.compose.runtime.key(item.id) {
+                        val currentIndex by rememberUpdatedState(index)
+                        val totalItems by rememberUpdatedState(queue.size)
+                        val isDragged = draggedId == item.id
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDragged) 1f else 0f)
+                                .graphicsLayer { translationY = if (isDragged) dragOffsetPx else 0f }
+                                .onSizeChanged { size ->
+                                    if (size.height > 0) itemHeightPx = size.height
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                if (party.canChangeVideo && queue.size > 1) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .semantics { contentDescription = "Drag to reorder" }
+                                            .pointerInput(item.id) {
+                                                detectVerticalDragGestures(
+                                                    onDragStart = {
+                                                        draggedId = item.id
+                                                        dragOffsetPx = 0f
+                                                    },
+                                                    onDragEnd = {
+                                                        draggedId = null
+                                                        dragOffsetPx = 0f
+                                                    },
+                                                    onDragCancel = {
+                                                        draggedId = null
+                                                        dragOffsetPx = 0f
+                                                    },
+                                                    onVerticalDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        dragOffsetPx += dragAmount
+                                                        val step = (itemHeightPx.takeIf { it > 0 } ?: 72).toFloat()
+                                                        val idx = currentIndex
+                                                        if (dragOffsetPx > step * 0.6f && idx + 1 < totalItems) {
+                                                            PhoneTogether.moveQueueItem(idx, idx + 1)
+                                                            dragOffsetPx -= step
+                                                        } else if (dragOffsetPx < -step * 0.6f && idx > 0) {
+                                                            PhoneTogether.moveQueueItem(idx, idx - 1)
+                                                            dragOffsetPx += step
+                                                        }
+                                                    },
+                                                )
+                                            },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DragHandle,
+                                            contentDescription = "Drag to reorder",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                }
+                                Column(Modifier.weight(1f).padding(start = if (party.canChangeVideo && queue.size > 1) 0.dp else 6.dp)) {
+                                    Text(
+                                        item.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    item.site?.let { site ->
+                                        Text(
+                                            site,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                if (party.canChangeVideo) {
+                                    IconButton(onClick = { PhoneTogether.playQueuedItemNow(item.id) }) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Play ${item.title} now",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = { PhoneTogether.removeFromQueue(item.id) }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove ${item.title}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            "Up next is kept on this phone. The next video starts when this one ends. If you leave the party, the list goes with you.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -852,6 +1034,29 @@ private fun WatchHereRow(watching: Boolean, onChange: (Boolean) -> Unit) {
             )
         }
         Switch(checked = watching, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun PartyLinksNote() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            Icons.Default.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp).size(16.dp),
+        )
+        Text(
+            "Each device loads the video itself. Public links, and sites that let several " +
+                "devices watch at once, work best. Links tied to one device or one IP address, " +
+                "and files on this phone, won't play for others.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

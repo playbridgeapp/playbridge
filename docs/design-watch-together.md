@@ -385,6 +385,33 @@ Not yet: web-page and Bridged App sources on the phone and TV (direct links
 only), and adding several paired TVs at once (the phone keeps one live TV
 connection).
 
+Party-as-target and phone-side queue (Android phone):
+
+- While the phone is in a party, **Watch party** appears as an explicit playback
+  destination alongside TVs, external receivers, and **This phone**. Entering a
+  party selects the Watch party target (and remembers the previous route to
+  restore when leaving or when the party ends); picking another device sends
+  subsequent casts to that device without leaving the party, and **Play on** /
+  **CastSheet** / **Toolbar** / **Device chip** / **Now playing** keep that
+  choice explicit. Casting to a TV that was also added to the party switches
+  away from the party target first rather than silently playing twice; LAN-added
+  TVs are tracked by member ID and TV UUID/endpoint so two TVs with the same
+  name don't collide.
+- The phone keeps a host-side, in-memory **Up next** queue (`PartyQueue`) for
+  the current party (cleared on leave or room end; never persisted or written to
+  cast history). It accepts remote HTTP(S) streams (and splits playlists or
+  episode lists into play-first + queue-rest in order), also allows local-network
+  HTTP(S) hosts (`.local`, RFC1918, link-local, CGNAT, ULA IPv6) with a one-time
+  notice (`"Only people on this Wi-Fi can load this video."`), and refuses
+  non-HTTP phone URLs plus loopback and this phone's own network addresses.
+  Auto-advance waits for the clear event after a real `Ended` (with a 1.5s
+  fallback grace timer when the host isn't clearing), never triggers on an
+  unprompted `VideoCleared` (remote Stop) or manual `Stop video`, pauses without
+  dropping remaining items if the phone loses video-change permission or a
+  queued item fails to load, and can be reordered, played immediately, or cleared
+  in **Watch together**. Multi-device queue sync inside the Rust room worker is
+  not part of this phone-side queue.
+
 ### Phase 2 status (Apple TV)
 
 Built (Apple TV Simulator tested; iPhone app is separate): the Apple TV receiver

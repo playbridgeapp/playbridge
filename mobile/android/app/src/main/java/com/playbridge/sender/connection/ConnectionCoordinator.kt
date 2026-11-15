@@ -156,7 +156,16 @@ class ConnectionCoordinator internal constructor(
         val box = json.optString("box_pk")
         val sign = json.optString("sign_pk")
         return if (json.optBoolean("ok") && member.isNotEmpty() && box.isNotEmpty() && sign.isNotEmpty()) {
-            Result.success(WatchTogetherTv(connectedTvName ?: "TV", member, box, sign))
+            Result.success(
+                WatchTogetherTv(
+                    name = connectedTvName ?: "TV",
+                    member = member,
+                    boxKey = box,
+                    signKey = sign,
+                    uuid = client.connectedTvUuid,
+                    endpointKey = client.connectedTvEndpointKey(),
+                )
+            )
         } else {
             Result.failure(IllegalStateException(json.optString("error").ifEmpty { "failed" }))
         }
@@ -664,4 +673,11 @@ class ConnectionCoordinator internal constructor(
 }
 
 /** A TV this phone added to a Watch Together room over its paired connection. */
-data class WatchTogetherTv(val name: String, val member: String, val boxKey: String, val signKey: String)
+data class WatchTogetherTv(
+    val name: String,
+    val member: String,
+    val boxKey: String,
+    val signKey: String,
+    val uuid: String = "",
+    val endpointKey: String? = null,
+)

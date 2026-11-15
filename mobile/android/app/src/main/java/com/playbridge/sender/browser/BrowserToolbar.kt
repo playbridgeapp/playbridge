@@ -66,6 +66,12 @@ fun BrowserToolbar(
     isSecure: Boolean = false,
     onSecurityIconClick: () -> Unit = {},
     onEditingChange: (Boolean) -> Unit = {},
+    targetKind: com.playbridge.sender.cast.TargetVisualKind = if (isTvConnected) {
+        com.playbridge.sender.cast.TargetVisualKind.PLAYBRIDGE_TV
+    } else {
+        com.playbridge.sender.cast.TargetVisualKind.THIS_PHONE
+    },
+    targetContentDescription: String? = null,
 ) {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -308,7 +314,7 @@ fun BrowserToolbar(
                         Spacer(modifier = Modifier.width(2.dp))
                     }
 
-                    // 2. TV Connection button (Permanent)
+                    // 2. Target Connection button (Permanent)
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -317,28 +323,46 @@ fun BrowserToolbar(
                             .clickable(onClick = onTvClick)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            if (isTvConnected) {
-                                Icon(
-                                    imageVector = Icons.Default.Tv,
-                                    contentDescription = "TV Connection (Connected)",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                // Glowing active dot in top-right corner of TV icon
+                            val icon = com.playbridge.sender.cast.targetIconVector(targetKind)
+                            val dotColor: Color?
+                            val iconTint: Color
+                            val description = targetContentDescription ?: when (targetKind) {
+                                com.playbridge.sender.cast.TargetVisualKind.WATCH_PARTY -> "Watch party"
+                                com.playbridge.sender.cast.TargetVisualKind.THIS_PHONE -> "This phone"
+                                com.playbridge.sender.cast.TargetVisualKind.OTHER_RECEIVER ->
+                                    if (isTvConnected) "Receiver (Connected)" else "Receiver (Disconnected)"
+                                com.playbridge.sender.cast.TargetVisualKind.PLAYBRIDGE_TV ->
+                                    if (isTvConnected) "TV Connection (Connected)" else "TV Connection (Disconnected)"
+                            }
+                            when (targetKind) {
+                                com.playbridge.sender.cast.TargetVisualKind.WATCH_PARTY -> {
+                                    iconTint = com.playbridge.sender.cast.PartyTargetColors.Accent
+                                    dotColor = com.playbridge.sender.cast.PartyTargetColors.Accent
+                                }
+                                com.playbridge.sender.cast.TargetVisualKind.PLAYBRIDGE_TV,
+                                com.playbridge.sender.cast.TargetVisualKind.OTHER_RECEIVER -> {
+                                    iconTint = if (isTvConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    dotColor = if (isTvConnected) Color(0xFF4CAF50) else null
+                                }
+                                com.playbridge.sender.cast.TargetVisualKind.THIS_PHONE -> {
+                                    iconTint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    dotColor = null
+                                }
+                            }
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = description,
+                                tint = iconTint,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            if (dotColor != null) {
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
                                         .offset(x = 2.dp, y = (-2).dp)
                                         .size(8.dp)
-                                        .background(Color(0xFF4CAF50), shape = CircleShape)
+                                        .background(dotColor, shape = CircleShape)
                                         .border(1.5.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Tv,
-                                    contentDescription = "TV Connection (Disconnected)",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                         }

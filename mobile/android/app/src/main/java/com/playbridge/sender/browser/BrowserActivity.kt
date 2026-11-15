@@ -512,6 +512,11 @@ class BrowserActivity : ComponentActivity() {
                 pagePlaybackCoordinator.end("superseded")
             }
             if (selectedDevice == null) {
+                if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+                    pagePlaybackCoordinator.end("superseded")
+                    linkedPageCastCoordinator.openParty(request)
+                    return@launch
+                }
                 when (connectionViewModel.route.value) {
                     is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice,
                     is com.playbridge.sender.cast.CastSessionManager.Route.External,
@@ -1086,6 +1091,30 @@ class BrowserActivity : ComponentActivity() {
                         if (playPayloads.isEmpty() ||
                             !Components.isCurrentPageNavigation(tabId, navigationGeneration)
                         ) return@launch
+
+                        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+                            val start = startIndex.coerceIn(0, (playPayloads.size - 1).coerceAtLeast(0))
+                            val split = com.playbridge.sender.together.PartyMediaSupport.splitForPlay(
+                                playPayloads.drop(start).map {
+                                    com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                        it,
+                                        fallbackTitle = playlistMetadata?.title,
+                                    )
+                                }
+                            )
+                            val first = split.first
+                            if (first != null) {
+                                com.playbridge.sender.together.PhoneTogether.playInParty(
+                                    url = first.url,
+                                    title = first.title,
+                                    headers = first.headers,
+                                    subtitles = first.subtitles,
+                                    startMs = first.startMs,
+                                    queueItems = split.rest,
+                                )
+                            }
+                            return@launch
+                        }
 
                         when (castRoute) {
                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
@@ -1724,6 +1753,19 @@ class BrowserActivity : ComponentActivity() {
             var showBrowserConnectDialog by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
             var isFullscreenVideoPortrait by remember { mutableStateOf(false) }
+            val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsStateWithLifecycle()
+            val partyTargetSelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsStateWithLifecycle()
+            val partyToast by com.playbridge.sender.together.PhoneTogether.toasts.collectAsStateWithLifecycle()
+            val activeParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+            val watchPartySelected = partyTargetSelected && activeParty != null
+            LaunchedEffect(partyToast, currentScreen) {
+                if (currentScreen != Screen.WatchTogether) {
+                    partyToast?.let {
+                        Toast.makeText(this@BrowserActivity, it, Toast.LENGTH_SHORT).show()
+                        com.playbridge.sender.together.PhoneTogether.consumeToast()
+                    }
+                }
+            }
 
             // Chrome-hidden browsing draws behind the transparent system bars while
             // media fullscreen remains immersive and can rotate independently.
@@ -1796,10 +1838,78 @@ class BrowserActivity : ComponentActivity() {
 
             val haptic = LocalHapticFeedback.current
 
+            fun playPartyPayloads(
+                items: List<PlayPayload>,
+                startIndex: Int = 0,
+                fallbackTitle: String? = null,
+            ) {
+                val start = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+                val split = com.playbridge.sender.together.PartyMediaSupport.splitForPlay(
+                    items.drop(start).map {
+                        com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                            it,
+                            fallbackTitle = fallbackTitle,
+                        )
+                    }
+                )
+                val first = split.first
+                if (first == null) {
+                    Toast.makeText(
+                        this@BrowserActivity,
+                        "This playlist doesn't contain playable links.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return
+                }
+                com.playbridge.sender.together.PhoneTogether.playInParty(
+                    url = first.url,
+                    title = first.title,
+                    headers = first.headers,
+                    subtitles = first.subtitles,
+                    startMs = first.startMs,
+                    queueItems = split.rest,
+                )
+            }
+
             fun performQuickCast() {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
                 scope.launch {
+                    if (watchPartySelected) {
+                        val content = pendingContentPayload
+                        if (content != null && videoCount == 0) {
+                            playPartyPayloads(listOf(content), fallbackTitle = selectedTab?.content?.title)
+                            return@launch
+                        }
+                        val video = buildCastSheetVideos(detectedVideos)
+                            .firstOrNull {
+                                it.effectiveValidationState != MediaValidationState.FAILED &&
+                                    it.kind != DetectedMediaKind.IMAGE
+                            }
+                        if (video == null) {
+                            Toast.makeText(
+                                this@BrowserActivity,
+                                "No video detected to cast to watch party",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            return@launch
+                        }
+                        val playlist = video.playlistPayload
+                        if (playlist != null) {
+                            playPartyPayloads(playlist, fallbackTitle = video.title ?: selectedTab?.content?.title)
+                        } else {
+                            com.playbridge.sender.together.PhoneTogether.playInParty(
+                                url = video.url,
+                                title = video.title ?: selectedTab?.content?.title,
+                                headers = VideoDetector.mediaHeaders(video),
+                                subtitles = detectedVideos
+                                    .filter { it.kind == DetectedMediaKind.SUBTITLE }
+                                    .map { it.url },
+                                startMs = video.startPositionMs,
+                            )
+                        }
+                        return@launch
+                    }
                     if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice) {
                         showBrowserConnectDialog = true
                         return@launch
@@ -2168,8 +2278,9 @@ class BrowserActivity : ComponentActivity() {
             // auto-connect is still enabled. A manual disconnect turns it off, so reopening the
             // sheet then respects that choice instead of immediately reconnecting.
             LaunchedEffect(showVideoSheet) {
-                // Don't auto-reconnect the native receiver while another protocol is selected.
-                if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected &&
+                // Don't auto-reconnect the native receiver while another protocol or the watch party is selected.
+                if (showVideoSheet && !watchPartySelected &&
+                    connectionState is WebSocketClient.ConnectionState.Disconnected &&
                     connectionViewModel.activeExternalDevice.value == null &&
                     castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
                     connectionViewModel.autoConnectEnabled.value) {
@@ -2291,16 +2402,22 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            androidx.compose.runtime.CompositionLocalProvider(LocalPlayOnRemote provides {
-                if (currentScreen != Screen.Remote) {
-                    remoteOrigin = currentScreen
-                    remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
-                }
-                if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                }
-                currentScreen = Screen.Remote
-            }, LocalPlayOnRemoteVisible provides (currentScreen == Screen.Remote)) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalPlayOnRemote provides {
+                    if (currentScreen != Screen.Remote) {
+                        remoteOrigin = currentScreen
+                        remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
+                    }
+                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                        connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                    }
+                    currentScreen = Screen.Remote
+                },
+                LocalPlayOnRemoteVisible provides (currentScreen == Screen.Remote),
+                com.playbridge.sender.cast.LocalOpenWatchParty provides {
+                    currentScreen = Screen.WatchTogether
+                },
+            ) {
             PlayBridgeTheme {
                 // Bridged Apps, chrome-hidden browsing and an open keyboard hide this bar. The
                 // engine then takes the keyboard inset itself (see browserBottomSpace).
@@ -2328,6 +2445,12 @@ class BrowserActivity : ComponentActivity() {
                     if (!isFullscreen && !isBrowserChromeHidden) {
                         Box(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.fillMaxWidth()) {
+                                val toolbarTargetKind = com.playbridge.sender.cast.resolveTargetVisualKind(
+                                    route = castRoute,
+                                    partySelected = watchPartySelected,
+                                    inParty = activeParty != null,
+                                    externalProtocol = activeExternalDevice?.protocol,
+                                )
                                 BrowserToolbar(
                                     currentUrl = currentUrl,
                                     isLoading = isLoading,
@@ -2355,9 +2478,10 @@ class BrowserActivity : ComponentActivity() {
                                     session?.loadUrl(url)
                                     isEditing = false
                                 },
-                                isTvConnected = activeExternalDevice != null ||
+                                isTvConnected = watchPartySelected || activeExternalDevice != null ||
                                     (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
                                         connectionState is WebSocketClient.ConnectionState.Connected),
+                                targetKind = toolbarTargetKind,
                                 onTvClick = { showBrowserConnectDialog = true },
                                 onRemoteClick = {
                                     if (connectionState is WebSocketClient.ConnectionState.Connected) {
@@ -2956,21 +3080,29 @@ class BrowserActivity : ComponentActivity() {
                         pendingContentPayload = null
                     },
                     onVideoClick = onVideoClick@ { video, subs, subtitleResources ->
-                         // In a watch party, a tapped video plays in the party instead.
-                         if (com.playbridge.sender.together.PhoneTogether.isInParty() &&
-                             video.playlistPayload == null &&
-                             video.kind == DetectedMediaKind.VIDEO
-                         ) {
-                             com.playbridge.sender.together.PhoneTogether.playInParty(
-                                 url = video.url,
-                                 title = video.title ?: selectedTab?.content?.title,
-                                 headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
-                                 subtitles = subs.orEmpty() + subtitleResources.map { it.url },
-                                 startMs = video.startPositionMs,
-                             )
+                         if (watchPartySelected) {
+                             if (video.kind == DetectedMediaKind.IMAGE) {
+                                 Toast.makeText(
+                                     this@BrowserActivity,
+                                     "Pictures can't be shared in a watch party yet",
+                                     Toast.LENGTH_SHORT,
+                                 ).show()
+                                 return@onVideoClick
+                             }
+                             val playlist = video.playlistPayload
+                             if (playlist != null) {
+                                 playPartyPayloads(playlist, fallbackTitle = video.title ?: selectedTab?.content?.title)
+                             } else {
+                                 com.playbridge.sender.together.PhoneTogether.playInParty(
+                                     url = video.url,
+                                     title = video.title ?: selectedTab?.content?.title,
+                                     headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
+                                     subtitles = subs.orEmpty() + subtitleResources.map { it.url },
+                                     startMs = video.startPositionMs,
+                                 )
+                             }
                              showVideoSheet = false
                              forcePlaylistSheet = null
-                             currentScreen = Screen.WatchTogether
                              return@onVideoClick
                          }
                          when (castRoute) {
@@ -3084,6 +3216,35 @@ class BrowserActivity : ComponentActivity() {
                          forcePlaylistSheet = null
                     },
                     onQueueVideo = onQueueVideo@ { video, subtitles, subtitleResources ->
+                        if (watchPartySelected) {
+                            if (video.kind == DetectedMediaKind.IMAGE) {
+                                Toast.makeText(
+                                    this@BrowserActivity,
+                                    "Pictures can't be added to the party queue",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@onQueueVideo
+                            }
+                            val items = video.playlistPayload?.map {
+                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                    it,
+                                    fallbackTitle = video.title ?: selectedTab?.content?.title,
+                                )
+                            } ?: listOf(
+                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                    url = video.url,
+                                    title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                    headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
+                                    subtitles = subtitles.orEmpty() + subtitleResources.map { it.url },
+                                    startMs = video.startPositionMs,
+                                )
+                            )
+                            if (com.playbridge.sender.together.PhoneTogether.enqueueAll(items)) {
+                                showVideoSheet = false
+                                forcePlaylistSheet = null
+                            }
+                            return@onQueueVideo
+                        }
                         if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
                             val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
                                 "Queue editing is only available with PlayBridge receivers"
@@ -3180,6 +3341,12 @@ class BrowserActivity : ComponentActivity() {
                     },
                     initialMode = castSheetInitialMode,
                     onContentClick = onContentClick@ { payload ->
+                        if (watchPartySelected) {
+                            playPartyPayloads(listOf(payload), fallbackTitle = selectedTab?.content?.title)
+                            showVideoSheet = false
+                            forcePlaylistSheet = null
+                            return@onContentClick
+                        }
                         when (castRoute) {
                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
                                 Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
@@ -3231,6 +3398,17 @@ class BrowserActivity : ComponentActivity() {
                         forcePlaylistSheet = null
                     },
                     onQueueContent = onQueueContent@ { payload ->
+                        if (watchPartySelected) {
+                            val item = com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                payload,
+                                fallbackTitle = selectedTab?.content?.title,
+                            )
+                            if (com.playbridge.sender.together.PhoneTogether.enqueue(item)) {
+                                showVideoSheet = false
+                                forcePlaylistSheet = null
+                            }
+                            return@onQueueContent
+                        }
                         if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv ||
                             connectionState !is WebSocketClient.ConnectionState.Connected
                         ) {
