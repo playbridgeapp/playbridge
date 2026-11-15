@@ -98,7 +98,7 @@ void main() {
         true);
     expect(menu.getMenuItem('linked_unlink')!.label, 'Unlink');
   });
-  test('menu separates sender and receiver and handles empty saved list', () {
+  test('menu leads with now playing, then Play on, and handles no devices', () {
     final menu = buildTrayMenu(
       senderStatus: 'Disconnected',
       receiverStatus: 'Waiting for phone',
@@ -113,11 +113,18 @@ void main() {
       remotePlaybackState: '',
     );
 
-    expect(menu.items!.first.key, 'show');
-    expect(menu.items!.where((item) => item.label == 'Sender').single.disabled,
+    expect(menu.items!.first.label, 'Not playing');
+    expect(menu.getMenuItem('show')!.label, 'Open PlayBridge');
+    expect(menu.items!.last.key, 'quit');
+    final labels = menu.items!.map((item) => item.label).toList();
+    expect(labels.indexOf('Play on'), lessThan(labels.indexOf('Disconnected')));
+    expect(menu.items!.where((item) => item.label == 'Play on').single.disabled,
         isTrue);
     expect(
-        menu.items!.where((item) => item.label == 'Receiver').single.disabled,
+        menu.items!
+            .where((item) => item.label == 'Waiting for phone')
+            .single
+            .disabled,
         isTrue);
     expect(
         menu.items!
@@ -129,12 +136,9 @@ void main() {
     expect(menu.getMenuItem('sender_manage')!.label, 'Find or manage devices…');
     expect(
       menu.items!
-          .singleWhere((item) => item.label == 'Saved devices')
-          .submenu!
-          .items!
-          .first
-          .label,
-      'No saved devices',
+          .singleWhere((item) => item.label == 'No saved devices')
+          .disabled,
+      isTrue,
     );
     expect(menu.getMenuItem('route_direct')!.checked, isTrue);
     expect(menu.getMenuItem('route_desktop')!.checked, isFalse);
@@ -162,19 +166,16 @@ void main() {
       remotePlaybackState: 'paused',
     );
 
-    final devices = menu.items!
-        .singleWhere((item) => item.label == 'Saved devices')
-        .submenu!
-        .items!;
-    expect(devices.where((item) => item.label == 'PlayBridge').single.disabled,
-        isTrue);
+    final devices = menu.items!;
+    // Bedroom is saved but not on the network, so it is not listed.
+    expect(devices.where((item) => item.label == 'PlayBridge'), isEmpty);
+    expect(devices.where((item) => item.label?.contains('Bedroom') == true),
+        isEmpty);
     expect(devices.where((item) => item.label == 'Google Cast').single.disabled,
         isTrue);
     expect(
         devices.map((item) => item.label).toList(),
         containsAllInOrder([
-          'PlayBridge',
-          'Bedroom · Not found',
           'Google Cast',
           'Living room',
         ]));
@@ -182,8 +183,7 @@ void main() {
         isTrue);
     expect(menu.getMenuItem('sender_device:${nearby.identityKey}')!.disabled,
         isTrue);
-    expect(menu.getMenuItem('sender_device:${older.identityKey}')!.disabled,
-        isFalse);
+    expect(menu.getMenuItem('sender_device:${older.identityKey}'), isNull);
     expect(menu.getMenuItem('sender_disconnect')!.disabled, isFalse);
     expect(
       menu.items!
@@ -200,11 +200,11 @@ void main() {
             .singleWhere((item) => item.label == 'Paused: An episode')
             .disabled,
         isTrue);
-    expect(menu.getMenuItem('sender_play_pause')!.label, 'Resume playback');
-    expect(menu.getMenuItem('sender_stop')!.label, 'Stop playback');
+    expect(menu.getMenuItem('sender_play_pause')!.label, 'Resume');
+    expect(menu.getMenuItem('sender_stop')!.label, 'Stop');
   });
 
-  test('saved devices group by protocol with found devices first', () {
+  test('only found devices are listed, grouped by protocol', () {
     final nearby = savedDevice('Zebra', 'nearby', TvProtocol.playBridge);
     final missing = savedDevice('Alpha', 'missing', TvProtocol.playBridge);
     final cast = savedDevice('Kitchen', 'cast', TvProtocol.googleCast);
@@ -222,23 +222,18 @@ void main() {
       remotePlaybackState: '',
     );
 
-    final labels = menu.items!
-        .singleWhere((item) => item.label == 'Saved devices')
-        .submenu!
-        .items!
-        .map((item) => item.label)
-        .toList();
+    final labels = menu.items!.map((item) => item.label).toList();
     expect(
         labels,
         containsAllInOrder([
           'PlayBridge',
           'Zebra',
-          'Alpha · Not found',
-          'Google Cast',
-          'Kitchen · Not found',
         ]));
-    expect(menu.getMenuItem('sender_device:${missing.identityKey}')!.disabled,
-        isFalse);
+    expect(labels.where((l) => l != null && l.contains('not found')), isEmpty);
+    expect(labels, isNot(contains('Google Cast')));
+    expect(menu.getMenuItem('sender_device:${missing.identityKey}'), isNull);
+    expect(menu.getMenuItem('sender_device:${cast.identityKey}'), isNull);
+    expect(menu.getMenuItem('sender_manage'), isNotNull);
   });
 
   test('playing menu offers pause and normalizes long titles', () {
@@ -256,7 +251,7 @@ void main() {
       remotePlaybackState: 'playing',
     );
 
-    expect(menu.getMenuItem('sender_play_pause')!.label, 'Pause playback');
+    expect(menu.getMenuItem('sender_play_pause')!.label, 'Pause');
     final title = menu.items!
         .singleWhere((item) => item.label?.startsWith('Now playing:') == true)
         .label!;

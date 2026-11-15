@@ -1,36 +1,90 @@
 import { DurableObject } from "cloudflare:workers";
 
-// One Limits object per client IP. Fixed-window counters, stored in memory and
-// SQLite so a hit survives eviction. Each Worker binds its own copy.
+// One Limits object per client IP: the rooms that network has open, and how many it opened
+// in the last hour. A room holds a slot from creation until it empties, closes or expires;
+// an entry past its expiry no longer counts, so a slot that is never handed back frees
+// itself when its room would have expired anyway.
+
+const HOUR_MS = 3_600_000;
+
+export type SlotResult = { ok: true } | { ok: false; retryAfterSecs: number };
+
+interface State {
+  /** roomId → when that room expires. */
+  open: Record<string, number>;
+  hourStart: number;
+  hourCount: number;
+}
 
 export interface LimitsRpc {
-  hit(kind: string, max: number, windowMs: number): Promise<boolean>;
+  openRoom(room: string, expiresAt: number, maxOpen: number, maxPerHour: number, isNew: boolean): Promise<SlotResult>;
+  closeRoom(room: string): Promise<void>;
 }
 
 export class Limits extends DurableObject implements LimitsRpc {
-  async hit(kind: string, max: number, windowMs: number): Promise<boolean> {
+  /**
+   * Takes a slot for `room`. `isNew` rooms also count against the hourly budget; a room
+   * coming back to life after it emptied only needs a slot.
+   */
+  async openRoom(room: string, expiresAt: number, maxOpen: number, maxPerHour: number, isNew: boolean): Promise<SlotResult> {
     const now = Date.now();
-    const key = `w:${kind}`;
-    const window = (await this.ctx.storage.get<{ start: number; count: number }>(key)) ?? {
-      start: now,
-      count: 0,
-    };
-    if (now - window.start >= windowMs) {
-      window.start = now;
-      window.count = 0;
+    const state = await this.load(now);
+    if (state.open[room] !== undefined) return { ok: true };
+
+    const expiries = Object.values(state.open);
+    if (expiries.length >= maxOpen) {
+      return { ok: false, retryAfterSecs: (Math.min(...expiries) - now) / 1000 };
     }
-    if (window.count >= max) return false;
-    window.count++;
-    await this.ctx.storage.put(key, window);
-    // Clear the object once its longest window has passed.
-    const alarm = await this.ctx.storage.getAlarm();
-    const expiry = window.start + windowMs;
-    if (alarm === null || alarm < expiry) await this.ctx.storage.setAlarm(expiry);
-    return true;
+    if (isNew) {
+      if (state.hourCount >= maxPerHour) {
+        return { ok: false, retryAfterSecs: (state.hourStart + HOUR_MS - now) / 1000 };
+      }
+      state.hourCount++;
+    }
+    state.open[room] = expiresAt;
+    await this.save(state, now);
+    return { ok: true };
+  }
+
+  async closeRoom(room: string): Promise<void> {
+    const now = Date.now();
+    const state = await this.load(now);
+    if (state.open[room] === undefined) return;
+    delete state.open[room];
+    await this.save(state, now);
   }
 
   async alarm(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+    const now = Date.now();
+    const state = await this.load(now);
+    if (Object.keys(state.open).length === 0 && now - state.hourStart >= HOUR_MS) {
+      await this.ctx.storage.deleteAll();
+    } else {
+      await this.ctx.storage.setAlarm(this.cleanupAt(state));
+    }
+  }
+
+  private async load(now: number): Promise<State> {
+    const state = (await this.ctx.storage.get<State>("s")) ?? { open: {}, hourStart: now, hourCount: 0 };
+    for (const [room, expiresAt] of Object.entries(state.open)) {
+      if (expiresAt <= now) delete state.open[room];
+    }
+    if (now - state.hourStart >= HOUR_MS) {
+      state.hourStart = now;
+      state.hourCount = 0;
+    }
+    return state;
+  }
+
+  private async save(state: State, now: number): Promise<void> {
+    await this.ctx.storage.put("s", state);
+    // Clear the object once nothing in it matters any more.
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm < now) await this.ctx.storage.setAlarm(this.cleanupAt(state));
+  }
+
+  private cleanupAt(state: State): number {
+    return Math.max(state.hourStart + HOUR_MS, ...Object.values(state.open));
   }
 }
 

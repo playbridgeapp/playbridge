@@ -1,102 +1,51 @@
 package com.playbridge.player.ui.player
 
-import androidx.compose.foundation.background
+import com.playbridge.player.ui.theme.TvSpacing
+import com.playbridge.player.ui.theme.TvText
+import com.playbridge.player.ui.theme.TvTheme
+
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 
-@OptIn(ExperimentalTvMaterial3Api::class)
+/**
+ * Title and one context line at the top left of the full controls (mockup PlayerControls):
+ * 30sp title, 16sp muted line under it ("From Pixel 9 · 2 of 4 in the queue", "Paused · 8 min left").
+ * [contextContent] replaces the line with other content (the Watch Together party label).
+ */
 @Composable
 fun TopMetadata(
     title: String,
-    subtitle: String?,
-    modifier: Modifier = Modifier
+    context: String?,
+    modifier: Modifier = Modifier,
+    contextContent: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = 48.dp, end = 48.dp, top = 32.dp),
+            .padding(start = TvSpacing.screenGutter, end = TvSpacing.screenGutter, top = TvSpacing.playerEdge),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (!subtitle.isNullOrBlank()) {
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White.copy(alpha = 0.75f),
-                maxLines = 1
-            )
-        }
-
         Text(
             text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            color = Color.White,
+            style = TvText.panelTitle,
+            color = TvTheme.player.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.Bold
         )
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-fun BottomMetadata(
-    engineType: String,
-    streamInfo: String?,
-    hdrFormat: String?,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 48.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        val displayInfo = remember(engineType, streamInfo) {
-            if (streamInfo.isNullOrBlank()) engineType else "$engineType | $streamInfo"
+        if (contextContent != null) {
+            contextContent()
+        } else if (!context.isNullOrBlank()) {
+            Text(
+                text = context,
+                style = TvText.caption,
+                color = TvTheme.player.onSurfaceMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
-
-        Text(
-            text = displayInfo,
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.9f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false)
-        )
-
-        if (!hdrFormat.isNullOrBlank()) {
-            HdrBadge(hdrFormat)
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun HdrBadge(format: String) {
-    Box(
-        modifier = Modifier
-            .background(Color(0xFFFFD700), RoundedCornerShape(3.dp))
-            .padding(horizontal = 6.dp, vertical = 1.dp)
-    ) {
-        Text(
-            text = format,
-            color = Color.Black,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Black,
-            fontSize = 10.sp
-        )
     }
 }

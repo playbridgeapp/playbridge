@@ -28,6 +28,13 @@ pub struct Timeline {
     /// Revision; higher wins. Ties break on the member that wrote it.
     pub rev: u64,
     pub by: MemberId,
+    /// True only when playback paused because the video reached its end.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ended: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Timeline {
@@ -210,6 +217,7 @@ mod tests {
             at_room_ms,
             rev: 1,
             by: MemberId::from_bytes([1; 16]),
+            ended: false,
         }
     }
 

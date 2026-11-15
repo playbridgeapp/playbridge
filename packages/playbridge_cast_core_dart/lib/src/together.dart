@@ -187,6 +187,8 @@ sealed class TogetherPlayerCommand {
         return TogetherRate(rate is num ? rate.toDouble() : 1.0);
       case 'go_live':
         return const TogetherGoLive();
+      case 'clear':
+        return const TogetherClear();
     }
     return null;
   }
@@ -226,7 +228,46 @@ final class TogetherGoLive extends TogetherPlayerCommand {
   const TogetherGoLive();
 }
 
-enum TogetherStop { left, unauthorized, roomFull, expired, replaced, error }
+/// Stop the shared video and return to waiting for the next one.
+final class TogetherClear extends TogetherPlayerCommand {
+  const TogetherClear();
+}
+
+enum TogetherStop {
+  left,
+  unauthorized,
+  roomFull,
+  expired,
+  replaced,
+
+  /// Too many parties open, or started this hour, on the creator's network.
+  roomLimit,
+
+  /// The relay used up its daily budget.
+  relayBusy,
+  error,
+}
+
+/// When a refused party may try again: "in a minute", "in 12 minutes", "in about 3 hours".
+String togetherRetryIn(Duration retryAfter) {
+  final secs = retryAfter.inSeconds;
+  final minutes = (secs + 59) ~/ 60;
+  final hours = (secs + 1800) ~/ 3600;
+  if (minutes <= 1) return 'in a minute';
+  if (minutes < 60) return 'in $minutes minutes';
+  if (hours <= 1) return 'in about an hour';
+  return 'in about $hours hours';
+}
+
+/// The messages for the limits every app shows the same way; null for the other reasons.
+String? togetherLimitMessage(TogetherStop reason, Duration retryAfter) =>
+    switch (reason) {
+      TogetherStop.roomLimit =>
+        'Too many watch parties are open on your network. End one, or try again ${togetherRetryIn(retryAfter)}.',
+      TogetherStop.relayBusy =>
+        'The watch party relay is busy today. Try again ${togetherRetryIn(retryAfter)}.',
+      _ => null,
+    };
 
 sealed class TogetherEvent {
   const TogetherEvent();
@@ -269,6 +310,8 @@ sealed class TogetherEvent {
         return TogetherConnected(_strings(json['members']));
       case 'disconnected':
         return const TogetherDisconnected();
+      case 'unreachable':
+        return const TogetherUnreachable();
       case 'member_joined':
         final member = s('member');
         return member == null ? null : TogetherMemberJoined(member);
@@ -287,6 +330,8 @@ sealed class TogetherEvent {
       case 'video':
         final item = TogetherItem.fromJson(json['item']);
         return item == null ? null : TogetherVideo(item);
+      case 'video_cleared':
+        return const TogetherVideoCleared();
       case 'timeline':
         final item = s('item');
         if (item == null) return null;
@@ -296,6 +341,9 @@ sealed class TogetherEvent {
           positionMs: _int(json['position_ms']),
           rev: _int(json['rev']),
         );
+      case 'ended':
+        final item = s('item');
+        return item == null ? null : TogetherVideoEnded(item);
       case 'waiting':
         return TogetherWaiting(_strings(json['members']));
       case 'continue_without_available':
@@ -328,6 +376,9 @@ sealed class TogetherEvent {
         return TogetherWarning(s('message') ?? '');
       case 'live':
         return TogetherLive(b('live'));
+      case 'duration':
+        final raw = json['duration_ms'];
+        return TogetherDuration(raw is num ? raw.toInt() : null);
       case 'rejected':
         return TogetherRejected(s('reason') ?? '');
       case 'player':
@@ -364,8 +415,15 @@ sealed class TogetherEvent {
             'room_full' => TogetherStop.roomFull,
             'expired' => TogetherStop.expired,
             'replaced' => TogetherStop.replaced,
+            'room_limit' => TogetherStop.roomLimit,
+            'relay_busy' => TogetherStop.relayBusy,
             _ => TogetherStop.error,
           },
+          retryAfter: Duration(
+              seconds: switch (json['retry_after']) {
+            final num n when n > 0 => n.toInt(),
+            _ => 0,
+          }),
         );
     }
     return null;
@@ -407,6 +465,11 @@ final class TogetherDisconnected extends TogetherEvent {
   const TogetherDisconnected();
 }
 
+/// The relay hasn't been reachable for a while; the engine keeps trying.
+final class TogetherUnreachable extends TogetherEvent {
+  const TogetherUnreachable();
+}
+
 final class TogetherMemberJoined extends TogetherEvent {
   const TogetherMemberJoined(this.member);
   final String member;
@@ -435,6 +498,10 @@ final class TogetherVideo extends TogetherEvent {
   final TogetherItem item;
 }
 
+final class TogetherVideoCleared extends TogetherEvent {
+  const TogetherVideoCleared();
+}
+
 final class TogetherTimeline extends TogetherEvent {
   const TogetherTimeline({
     required this.item,
@@ -446,6 +513,12 @@ final class TogetherTimeline extends TogetherEvent {
   final bool playing;
   final int positionMs;
   final int rev;
+}
+
+/// The shared video reached its end on the timeline (not a manual pause).
+final class TogetherVideoEnded extends TogetherEvent {
+  const TogetherVideoEnded(this.item);
+  final String item;
 }
 
 final class TogetherWaiting extends TogetherEvent {
@@ -508,6 +581,12 @@ final class TogetherLive extends TogetherEvent {
   final bool live;
 }
 
+/// The party's known duration for the current video, or null when live/unknown.
+final class TogetherDuration extends TogetherEvent {
+  const TogetherDuration(this.durationMs);
+  final int? durationMs;
+}
+
 /// A message the engine dropped; for logs only.
 final class TogetherRejected extends TogetherEvent {
   const TogetherRejected(this.reason);
@@ -556,9 +635,16 @@ final class TogetherError extends TogetherEvent {
 }
 
 final class TogetherStopped extends TogetherEvent {
-  const TogetherStopped({required this.roomId, required this.reason});
+  const TogetherStopped({
+    required this.roomId,
+    required this.reason,
+    this.retryAfter = Duration.zero,
+  });
   final String roomId;
   final TogetherStop reason;
+
+  /// Set for [TogetherStop.roomLimit] and [TogetherStop.relayBusy].
+  final Duration retryAfter;
 }
 
 /// The native calls a [TogetherClient] makes; tests swap in a fake.
@@ -641,6 +727,7 @@ final class TogetherClient {
 
   bool load(TogetherItem item) =>
       _submit({'command': 'load', 'item': item.toJson()});
+  bool clear() => _submit({'command': 'clear'});
   bool requestPlay(TogetherItem item) =>
       _submit({'command': 'request_play', 'item': item.toJson()});
   bool play() => _submit({'command': 'play'});

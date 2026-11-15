@@ -235,7 +235,10 @@ when it belongs to the person who shared the video, and **other** otherwise.
   Ed25519 key pair for signing.
 - Every sender numbers its messages (`seq`); members drop repeats and older
   numbers, so the relay cannot replay messages.
-- Pairing codes expire after 10 minutes; code lookups are rate-limited per IP.
+- Pairing codes expire after 10 minutes; registers, lookups and invites are
+  rate-limited per IP (10, 30 and 30 a minute) with Workers rate-limit bindings,
+  which cost no Durable Object requests. A code on its own gets nobody anything,
+  so the limits fail open.
 - Joining a room on any relay shows its address in the join prompt.
 - The relay reports a protocol version; the app refuses incompatible relays with
   "This relay needs updating".
@@ -255,14 +258,43 @@ One codebase, deployed two ways:
 | --- | --- | --- |
 | Devices per room | 4 | 8 (configurable) |
 | Room lifetime | 3 hours | 8 hours (configurable) |
-| Rooms per IP per day | a few | configurable |
-| When the quota runs out | "The shared relay is busy. Deploy your own to keep watching." | The owner's own free quota |
+| Rooms open at once per IP | 4 | 20 (configurable) |
+| New rooms per IP per hour | 20 | 100 (configurable) |
+| Daily budget | 60,000 Durable Object requests | none (configurable) |
+| When the budget runs out | "The watch party relay is busy today. Try again in about N hours." | The owner's own free quota |
 
 Both use SQLite-backed Durable Objects (the kind the free plan allows),
-WebSocket Hibernation and Cloudflare's free plan. Per-IP room limits are kept in
-a small `Limits` Durable Object keyed by IP. Rooms close 30 minutes
-after the last member leaves. On the free plan, hitting the daily limit stops the
-service until reset; it never bills.
+WebSocket Hibernation and Cloudflare's free plan. On the free plan, hitting a
+daily limit stops the service until 00:00 UTC; it never bills.
+
+Cloudflare's free limits are per account, so the shared relay and the pairing
+service draw on the same 100,000 Durable Object requests a day. A 3-device,
+2-hour party costs about 75 of them (an incoming WebSocket message counts as
+1/20 of a request); a pairing about 10. The relay keeps 60% for itself and
+leaves the rest for pairing:
+
+- **Slots.** A small `Limits` Durable Object per IP holds that network's open
+  rooms. A room takes a slot when it's created and gives it back 2 minutes after
+  its last member leaves, or when it closes or expires. Rejoining an emptied
+  room takes a slot again and is refused when the network has none left. A slot
+  that is never handed back frees itself when its room would have expired.
+- **Budget.** A `Gate` Durable Object counts the relay's usage per UTC day. A
+  new room is charged 30 up front; open rooms report their messages as they go.
+  Once the budget is spent, new rooms get `503 relay_busy` until midnight UTC;
+  open rooms keep going.
+- **Messages.** Each member may send a burst of 60, then one every 2 seconds;
+  normal use is a few a minute. A member over that is closed with 4029 and
+  reconnects after 30 seconds.
+- **Connects.** Workers rate-limit bindings allow 30 per room and 120 per IP a
+  minute, with no Durable Object cost. A missing or failing limiter lets the
+  connect through.
+
+Refusals carry `{error, retry_after}` and a `Retry-After` header. Apps retry
+`429 rate_limited` after the wait; they stop on `429 room_limit` and
+`503 relay_busy` and say when to try again. Network errors back off up to 2
+minutes, and after 20 seconds without a connection the apps say they can't
+reach the relay and are still trying. Rooms close 30 minutes after the last
+member leaves.
 
 ### Self-hosting a Room Worker
 
@@ -282,7 +314,7 @@ Only the host's relay setting matters. Guests follow the invite link.
 - **Envelope** (`protocol/`, unencrypted): `v`, `room`, `from`, `to` (optional,
   for per-member messages), `seq`, `ct` (ciphertext).
 - **Room messages** (inside `ct`, defined in `cast/together`): `hello`,
-  `member`, `load`, `ready`, `play`, `pause`, `seek`, `position`, `buffering`,
+  `member`, `load`, `clear`, `ready`, `play`, `pause`, `seek`, `position`, `buffering`,
   `leave`, `host`, `lock`, `change_policy`, `request_play`, `request_reply`,
   `credentials`, `warning`.
 - **Clock**: `ping {t0}` and `pong {t0, room_time}` handled by the Room Worker
@@ -307,7 +339,7 @@ Only the host's relay setting matters. Guests follow the invite link.
 Built: the Android TV (pairing code and QR, join prompt, synced player, remote
 controls go to the party, no history) and the Android phone as host, guest and
 remote (start or join, share the invite, add the connected TV or a TV by code,
-play, pause and seek, lock, who can change the video, requests, sign-in
+play, pause, seek bar, stop video, lock, who can change the video, requests, sign-in
 sharing). While the phone is in a party, a video tapped in the cast sheet plays
 in the party. The phone can also watch: "Watch on this phone" (on by default
 when it isn't connected to a TV) plays the video in the phone player, whose
@@ -317,9 +349,21 @@ the player turns the phone back into a remote. The shared relay runs at
 
 Sync details settled while testing:
 
-- The room pauses at the end of the video (the shortest length a screen
-  reported), and no device is seeked past its own end. Live streams report no
-  length and never end.
+- When the shared timeline reaches the end of the video (the shortest length a
+  screen reported), it pauses with `ended` on the timeline, emits `ended` once,
+  and a host-capable member clears the video (`clear`) so every member stops
+  playing and returns to pre-play (`video_cleared`, waiting for the next pick)
+  while staying in the party. Manual pause near the end does not emit `ended`
+  or clear. If only guests remain or an older host does not clear, `ended`
+  still closes each screen's player and keeps it waiting as a screen. Stopping
+  the video early (`clear`, allowed by the same permission as changing the video)
+  uses the same path: it clears the item, closes every member's player without
+  leaving the party, writing history, or advancing to "up next", and returns
+  remotes to waiting so the party stays open for the next pick. (On TVs, the
+  remote Back button still leaves the party.) Live streams report no length,
+  hide seeking, and never end, though they can still be stopped (`clear`). When
+  a screen learns a late finite duration after loading, the engine broadcasts a
+  `duration` update so phones can reveal the seek bar.
 - Players keep no back buffer (low-memory TVs), so any seek back reloads the
   video. While paused, gaps under 500 ms are left alone and closed by the speed
   nudge after resuming.
@@ -341,6 +385,40 @@ Not yet: web-page and Bridged App sources on the phone and TV (direct links
 only), and adding several paired TVs at once (the phone keeps one live TV
 connection).
 
+### Phase 2 status (Apple TV)
+
+Built (Apple TV Simulator tested; iPhone app is separate): the Apple TV receiver
+as a Watch Together screen (`PlayBridgeCastCore.xcframework` built with
+`receiver-proxy-apple,together` and `pb_together_*` FFI).
+
+- **Joining.** Pairing code and QR (`pair.playbridge.app` or a custom pairing
+  URL) with a confirmation prompt showing the host and relay; paired phones also
+  see `watch_together_v1` in capabilities and can add the TV over LAN via
+  `watch_together_join` (`watch_together_joined`). When `PlayBridgeCastCore` is
+  absent on a clean checkout, Watch Together reports that it isn't available on
+  this Apple TV without crashing.
+- **Synced player.** Party videos load paused in either mpv or AVPlayer via
+  `PlayerOverlayController` / `TogetherLoadedPlanner`, outside history,
+  bookmarks and progress webhooks. Video replacements reuse the active playback
+  session (`TogetherPlaybackPolicy`) with generation- and item-loaded-fenced
+  status reporting so stale frames do not misclassify on-demand videos as live,
+  and `go_live` seeks only when a loaded stream lacks a finite duration. Play,
+  pause and seek from the Siri Remote and paired phone remotes forward to the
+  party; inside a party, playback errors stay on screen without auto-closing
+  and natural end-of-video closes the player and returns to the party waiting
+  screen without leaving, while Leave party disconnects the room and continues
+  local playback as an ordinary video.
+- **Tested.** Host Swift tests (`TogetherModels`, `TogetherLoadedPlanner`,
+  `TogetherClient`, `TogetherPlaybackPolicy`, `TogetherPlayerAttachment`),
+  clean-checkout build without `PlayBridgeCastCore.xcframework`, and live
+  Apple TV Simulator + Watch Together host tests against `party.playbridge.app`
+  / `pair.playbridge.app` (pair, invite, join, load, replace item, failure
+  handling, end-of-video, seek, pause & play, Leave party, no
+  history/bookmarks) on both mpv and AVPlayer.
+- **Not yet tested.** Real Apple TV hardware, phone-initiated LAN
+  `watch_together_join`, a live HLS stream in a party, and the iPhone Watch
+  Together UI (not built).
+
 ### Phase 3 status
 
 Built (macOS tested; Windows and Linux share the code): the desktop as screen,
@@ -358,7 +436,8 @@ remote and host from a Watch Together screen in the sidebar.
   asking. The desktop receiver advertises `watch_together_v1`, and its Rust
   receiver passes an authenticated sender's `watch_together_join` to the app.
 - **Remote and host.** Start a party (shared relay or your own), copy the
-  invite, play, pause and seek, add the connected PlayBridge TV (it becomes
+  invite, play, pause, seek, and stop the video (under the video-change
+  permission), add the connected PlayBridge TV (it becomes
   this computer's own and, for the host, its delegate) or a TV by code, lock,
   who can change the video, requests, and sign-in sharing. A video sent from
   the browser extension during a party plays in the party (direct links; a

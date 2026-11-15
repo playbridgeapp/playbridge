@@ -213,6 +213,72 @@ void main() {
     await waitFor(() => f.engine.state == 'playing');
   });
 
+  test('the party video ending stops playback and keeps this computer watching',
+      () async {
+    final f = await fixture();
+    await joinAndLoad(f);
+    final stops = f.engine.stops;
+
+    f.player.notifyCompletedForTest();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(f.engine.stops, stops + 1, reason: 'closes player at end of video');
+    expect(f.together.state, isA<TogetherInParty>());
+    expect(f.together.party!.watching, isTrue);
+    expect(f.player.inParty, isFalse);
+    expect(f.player.currentItemId, isNull);
+    expect(f.room.names, isNot(contains('screen')));
+
+    // The next party video plays here too.
+    deliver(f.client, f.room, load('b'));
+    await waitFor(() => f.player.currentItemId == 'b');
+    expect(f.together.party!.watching, isTrue);
+    expect(f.player.inParty, isTrue);
+  });
+
+  test(
+      'ended event without clear stops player and returns party to waiting as a screen',
+      () async {
+    final f = await fixture();
+    await joinAndLoad(f);
+    final stops = f.engine.stops;
+
+    deliver(f.client, f.room, {'event': 'ended', 'item': 'a'});
+    await waitFor(() => f.engine.stops == stops + 1);
+
+    expect(f.together.state, isA<TogetherInParty>());
+    expect(f.together.party!.item, isNull);
+    expect(f.together.party!.watching, isTrue);
+    expect(f.player.inParty, isFalse);
+    expect(f.player.currentItemId, isNull);
+    expect(f.room.names, isNot(contains('screen')));
+
+    deliver(f.client, f.room, load('b'));
+    await waitFor(() => f.player.currentItemId == 'b');
+    expect(f.together.party!.watching, isTrue);
+    expect(f.player.inParty, isTrue);
+  });
+
+  test('stopping the party video here stops watching here', () async {
+    final f = await fixture();
+    await joinAndLoad(f);
+    await f.player.stop();
+    expect(f.room.last('screen'), {'command': 'screen', 'screen': false});
+    expect(f.together.party!.watching, isFalse);
+  });
+
+  test('a length that arrives after the live wait is still reported', () async {
+    final f = await fixture();
+    f.engine.durationMs = 0;
+    await joinAndLoad(f);
+    expect(f.room.last('loaded'), {'command': 'loaded', 'item': 'a'});
+
+    f.engine.durationMs = 1420000;
+    f.engine.changed();
+    expect(f.room.last('loaded'),
+        {'command': 'loaded', 'item': 'a', 'duration_ms': 1420000});
+  });
+
   test('something else playing turns this computer into a remote', () async {
     final f = await fixture();
     await joinAndLoad(f);
@@ -266,6 +332,27 @@ void main() {
     await waitFor(() => f.engine.stops > stops);
     expect(f.together.state, isA<TogetherEnded>());
     expect(f.player.inParty, isFalse);
+  });
+
+  test(
+      'says when a refused party may try again, and when the relay is unreachable',
+      () async {
+    final f = await fixture();
+    await joinAndLoad(f);
+    deliver(f.client, f.room, {'event': 'unreachable'});
+    expect(f.together.party!.notice, "Can't reach relay.test. Still trying…");
+
+    deliver(f.client, f.room, {
+      'event': 'stopped',
+      'room': 'r1',
+      'reason': 'room_limit',
+      'retry_after': 700,
+    });
+    await waitFor(() => f.together.state is TogetherEnded);
+    expect(
+        (f.together.state as TogetherEnded).message,
+        'Too many watch parties are open on your network. '
+        'End one, or try again in 12 minutes.');
   });
 
   test('sharing a video follows who may change it', () async {
@@ -328,5 +415,28 @@ void main() {
     expect((join as WatchTogetherJoinCmd).from, 'Pixel');
     expect(parseCommand('{"type":"watch_together_join","from":"x"}'),
         isA<UnknownCmd>());
+  });
+
+  test(
+      'video cleared closes player, returns party to preplay, and stopVideo checks permission',
+      () async {
+    final f = await fixture();
+    await joinAndLoad(f);
+    expect(f.player.inParty, isTrue);
+
+    // Guest cannot stop by default; host or Anyone (unlocked) can.
+    expect(f.together.stopVideo(), isFalse);
+    deliver(f.client, f.room, {'event': 'policy', 'policy': 'anyone'});
+    expect(f.together.stopVideo(), isTrue);
+    expect(f.room.names.last, 'clear');
+
+    final stops = f.engine.stops;
+    deliver(f.client, f.room, {'event': 'video_cleared'});
+    await waitFor(() => f.engine.stops > stops);
+
+    expect(f.together.state, isA<TogetherInParty>());
+    expect(f.together.party!.item, isNull);
+    expect(f.together.party!.watching, isTrue);
+    expect(f.player.inParty, isFalse);
   });
 }

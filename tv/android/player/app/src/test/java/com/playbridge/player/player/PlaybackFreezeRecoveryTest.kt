@@ -15,9 +15,9 @@ class PlaybackFreezeRecoveryTest {
                 nowMs = sec * 1_000L,
                 playbackRequested = true,
                 hasFirstFrame = true,
-                isBuffering = true,
                 positionMs = 10_000L,
                 bufferedEndMs = bufferedEnd,
+                durationMs = 120_000L,
             )
             assertEquals(PlaybackFreezeRecovery.Decision.None, decision)
             bufferedEnd += 250L // Slow network continuously filling cache
@@ -35,9 +35,9 @@ class PlaybackFreezeRecoveryTest {
                 nowMs = 0L,
                 playbackRequested = true,
                 hasFirstFrame = true,
-                isBuffering = false,
                 positionMs = 24_000L,
                 bufferedEndMs = 28_000L,
+                durationMs = 120_000L,
             ),
         )
         // Advance slightly to establish 25_000ms as last good position, then freeze flat.
@@ -47,9 +47,9 @@ class PlaybackFreezeRecoveryTest {
                 nowMs = 1_000L,
                 playbackRequested = true,
                 hasFirstFrame = true,
-                isBuffering = false,
                 positionMs = 25_000L,
                 bufferedEndMs = 28_000L,
+                durationMs = 120_000L,
             ),
         )
 
@@ -58,9 +58,9 @@ class PlaybackFreezeRecoveryTest {
                 nowMs = sec * 1_000L,
                 playbackRequested = true,
                 hasFirstFrame = true,
-                isBuffering = true,
                 positionMs = 25_000L,
                 bufferedEndMs = 28_000L,
+                durationMs = 120_000L,
             )
             assertEquals("Expected no reload at t=${sec}s", PlaybackFreezeRecovery.Decision.None, decision)
         }
@@ -69,9 +69,9 @@ class PlaybackFreezeRecoveryTest {
             nowMs = 17_000L,
             playbackRequested = true,
             hasFirstFrame = true,
-            isBuffering = true,
             positionMs = 25_000L,
             bufferedEndMs = 28_000L,
+            durationMs = 120_000L,
         )
         assertEquals(
             PlaybackFreezeRecovery.Decision.Reload(
@@ -91,9 +91,9 @@ class PlaybackFreezeRecoveryTest {
             nowMs = 0L,
             playbackRequested = true,
             hasFirstFrame = true,
-            isBuffering = false,
             positionMs = 12_000L,
             bufferedEndMs = 12_000L,
+            durationMs = 120_000L,
         )
         for (sec in 1..15) {
             assertEquals(
@@ -102,9 +102,9 @@ class PlaybackFreezeRecoveryTest {
                     nowMs = sec * 1_000L,
                     playbackRequested = true,
                     hasFirstFrame = true,
-                    isBuffering = false,
                     positionMs = 12_000L,
                     bufferedEndMs = 12_000L,
+                    durationMs = 120_000L,
                 ),
             )
         }
@@ -112,49 +112,79 @@ class PlaybackFreezeRecoveryTest {
             nowMs = 16_000L,
             playbackRequested = true,
             hasFirstFrame = true,
-            isBuffering = false,
             positionMs = 12_000L,
             bufferedEndMs = 12_000L,
+            durationMs = 120_000L,
         )
         assertTrue(decision is PlaybackFreezeRecovery.Decision.Reload)
     }
 
-    @Test fun eofReachedFreezeReloadsAfter3Seconds() {
-        val recovery = PlaybackFreezeRecovery()
-        recovery.markFirstFrame()
-
-        recovery.sample(
-            nowMs = 0L,
-            playbackRequested = true,
-            hasFirstFrame = true,
-            eofReached = true,
-            positionMs = 18_000L,
-            bufferedEndMs = 18_000L,
-        )
-        for (sec in 1..3) {
+    @Test fun naturalEndAndClearedItemsNeverTriggerFifteenSecondSilentFreezeReload() {
+        // 1. Even before EVENT_ENDED fires, sitting flat at the buffered finite end must not reload.
+        val nearEnd = PlaybackFreezeRecovery()
+        nearEnd.markFirstFrame()
+        for (sec in 0..30) {
             assertEquals(
+                "Flat position/cache at natural end triggered reload at t=${sec}s",
                 PlaybackFreezeRecovery.Decision.None,
-                recovery.sample(
+                nearEnd.sample(
                     nowMs = sec * 1_000L,
                     playbackRequested = true,
                     hasFirstFrame = true,
-                    eofReached = true,
-                    positionMs = 18_000L,
-                    bufferedEndMs = 18_000L,
+                    positionMs = 59_500L,
+                    bufferedEndMs = 60_000L,
+                    durationMs = 60_000L,
                 ),
             )
         }
-        val decision = recovery.sample(
-            nowMs = 4_000L,
+        assertEquals(0, nearEnd.totalRecoveries)
+
+        // 2. Once EVENT_ENDED or TogetherPlayerCommand.Clear marks the item ended, neither
+        //    subsequent flat-sample ticks (even if state briefly looked "playing") nor late
+        //    recoverable errors can trigger a reload. Resetting for a new item re-enables recovery.
+        val ended = PlaybackFreezeRecovery()
+        ended.markFirstFrame()
+        ended.sample(
+            nowMs = 0L,
             playbackRequested = true,
             hasFirstFrame = true,
-            eofReached = true,
-            positionMs = 18_000L,
-            bufferedEndMs = 18_000L,
+            positionMs = 20_000L,
+            bufferedEndMs = 20_000L,
+            durationMs = 60_000L,
         )
+        ended.sample(
+            nowMs = 14_000L,
+            playbackRequested = true,
+            hasFirstFrame = true,
+            positionMs = 20_000L,
+            bufferedEndMs = 20_000L,
+            durationMs = 60_000L,
+        )
+        ended.markEnded()
+        for (sec in 15..35) {
+            assertEquals(
+                PlaybackFreezeRecovery.Decision.None,
+                ended.sample(
+                    nowMs = sec * 1_000L,
+                    playbackRequested = true,
+                    hasFirstFrame = true,
+                    positionMs = 20_000L,
+                    bufferedEndMs = 20_000L,
+                    durationMs = 60_000L,
+                ),
+            )
+        }
         assertEquals(
-            PlaybackFreezeRecovery.Decision.Reload(18_000L, attempt = 1, withoutProgressAttempt = 1),
-            decision,
+            PlaybackFreezeRecovery.Decision.None,
+            ended.evaluateRecoverableError("mpv_playback_failed", playbackRequested = true, positionMs = 20_000L),
+        )
+        assertEquals(0, ended.totalRecoveries)
+
+        ended.resetForNewItem()
+        ended.markFirstFrame()
+        assertTrue(
+            ended.evaluateRecoverableError("mpv_playback_failed", playbackRequested = true, positionMs = 5_000L)
+                is PlaybackFreezeRecovery.Decision.Reload,
         )
     }
 

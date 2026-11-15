@@ -27,6 +27,9 @@ class Engine extends PlayerEngine {
   int durationMs = 100000;
   int stops = 0;
   int opens = 0;
+
+  /// Tells listeners something changed, as the real engine does on every update.
+  void changed() => notifyListeners();
   @override
   dynamic get tracks => null;
   @override

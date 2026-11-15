@@ -92,3 +92,32 @@ val LightOnErrorContainer = Color(0xFF410E0B)
 val LightOnSurface        = Color(0xFF0A0720)
 val LightOnSurfaceVariant = Color(0xFF403A6A)
 val LightOutlineVariant   = Color(0xFFC0BBE0)
+
+// ── Redesign extras (stage 1) ─────────────────────────────────────────────────
+
+/** Dimmed brand text used for "backgrounded" content (Home behind a corner card). */
+val OnSurfaceDim = Color(0xFF6E6A9A)
+val LightOnSurfaceDim = Color(0xFF8A86B0)
+
+/** Status tones for connection dots and "ready" ticks. Warning is amber, success a soft green. */
+val StatusSuccess = Color(0xFF7BDCA0)
+val StatusWarning = Color(0xFFF2C14E)
+val LightStatusSuccess = Color(0xFF1B7F4B)
+val LightStatusWarning = Color(0xFF9A6A00)
+
+// ── Player surfaces (neutral near-black, never themed) ────────────────────────
+// The player always renders over video, so it uses neutral tones instead of the indigo
+// brand surfaces. Brand accent (Primary) is still used for progress and selection.
+
+val PlayerBackground     = Color(0xFF0B0B10) // letterbox / scrim base
+val PlayerPanel          = Color(0xFF17161F) // right-hand side panel
+val PlayerRow            = Color(0xFF23222E) // list row inside a panel
+val PlayerControl        = Color(0xFF2A2836) // circular control button
+val PlayerTrack          = Color(0xFF3A3848) // seek bar / progress track
+val PlayerBuffer         = Color(0xFF6E6A86) // seek bar buffered range
+val PlayerDivider        = Color(0xFF33323F)
+val PlayerOnSurface      = Color(0xFFFFFFFF)
+val PlayerOnSurfaceMuted = Color(0xFFC9C6DA)
+val PlayerOnSurfaceDim   = Color(0xFF8F8AA8) // placeholder / disabled text
+val PlayerFocusFill      = Color(0xFFFFFFFF) // focused control fill
+val PlayerOnFocusFill    = Color(0xFF0D072E)

@@ -68,4 +68,15 @@ class HistoryThumbnailCapturePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `a black or nearly black frame is not kept as a preview`() {
+        assertTrue(isBlankFrame(IntArray(0)))
+        assertTrue(isBlankFrame(IntArray(1000) { 0xFF000000.toInt() }))
+        assertTrue(isBlankFrame(IntArray(1000) { 0xFF101010.toInt() }))
+        // Four bright pixels in a thousand are still a blank frame; five are a picture.
+        assertTrue(isBlankFrame(IntArray(1000) { if (it < 4) 0xFFFFFFFF.toInt() else 0xFF000000.toInt() }))
+        assertFalse(isBlankFrame(IntArray(1000) { if (it < 5) 0xFFFFFFFF.toInt() else 0xFF000000.toInt() }))
+        assertFalse(isBlankFrame(IntArray(1000) { 0xFF336699.toInt() }))
+    }
 }

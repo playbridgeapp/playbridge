@@ -5,13 +5,24 @@
   "name": "playbridge-together-pairing",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "observability": { "enabled": true },
+  // One log line per failure; no line for every request.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   "routes": [{ "pattern": "pair.playbridge.app", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
-      { "name": "LOBBIES", "class_name": "Lobby" },
-      { "name": "LIMITS", "class_name": "Limits" }
+      { "name": "LOBBIES", "class_name": "Lobby" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Lobby", "Limits"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Lobby", "Limits"] },
+    // Per-IP limits moved to the rate-limit bindings below.
+    { "tag": "v2", "deleted_classes": ["Limits"] }
+  ],
+  // Per IP, per minute, counted per Cloudflare location. namespace_id is any integer
+  // unique to the account.
+  "ratelimits": [
+    { "name": "REGISTER_LIMIT", "namespace_id": "4201", "simple": { "limit": 10, "period": 60 } },
+    { "name": "LOOKUP_LIMIT", "namespace_id": "4202", "simple": { "limit": 30, "period": 60 } },
+    { "name": "INVITE_LIMIT", "namespace_id": "4203", "simple": { "limit": 30, "period": 60 } }
+  ]
 }

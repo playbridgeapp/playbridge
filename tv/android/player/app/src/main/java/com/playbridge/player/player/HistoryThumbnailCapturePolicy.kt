@@ -34,3 +34,22 @@ internal fun shouldCaptureHistoryThumbnail(
         HistoryThumbnailMode.ARTWORK_ONLY -> false
     }
 }
+
+private const val BLANK_FRAME_LUMA = 32
+private const val BLANK_FRAME_MIN_LIT_PER_THOUSAND = 5
+
+/**
+ * True when a captured frame (ARGB pixels) is black or nearly so: the video has not drawn its
+ * first picture yet, or sits on a fade. Such a frame is not kept as a preview; a later one is.
+ */
+internal fun isBlankFrame(pixels: IntArray): Boolean {
+    if (pixels.isEmpty()) return true
+    var lit = 0
+    for (pixel in pixels) {
+        val r = (pixel shr 16) and 0xFF
+        val g = (pixel shr 8) and 0xFF
+        val b = pixel and 0xFF
+        if ((r * 299 + g * 587 + b * 114) / 1000 > BLANK_FRAME_LUMA) lit++
+    }
+    return lit.toLong() * 1000 < pixels.size.toLong() * BLANK_FRAME_MIN_LIT_PER_THOUSAND
+}

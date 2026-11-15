@@ -86,6 +86,12 @@ struct PairingCredentialState {
         authorizedTokenVerifiers.removeAll()
     }
 
+    func deviceName(forToken token: String) -> String? {
+        let verifier = Self.hashToken(token)
+        let name = pairedDevices.first(where: { $0.tokenVerifier == verifier })?.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (name?.isEmpty == false) ? name : nil
+    }
+
     mutating func updateLastConnected(token: String, connectedAt: Date = Date()) {
         let verifier = Self.hashToken(token)
         guard let index = pairedDevices.firstIndex(where: { $0.tokenVerifier == verifier }) else {

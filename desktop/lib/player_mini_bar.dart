@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 
 import 'chapter_navigation.dart';
@@ -7,10 +5,12 @@ import 'media_kind.dart';
 import 'playback_clock.dart';
 import 'player_control_visibility.dart';
 import 'player_engine.dart';
+import 'player/player_widgets.dart';
 import 'seek_hover_preview.dart';
+import 'ui/pb_theme.dart';
 
-/// One thin row shown while the desktop player is playing: play/pause, stop,
-/// seek (when the title has a duration), audio, subtitles, and fullscreen.
+/// One slim rounded bar shown while the desktop player is playing: play/pause,
+/// stop, seek (when the title has a duration), audio, subtitles, and fullscreen.
 ///
 /// Audio appears only with two or more real tracks. Subtitles appear only when
 /// at least one real subtitle track exists. Images follow the full bar and
@@ -79,130 +79,95 @@ class PlayerMiniBar extends StatelessWidget {
     final max = dur > 0 ? dur : 1.0;
     final pos = positionMs.toDouble().clamp(0.0, max);
 
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.black.withValues(alpha: 0.05),
-                Colors.black.withValues(alpha: 0.55),
-              ],
-            ),
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(4, 0, 4, 2),
-            child: Row(
-              children: [
-                _MiniIconButton(
-                  tooltip: playing ? 'Pause' : 'Play',
-                  icon: playing ? Icons.pause : Icons.play_arrow,
-                  onPressed: _playEnabled ? onPlayPause : null,
-                ),
-                _MiniIconButton(
-                  tooltip: 'Stop',
-                  icon: Icons.stop,
-                  onPressed: onStop,
-                ),
-                if (showSeek) ...[
-                  SizedBox(
-                    width: 56,
-                    child: Text(
-                      formatControlElapsed(pos.toInt()),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: SeekHoverPreview(
-                      durationMs: durationMs,
-                      chapters: chapters,
-                      // Overlay radius 10 is wider than the thumb.
-                      trackInset: 10,
-                      enabled: seekEnabled,
-                      child: ExcludeFocus(
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            trackHeight: 2,
-                            trackShape: ChapterSliderTrackShape(
-                              fractions: chapterFractions(chapters, durationMs),
-                            ),
-                            thumbShape: const RoundSliderThumbShape(
-                              enabledThumbRadius: 5,
-                            ),
-                            overlayShape: const RoundSliderOverlayShape(
-                              overlayRadius: 10,
-                            ),
-                          ),
-                          child: Slider(
-                            min: 0,
-                            max: max,
-                            value: pos,
-                            onChanged: seekEnabled ? onSeekChanged : null,
-                            onChangeEnd: seekEnabled ? onSeekEnd : null,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 56,
-                    child: Text(
-                      formatRemainingClock(pos.toInt(), durationMs),
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ),
-                ] else
-                  const Spacer(),
-                if (showAudio) audioMenu!,
-                if (showSubs) subtitleMenu!,
-                _MiniIconButton(
-                  tooltip: isFullScreen ? 'Exit fullscreen' : 'Fullscreen',
-                  icon: isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                  onPressed: onToggleFullScreen,
-                ),
-              ],
-            ),
-          ),
-        ),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      decoration: BoxDecoration(
+        color: PbColors.playerSurface.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(28),
       ),
-    );
-  }
-}
-
-class _MiniIconButton extends StatelessWidget {
-  const _MiniIconButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon),
-      iconSize: 18,
-      visualDensity: VisualDensity.compact,
-      padding: const EdgeInsets.all(4),
-      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+      child: Row(
+        children: [
+          PlayerIconButton(
+            tooltip: playing ? 'Pause' : 'Play',
+            icon: playing ? Icons.pause : Icons.play_arrow,
+            onPressed: _playEnabled ? onPlayPause : null,
+          ),
+          PlayerIconButton(
+            tooltip: 'Stop',
+            icon: Icons.stop,
+            onPressed: onStop,
+          ),
+          if (showSeek) ...[
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 52,
+              child: Text(
+                formatControlElapsed(pos.toInt()),
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: PbColors.playerText,
+                ),
+              ),
+            ),
+            Expanded(
+              child: SeekHoverPreview(
+                durationMs: durationMs,
+                chapters: chapters,
+                // Overlay radius 10 is wider than the thumb.
+                trackInset: 10,
+                enabled: seekEnabled,
+                child: ExcludeFocus(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 4,
+                      activeTrackColor: PbColors.accent,
+                      inactiveTrackColor: PlayerTones.track,
+                      thumbColor: PlayerTones.foreground,
+                      trackShape: ChapterSliderTrackShape(
+                        fractions: chapterFractions(chapters, durationMs),
+                        gapColor: PbColors.playerSurface,
+                      ),
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 6,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 10,
+                      ),
+                    ),
+                    child: Slider(
+                      min: 0,
+                      max: max,
+                      value: pos,
+                      onChanged: seekEnabled ? onSeekChanged : null,
+                      onChangeEnd: seekEnabled ? onSeekEnd : null,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 60,
+              child: Text(
+                formatRemainingClock(pos.toInt(), durationMs),
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: PbColors.playerText,
+                ),
+              ),
+            ),
+          ] else
+            const Spacer(),
+          if (showAudio) audioMenu!,
+          if (showSubs) subtitleMenu!,
+          PlayerIconButton(
+            tooltip: isFullScreen ? 'Exit fullscreen' : 'Fullscreen',
+            icon: isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            onPressed: onToggleFullScreen,
+          ),
+        ],
+      ),
     );
   }
 }

@@ -5,15 +5,23 @@ import Foundation
 enum TvCapabilities {
     static let mediaKinds = ["video", "audio", "image"]
 
-    static let defaultFeatures = [
-        "receiver_capabilities_v1",
-        "player_home_v1",
-        "queue_crud_v1",
-        "stable_item_ids",
-        "command_results",
-        "subtitle_resource_add_v1",
-        "progress_webhook_v1",
-    ]
+    static let defaultFeatures: [String] = {
+        var features = [
+            "receiver_capabilities_v1",
+            "player_home_v1",
+            "queue_crud_v1",
+            "stable_item_ids",
+            "command_results",
+            "subtitle_resource_add_v1",
+            "subtitle_style_v1",
+            "subtitle_font_v1",
+            "progress_webhook_v1",
+        ]
+        if RustTogetherBoundary.isCompiledWithCastCore {
+            features.append("watch_together_v1")
+        }
+        return features
+    }()
 
     private static let playerTransport = [
         "play",

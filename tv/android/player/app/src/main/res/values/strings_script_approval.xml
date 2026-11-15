@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="user_script_install_title">Install this browser script?</string>
+    <string name="user_script_install_warning">A script can read and change the pages it runs on in this TV\'s browser. Only approve scripts you chose yourself.</string>
+    <string name="user_script_install_deny">Don\'t install</string>
+    <string name="user_script_install_approve">Install</string>
+    <string name="user_script_fingerprint">Fingerprint (SHA-256), to compare with the phone</string>
+    <plurals name="user_script_expires_in">
+        <item quantity="one">Expires in %1$d second</item>
+        <item quantity="other">Expires in %1$d seconds</item>
+    </plurals>
+</resources>

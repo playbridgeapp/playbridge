@@ -72,9 +72,39 @@ sealed interface TogetherPlayerCommand {
     data class Rate(val rate: Float) : TogetherPlayerCommand
     /** A live stream: jump to this device's live point and play. */
     data object GoLive : TogetherPlayerCommand
+    /** Stop the shared video and return to waiting for the next one. */
+    data object Clear : TogetherPlayerCommand
 }
 
-enum class TogetherStop { Left, Unauthorized, RoomFull, Expired, Replaced, Error }
+enum class TogetherStop {
+    Left, Unauthorized, RoomFull, Expired, Replaced,
+    /** Too many parties open, or started this hour, on the creator's network. */
+    RoomLimit,
+    /** The relay used up its daily budget. */
+    RelayBusy,
+    Error,
+}
+
+/** When a refused party may try again: "in a minute", "in 12 minutes", "in about 3 hours". */
+fun togetherRetryIn(retryAfterSecs: Long): String {
+    val minutes = (retryAfterSecs + 59) / 60
+    val hours = (retryAfterSecs + 1800) / 3600
+    return when {
+        minutes <= 1 -> "in a minute"
+        minutes < 60 -> "in $minutes minutes"
+        hours <= 1 -> "in about an hour"
+        else -> "in about $hours hours"
+    }
+}
+
+/** The messages for the limits every app shows the same way; null for the other reasons. */
+fun togetherLimitMessage(reason: TogetherStop, retryAfterSecs: Long): String? = when (reason) {
+    TogetherStop.RoomLimit ->
+        "Too many watch parties are open on your network. End one, or try again ${togetherRetryIn(retryAfterSecs)}."
+    TogetherStop.RelayBusy ->
+        "The watch party relay is busy today. Try again ${togetherRetryIn(retryAfterSecs)}."
+    else -> null
+}
 
 sealed interface TogetherEvent {
     /** Entered a room. [invite] is the shareable link and holds the room key. */
@@ -92,11 +122,16 @@ sealed interface TogetherEvent {
     }
     data class Connected(val members: List<String>) : TogetherEvent
     data object Disconnected : TogetherEvent
+    /** The relay hasn't been reachable for a while; the engine keeps trying. */
+    data object Unreachable : TogetherEvent
     data class MemberJoined(val member: String) : TogetherEvent
     data class MemberLeft(val member: String) : TogetherEvent
     data class Member(val member: String, val name: String, val kind: TogetherDeviceKind, val host: Boolean) : TogetherEvent
     data class Video(val item: TogetherItem) : TogetherEvent
+    data object VideoCleared : TogetherEvent
     data class Timeline(val item: String, val playing: Boolean, val positionMs: Long, val rev: Long) : TogetherEvent
+    /** The shared video reached its end on the timeline (not a manual pause). */
+    data class Ended(val item: String) : TogetherEvent
     data class Waiting(val members: List<String>) : TogetherEvent
     data class ContinueWithoutAvailable(val members: List<String>) : TogetherEvent
     data class PlayRequested(val request: String, val from: String, val title: String, val site: String?) : TogetherEvent
@@ -108,6 +143,8 @@ sealed interface TogetherEvent {
     data class Warning(val message: String) : TogetherEvent
     /** The video is a live stream: the party shares play and pause only, so hide seeking. */
     data class Live(val live: Boolean) : TogetherEvent
+    /** The party's known duration for the current video, or null when live or unknown. */
+    data class Duration(val durationMs: Long?) : TogetherEvent
     /** A message the engine dropped; for logs only. */
     data class Rejected(val reason: String) : TogetherEvent
     data class Player(val command: TogetherPlayerCommand) : TogetherEvent
@@ -126,7 +163,8 @@ sealed interface TogetherEvent {
     data class PairingInvite(val from: String, val relay: String) : TogetherEvent
     data class PairSent(val id: String?) : TogetherEvent
     data class Error(val context: String, val message: String, val id: String?) : TogetherEvent
-    data class Stopped(val roomId: String, val reason: TogetherStop) : TogetherEvent
+    /** [retryAfterSecs] is set for [TogetherStop.RoomLimit] and [TogetherStop.RelayBusy]. */
+    data class Stopped(val roomId: String, val reason: TogetherStop, val retryAfterSecs: Long = 0) : TogetherEvent
 }
 
 object TogetherJson {
@@ -177,6 +215,7 @@ object TogetherJson {
         )
         "connected" -> TogetherEvent.Connected(o.strings("members"))
         "disconnected" -> TogetherEvent.Disconnected
+        "unreachable" -> TogetherEvent.Unreachable
         "member_joined" -> TogetherEvent.MemberJoined(o.string("member") ?: return null)
         "member_left" -> TogetherEvent.MemberLeft(o.string("member") ?: return null)
         "member" -> TogetherEvent.Member(
@@ -186,12 +225,14 @@ object TogetherJson {
             host = o.bool("host"),
         )
         "video" -> TogetherEvent.Video(parseItem(o.obj("item") ?: return null) ?: return null)
+        "video_cleared" -> TogetherEvent.VideoCleared
         "timeline" -> TogetherEvent.Timeline(
             item = o.string("item") ?: return null,
             playing = o.bool("playing"),
             positionMs = o.long("position_ms"),
             rev = o.long("rev"),
         )
+        "ended" -> TogetherEvent.Ended(o.string("item") ?: return null)
         "waiting" -> TogetherEvent.Waiting(o.strings("members"))
         "continue_without_available" -> TogetherEvent.ContinueWithoutAvailable(o.strings("members"))
         "play_requested" -> TogetherEvent.PlayRequested(
@@ -207,6 +248,7 @@ object TogetherJson {
         "credentials" -> TogetherEvent.CredentialsReceived(o.string("item") ?: return null)
         "warning" -> TogetherEvent.Warning(o.string("message").orEmpty())
         "live" -> TogetherEvent.Live(o.bool("live"))
+        "duration" -> TogetherEvent.Duration(o.nullableLong("duration_ms"))
         "rejected" -> TogetherEvent.Rejected(o.string("reason").orEmpty())
         "player" -> parsePlayer(o.obj("command") ?: return null)?.let { TogetherEvent.Player(it) }
         "pairing_code" -> TogetherEvent.PairingCode(
@@ -227,8 +269,11 @@ object TogetherJson {
                 "room_full" -> TogetherStop.RoomFull
                 "expired" -> TogetherStop.Expired
                 "replaced" -> TogetherStop.Replaced
+                "room_limit" -> TogetherStop.RoomLimit
+                "relay_busy" -> TogetherStop.RelayBusy
                 else -> TogetherStop.Error
             },
+            o.long("retry_after"),
         )
         else -> null
     }
@@ -244,6 +289,7 @@ object TogetherJson {
         "seek" -> TogetherPlayerCommand.Seek(o.long("position_ms"))
         "rate" -> TogetherPlayerCommand.Rate((o["rate"] as? JsonPrimitive)?.doubleOrNull?.toFloat() ?: 1f)
         "go_live" -> TogetherPlayerCommand.GoLive
+        "clear" -> TogetherPlayerCommand.Clear
         else -> null
     }
 
@@ -273,6 +319,9 @@ object TogetherJson {
 
     private fun JsonObject.long(name: String): Long =
         (this[name] as? JsonPrimitive)?.let { it.longOrNull ?: it.doubleOrNull?.toLong() } ?: 0L
+
+    private fun JsonObject.nullableLong(name: String): Long? =
+        (this[name] as? JsonPrimitive)?.let { it.longOrNull ?: it.doubleOrNull?.toLong() }
 
     private fun JsonObject.obj(name: String): JsonObject? = this[name] as? JsonObject
 

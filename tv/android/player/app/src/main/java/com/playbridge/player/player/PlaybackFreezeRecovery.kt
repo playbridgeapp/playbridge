@@ -8,12 +8,13 @@ import kotlin.math.abs
  * Mirrors Apple TV's `PlaybackFreezeRecovery`:
  * - Waits passively while a slow server is still filling the demuxer cache (`bufferedEndMs` grows).
  * - Reloads at the last good position only when genuinely stuck (position and cache both flat for
- *   [STALL_RELOAD_DELAY_MS], or frozen at EOF for [EOF_FREEZE_RELOAD_DELAY_MS], or on a recoverable
- *   premature-EOF / 5xx / network error after playback has started).
+ *   [STALL_RELOAD_DELAY_MS], or on a recoverable premature-EOF / 5xx / network error after
+ *   playback has started).
  * - Caps retries to [MAX_RECOVERIES_WITHOUT_PROGRESS] consecutive attempts without
  *   [MIN_PROGRESS_ADVANCE_MS] of forward progress and [MAX_TOTAL_RECOVERIES] total attempts per
  *   item (preserved across pauses and seeks; reset only on a new item / retry launch).
- * - Never triggers during pause (user or party), seeking, live streams, pre-buffering, or Still watching.
+ * - Never triggers after item end/clear, during pause (user or party), seeking, live streams,
+ *   pre-buffering, or Still watching.
  */
 internal class PlaybackFreezeRecovery {
     sealed class Decision {
@@ -40,6 +41,8 @@ internal class PlaybackFreezeRecovery {
         private set
     var itemHasEverRenderedFirstFrame: Boolean = false
         private set
+    var hasEnded: Boolean = false
+        private set
 
     private var frozenTicks: Int = 0
     private var stallSinceMs: Long? = null
@@ -50,12 +53,19 @@ internal class PlaybackFreezeRecovery {
         itemHasEverRenderedFirstFrame = true
     }
 
+    /** Marks the active item as naturally ended or cleared so no delayed freeze/error reload can fire. */
+    fun markEnded() {
+        hasEnded = true
+        resetTransientFreeze()
+    }
+
     fun resetForNewItem() {
         totalRecoveries = 0
         recoveriesWithoutProgress = 0
         lastRecoveryPositionMs = null
         lastGoodPositionMs = 0L
         itemHasEverRenderedFirstFrame = false
+        hasEnded = false
         resetTransientFreeze()
     }
 
@@ -93,13 +103,12 @@ internal class PlaybackFreezeRecovery {
         isPreBuffering: Boolean = false,
         isStillWatchingPrompting: Boolean = false,
         hasFirstFrame: Boolean = true,
-        @Suppress("UNUSED_PARAMETER") isBuffering: Boolean = false,
-        eofReached: Boolean = false,
         positionMs: Long,
         bufferedEndMs: Long,
+        durationMs: Long = 0L,
     ): Decision {
         if (hasFirstFrame) itemHasEverRenderedFirstFrame = true
-        if (!playbackRequested || isPaused || isSeeking || isLive || isPreBuffering || isStillWatchingPrompting) {
+        if (hasEnded || !playbackRequested || isPaused || isSeeking || isLive || isPreBuffering || isStillWatchingPrompting) {
             resetTransientFreeze()
             return Decision.None
         }
@@ -110,6 +119,15 @@ internal class PlaybackFreezeRecovery {
 
         val clampedPosMs = positionMs.coerceAtLeast(0L)
         val clampedBufferedEndMs = maxOf(clampedPosMs, bufferedEndMs.coerceAtLeast(0L))
+        if (durationMs > 0L) {
+            val endThresholdMs = (durationMs - END_OF_ITEM_MARGIN_MS).coerceAtLeast(0L)
+            if (clampedPosMs >= endThresholdMs && clampedBufferedEndMs >= endThresholdMs) {
+                // Playback has reached the end of the fully buffered stream; do not reload while
+                // the renderer drains or finishes.
+                resetTransientFreeze()
+                return Decision.None
+            }
+        }
 
         val prevPos = lastSamplePositionMs
         val prevBuffered = lastSampleBufferedEndMs
@@ -147,9 +165,8 @@ internal class PlaybackFreezeRecovery {
         if (stallSinceMs == null) stallSinceMs = nowMs
         if (frozenTicks < FROZEN_TICKS_THRESHOLD) return Decision.None
 
-        val delayMs = if (eofReached) EOF_FREEZE_RELOAD_DELAY_MS else STALL_RELOAD_DELAY_MS
         val elapsed = nowMs - (stallSinceMs ?: nowMs)
-        if (elapsed < delayMs) return Decision.None
+        if (elapsed < STALL_RELOAD_DELAY_MS) return Decision.None
 
         return recordRecoveryOrFail(resumePositionMs = maxOf(lastGoodPositionMs, clampedPosMs))
     }
@@ -157,7 +174,7 @@ internal class PlaybackFreezeRecovery {
     /**
      * Evaluates an MPV error / premature-EOF event after playback started or during a recovery
      * reload. Returns [Decision.None] when the event should take normal failure/failover handling
-     * (e.g., initial load before first frame, live stream, paused, or non-recoverable HTTP 4xx/format error).
+     * (e.g., initial load before first frame, live stream, paused, ended, or non-recoverable HTTP 4xx/format error).
      */
     fun evaluateRecoverableError(
         errorCode: String,
@@ -168,7 +185,7 @@ internal class PlaybackFreezeRecovery {
         isStillWatchingPrompting: Boolean = false,
         positionMs: Long = lastGoodPositionMs,
     ): Decision {
-        if (!playbackRequested || isPaused || isLive || isPreBuffering || isStillWatchingPrompting) {
+        if (hasEnded || !playbackRequested || isPaused || isLive || isPreBuffering || isStillWatchingPrompting) {
             return Decision.None
         }
         if (!itemHasEverRenderedFirstFrame && totalRecoveries == 0) {
@@ -205,7 +222,7 @@ internal class PlaybackFreezeRecovery {
     companion object {
         const val FROZEN_TICKS_THRESHOLD = 2
         const val STALL_RELOAD_DELAY_MS = 15_000L
-        const val EOF_FREEZE_RELOAD_DELAY_MS = 3_000L
+        const val END_OF_ITEM_MARGIN_MS = 1_000L
         const val MAX_RECOVERIES_WITHOUT_PROGRESS = 2
         const val MAX_TOTAL_RECOVERIES = 6
         const val MIN_PROGRESS_ADVANCE_MS = 2_000L

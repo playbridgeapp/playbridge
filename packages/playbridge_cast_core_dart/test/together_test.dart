@@ -57,6 +57,7 @@ void main() {
       headers: {'Referer': 'https://example.com/'},
     ));
     client.reply('r1', allowed: true);
+    client.clear();
     client.setScreen(false);
 
     expect(native.submitted, [
@@ -87,6 +88,7 @@ void main() {
         },
       },
       {'command': 'reply', 'request': 'r1', 'allowed': true, 'always': false},
+      {'command': 'clear'},
       {'command': 'screen', 'screen': false},
     ]);
   });
@@ -143,16 +145,46 @@ void main() {
     expect((events[4] as TogetherStopped).reason, TogetherStop.roomFull);
   });
 
-  test('parses live streams', () {
+  test('parses limits with when to try again, and an unreachable relay', () {
+    final events = <TogetherEvent>[];
+    client.events.listen(events.add);
+    native.pending.addAll([
+      '{"event":"unreachable"}',
+      '{"event":"stopped","room":"r","reason":"relay_busy","retry_after":7000}',
+    ]);
+    client.poll();
+    expect(events[0], isA<TogetherUnreachable>());
+    final stopped = events[1] as TogetherStopped;
+    expect(stopped.reason, TogetherStop.relayBusy);
+    expect(stopped.retryAfter, const Duration(seconds: 7000));
+    expect(togetherLimitMessage(stopped.reason, stopped.retryAfter),
+        'The watch party relay is busy today. Try again in about 2 hours.');
+    expect(togetherRetryIn(const Duration(seconds: 700)), 'in 12 minutes');
+    expect(togetherLimitMessage(TogetherStop.roomFull, Duration.zero), isNull);
+  });
+
+  test(
+      'parses live streams, duration, video_cleared, ended, and clear player action',
+      () {
     final events = <TogetherEvent>[];
     client.events.listen(events.add);
     native.pending.addAll([
       '{"event":"live","live":true}',
       '{"event":"player","command":{"action":"go_live"}}',
+      '{"event":"duration","duration_ms":95000}',
+      '{"event":"duration","duration_ms":null}',
+      '{"event":"ended","item":"i1"}',
+      '{"event":"video_cleared"}',
+      '{"event":"player","command":{"action":"clear"}}',
     ]);
     client.poll();
     expect((events[0] as TogetherLive).live, isTrue);
     expect((events[1] as TogetherPlayer).command, isA<TogetherGoLive>());
+    expect((events[2] as TogetherDuration).durationMs, 95000);
+    expect((events[3] as TogetherDuration).durationMs, isNull);
+    expect((events[4] as TogetherVideoEnded).item, 'i1');
+    expect(events[5], isA<TogetherVideoCleared>());
+    expect((events[6] as TogetherPlayer).command, isA<TogetherClear>());
   });
 
   test('close delivers what is left, then cancels and frees once', () {

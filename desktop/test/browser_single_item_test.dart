@@ -207,7 +207,7 @@ void main() {
       home: Scaffold(body: NowCastingScreen(controller: f.sender)),
     ));
     expect(find.text('One'), findsOneWidget);
-    expect(find.textContaining('PLAYLIST'), findsNothing);
+    expect(find.textContaining('Queue'), findsNothing);
 
     // Even a stale/unexpected playlist snapshot cannot offer browser jumps.
     f.sender.handleReceiverMessage(jsonEncode({
@@ -218,7 +218,7 @@ void main() {
       ],
     }));
     await tester.pump();
-    expect(find.textContaining('PLAYLIST'), findsNothing);
+    expect(find.textContaining('Queue'), findsNothing);
     expect(find.text('Two'), findsNothing);
   });
 
@@ -269,7 +269,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: NowCastingScreen(controller: f.sender)),
     ));
-    expect(find.text('PLAYLIST  ·  2 ITEMS'), findsOneWidget);
+    expect(find.text('Queue · 2 items'), findsOneWidget);
     await tester.tap(find.text('One'));
     await tester.pump();
     expect(f.transport.jumps, [0]);
@@ -307,6 +307,6 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: NowCastingScreen(controller: f.sender)),
     ));
-    expect(find.textContaining('PLAYLIST'), findsNothing);
+    expect(find.textContaining('Queue'), findsNothing);
   });
 }

@@ -17,6 +17,7 @@ import com.playbridge.shared.together.TogetherPlayerCommand
 import com.playbridge.shared.together.TogetherPolicy
 import com.playbridge.shared.together.TogetherSource
 import com.playbridge.shared.together.TogetherStop
+import com.playbridge.shared.together.togetherLimitMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,6 +64,8 @@ object PhoneTogether {
         val positionMs: Long = 0,
         /** When [positionMs] was reported, on the elapsed-realtime clock. */
         val positionAt: Long = 0,
+        /** Party-known video duration in milliseconds, or null when live or unknown. */
+        val durationMs: Long? = null,
         val waitingFor: List<String> = emptyList(),
         val continueWithout: List<String> = emptyList(),
         val locked: Boolean = false,
@@ -74,8 +77,11 @@ object PhoneTogether {
     ) {
         override fun toString(): String = "Party(room=$roomId, relay=$relay, host=$host)"
 
-        fun positionNow(): Long =
-            if (playing) positionMs + (SystemClock.elapsedRealtime() - positionAt) else positionMs
+        fun positionNow(elapsedMs: Long = SystemClock.elapsedRealtime()): Long {
+            val raw = if (playing) positionMs + (elapsedMs - positionAt).coerceAtLeast(0L) else positionMs
+            val length = durationMs?.takeIf { it > 0 }
+            return if (length != null) raw.coerceIn(0L, length) else raw.coerceAtLeast(0L)
+        }
 
         /** Whether this phone may change the video without asking. */
         val canChangeVideo: Boolean get() = host || (policy == TogetherPolicy.Anyone && !locked)
@@ -248,11 +254,11 @@ object PhoneTogether {
 
     private fun onPlayerCommand(command: TogetherPlayerCommand) {
         if (party()?.watching != true) return
-        if (command is TogetherPlayerCommand.Load) {
-            openPlayer(command)
-            return
+        when (command) {
+            is TogetherPlayerCommand.Load -> openPlayer(command)
+            TogetherPlayerCommand.Clear -> closePlayer()
+            else -> player?.applyPartyCommand(command)
         }
-        player?.applyPartyCommand(command)
     }
 
     private fun openPlayer(command: TogetherPlayerCommand.Load) {
@@ -305,6 +311,7 @@ object PhoneTogether {
 
     fun play() = client?.play()
     fun pause() = client?.pause()
+    fun stopVideo(): Boolean = party()?.let { it.canChangeVideo && client?.clear() == true } ?: false
     fun seekBy(deltaMs: Long) {
         val party = party() ?: return
         client?.seek((party.positionNow() + deltaMs).coerceAtLeast(0))
@@ -374,30 +381,36 @@ object PhoneTogether {
                 )
             }
             is TogetherEvent.Player -> onPlayerCommand(event.command)
-            is TogetherEvent.Connected -> updateParty { it.copy(connected = true, notice = null) }
-            TogetherEvent.Disconnected -> updateParty { it.copy(connected = false, notice = "Reconnecting…") }
-            is TogetherEvent.Member -> updateParty {
-                it.copy(members = it.members + (event.member to Member(event.name, event.kind, event.host)))
+            is TogetherEvent.Connected -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            TogetherEvent.Disconnected -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            TogetherEvent.Unreachable -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Member -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.MemberLeft -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Video -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            TogetherEvent.VideoCleared -> {
+                closePlayer()
+                updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             }
-            is TogetherEvent.MemberLeft -> updateParty { it.copy(members = it.members - event.member) }
-            is TogetherEvent.Video -> updateParty { it.copy(item = event.item, notice = null) }
-            is TogetherEvent.Timeline -> updateParty {
-                it.copy(playing = event.playing, positionMs = event.positionMs, positionAt = SystemClock.elapsedRealtime())
+            is TogetherEvent.Ended -> {
+                if (playerItem == event.item || loadingItem == event.item) {
+                    closePlayer()
+                }
+                updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             }
-            is TogetherEvent.Waiting -> updateParty { it.copy(waitingFor = event.members) }
-            is TogetherEvent.ContinueWithoutAvailable -> updateParty { it.copy(continueWithout = event.members) }
-            is TogetherEvent.Locked -> updateParty { it.copy(locked = event.locked) }
-            is TogetherEvent.Policy -> updateParty { it.copy(policy = event.policy) }
-            is TogetherEvent.PlayRequested -> updateParty {
-                it.copy(requests = it.requests + Request(event.request, event.from, event.title, event.site))
-            }
+            is TogetherEvent.Timeline -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Waiting -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.ContinueWithoutAvailable -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Locked -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Policy -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.PlayRequested -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             is TogetherEvent.RequestAnswered -> toast(if (event.allowed) "The host is playing your video" else "The host said no")
             is TogetherEvent.RequestExpired -> {
                 updateParty { party -> party.copy(requests = party.requests.filterNot { it.id == event.request }) }
                 toast("The host didn't respond")
             }
-            is TogetherEvent.Warning -> updateParty { it.copy(notice = event.message) }
-            is TogetherEvent.Live -> updateParty { it.copy(live = event.live) }
+            is TogetherEvent.Warning -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Live -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Duration -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             is TogetherEvent.PairSent -> toast("Invite sent. Confirm on that device.")
             is TogetherEvent.PairingCode -> if (state.value is State.GettingCode || state.value is State.Code) {
                 mutableState.value = State.Code(event.code, event.qrSize, event.qrModules, event.expiresAtMs)
@@ -429,6 +442,8 @@ object PhoneTogether {
                         TogetherStop.Expired -> State.Ended("This watch party has ended.")
                         TogetherStop.Unauthorized -> State.Ended("This invite isn't valid any more.")
                         TogetherStop.Replaced -> State.Ended("You joined this party somewhere else.")
+                        TogetherStop.RoomLimit, TogetherStop.RelayBusy ->
+                            State.Ended(togetherLimitMessage(event.reason, event.retryAfterSecs).orEmpty())
                         TogetherStop.Error -> State.Ended("The watch party connection failed.")
                     }
                 }
@@ -459,3 +474,56 @@ object PhoneTogether {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
+
+internal fun reducePartyEvent(
+    party: PhoneTogether.Party,
+    event: TogetherEvent,
+    elapsedMs: Long,
+): PhoneTogether.Party = when (event) {
+    is TogetherEvent.Connected -> party.copy(connected = true, notice = null)
+    TogetherEvent.Disconnected -> party.copy(connected = false, notice = "Reconnecting…")
+    TogetherEvent.Unreachable -> party.copy(notice = "Can't reach ${party.relay}. Still trying…")
+    is TogetherEvent.Member -> party.copy(
+        members = party.members + (event.member to PhoneTogether.Member(event.name, event.kind, event.host)),
+    )
+    is TogetherEvent.MemberLeft -> party.copy(members = party.members - event.member)
+    is TogetherEvent.Video -> party.copy(
+        item = event.item,
+        playing = false,
+        positionMs = event.item.startMs,
+        positionAt = elapsedMs,
+        durationMs = null,
+        live = false,
+        notice = null,
+    )
+    TogetherEvent.VideoCleared -> clearPartyItem(party, elapsedMs)
+    is TogetherEvent.Ended ->
+        if (party.item?.id == event.item) clearPartyItem(party, elapsedMs) else party
+    is TogetherEvent.Timeline -> party.copy(playing = event.playing, positionMs = event.positionMs, positionAt = elapsedMs)
+    is TogetherEvent.Waiting -> party.copy(waitingFor = event.members)
+    is TogetherEvent.ContinueWithoutAvailable -> party.copy(continueWithout = event.members)
+    is TogetherEvent.Locked -> party.copy(locked = event.locked)
+    is TogetherEvent.Policy -> party.copy(policy = event.policy)
+    is TogetherEvent.PlayRequested -> party.copy(
+        requests = party.requests + PhoneTogether.Request(event.request, event.from, event.title, event.site),
+    )
+    is TogetherEvent.Warning -> party.copy(notice = event.message)
+    is TogetherEvent.Live -> party.copy(live = event.live)
+    is TogetherEvent.Duration -> party.copy(durationMs = event.durationMs)
+    else -> party
+}
+
+private fun clearPartyItem(
+    party: PhoneTogether.Party,
+    elapsedMs: Long,
+): PhoneTogether.Party = party.copy(
+    item = null,
+    playing = false,
+    positionMs = 0,
+    positionAt = elapsedMs,
+    durationMs = null,
+    live = false,
+    waitingFor = emptyList(),
+    continueWithout = emptyList(),
+    notice = null,
+)

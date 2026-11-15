@@ -8,7 +8,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.playbridge.player.player.SubtitleManager
@@ -16,6 +21,9 @@ import com.playbridge.player.player.SubtitleCueLoader
 import com.playbridge.player.player.SkipSegment
 
 private const val END_SEEK_PADDING_MS = 250L
+
+/** Presses closer together than this commit as one seek. */
+private const val SCRUB_COMMIT_DELAY_MS = 400L
 
 internal fun skipSegmentEndsPlayback(segment: SkipSegment, durationMs: Long): Boolean =
     segment.endMs == com.playbridge.player.player.SkipSegmentFetcher.OPEN_ENDED_MS ||
@@ -29,6 +37,16 @@ internal fun skipTargetMs(segment: SkipSegment, durationMs: Long): Long = when {
     else -> segment.endMs + 1_000L
 }
 
+/** Seek strip hides after 3 s, full controls after 8 s (ControlsRemoteMap). */
+internal fun autoHideDelayMs(fullControls: Boolean): Long = if (fullControls) 8_000L else 3_000L
+
+/** How long "Press Back again to stop" stays up, and how long a second Back counts. */
+internal const val BACK_CONFIRM_WINDOW_MS = 3_000L
+
+/** Position data the seek bar reads on its own so the rest of the overlay does not recompose every tick. */
+@androidx.compose.runtime.Immutable
+data class SeekProgress(val position: Long = 0L, val duration: Long = 0L, val buffered: Long = 0L)
+
 class PlayerControlsViewModel @JvmOverloads constructor(
     private val injectedScope: CoroutineScope? = null,
 ) : ViewModel() {
@@ -37,6 +55,25 @@ class PlayerControlsViewModel @JvmOverloads constructor(
 
     private val _controlsState = MutableStateFlow(PlayerControlsState())
     val controlsState = _controlsState.asStateFlow()
+
+    /**
+     * What the overlay root collects. Position is rounded to a second and the buffer is dropped,
+     * so it changes about once a second instead of four times a second. The seek bar reads
+     * [seekProgress] for exact values.
+     */
+    val uiState: StateFlow<PlayerControlsState> by lazy {
+        _controlsState
+            .map { it.copy(currentPosition = it.currentPosition / 1000L * 1000L, bufferedPosition = 0L) }
+            .distinctUntilChanged()
+            .stateIn(scope, SharingStarted.Eagerly, _controlsState.value)
+    }
+
+    val seekProgress: StateFlow<SeekProgress> by lazy {
+        _controlsState
+            .map { SeekProgress(it.currentPosition, it.duration, it.bufferedPosition) }
+            .distinctUntilChanged()
+            .stateIn(scope, SharingStarted.Eagerly, SeekProgress())
+    }
 
     private var autoHideJob: Job? = null
     private var progressUpdateJob: Job? = null
@@ -112,6 +149,7 @@ class PlayerControlsViewModel @JvmOverloads constructor(
                 isFullControlsVisible = full || hasActiveOverlay,
                 isPlaying = playing ?: engine?.isPlaying ?: it.isPlaying,
                 lastClosedOverlay = if (hasActiveOverlay) it.lastClosedOverlay else ActiveOverlay.NONE,
+                transportBadge = TransportBadge.NONE,
                 title = it.title // Keep title
             )
         }
@@ -168,7 +206,128 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     fun getTitle(): String = _controlsState.value.title
 
     fun setPlaying(playing: Boolean) {
-        _controlsState.update { it.copy(isPlaying = playing) }
+        val changed = _controlsState.value.isPlaying != playing
+        _controlsState.update {
+            it.copy(
+                isPlaying = playing,
+                transportBadge = if (playing && it.transportBadge == TransportBadge.PAUSED) TransportBadge.NONE else it.transportBadge,
+                phonePaused = if (playing) null else it.phonePaused,
+            )
+        }
+        // Playing starts the controls' auto-hide timer; pausing pins full controls.
+        if (changed) resetAutoHideTimer()
+    }
+
+    // --- Notices, badges, bookmark, error ---------------------------------------------------
+
+    private var noticeJob: Job? = null
+    private var badgeJob: Job? = null
+
+    /** Show a short message pill that clears itself after [durationMs]. */
+    fun showNotice(text: String, emphasis: Boolean = false, icon: Int? = null, durationMs: Long = 3_000L) {
+        noticeJob?.cancel()
+        _controlsState.update { it.copy(notice = PlayerNotice(text, emphasis, icon)) }
+        noticeJob = scope.launch {
+            delay(durationMs)
+            _controlsState.update { it.copy(notice = null) }
+        }
+    }
+
+    fun clearNotice() {
+        noticeJob?.cancel()
+        _controlsState.update { if (it.notice == null) it else it.copy(notice = null) }
+    }
+
+    /** PAUSED stays until playback resumes or controls open; PLAYING clears itself. */
+    fun showTransportBadge(badge: TransportBadge) {
+        badgeJob?.cancel()
+        _controlsState.update { it.copy(transportBadge = badge) }
+        if (badge == TransportBadge.PLAYING) {
+            badgeJob = scope.launch {
+                delay(1_000L)
+                _controlsState.update { s ->
+                    if (s.transportBadge == TransportBadge.PLAYING) s.copy(transportBadge = TransportBadge.NONE) else s
+                }
+            }
+        }
+    }
+
+    fun setBookmarkState(state: BookmarkState) {
+        _controlsState.update { if (it.bookmark == state) it else it.copy(bookmark = state) }
+    }
+
+    fun setSenderName(name: String?) {
+        _controlsState.update { it.copy(senderName = name) }
+    }
+
+    fun setPartySession(inParty: Boolean) {
+        _controlsState.update { if (it.isPartySession == inParty) it else it.copy(isPartySession = inParty) }
+    }
+
+    fun setPrePlayResume(resume: PrePlayResume?) {
+        _controlsState.update { if (it.prePlayResume == resume) it else it.copy(prePlayResume = resume) }
+    }
+
+    // --- Phone confirmations: never open the controls and never take focus ---------------------
+
+    private var phoneSeekJob: Job? = null
+    private var phoneCardJob: Job? = null
+
+    /** A new cast starts: nothing a phone did to the previous video applies any more. */
+    fun clearPhoneConfirmations() {
+        phoneSeekJob?.cancel()
+        phoneCardJob?.cancel()
+        _controlsState.update {
+            if (it.phonePaused == null && it.phoneSeek == null && it.phoneCard == null) it
+            else it.copy(phonePaused = null, phoneSeek = null, phoneCard = null)
+        }
+    }
+
+    /** A phone paused playback. Stays up until playback resumes; the controls are left as they are. */
+    fun showPhonePaused(name: String?) {
+        _controlsState.update { it.copy(isPlaying = false, phonePaused = PhoneOrigin(name), transportBadge = TransportBadge.NONE) }
+        resetAutoHideTimer()
+    }
+
+    /** A phone is seeking to [targetMs]; clears itself [PHONE_CONFIRMATION_MS] after the last call. */
+    fun showPhoneSeek(name: String?, targetMs: Long) {
+        phoneSeekJob?.cancel()
+        _controlsState.update { it.copy(phoneSeek = PhoneSeek(name, targetMs.coerceAtLeast(0L))) }
+        phoneSeekJob = scope.launch {
+            delay(PHONE_CONFIRMATION_MS)
+            _controlsState.update { it.copy(phoneSeek = null) }
+        }
+    }
+
+    /** A phone changed a setting; the card clears itself [PHONE_CONFIRMATION_MS] later. */
+    fun showPhoneCard(card: PhoneChangeCard) {
+        phoneCardJob?.cancel()
+        _controlsState.update { it.copy(phoneCard = card) }
+        phoneCardJob = scope.launch {
+            delay(PHONE_CONFIRMATION_MS)
+            _controlsState.update { it.copy(phoneCard = null) }
+        }
+    }
+
+    /** Terminal playback failure: shows the error screen instead of the spinner. */
+    fun showPlaybackError(reason: String) {
+        autoHideJob?.cancel()
+        _controlsState.update {
+            it.copy(
+                playbackError = reason,
+                playbackTransitionMessage = null,
+                isVisible = false,
+                isFullControlsVisible = false,
+                activeOverlay = ActiveOverlay.NONE,
+                lastClosedOverlay = ActiveOverlay.NONE,
+                activeSkipSegment = null,
+                isSkipButtonFocused = false,
+            )
+        }
+    }
+
+    fun clearPlaybackError() {
+        _controlsState.update { if (it.playbackError == null) it else it.copy(playbackError = null) }
     }
 
     /**
@@ -247,7 +406,7 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     }
 
     fun clearPlaybackTransition() {
-        _controlsState.update { it.copy(playbackTransitionMessage = null) }
+        _controlsState.update { it.copy(playbackTransitionMessage = null, playbackError = null) }
     }
     
     private var skipSegmentsJob: kotlinx.coroutines.Job? = null
@@ -320,6 +479,7 @@ class PlayerControlsViewModel @JvmOverloads constructor(
             val nextChapterOsd = if (clearTimeline) null else state.chapterOsd
             state.copy(
                 activeMetadata = nextActiveMetadata,
+                prePlayResume = null,
                 prePlayMetadata = if (metadata != null && showCountdown) metadata else null,
                 skipSegments = nextSkipSegments,
                 activeSkipSegment = nextActiveSkipSegment,
@@ -399,15 +559,19 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         }
 
         val duration = currentEngine.duration
-        if (duration > 0) {
-            scrubPosition = (scrubPosition + deltaMs).coerceIn(0, duration)
-            _controlsState.update { it.copy(currentPosition = scrubPosition) }
+        // Unknown duration (rare): still seek, just without an upper bound.
+        scrubPosition = if (duration > 0) {
+            (scrubPosition + deltaMs).coerceIn(0, duration)
+        } else {
+            (scrubPosition + deltaMs).coerceAtLeast(0L)
+        }
+        _controlsState.update { it.copy(currentPosition = scrubPosition) }
 
-            commitSeekJob?.cancel()
-            commitSeekJob = viewModelScope.launch {
-                delay(400)
-                commitSeek()
-            }
+        // Several presses inside the window commit as one seek.
+        commitSeekJob?.cancel()
+        commitSeekJob = scope.launch {
+            delay(SCRUB_COMMIT_DELAY_MS)
+            commitSeek()
         }
         showSeekUI()
     }
@@ -424,17 +588,15 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         progressUpdateJob = viewModelScope.launch {
             while (true) {
                 engine?.let {
-                    // Safety net for the (full controls / overlay) ⟺ paused invariant: if
-                    // playback is running but full controls or an overlay are still up (a missed
-                    // play-state callback), dismiss them. Engine callbacks are the primary
-                    // mechanism; this only catches the gap. The lightweight seek UI
-                    // (isVisible && !isFullControlsVisible) is intentionally shown during
-                    // playback and left to its own auto-hide timer, so it's excluded here.
+                    // Full controls may now be open while playing (Up/Down while a video plays).
+                    // Safety net: if they are up, the video is playing and no auto-hide timer is
+                    // running (a missed play-state callback), start one so they cannot stick.
                     val cs = _controlsState.value
                     if (it.isPlaying && !isScrubbing &&
                         cs.activeOverlay == ActiveOverlay.NONE &&
-                        cs.isFullControlsVisible) {
-                        hideControls()
+                        cs.isFullControlsVisible && cs.isVisible &&
+                        autoHideJob?.isActive != true) {
+                        resetAutoHideTimer()
                     }
 
                     val currentPos = if (isScrubbing) _controlsState.value.currentPosition else it.currentPosition
@@ -514,11 +676,13 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         }
     }
 
-    fun resetAutoHideTimer(durationMs: Long = 5000) {
+    fun resetAutoHideTimer(durationMs: Long? = null) {
         autoHideJob?.cancel()
-        if (_controlsState.value.shouldAutoHideControls()) {
+        val current = _controlsState.value
+        if (current.shouldAutoHideControls()) {
+            val delayMs = durationMs ?: autoHideDelayMs(current.isFullControlsVisible)
             autoHideJob = scope.launch {
-                delay(durationMs)
+                delay(delayMs)
                 if (_controlsState.value.shouldAutoHideControls()) {
                     hideControls()
                 }
@@ -527,8 +691,9 @@ class PlayerControlsViewModel @JvmOverloads constructor(
     }
 
     fun showSettings(tab: SettingsTab) {
-        showOverlay(ActiveOverlay.SETTINGS)
+        // The tab first: the panel reads it as its starting page the moment the overlay shows.
         _controlsState.update { it.copy(activeSettingsTab = tab) }
+        showOverlay(ActiveOverlay.SETTINGS)
     }
 
     fun hideSettings() {
@@ -557,20 +722,10 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         showOverlay(ActiveOverlay.PLAYLIST_PICKER)
     }
 
-    fun showSwitchPlayer() {
-        if (!_controlsState.value.canSwitchPlayer) return
-        showOverlay(ActiveOverlay.SWITCH_PLAYER)
-    }
-
     fun setPlayerSwitchAllowed(allowed: Boolean) {
         _controlsState.update {
             it.copy(
                 canSwitchPlayer = allowed,
-                activeOverlay = if (!allowed && it.activeOverlay == ActiveOverlay.SWITCH_PLAYER) {
-                    ActiveOverlay.NONE
-                } else {
-                    it.activeOverlay
-                },
             )
         }
     }
@@ -761,6 +916,8 @@ class PlayerControlsViewModel @JvmOverloads constructor(
         onlineSubtitleJob?.cancel()
         skipSegmentsJob?.cancel()
         chapterOsdJob?.cancel()
+        phoneSeekJob?.cancel()
+        phoneCardJob?.cancel()
         cachedOnlineTracks = emptyList()
         trustedLocalSubtitleProxyOrigin = null
         subtitleTargetResolver = null

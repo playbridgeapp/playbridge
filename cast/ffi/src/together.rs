@@ -84,6 +84,7 @@ enum Call {
     Load {
         item: ItemInput,
     },
+    Clear,
     Play,
     Pause,
     Seek {
@@ -471,9 +472,18 @@ impl Worker {
                 Ok(Ok(Stop::RoomFull)) => "room_full",
                 Ok(Ok(Stop::Expired)) => "expired",
                 Ok(Ok(Stop::Replaced)) => "replaced",
+                Ok(Ok(Stop::RoomLimit { .. })) => "room_limit",
+                Ok(Ok(Stop::RelayBusy { .. })) => "relay_busy",
                 Ok(Err(_)) | Err(_) => "error",
             };
-            let _ = events.send(json!({"event": "stopped", "room": room_id, "reason": reason}));
+            let mut stopped = json!({"event": "stopped", "room": room_id, "reason": reason});
+            if let Ok(Ok(
+                Stop::RoomLimit { retry_after_secs } | Stop::RelayBusy { retry_after_secs },
+            )) = &stop
+            {
+                stopped["retry_after"] = json!(retry_after_secs);
+            }
+            let _ = events.send(stopped);
         });
         self.room = Some(Room {
             commands,
@@ -652,6 +662,7 @@ fn key(text: &str) -> Result<[u8; 32], &'static str> {
 fn room_command(request: Call) -> Result<RoomCommand, &'static str> {
     Ok(match request {
         Call::Load { item } => RoomCommand::Load(item.into_item()),
+        Call::Clear => RoomCommand::Clear,
         Call::Play => RoomCommand::Play,
         Call::Pause => RoomCommand::Pause,
         Call::Seek { position_ms } => RoomCommand::Seek(position_ms.max(0.0)),
@@ -689,6 +700,7 @@ fn event_json(event: &Event) -> Option<Value> {
     Some(match event {
         Event::Connected { members } => json!({"event": "connected", "members": ids(members)}),
         Event::Disconnected => json!({"event": "disconnected"}),
+        Event::Unreachable => json!({"event": "unreachable"}),
         Event::MemberJoined(m) => json!({"event": "member_joined", "member": m.to_string()}),
         Event::MemberLeft(m) => json!({"event": "member_left", "member": m.to_string()}),
         Event::MemberInfo {
@@ -700,6 +712,7 @@ fn event_json(event: &Event) -> Option<Value> {
             json!({"event": "member", "member": member.to_string(), "name": name, "kind": kind, "host": host})
         }
         Event::VideoChanged(item) => json!({"event": "video", "item": item}),
+        Event::VideoCleared => json!({"event": "video_cleared"}),
         Event::TimelineChanged(t) => json!({
             "event": "timeline",
             "item": t.item,
@@ -707,6 +720,7 @@ fn event_json(event: &Event) -> Option<Value> {
             "position_ms": t.position_ms,
             "rev": t.rev,
         }),
+        Event::Ended { item } => json!({"event": "ended", "item": item}),
         Event::Waiting(members) => json!({"event": "waiting", "members": ids(members)}),
         Event::ContinueWithoutAvailable(members) => {
             json!({"event": "continue_without_available", "members": ids(members)})
@@ -734,6 +748,7 @@ fn event_json(event: &Event) -> Option<Value> {
         Event::CredentialsReceived { item } => json!({"event": "credentials", "item": item}),
         Event::Warning(message) => json!({"event": "warning", "message": message}),
         Event::Live(live) => json!({"event": "live", "live": live}),
+        Event::Duration(duration_ms) => json!({"event": "duration", "duration_ms": duration_ms}),
         Event::Rejected(reason) => json!({"event": "rejected", "reason": reason}),
     })
 }
@@ -798,6 +813,11 @@ impl Feed {
                 }
                 self.rate = *rate;
             }
+            PlayerCommand::Clear => {
+                self.rate = 1.0;
+                self.snapshot = None;
+                self.loaded = None;
+            }
         }
     }
 }
@@ -833,6 +853,7 @@ impl Player for BridgePlayer {
             PlayerCommand::Seek(to) => json!({"action": "seek", "position_ms": to}),
             PlayerCommand::SetRate(rate) => json!({"action": "rate", "rate": rate}),
             PlayerCommand::GoLive => json!({"action": "go_live"}),
+            PlayerCommand::Clear => json!({"action": "clear"}),
         };
         let _ = self
             .events

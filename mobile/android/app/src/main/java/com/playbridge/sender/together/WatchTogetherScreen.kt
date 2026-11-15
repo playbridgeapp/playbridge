@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -58,6 +59,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -516,70 +518,174 @@ private fun PartyHeader(party: PhoneTogether.Party) {
     }
 }
 
+internal data class NowPlayingUiState(
+    val title: String?,
+    val subtitle: String?,
+    val hasVideo: Boolean,
+    val live: Boolean,
+    val playing: Boolean,
+    val positionMs: Long,
+    val durationMs: Long?,
+    val showSeekBar: Boolean,
+    val canControl: Boolean,
+    val canStop: Boolean,
+    val emptyHint: String,
+)
+
+internal fun mapNowPlayingState(party: PhoneTogether.Party, positionMs: Long): NowPlayingUiState {
+    val item = party.item
+    val canControl = party.host || !party.locked
+    val durationMs = party.durationMs?.takeIf { it > 0 }
+    if (item == null) {
+        return NowPlayingUiState(
+            title = null,
+            subtitle = null,
+            hasVideo = false,
+            live = false,
+            playing = false,
+            positionMs = 0,
+            durationMs = null,
+            showSeekBar = false,
+            canControl = canControl,
+            canStop = false,
+            emptyHint = if (party.canChangeVideo) {
+                "Open a video in the Browser and tap it in the cast sheet to play it for everyone."
+            } else {
+                "Waiting for the host to pick a video."
+            },
+        )
+    }
+    val showSeekBar = !party.live && durationMs != null
+    val subtitle = when {
+        party.live -> listOfNotNull(item.site, "Live").joinToString(" · ")
+        showSeekBar -> item.site
+        else -> listOfNotNull(item.site, formatTime(positionMs)).joinToString(" · ")
+    }
+    return NowPlayingUiState(
+        title = item.title,
+        subtitle = subtitle,
+        hasVideo = true,
+        live = party.live,
+        playing = party.playing,
+        positionMs = positionMs.coerceAtLeast(0L),
+        durationMs = durationMs,
+        showSeekBar = showSeekBar,
+        canControl = canControl,
+        canStop = party.canChangeVideo,
+        emptyHint = "",
+    )
+}
+
 @Composable
 private fun NowPlaying(party: PhoneTogether.Party, canControl: Boolean) {
     // Ticks the displayed position while playing.
-    var now by remember { mutableLongStateOf(party.positionNow()) }
+    var now by remember(party.item?.id) { mutableLongStateOf(party.positionNow()) }
     LaunchedEffect(party) {
         while (true) {
             now = party.positionNow()
             delay(500)
         }
     }
+    var dragging by remember(party.item?.id) { mutableStateOf(false) }
+    var dragPositionMs by remember(party.item?.id) { mutableLongStateOf(now) }
+
+    val displayedPosition = if (dragging) dragPositionMs else now
+    val ui = mapNowPlayingState(party, displayedPosition)
 
     Panel {
-        val item = party.item
-        if (item == null) {
+        if (!ui.hasVideo) {
             Text("Nothing playing yet", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (party.canChangeVideo) {
-                    "Open a video in the Browser and tap it in the cast sheet to play it for everyone."
-                } else {
-                    "Waiting for the host to pick a video."
-                },
+                ui.emptyHint,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    item.title,
+                    ui.title.orEmpty(),
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // A live party shares play and pause only: no position, no seeking.
-                Text(
-                    listOfNotNull(item.site, if (party.live) "Live" else formatTime(now)).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ui.subtitle?.let {
+                    // A live party shares play and pause only: no position, no seeking.
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (ui.showSeekBar) {
+                val totalMs = ui.durationMs ?: 1L
+                val fraction = (displayedPosition.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Slider(
+                        value = fraction,
+                        onValueChange = { next ->
+                            dragging = true
+                            dragPositionMs = (next * totalMs).toLong().coerceIn(0L, totalMs)
+                        },
+                        onValueChangeFinished = {
+                            val target = dragPositionMs
+                            dragging = false
+                            PhoneTogether.seekTo(target)
+                        },
+                        enabled = canControl,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            formatTime(displayedPosition),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            formatTime(totalMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (!party.live) {
+                if (!ui.live) {
                     IconButton(onClick = { PhoneTogether.seekBy(-10_000) }, enabled = canControl, modifier = Modifier.size(52.dp)) {
                         Icon(Icons.Default.Replay10, contentDescription = "Back 10 seconds", modifier = Modifier.size(30.dp))
                     }
                 }
                 FilledIconButton(
-                    onClick = { if (party.playing) PhoneTogether.pause() else PhoneTogether.play() },
+                    onClick = { if (ui.playing) PhoneTogether.pause() else PhoneTogether.play() },
                     enabled = canControl,
                     modifier = Modifier.size(64.dp),
                 ) {
                     Icon(
-                        if (party.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (party.playing) "Pause" else "Play",
+                        if (ui.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (ui.playing) "Pause" else "Play",
                         modifier = Modifier.size(34.dp),
                     )
                 }
-                if (!party.live) {
+                if (!ui.live) {
                     IconButton(onClick = { PhoneTogether.seekBy(10_000) }, enabled = canControl, modifier = Modifier.size(52.dp)) {
                         Icon(Icons.Default.Forward10, contentDescription = "Forward 10 seconds", modifier = Modifier.size(30.dp))
                     }
+                }
+            }
+            if (ui.canStop) {
+                FilledTonalButton(
+                    onClick = { PhoneTogether.stopVideo() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Stop video")
                 }
             }
             if (!canControl) {

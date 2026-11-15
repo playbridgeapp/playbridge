@@ -134,6 +134,10 @@ open class PlayerActivity : ComponentActivity() {
     /** The Watch Together video this player shows; null outside a party. */
     private var partyItem: String? = null
     private var partyLoadedReported = false
+    /** When the party video became ready; 0 until then. */
+    private var partyReadyAtMs = 0L
+    /** Reported with no length only because it hadn't arrived; report it when it does. */
+    private var partyLengthPending = false
     private val partyBridge = object : PhoneTogether.PartyPlayer {
         override fun applyPartyCommand(command: TogetherPlayerCommand) =
             this@PlayerActivity.applyPartyCommand(command)
@@ -598,8 +602,13 @@ open class PlayerActivity : ComponentActivity() {
                     waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
                     onClose = ::leave,
                     onEnded = {
-                        // The party stays on the ended video until someone picks another.
-                        if (partyItem == null && (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId))) finish()
+                        if (partyItem != null) {
+                            partyItem = null
+                            PhoneTogether.playerClosed(partyBridge, stopWatching = false)
+                            finish()
+                        } else if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) {
+                            finish()
+                        }
                     },
                     isInPip = isInPip,
                     poster = poster,
@@ -635,14 +644,45 @@ open class PlayerActivity : ComponentActivity() {
             is TogetherPlayerCommand.Rate -> p.setPlaybackSpeed(command.rate)
             // PhoneTogether opens a new video with a new intent.
             is TogetherPlayerCommand.Load -> Unit
+            TogetherPlayerCommand.Clear -> {
+                partyItem = null
+                finish()
+                return
+            }
         }
         reportPartyState()
     }
 
     /** Tells the party where this phone's player is. */
-    private fun reportPartyState() {
-        if (partyItem == null) return
+    /**
+     * Tells the party the video loaded, with its length. A live stream has none. An
+     * on-demand video that doesn't know its length yet gets a few seconds to learn it,
+     * so it isn't taken for live (which would stop position sync on this phone).
+     */
+    private fun reportPartyLoaded(item: String) {
+        if (partyReadyAtMs == 0L) return
         val p = player ?: return
+        val live = p.isCurrentMediaItemLive
+        val duration = p.duration.takeIf { it > 0 && it != C.TIME_UNSET }
+        if (partyLoadedReported) {
+            if (partyLengthPending && !live && duration != null) {
+                partyLengthPending = false
+                PhoneTogether.onLoaded(item, duration)
+            }
+            return
+        }
+        if (!live && duration == null &&
+            android.os.SystemClock.elapsedRealtime() - partyReadyAtMs < PARTY_LENGTH_WAIT_MS
+        ) return
+        partyLoadedReported = true
+        partyLengthPending = !live && duration == null
+        PhoneTogether.onLoaded(item, duration.takeIf { !live })
+    }
+
+    private fun reportPartyState() {
+        val item = partyItem ?: return
+        val p = player ?: return
+        reportPartyLoaded(item)
         PhoneTogether.onPlayerState(
             positionMs = p.currentPosition.coerceAtLeast(0),
             // An ended player is still set to play, but it isn't moving.
@@ -744,11 +784,9 @@ open class PlayerActivity : ComponentActivity() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             val item = partyItem ?: return
-            if (playbackState == Player.STATE_READY && !partyLoadedReported) {
-                partyLoadedReported = true
-                // A live stream has no end for the party to stop at.
-                val p = player
-                PhoneTogether.onLoaded(item, p?.duration?.takeIf { it > 0 && !p.isCurrentMediaItemLive })
+            if (playbackState == Player.STATE_READY && partyReadyAtMs == 0L) {
+                partyReadyAtMs = android.os.SystemClock.elapsedRealtime()
+                reportPartyLoaded(item)
             }
             reportPartyState()
         }
@@ -889,6 +927,8 @@ open class PlayerActivity : ComponentActivity() {
         }
 
         const val EXTRA_PAGE_SESSION_ID = "page_session_id"
+        /** How long an on-demand party video may take to learn its length. */
+        private const val PARTY_LENGTH_WAIT_MS = 3_000L
         const val EXTRA_INITIAL_ORIENTATION = "initial_orientation"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"

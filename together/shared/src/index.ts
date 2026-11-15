@@ -60,8 +60,36 @@ export function json(body: unknown, status = 200, headers: HeadersInit = {}): Re
   });
 }
 
-export function errorResponse(code: string, status: number): Response {
-  return json({ error: code }, status);
+/**
+ * A refusal the apps can act on: `{error, retry_after}` plus a `Retry-After` header when the
+ * caller should wait. 429 `rate_limited` means slow down and retry; 429 `room_limit` and 503
+ * `relay_busy` / `pairing_unavailable` mean stop and tell the person.
+ */
+export function errorResponse(code: string, status: number, retryAfterSecs?: number): Response {
+  if (retryAfterSecs === undefined) return json({ error: code }, status);
+  const wait = Math.max(1, Math.ceil(retryAfterSecs));
+  return json({ error: code, retry_after: wait }, status, { "retry-after": String(wait) });
+}
+
+/** Seconds until the next 00:00 UTC, when Cloudflare's daily quotas reset. */
+export function secondsUntilUtcMidnight(now = Date.now()): number {
+  const midnight = new Date(now);
+  midnight.setUTCHours(24, 0, 0, 0);
+  return Math.ceil((midnight.getTime() - now) / 1000);
+}
+
+/**
+ * Asks a Workers rate-limit binding whether `key` may go on. Allows the call when the
+ * binding is missing or fails: these limits only slow abuse, and failing closed would lock
+ * everyone out on an outage.
+ */
+export async function underLimit(limiter: RateLimit | undefined, key: string): Promise<boolean> {
+  if (!limiter) return true;
+  try {
+    return (await limiter.limit({ key })).success;
+  } catch {
+    return true;
+  }
 }
 
 export function clientIp(request: Request): string {
@@ -120,4 +148,4 @@ export function parseFrame<T>(raw: string | ArrayBuffer, maxBytes: number): T | 
   }
 }
 
-export { Limits, limitsFor, type LimitsRpc } from "./limits";
+export { Limits, limitsFor, type LimitsRpc, type SlotResult } from "./limits";

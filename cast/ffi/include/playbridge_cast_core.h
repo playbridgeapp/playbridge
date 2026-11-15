@@ -13,6 +13,7 @@ typedef struct CastSession CastSession;
 typedef struct SenderServices SenderServices;
 typedef struct ReceiverRuntime ReceiverRuntime;
 typedef struct AtvRemote AtvRemote;
+typedef struct TogetherHandle TogetherHandle;
 
 /* Increment when the stable C ABI or its JSON event contract changes. */
 uint32_t pb_cast_core_abi_version(void);
@@ -198,6 +199,14 @@ char *pb_receiver_runtime_next_json(const ReceiverRuntime *runtime,
                                     uint64_t wait_ms);
 void pb_receiver_runtime_cancel(const ReceiverRuntime *runtime);
 void pb_receiver_runtime_free(const ReceiverRuntime *runtime);
+
+/* Watch Together room engine and receiver pairing (`cast/ffi/src/together.rs`). */
+uint32_t pb_together_abi_version(void);
+TogetherHandle *pb_together_start(void);
+bool pb_together_submit_json(const TogetherHandle *handle, const char *command_json);
+char *pb_together_next_json(const TogetherHandle *handle, uint64_t wait_ms);
+void pb_together_cancel(const TogetherHandle *handle);
+void pb_together_free(const TogetherHandle *handle);
 
 void pb_string_free(char *value);
 

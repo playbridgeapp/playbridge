@@ -127,6 +127,17 @@ class MpvEngine extends PlayerEngine {
   }
 
   final Player player = Player();
+
+  @override
+  Future<Uint8List?> captureFrame() async {
+    try {
+      return await player.screenshot();
+    } catch (e) {
+      debugPrint('[mpv] frame capture failed: $e');
+      return null;
+    }
+  }
+
   final List<File> _lateSubtitleFiles = [];
   final List<StreamSubscription> _subs = [];
   bool preselectHlsQuality;

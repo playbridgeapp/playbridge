@@ -92,7 +92,7 @@ class Party {
     bool? connected,
     Map<String, PartyMember>? members,
     Set<String>? own,
-    TogetherItem? item,
+    TogetherItem? Function()? item,
     bool? playing,
     int? positionMs,
     int? positionAt,
@@ -114,7 +114,7 @@ class Party {
         connected: connected ?? this.connected,
         members: members ?? this.members,
         own: own ?? this.own,
-        item: item ?? this.item,
+        item: item != null ? item() : this.item,
         playing: playing ?? this.playing,
         positionMs: positionMs ?? this.positionMs,
         positionAt: positionAt ?? this.positionAt,
@@ -229,6 +229,9 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
 
   /// The item the room last asked this computer to load, until it reports loaded.
   String? _loadingItem;
+
+  /// The video reported as live only because its length hadn't arrived yet.
+  String? _reportedLive;
   Timer? _liveTimer;
   Timer? _snapshotTimer;
   bool _applying = false;
@@ -369,6 +372,12 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
 
   bool playParty() => _client?.play() ?? false;
   bool pauseParty() => _client?.pause() ?? false;
+  bool stopVideo() {
+    final current = party;
+    if (current == null || !current.canChangeVideo) return false;
+    return _client?.clear() ?? false;
+  }
+
   bool seekParty(int positionMs) =>
       _client?.seek(positionMs < 0 ? 0 : positionMs) ?? false;
 
@@ -475,10 +484,17 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
   bool seek(int positionMs) =>
       _client?.seek(positionMs < 0 ? 0 : positionMs) ?? false;
 
+  @override
+  void videoEnded() => _stopWatchingPlayer();
+
   void _onPlayerCommand(TogetherPlayerCommand command) {
     if (party?.watching != true) return;
     if (command is TogetherLoad) {
       unawaited(_openPlayer(command));
+      return;
+    }
+    if (command is TogetherClear) {
+      _stopWatchingPlayer(stopPlayer: true);
       return;
     }
     if (_playerItem == null) return;
@@ -489,7 +505,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
             player.partySeek(Duration(milliseconds: positionMs)),
           TogetherRate(:final rate) => player.partyRate(rate),
           TogetherGoLive() => player.partyGoLive(),
-          TogetherLoad() => Future<void>.value(),
+          TogetherLoad() || TogetherClear() => Future<void>.value(),
         }));
   }
 
@@ -513,6 +529,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     }
     _loadingItem = item.id;
     _playerItem = item.id;
+    _reportedLive = null;
     _liveTimer?.cancel();
     player.partyControls = this;
     await _apply(() => player.playPlaylist(
@@ -549,6 +566,18 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
       return;
     }
     _checkLoaded();
+    _checkLateLength();
+  }
+
+  /// Reported as live because the length took too long to arrive: once the player
+  /// knows it, tell the party, so positions sync again.
+  void _checkLateLength() {
+    final item = _reportedLive;
+    if (item == null || item != _playerItem || player.isOpening) return;
+    if (player.durationMs > 0 && !player.isLive) {
+      _reportedLive = null;
+      _client?.loaded(item, player.durationMs);
+    }
   }
 
   /// Reports the party video loaded once it knows its length; a video still
@@ -575,6 +604,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
   void _reportLoaded(String item, int? durationMs) {
     if (_loadingItem != item) return;
     _loadingItem = null;
+    _reportedLive = durationMs == null && !player.isLive ? item : null;
     _liveTimer?.cancel();
     _liveTimer = null;
     _client?.loaded(item, durationMs);
@@ -597,6 +627,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     final showing = _playerItem != null;
     _playerItem = null;
     _loadingItem = null;
+    _reportedLive = null;
     _liveTimer?.cancel();
     _liveTimer = null;
     _snapshotTimer?.cancel();
@@ -647,6 +678,9 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
       case TogetherDisconnected():
         _updateParty(
             (p) => p.copyWith(connected: false, notice: () => 'Reconnecting…'));
+      case TogetherUnreachable():
+        _updateParty((p) =>
+            p.copyWith(notice: () => "Can't reach ${p.relay}. Still trying…"));
       case TogetherMember():
         _updateParty((p) => p.copyWith(members: {
               ...p.members,
@@ -659,7 +693,24 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
               own: p.own.difference({member}),
             ));
       case TogetherVideo(:final item):
-        _updateParty((p) => p.copyWith(item: item, notice: () => null));
+        _updateParty((p) => p.copyWith(
+              item: () => item,
+              playing: false,
+              positionMs: item.startMs,
+              positionAt: clock(),
+              live: false,
+              notice: () => null,
+            ));
+      case TogetherVideoCleared():
+        _stopWatchingPlayer(stopPlayer: true);
+        _updateParty(_clearPartyState);
+      case TogetherVideoEnded(:final item):
+        if (_playerItem == item ||
+            _loadingItem == item ||
+            party?.item?.id == item) {
+          _stopWatchingPlayer(stopPlayer: true);
+          _updateParty((p) => p.item?.id == item ? _clearPartyState(p) : p);
+        }
       case TogetherTimeline():
         _updateParty((p) => p.copyWith(
               playing: event.playing,
@@ -708,10 +759,23 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
         _onStopped(event);
       case TogetherRejected(:final reason):
         debugPrint('[together] dropped a room message: $reason');
-      case TogetherMemberJoined() || TogetherCredentialsReceived():
+      case TogetherMemberJoined() ||
+            TogetherCredentialsReceived() ||
+            TogetherDuration():
         break;
     }
   }
+
+  Party _clearPartyState(Party p) => p.copyWith(
+        item: () => null,
+        playing: false,
+        positionMs: 0,
+        positionAt: clock(),
+        waitingFor: const [],
+        continueWithout: const [],
+        live: false,
+        notice: () => null,
+      );
 
   void _onError(TogetherError event) {
     debugPrint('[together] ${event.context} failed');
@@ -749,6 +813,8 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
           const TogetherEnded("This invite isn't valid any more."),
         TogetherStop.replaced =>
           const TogetherEnded('This computer joined the party somewhere else.'),
+        TogetherStop.roomLimit || TogetherStop.relayBusy => TogetherEnded(
+            togetherLimitMessage(event.reason, event.retryAfter) ?? ''),
         TogetherStop.error =>
           const TogetherEnded('The watch party connection failed.'),
       });

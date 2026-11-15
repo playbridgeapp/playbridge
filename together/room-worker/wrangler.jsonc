@@ -6,19 +6,33 @@
   "name": "playbridge-together-room",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
-  "observability": { "enabled": true },
+  // One log line per refusal and per room problem; no line for every request and message.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
   "durable_objects": {
     "bindings": [
       { "name": "ROOMS", "class_name": "Room" },
-      { "name": "LIMITS", "class_name": "Limits" }
+      { "name": "LIMITS", "class_name": "Limits" },
+      { "name": "GATE", "class_name": "Gate" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Limits"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room", "Limits"] },
+    { "tag": "v2", "new_sqlite_classes": ["Gate"] }
+  ],
+  // Connect limits, counted per Cloudflare location. namespace_id is any integer unique
+  // to the account; change them if they clash with another Worker's.
+  "ratelimits": [
+    { "name": "CONNECTS_PER_ROOM", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } },
+    { "name": "CONNECTS_PER_IP", "namespace_id": "4102", "simple": { "limit": 120, "period": 60 } }
+  ],
   "vars": {
     "SHARED_TIER": "false",
     "MAX_MEMBERS": "8",
     "ROOM_LIFETIME_HOURS": "8",
-    "ROOMS_PER_IP_PER_DAY": "50",
+    "OPEN_ROOMS_PER_IP": "20",
+    "ROOMS_PER_IP_PER_HOUR": "100",
+    // 0: no daily cap. Set one (e.g. 60000) if this account also runs other Workers.
+    "DAILY_BUDGET": "0",
     "IDLE_CLOSE_MINUTES": "30"
   },
   "env": {
@@ -28,14 +42,23 @@
       "durable_objects": {
         "bindings": [
           { "name": "ROOMS", "class_name": "Room" },
-          { "name": "LIMITS", "class_name": "Limits" }
+          { "name": "LIMITS", "class_name": "Limits" },
+          { "name": "GATE", "class_name": "Gate" }
         ]
       },
+      "ratelimits": [
+        { "name": "CONNECTS_PER_ROOM", "namespace_id": "4111", "simple": { "limit": 30, "period": 60 } },
+        { "name": "CONNECTS_PER_IP", "namespace_id": "4112", "simple": { "limit": 120, "period": 60 } }
+      ],
       "vars": {
         "SHARED_TIER": "true",
         "MAX_MEMBERS": "4",
         "ROOM_LIFETIME_HOURS": "3",
-        "ROOMS_PER_IP_PER_DAY": "5",
+        "OPEN_ROOMS_PER_IP": "4",
+        "ROOMS_PER_IP_PER_HOUR": "20",
+        // 60% of the account's 100,000 free Durable Object requests a day; the rest is
+        // left for the pairing service.
+        "DAILY_BUDGET": "60000",
         "IDLE_CLOSE_MINUTES": "30",
         // App Links for invite links on party.playbridge.app: the release signing key
         // (GitHub APKs), then the Google Play app-signing key (Play installs).
