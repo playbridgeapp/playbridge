@@ -3,6 +3,7 @@ package com.playbridge.sender.data.backup
 import kotlinx.serialization.json.jsonObject
 import android.content.Context
 import com.playbridge.sender.browser.Components
+import com.playbridge.sender.history.CastHistorySettings
 import com.playbridge.sender.settings.ExportedAppSettings
 import com.playbridge.sender.settings.ExportedBookmark
 import com.playbridge.sender.settings.ExportedCollection
@@ -25,6 +26,26 @@ import com.playbridge.sender.player.PhonePlayerMode
 import kotlinx.serialization.Serializable
 import mozilla.components.browser.state.state.ContentState
 import mozilla.components.browser.state.state.TabSessionState
+
+/** Cast history choices into a backup. The history itself (titles, links, positions) is never exported. */
+internal fun ExportedAppSettings.withCastHistory(history: CastHistorySettings) = copy(
+    castHistoryEnabled = history.enabled,
+    castHistoryLimit = history.limit,
+    castHistoryRememberPosition = history.rememberPosition,
+    castHistoryKeepPreviews = history.keepPreviews,
+    castHistoryExcludeBridgedApps = history.excludeBridgedApps,
+    castHistoryCheckLinks = history.checkLinks,
+)
+
+/** The cast history choices a backup carries, over [current] for anything it lacks. */
+internal fun ExportedAppSettings.castHistoryOver(current: CastHistorySettings) = CastHistorySettings(
+    enabled = castHistoryEnabled ?: current.enabled,
+    limit = CastHistorySettings.coerceLimit(castHistoryLimit ?: current.limit),
+    rememberPosition = castHistoryRememberPosition ?: current.rememberPosition,
+    keepPreviews = castHistoryKeepPreviews ?: current.keepPreviews,
+    excludeBridgedApps = castHistoryExcludeBridgedApps ?: current.excludeBridgedApps,
+    checkLinks = castHistoryCheckLinks ?: current.checkLinks,
+)
 
 object BackupUtils {
 
@@ -92,7 +113,7 @@ object BackupUtils {
             phoneBackgroundPlay = settingsRepository.phoneLeaveAction.first() == com.playbridge.sender.player.PhoneLeaveAction.KEEP_PLAYING,
             phoneLeaveAction = settingsRepository.phoneLeaveAction.first().id,
             phoneSubtitleStyle = com.playbridge.shared.protocol.createSubtitleStyleJson(settingsRepository.phoneSubtitleStyle.first()),
-        )
+        ).withCastHistory(settingsRepository.castHistory.first())
 
         val exported = ExportedSettings(
             tvPlayerMode = settingsRepository.tvPlayerMode.first(),
@@ -187,6 +208,7 @@ object BackupUtils {
                         com.playbridge.sender.player.PhoneLeaveAction.of(s.phoneLeaveAction, s.phoneBackgroundPlay),
                     )
                 }
+                settingsRepository.setCastHistory(s.castHistoryOver(settingsRepository.castHistory.first()))
                 s.phoneSubtitleStyle?.let { json ->
                     runCatching {
                         com.playbridge.shared.protocol.parseSubtitleStyle(

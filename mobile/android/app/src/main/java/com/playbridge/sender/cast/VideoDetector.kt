@@ -138,6 +138,8 @@ data class DetectedVideo(
     val visualMetadata: playbridge.VisualMetadata? = null,
     /** Resume point for contentPayload casts packaged through DetectedVideo. */
     val startPositionMs: Long = 0L,
+    /** For a playlist replayed from history: which item to start at; [startPositionMs] applies to it. */
+    val startIndex: Int = 0,
 ) {
     val isSubtitle: Boolean
         get() = mediaKind.equals("subtitle", ignoreCase = true) ||
@@ -692,6 +694,13 @@ object VideoDetector {
 
     /** Returns the cached thumbnail for [url], or null if not yet fetched. */
     fun getCachedThumbnail(url: String): Bitmap? = synchronized(thumbnailCache) { thumbnailCache[url] }
+
+    /** The page a detected [mediaUrl] was found on, if the detector still knows it. */
+    fun originUrlFor(mediaUrl: String): String? = runCatching {
+        tabVideos.values.firstNotNullOfOrNull { list ->
+            list.firstOrNull { it.url == mediaUrl }?.originUrl
+        }
+    }.getOrNull()
 
     /** Returns true if a thumbnail has already been fetched and cached for this URL. */
     fun hasThumbnail(url: String): Boolean = synchronized(thumbnailCache) { thumbnailCache.containsKey(url) }

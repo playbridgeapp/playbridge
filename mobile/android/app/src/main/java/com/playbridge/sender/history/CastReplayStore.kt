@@ -6,7 +6,6 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.proxy.PhoneProxyUrls
-import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,18 +88,18 @@ internal fun replaySourceFromExternalMedia(media: MediaItem): CastReplaySource? 
     )
 }
 
-/** Encrypted, bounded phone-only snapshots; losing the device-bound key merely disables recast. */
-class CastReplayStore(context: Context, diagnostics: CastAttemptDiagnostics) {
+/**
+ * Encrypted phone-only snapshots; losing the device-bound key merely disables recast. A source lives
+ * as long as its cast history entry, which [CastHistoryRepository] enforces; this store never prunes
+ * on its own, so it cannot drop sources the history still lists.
+ */
+class CastReplayStore(context: Context) : ReplaySources {
     private val preferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val _sources = MutableStateFlow(readStored())
-    val sources: StateFlow<Map<String, CastReplaySource>> = _sources.asStateFlow()
-
-    init {
-        retainOnly(diagnostics.attempts.value.map { it.id }.toSet())
-    }
+    override val sources: StateFlow<Map<String, CastReplaySource>> = _sources.asStateFlow()
 
     @Synchronized
-    fun put(id: String, source: CastReplaySource) {
+    override fun put(id: String, source: CastReplaySource) {
         if (!isReplayableMediaUrl(source.url)) return
         val encrypted = runCatching { encrypt(encode(source).toString()) }.getOrNull() ?: return
         val next = LinkedHashMap(_sources.value)
@@ -110,13 +109,13 @@ class CastReplayStore(context: Context, diagnostics: CastAttemptDiagnostics) {
     }
 
     @Synchronized
-    fun delete(id: String) {
+    override fun delete(id: String) {
         _sources.value = _sources.value - id
         preferences.edit().remove(id).apply()
     }
 
     @Synchronized
-    fun retainOnly(ids: Set<String>) {
+    override fun retainOnly(ids: Set<String>) {
         val stale = preferences.all.keys - ids
         if (stale.isEmpty()) return
         _sources.value = _sources.value.filterKeys { it in ids }
@@ -124,7 +123,7 @@ class CastReplayStore(context: Context, diagnostics: CastAttemptDiagnostics) {
     }
 
     @Synchronized
-    fun clear() {
+    override fun clear() {
         _sources.value = emptyMap()
         preferences.edit().clear().apply()
     }
@@ -204,3 +203,30 @@ class CastReplayStore(context: Context, diagnostics: CastAttemptDiagnostics) {
 }
 
 private const val MAX_REPLAY_PLAYLIST_ITEMS = 100
+
+/** The few fields of a native playlist command the history records; the wire JSON is never kept. */
+internal data class NativeCastInfo(
+    val title: String?,
+    val itemCount: Int,
+    val startIndex: Int,
+    val detectedBy: String?,
+)
+
+internal fun nativeCastInfo(command: String): NativeCastInfo? = runCatching {
+    val root = Json.parseToJsonElement(command) as? JsonObject ?: return@runCatching null
+    if (root["action"]?.jsonPrimitive?.contentOrNull != "playlist") return@runCatching null
+    val payload = root["payload"] as? JsonObject ?: return@runCatching null
+    val items = payload["items"] as? JsonArray ?: return@runCatching null
+    val count = items.size
+    if (count == 0) return@runCatching null
+    // The wire JSON uses camelCase names; the snake_case names are accepted too.
+    val start = ((payload["startIndex"] ?: payload["start_index"])?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0)
+        .coerceIn(0, count - 1)
+    val current = items[start] as? JsonObject
+    NativeCastInfo(
+        title = current?.get("title")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+        itemCount = count,
+        startIndex = start,
+        detectedBy = (current?.get("detectedBy") ?: current?.get("detected_by"))?.jsonPrimitive?.contentOrNull,
+    )
+}.getOrNull()

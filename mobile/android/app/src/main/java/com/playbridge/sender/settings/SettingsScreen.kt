@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tv
@@ -62,7 +63,7 @@ import androidx.compose.ui.unit.dp
 
 private enum class SettingsSection {
     Hub, PhonePlayer, TV, AudioSubtitles, Casting, StreamProxy, WebsitePermissions,
-    Browser, PopupBlocker, Remote, Appearance, Backup, Logs,
+    Browser, PopupBlocker, Remote, Appearance, CastHistory, Backup, Logs,
 }
 
 /** Pages opened from another page return there; the rest return to the hub. */
@@ -100,6 +101,7 @@ fun SettingsScreen(
         SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(onBack = up)
         SettingsSection.Remote -> RemoteSettingsScreen(onBack = up)
         SettingsSection.Appearance -> AppearanceSettingsScreen(onBack = up)
+        SettingsSection.CastHistory -> CastHistorySettingsScreen(onBack = up)
         SettingsSection.Backup -> ImportExportSettingsScreen(onBack = up)
         SettingsSection.Logs -> LogsScreen(onBack = up, tvLogs = tvLogs)
     }
@@ -136,6 +138,7 @@ private fun SettingsHubContent(
     val blockPopups by settings.blockPopups.collectAsState(initial = true)
     val maxTabs by settings.maxAliveTabs.collectAsState(initial = 5)
     val remote by remotePreferences.state.collectAsState()
+    val historySettings by settings.castHistory.collectAsState(initial = com.playbridge.sender.history.CastHistorySettings())
     val themeLabel = com.playbridge.sender.ui.theme.ThemeController.current().label
 
     val label = { options: List<Pair<String, String>>, code: String, fallback: String ->
@@ -171,6 +174,11 @@ private fun SettingsHubContent(
     )
     val general = listOf(
         SettingsHubItem(Icons.Default.Palette, "Appearance", "Theme: $themeLabel", SettingsSection.Appearance),
+        SettingsHubItem(
+            Icons.Default.History, "Cast history",
+            if (historySettings.enabled) "Keeping ${historySettings.limit} · position ${if (historySettings.rememberPosition) "on" else "off"}" else "Off",
+            SettingsSection.CastHistory,
+        ),
         SettingsHubItem(Icons.Default.SwapVert, "Backup & restore", "Files and cloud backup", SettingsSection.Backup),
         SettingsHubItem(Icons.Default.Description, "Logs & diagnostics", "Phone and TV logs", SettingsSection.Logs),
     )

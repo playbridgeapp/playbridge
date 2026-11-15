@@ -14,8 +14,8 @@ import com.playbridge.sender.data.iptv.IptvPlaylistDao
 import com.playbridge.sender.data.iptv.IptvPlaylistEntity
 
 @Database(
-    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, CommandHistoryEntity::class, SearchHistoryEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class],
-    version = 25
+    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, CommandHistoryEntity::class, SearchHistoryEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class, CastHistoryEntity::class],
+    version = 26
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
@@ -28,4 +28,5 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun collectionDao(): CollectionDao
     abstract fun collectionItemDao(): CollectionItemDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun castHistoryDao(): CastHistoryDao
 }
