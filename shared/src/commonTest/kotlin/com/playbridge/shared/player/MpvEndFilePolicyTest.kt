@@ -30,6 +30,19 @@ class MpvEndFilePolicyTest {
         assertEquals(PlaybackState.Ended, classify(duration = -1))
     }
 
+    @Test fun cleanShortFileShorterThanDeclaredLengthEndsNormally() {
+        assertEquals(
+            PlaybackState.Ended,
+            MpvEndFilePolicy.classify(
+                fileLoaded = true,
+                transitioning = false,
+                positionMs = 20_000,
+                durationMs = 120_000,
+                hadTruncationOrNetworkError = false,
+            ),
+        )
+    }
+
     private fun classify(loaded: Boolean = true, transitioning: Boolean = false, position: Long = 0, duration: Long = 100_000) =
         MpvEndFilePolicy.classify(loaded, transitioning, position, duration)
 }

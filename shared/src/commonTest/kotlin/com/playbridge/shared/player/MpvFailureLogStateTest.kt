@@ -2,7 +2,9 @@ package com.playbridge.shared.player
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MpvFailureLogStateTest {
     @Test fun recoveredHttpErrorCannotLabelALaterUnrelatedFailure() {
@@ -37,5 +39,17 @@ class MpvFailureLogStateTest {
         logs.positionChanged(0, playing = false)
         logs.record("cplayer", 20, "Failed to open private-url")
         assertEquals("mpv_http_403", logs.failureCode.value)
+    }
+
+    @Test fun truncationSignalSurvivesHealthyTicksWithinSameFileAndResetsOnNewFile() {
+        val logs = MpvFailureLogState()
+        assertFalse(logs.hadTruncationOrNetworkError)
+        logs.record("ffmpeg/http", 30, "Will reconnect at 1048576 in 1 second(s), error=End of file.")
+        assertTrue(logs.hadTruncationOrNetworkError)
+        logs.positionChanged(5_000, playing = true)
+        logs.positionChanged(6_000, playing = true)
+        assertTrue(logs.hadTruncationOrNetworkError)
+        logs.beginFile()
+        assertFalse(logs.hadTruncationOrNetworkError)
     }
 }

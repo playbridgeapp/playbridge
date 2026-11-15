@@ -147,7 +147,15 @@ internal class PendingSeekTracker(
         return current.targetMs
     }
 
-    fun isPending(sessionId: Long): Boolean = pending?.sessionId == sessionId
+    fun isPending(sessionId: Long, nowMs: Long? = null): Boolean {
+        val current = pending ?: return false
+        if (current.sessionId != sessionId) return false
+        if (nowMs != null && nowMs - current.startedAtMs >= timeoutMs) {
+            pending = null
+            return false
+        }
+        return true
+    }
 
     fun clear() {
         pending = null

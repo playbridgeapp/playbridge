@@ -61,6 +61,12 @@ internal fun mpvNeedsFileReady(
 ): Boolean = hasLoadedFile && !transitioning && !alreadyReady &&
     state in setOf(PlaybackState.Ready, PlaybackState.Playing, PlaybackState.Paused, PlaybackState.Buffering)
 
+/** Ignore stale Error states while a replacement file/session is transitioning in. */
+internal fun mpvCanEmitError(
+    state: PlaybackState,
+    transitioning: Boolean,
+): Boolean = state is PlaybackState.Error && !transitioning
+
 /** Headless MPV renderer for the permanent host process boundary. */
 class MpvRendererService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -342,7 +348,9 @@ class MpvRendererService : Service() {
                                 sendEvent(RendererProtocol.EVENT_FIRST_FRAME)
                             }
                         }
-                        is PlaybackState.Error -> sendError(state.code)
+                        is PlaybackState.Error -> if (mpvCanEmitError(state, renderer.isTransitioning)) {
+                            sendError(state.code)
+                        }
                         PlaybackState.Ended -> {
                             // loadfile replacement reports END_FILE for the outgoing file after
                             // prepare() has already assigned the incoming session id. Only let an
