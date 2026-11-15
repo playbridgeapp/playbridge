@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
@@ -71,13 +72,17 @@ fun DeviceChip(
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val route by viewModel.route.collectAsState()
     val castSessionState by viewModel.castSessionState.collectAsState()
+    val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsState()
+    val partySelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsState()
 
-    val externalSelected = route is CastSessionManager.Route.External && activeExternalDevice != null
-    val nativeSelected = route is CastSessionManager.Route.NativeTv
+    val activeParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+    val watchPartySelected = activeParty != null && partySelected
+    val externalSelected = !watchPartySelected && route is CastSessionManager.Route.External && activeExternalDevice != null
+    val nativeSelected = !watchPartySelected && route is CastSessionManager.Route.NativeTv
     val externalConnected = externalSelected && castSessionState.isReadyForPlayback
-    val isConnected = externalConnected ||
+    val isConnected = watchPartySelected || externalConnected ||
         (nativeSelected && connectionState is WebSocketClient.ConnectionState.Connected)
-    val isConnecting = if (externalSelected) {
+    val isConnecting = !watchPartySelected && if (externalSelected) {
         castSessionState.phase == SessionPhase.CONNECTING
     } else {
         nativeSelected && (
@@ -89,6 +94,7 @@ fun DeviceChip(
 
     val name = if (externalSelected) activeExternalDevice?.name else tvDevice?.name
     val label = when {
+        watchPartySelected -> "Watch party"
         castStatusLabel -> when {
             isConnected -> name ?: "TV"
             isConnecting -> "Connecting…"
@@ -101,11 +107,13 @@ fun DeviceChip(
         else -> "Watching on: This Device"
     }
     val icon = when {
+        watchPartySelected -> Icons.Default.Groups
         externalSelected -> Icons.Default.Cast
         nativeSelected -> Icons.Default.Tv
         else -> Icons.Default.Smartphone
     }
     val iconTint = when {
+        watchPartySelected -> PartyTargetColors.Accent
         isConnected -> ConnectedGreen
         isConnecting -> ConnectingOrange
         else -> Color.White.copy(alpha = 0.7f)
@@ -113,6 +121,7 @@ fun DeviceChip(
 
     // Mirror ChipDropdown's capsule styling so the chip looks identical to the old trigger.
     val accent = when {
+        watchPartySelected -> PartyTargetColors.Accent
         isConnected -> ConnectedGreen
         isConnecting -> ConnectingOrange
         else -> Color.Unspecified

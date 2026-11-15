@@ -329,10 +329,24 @@ class StreamRouteService(
                 .readTimeout(30, TimeUnit.SECONDS)
                 .build()
 
-        /** Prefer Wi-Fi site-local IPv4; skip VPN tunnels (same rules as LocalProxyServer). */
-        fun lanIpv4(): String? = runCatching {
+        private fun activeNonLoopbackInterfaces(): List<NetworkInterface> = runCatching {
             NetworkInterface.getNetworkInterfaces().toList()
                 .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+        }.getOrDefault(emptyList())
+
+        /** All non-loopback IP addresses currently bound to this phone's active network interfaces. */
+        fun ownHostAddresses(): Set<String> =
+            activeNonLoopbackInterfaces()
+                .flatMap { it.inetAddresses.toList() }
+                .filter { !it.isLoopbackAddress && !it.isAnyLocalAddress }
+                .mapNotNull { addr ->
+                    addr.hostAddress?.substringBefore('%')?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+                }
+                .toSet()
+
+        /** Prefer Wi-Fi site-local IPv4; skip VPN tunnels (same rules as LocalProxyServer). */
+        fun lanIpv4(): String? = runCatching {
+            activeNonLoopbackInterfaces()
                 .filterNot { nif ->
                     val n = nif.name.orEmpty()
                     n.startsWith("tun") || n.startsWith("wg") ||

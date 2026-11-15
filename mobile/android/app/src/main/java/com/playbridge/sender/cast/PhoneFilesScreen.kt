@@ -243,7 +243,17 @@ fun PhoneFilesScreen(
         castRoute is CastSessionManager.Route.NativeTv &&
             nativeDevice?.supportsNativeMediaKind(media.mediaKind.wireValue) == false
 
+    fun showPartyUnsupported() {
+        scope.launch {
+            snackbar.showSnackbar("Files on this phone can't be played in a watch party. Change where to play to open or cast them.")
+        }
+    }
+
     fun playOnTv(media: PhoneMediaItem, subtitleUrl: String? = null) {
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            showPartyUnsupported()
+            return
+        }
         if (unsupportedOnTv(media)) {
             scope.launch { snackbar.showSnackbar("${tvName ?: "This TV"} can't play this kind of file") }
             return
@@ -269,7 +279,11 @@ fun PhoneFilesScreen(
         }
     }
 
-    fun play(media: PhoneMediaItem) = if (hasExternalTarget) playOnTv(media) else playOnPhone(media)
+    fun play(media: PhoneMediaItem) = when {
+        com.playbridge.sender.together.PhoneTogether.isPartySelected() -> showPartyUnsupported()
+        hasExternalTarget -> playOnTv(media)
+        else -> playOnPhone(media)
+    }
 
     fun castItem(media: PhoneMediaItem, displayDurationMs: Long? = null) = com.playbridge.sender.connection.LocalCastItem(
         uri = media.uri.toString(),
@@ -284,6 +298,10 @@ fun PhoneFilesScreen(
     )
 
     fun sendQueue(list: List<com.playbridge.sender.connection.LocalCastItem>, mode: com.playbridge.sender.connection.LocalQueueMode, source: String? = null) {
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            showPartyUnsupported()
+            return
+        }
         if (list.isEmpty()) return
         scope.launch {
             val result = viewModel.castLocalQueue(list, mode, source)
@@ -308,6 +326,10 @@ fun PhoneFilesScreen(
 
     /** Play all / Play N / Shuffle: a new list on the TV, or in order on this phone. [source] names it in Up next. */
     fun playList(list: List<PhoneMediaItem>, shuffle: Boolean, source: String) {
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            showPartyUnsupported()
+            return
+        }
         val ordered = if (shuffle) list.shuffled() else list
         when {
             queueEnabled -> queue(ordered, com.playbridge.sender.connection.LocalQueueMode.REPLACE, if (shuffle) "$source, shuffled" else source)

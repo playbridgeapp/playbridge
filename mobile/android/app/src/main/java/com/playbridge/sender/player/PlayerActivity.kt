@@ -827,6 +827,9 @@ open class PlayerActivity : ComponentActivity() {
             val sanitizedMsg = error.message?.let { com.playbridge.shared.logging.redactLogText(it) } ?: "unknown"
             Log.e(PB_PLAYER, "error ${error.errorCodeName}: $sanitizedMsg")
             if (PhonePlayerFallback.isFormatError(error.errorCode) && fallBackToMpv(error.errorCodeName)) return
+            partyItem?.takeIf { !partyLoadedReported }?.let { item ->
+                PhoneTogether.onLoadFailed(item)
+            }
             (player as? ExoPlayer)?.let { recoverFromPlayerError(it, error) }
         }
     }

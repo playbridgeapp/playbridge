@@ -53,6 +53,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import com.playbridge.sender.R
+import com.playbridge.sender.cast.PartyTargetColors
+import com.playbridge.sender.cast.TargetVisualKind
+import com.playbridge.sender.cast.targetIconVector
 import com.playbridge.sender.ui.frostedGlass
 import com.playbridge.sender.ui.rememberFrostedBackdrop
 import com.playbridge.sender.ui.theme.DockGlass
@@ -91,6 +94,7 @@ internal fun MovablePlayBridgeEdgeShortcut(
     onRefresh: () -> Unit,
     onBack: () -> Unit,
     onAppSettings: () -> Unit,
+    targetKind: TargetVisualKind = TargetVisualKind.THIS_PHONE,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -115,6 +119,7 @@ internal fun MovablePlayBridgeEdgeShortcut(
             onRefresh = onRefresh,
             onBack = onBack,
             onAppSettings = onAppSettings,
+            targetKind = targetKind,
             onRight = onRight,
             dragging = dragOffset != null,
             handleModifier = Modifier.pointerInput(maxX, maxY, resting) {
@@ -159,6 +164,7 @@ internal fun PlayBridgeEdgeShortcut(
     onRefresh: () -> Unit,
     onBack: () -> Unit = onDashboard,
     onAppSettings: () -> Unit = {},
+    targetKind: TargetVisualKind = TargetVisualKind.THIS_PHONE,
     onRight: Boolean = true,
     dragging: Boolean = false,
     handleModifier: Modifier = Modifier,
@@ -268,7 +274,14 @@ internal fun PlayBridgeEdgeShortcut(
                 DropdownMenuItem(
                     colors = menuItemColors,
                     text = { Text("Play on") },
-                    leadingIcon = { Icon(Icons.Default.Cast, null, Modifier.size(18.dp)) },
+                    leadingIcon = {
+                        Icon(
+                            targetIconVector(targetKind),
+                            null,
+                            Modifier.size(18.dp),
+                            tint = if (targetKind == TargetVisualKind.WATCH_PARTY) PartyTargetColors.Accent else glassIcon,
+                        )
+                    },
                     onClick = { expanded = false; onDevices() },
                 )
                 DropdownMenuItem(

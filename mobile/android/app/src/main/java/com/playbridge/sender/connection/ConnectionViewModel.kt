@@ -145,7 +145,11 @@ class ConnectionViewModel(
      * would cost something: media this phone serves may cut out, and a linked website loses
      * control (and stops adding to the queue).
      */
+    fun selectWatchPartyTarget() = com.playbridge.sender.together.PhoneTogether.selectPartyTarget()
+
+    /** True when casting would interrupt phone-served TV playback or a linked site; null when switching away from a watch party. */
     fun thisPhoneSwitchWarning(): ThisPhoneSwitchWarning? {
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) return null
         val phoneServed = castSessionManager.tvPlaysPhoneServedMedia()
         val linked = org.koin.core.context.GlobalContext.get()
             .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>().uiState.value
@@ -672,6 +676,16 @@ class ConnectionViewModel(
             url,
             headers,
         )
+        if (com.playbridge.sender.together.PhoneTogether.isPartySelected()) {
+            com.playbridge.sender.together.PhoneTogether.playInParty(
+                url = url,
+                title = title,
+                headers = headers,
+                subtitles = emptyList(),
+                startMs = 0L,
+            )
+            return true
+        }
         val media = MediaItem(url = url, headers = headers, mimeType = mime, title = title)
         if (castSessionManager.load(media)) return true
         if (route.value is CastSessionManager.Route.NativeTv &&

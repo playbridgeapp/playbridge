@@ -13,6 +13,8 @@ import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.player.PagePlayerSession
 import com.playbridge.sender.player.PlayerActivity
 import com.playbridge.sender.player.PlayerLaunchOrigin
+import com.playbridge.sender.together.PartyMediaSupport
+import com.playbridge.sender.together.PhoneTogether
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -38,7 +40,26 @@ class PagePlaybackCoordinator(
     private var createdAtMillis = 0L
     private var lastActivityAtMillis = 0L
 
+    private fun activePartyRawId(): String? =
+        (PhoneTogether.state.value as? PhoneTogether.State.InParty)
+            ?.party
+            ?.takeIf { PhoneTogether.isPartySelected() }
+            ?.let { "watch_party:${it.roomId}" }
+
     suspend fun destination(origin: String? = null): JSONObject {
+        val partyRawId = activePartyRawId()
+        if (partyRawId != null) {
+            val normalized = origin?.let(PageCastConsentStore::normalizeOrigin)
+            return pagePlaybackDestination(
+                rawId = partyRawId,
+                rawName = "Watch party",
+                kind = "external",
+                connected = true,
+                origin = normalized,
+                consented = normalized != null && PageCastConsentStore.isApproved(context, normalized),
+                installSecret = PageDestinationPrivacy.installSecret(context),
+            )
+        }
         val route = connection.route.value
         val device = if (route is CastSessionManager.Route.External) connection.activeExternalDevice.value
             else connection.tvDevice.first()
@@ -64,11 +85,14 @@ class PagePlaybackCoordinator(
     }
 
     /** A selected non-local route with a live transport. Websites must not disconnect it. */
-    private fun liveReceiverConnected(): Boolean = when (val route = connection.route.value) {
-        is CastSessionManager.Route.ThisDevice -> false
-        is CastSessionManager.Route.NativeTv ->
-            connection.connectionState.value is WebSocketClient.ConnectionState.Connected
-        is CastSessionManager.Route.External -> connection.castSessionState.value.isReadyForPlayback
+    private fun liveReceiverConnected(): Boolean {
+        if (PhoneTogether.isPartySelected()) return true
+        return when (connection.route.value) {
+            is CastSessionManager.Route.ThisDevice -> false
+            is CastSessionManager.Route.NativeTv ->
+                connection.connectionState.value is WebSocketClient.ConnectionState.Connected
+            is CastSessionManager.Route.External -> connection.castSessionState.value.isReadyForPlayback
+        }
     }
 
     fun handle(message: JSONObject): Boolean {
@@ -167,6 +191,11 @@ class PagePlaybackCoordinator(
         if (!PageCastConsentStore.isApproved(context, request.origin)) { reject(request, "not_allowed"); return }
         if (!pageDestinationMatches(request)) { reject(request, "receiver_changed"); return }
         if (!destination.optBoolean("connected")) { reject(request, "connect_failed"); return }
+        if (PhoneTogether.isPartySelected()) {
+            end("superseded")
+            linked.openParty(request)
+            return
+        }
         end("superseded")
         linked.supersedeIfActive()
         active = request
@@ -293,11 +322,13 @@ class PagePlaybackCoordinator(
 
     private suspend fun pageDestinationMatches(request: LinkedPageCastOpenRequest): Boolean {
         val id = request.destinationId ?: return false
-        val route = connection.route.value
-        val device = if (route is CastSessionManager.Route.External) connection.activeExternalDevice.value
-            else connection.tvDevice.first()
-        val rawId = if (route is CastSessionManager.Route.ThisDevice) PageDestinationPrivacy.THIS_DEVICE
+        val rawId = activePartyRawId() ?: run {
+            val route = connection.route.value
+            val device = if (route is CastSessionManager.Route.External) connection.activeExternalDevice.value
+                else connection.tvDevice.first()
+            if (route is CastSessionManager.Route.ThisDevice) PageDestinationPrivacy.THIS_DEVICE
             else device?.endpointKey?.toString() ?: PageDestinationPrivacy.UNAVAILABLE
+        }
         return pageDestinationIdMatches(id, rawId, request.origin, PageDestinationPrivacy.installSecret(context))
     }
 

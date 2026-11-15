@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.Icons
@@ -116,10 +117,23 @@ fun CastSheet(
     val context = LocalContext.current
     val streamProxySettings = remember { StreamProxySettingsStore.load(context) }
     val streamRouteService = remember { StreamRouteService(context.applicationContext) }
+    val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsState()
+    val partyTargetSelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsState()
+    val activeParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+    val watchPartySelected = activeParty != null && partyTargetSelected
+    val partyHostName = activeParty?.members?.values?.firstOrNull { it.host }?.name ?: "Host"
+    val partyCanChange = activeParty?.canChangeVideo == true
+    val partyMustAsk = activeParty != null && !activeParty.host &&
+        activeParty.policy == com.playbridge.shared.together.TogetherPolicy.Ask && !activeParty.locked
+    val partyLockedOrHostOnly = activeParty != null && !partyCanChange && !partyMustAsk
+    val openWatchParty = LocalOpenWatchParty.current
     var showPlayOn by remember { mutableStateOf(false) }
-    if (showPlayOn) PlayOnSheet(onDismiss = { showPlayOn = false })
+    if (showPlayOn) PlayOnSheet(
+        onDismiss = { showPlayOn = false },
+        onOpenParty = openWatchParty?.let { open -> { onDismiss(); open() } },
+    )
     val castProtocol = selectedTvDevice?.resolvedProtocol ?: CastProtocol.PLAYBRIDGE
-    val isBrowserDestination = castProtocol == CastProtocol.WEB_BROWSER
+    val isBrowserDestination = !watchPartySelected && castProtocol == CastProtocol.WEB_BROWSER
     var routeMode by remember(castProtocol) {
         mutableStateOf(CastPreparation.defaultRoute(castProtocol))
     }
@@ -160,7 +174,7 @@ fun CastSheet(
     //   "browse" → open the page URL on the TV
     // Whether the selected TV can open web pages. Receivers that report no browser engines
     // (e.g. desktop, Apple TV) get no Browse action at all.
-    val canBrowse = onBrowseClick != null && selectedTvDevice?.browsers?.isNotEmpty() == true
+    val canBrowse = !watchPartySelected && onBrowseClick != null && selectedTvDevice?.browsers?.isNotEmpty() == true
 
     var castAction by remember(playableVideos, detectedAudio, detectedImages, contentPayload) {
         mutableStateOf(
@@ -483,7 +497,7 @@ fun CastSheet(
                     .fillMaxHeight()
                     .padding(bottom = 80.dp) // Provide padding so FAB doesn't cover content
             ) {
-                if (receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected && selectedRemoteTV?.paired == true) {
+                if (!watchPartySelected && receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected && selectedRemoteTV?.paired == true) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(com.playbridge.sender.cast.remote.RemoteAvailability.RECEIVER_MISSING)
                         TextButton(onClick = { connections.openPlayBridge(); onDismiss() }) {
@@ -492,16 +506,7 @@ fun CastSheet(
                         Text("Once PlayBridge connects, send again.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                // Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Shared by the header action dropdown and the Send button.
-                var actionMenuExpanded by remember { mutableStateOf(false) }
+                // Shared by the header and Send button.
                 val requestedMediaKind = selectedVideo?.kind?.protocolValue
                     ?: contentPayload?.let { resolveMediaKind(it).wireValue }
                     ?: "video"
@@ -509,11 +514,34 @@ fun CastSheet(
                     ?.supportsNativeMediaKind(requestedMediaKind)
                     ?: true
                 val playEnabled = selectedVideo != null || contentPayload != null
-                val canQueue = isTvPlaying
+                val canQueue = if (watchPartySelected) partyCanChange else isTvPlaying
+                LaunchedEffect(watchPartySelected, canQueue) {
+                    if (watchPartySelected && !canQueue && castAction == "queue") {
+                        castAction = "play"
+                    }
+                }
 
                 // Resolve quality / HLS filtering, then package through the selected stream route.
                 fun dispatch(queue: Boolean) {
                     if (packaging) return
+                    // Watch party plays remote web URLs directly without phone-local proxy rewriting.
+                    if (watchPartySelected) {
+                        val subtitleResources = selectedSubtitleResources()
+                        val subs = selectedSubtitles.toList()
+                        if (contentPayload != null && selectedVideo == null) {
+                            if (queue) onQueueContent(contentPayload) else onContentClick(contentPayload)
+                            return
+                        }
+                        val specificUrl = selectedQualityUrl
+                        val chosen = if (specificUrl != null) {
+                            selectedVideo!!.copy(url = specificUrl)
+                        } else {
+                            selectedVideo!!
+                        }
+                        if (queue) onQueueVideo(chosen, subs, subtitleResources)
+                        else onVideoClick(chosen, subs, subtitleResources)
+                        return
+                    }
                     // Selected-media path: same policy + packaging as detected media.
                     if (contentPayload != null && selectedVideo == null) {
                         packaging = true
@@ -711,10 +739,20 @@ fun CastSheet(
                     }
                 }
 
-                val sendEnabled = !packaging && !(selectedRemoteTV?.paired == true && receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) && when (castAction) {
+                // Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    var actionMenuExpanded by remember { mutableStateOf(false) }
+
+                val sendEnabled = !packaging && !( !watchPartySelected && selectedRemoteTV?.paired == true && receiverState !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected ) && when (castAction) {
                     "browse" -> canBrowse && browseUrl.isNotBlank()
                     "queue"  -> playEnabled && canQueue
-                    else     -> playEnabled
+                    else     -> playEnabled && (!watchPartySelected || !partyLockedOrHostOnly)
                 }
 
                 // Action chip: tap opens a dropdown to choose Play / Queue / Browse. Selecting an
@@ -790,7 +828,7 @@ fun CastSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (castAction != "browse") {
+                    if (castAction != "browse" && !watchPartySelected) {
                         val routeOptions = StreamRouteMode.entries
                             .filter {
                                 // Via proxy only when configured.
@@ -823,17 +861,27 @@ fun CastSheet(
                     }
 
                     // Destination control keeps the selected media while choosing where to play.
-                    // "This device" (phone) gets a phone icon; any remote target gets a TV icon.
                     val isThisDevice = selectedTvDevice == null
                     val currentTarget = selectedTvDevice?.name
+                    val headerTargetKind = when {
+                        watchPartySelected -> TargetVisualKind.WATCH_PARTY
+                        isThisDevice -> TargetVisualKind.THIS_PHONE
+                        castProtocol == CastProtocol.PLAYBRIDGE -> TargetVisualKind.PLAYBRIDGE_TV
+                        else -> TargetVisualKind.OTHER_RECEIVER
+                    }
                     IconButton(onClick = { showPlayOn = true }) {
                         Icon(
-                            imageVector = if (isThisDevice) Icons.Default.Smartphone
-                            else Icons.Default.Tv,
-                            contentDescription = if (isThisDevice) "This device"
-                            else "Connected to $currentTarget",
-                            tint = if (isThisDevice) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.primary
+                            imageVector = targetIconVector(headerTargetKind),
+                            contentDescription = when (headerTargetKind) {
+                                TargetVisualKind.WATCH_PARTY -> "Watch party"
+                                TargetVisualKind.THIS_PHONE -> "This device"
+                                else -> "Connected to $currentTarget"
+                            },
+                            tint = when (headerTargetKind) {
+                                TargetVisualKind.WATCH_PARTY -> PartyTargetColors.Accent
+                                TargetVisualKind.THIS_PHONE -> MaterialTheme.colorScheme.onSurfaceVariant
+                                else -> MaterialTheme.colorScheme.primary
+                            }
                         )
                     }
 
@@ -870,7 +918,23 @@ fun CastSheet(
                 }
             }
 
-            if (castAction != "browse" && browserRouteHint != null) {
+            if (watchPartySelected && !partyCanChange) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = when {
+                        partyMustAsk -> "$partyHostName approves each video. Send asks them to play it."
+                        activeParty?.locked == true -> "$partyHostName locked the controls"
+                        else -> "Only $partyHostName can change the video"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                )
+            }
+
+            if (castAction != "browse" && !watchPartySelected && browserRouteHint != null) {
                 Text(
                     text = browserRouteHint,
                     style = MaterialTheme.typography.bodySmall,
@@ -1300,7 +1364,7 @@ fun CastSheet(
                                 },
                                 onPreviewClick = { previewVideo = video },
                                 onPlayPhoneClick = { origin -> dispatchPhoneForVideo(video, origin) },
-                                onSaveToCollection = onSaveToCollection?.let { cb -> { cb(video) } }
+                                onSaveToCollection = onSaveToCollection?.let { cb -> { cb(video) } },
                             )
                         }
 

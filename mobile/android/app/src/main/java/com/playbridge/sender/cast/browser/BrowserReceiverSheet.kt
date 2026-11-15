@@ -104,6 +104,7 @@ fun BrowserReceiverSheet(
                 onCopy = { copyToClipboard(context, it) },
                 onApprove = { request, code -> browserRepo.approve(request.sessionId, code).getOrThrow() },
                 onPlayHere = { session ->
+                    com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
                     viewModel.selectBrowserTarget(session.toTvDevice(browserRepo.lanHostIp(), hostState.port))
                     onCastHere?.invoke()
                     onDismiss()
@@ -120,6 +121,7 @@ fun BrowserReceiverSheet(
     val activate by browserRepo.activateSession.collectAsState()
     LaunchedEffect(activate) {
         val session = activate ?: return@LaunchedEffect
+        com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
         viewModel.selectBrowserTarget(session.toTvDevice(browserRepo.lanHostIp(), hostState.port))
         browserRepo.clearActivateSession()
         onCastHere?.invoke()

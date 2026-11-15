@@ -235,7 +235,7 @@ internal fun VideoItemDetailed(
     onOpenWithClick: () -> Unit,
     onPreviewClick: () -> Unit,
     onPlayPhoneClick: (PlayerLaunchOrigin?) -> Unit,
-    onSaveToCollection: (() -> Unit)? = null
+    onSaveToCollection: (() -> Unit)? = null,
 ) {
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }

@@ -1076,6 +1076,10 @@ fun AppNavHost(
                     }
                     val castSessionState by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
                     val reconnectStatus by connectionViewModel.reconnectStatus.collectAsStateWithLifecycle()
+                    val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsStateWithLifecycle()
+                    val partySelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsStateWithLifecycle()
+                    val selectedParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+                        ?.takeIf { partySelected }
                     val playOnStatus = playOnStatus(
                         route = castRoute,
                         socketConnected = connectionState is WebSocketClient.ConnectionState.Connected,
@@ -1087,6 +1091,8 @@ fun AppNavHost(
                             connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
                             castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTING,
                         reconnecting = reconnectStatus != null,
+                        partyWatchingCount = selectedParty?.let { com.playbridge.sender.cast.partyWatchingCount(it) },
+                        partyPlayingTitle = selectedParty?.item?.title,
                     )
                     val ublockSetupStatus by Components.ublockOnboarding.status.collectAsStateWithLifecycle()
                     val tileStates = rememberDashboardTileStates(
@@ -1112,7 +1118,10 @@ fun AppNavHost(
                         onPlayOn = { showDevicePicker = true },
                         onExit = onFullExit,
                         onRemote = { onScreenChange(Screen.Remote) },
-                        onUseThisPhone = { connectionViewModel.selectThisDevice() },
+                        onUseThisPhone = {
+                            com.playbridge.sender.together.PhoneTogether.deselectPartyTarget()
+                            connectionViewModel.selectThisDevice()
+                        },
                         onSettings = {
                             // So Settings back lands on Dashboard (not Browser).
                             onLastMainScreenChange(Screen.Dashboard)
@@ -1221,6 +1230,9 @@ fun AppNavHost(
                         openRemoteQueue = true
                         onScreenChange(Screen.Remote)
                     },
+                    onOpenWatchParty = {
+                        onScreenChange(Screen.WatchTogether)
+                    },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(
@@ -1235,6 +1247,15 @@ fun AppNavHost(
         // Keep the bridged-app menu outside AnimatedContent so it never slides/fades with a page.
         // Only bridged apps get it: ordinary browser pages keep their own controls.
         if (currentScreen == Screen.Browser && isBridgedAppMode) {
+            val edgeTogetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsStateWithLifecycle()
+            val edgePartySelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsStateWithLifecycle()
+            val inParty = edgeTogetherState is com.playbridge.sender.together.PhoneTogether.State.InParty
+            val edgeTargetKind = com.playbridge.sender.cast.resolveTargetVisualKind(
+                route = castRoute,
+                partySelected = edgePartySelected && inParty,
+                inParty = inParty,
+                externalProtocol = activeExternalDevice?.protocol,
+            )
             key(currentScreen, isFullscreen) {
                 MovablePlayBridgeEdgeShortcut(
                     fullscreen = fullscreenBrowser,
@@ -1262,6 +1283,7 @@ fun AppNavHost(
                         leaveMediaFullscreen()
                         session?.reload()
                     },
+                    targetKind = edgeTargetKind,
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.safeDrawing),
@@ -1311,9 +1333,41 @@ private fun NowPlayingBarHost(
     showDevicePicker: () -> Unit,
     onOpenRemote: () -> Unit,
     onOpenUpNext: () -> Unit,
+    onOpenWatchParty: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val togetherState by com.playbridge.sender.together.PhoneTogether.state.collectAsStateWithLifecycle()
+    val partySelected by com.playbridge.sender.together.PhoneTogether.partyTargetSelected.collectAsStateWithLifecycle()
+    val partyQueue by com.playbridge.sender.together.PhoneTogether.queue.collectAsStateWithLifecycle()
+    val activeParty = (togetherState as? com.playbridge.sender.together.PhoneTogether.State.InParty)?.party
+    if (activeParty != null && partySelected) {
+        val partyPlaying = activeParty.item != null
+        val partyPaused = partyPlaying && !activeParty.playing
+        val canControl = activeParty.host || !activeParty.locked
+        val duration = activeParty.durationMs?.takeIf { it > 0 && !activeParty.live }
+        val progress = duration?.let { (activeParty.positionNow().toFloat() / it).coerceIn(0f, 1f) }
+        val watching = com.playbridge.sender.cast.partyWatchingCount(activeParty)
+        NowPlayingBar(
+            primaryText = activeParty.item?.title ?: "Watch party · $watching",
+            secondaryText = if (partyPlaying) "Watch party · $watching watching" else "Ready · Tap to open party",
+            leadingIcon = Icons.Default.Groups,
+            onClick = onOpenWatchParty,
+            isPlaying = partyPlaying,
+            isPaused = partyPaused,
+            progress = if (partyPlaying) progress else null,
+            ready = activeParty.connected,
+            upNextCount = partyQueue.size,
+            onUpNext = onOpenWatchParty,
+            onPlayPause = if (partyPlaying && canControl) ({
+                if (activeParty.playing) com.playbridge.sender.together.PhoneTogether.pause()
+                else com.playbridge.sender.together.PhoneTogether.play()
+            }) else null,
+            accentColor = com.playbridge.sender.cast.PartyTargetColors.Surface,
+            modifier = modifier,
+        )
+        return
+    }
     val linkedCoordinator = koinInject<LinkedPageCastCoordinator>()
     val linkedPage by linkedCoordinator.uiState.collectAsStateWithLifecycle()
     val phoneQueue by koinInject<com.playbridge.sender.cast.PhoneQueueCoordinator>().state.collectAsStateWithLifecycle()
