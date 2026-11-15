@@ -10,7 +10,14 @@ internal class MpvFailureLogState {
     val failureCode = mutableFailureCode.asStateFlow()
     private var lastPositionMs = 0L
 
+    /** Sticky within the active file: true once FFmpeg/cplayer logs truncation or network failure. */
+    var hadTruncationOrNetworkError: Boolean = false
+        private set
+
     fun record(prefix: String, level: Int, text: String) {
+        if (MpvFailureLogPolicy.isTruncationOrNetworkLog(prefix, level, text)) {
+            hadTruncationOrNetworkError = true
+        }
         val code = MpvFailureLogPolicy.classify(prefix, level, text) ?: return
         if (code != "mpv_load_failed" || lastCode == null) lastCode = code
         if (MpvFailureLogPolicy.isTerminal(prefix, text)) mutableFailureCode.value = lastCode
@@ -18,6 +25,7 @@ internal class MpvFailureLogState {
 
     fun beginFile() {
         playbackHealthy()
+        hadTruncationOrNetworkError = false
         lastPositionMs = 0L
     }
 

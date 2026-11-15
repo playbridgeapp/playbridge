@@ -131,6 +131,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private val sessionCoordinator = RendererSessionCoordinator()
     private val failureReporter = RendererFailureReporter()
     private val stallDetector = PlaybackStallDetector()
+    private val freezeRecovery = PlaybackFreezeRecovery()
+    private var itemIsKnownVod = false
+    private var activeRecoveryResumePlaying = false
+    private var activeRecoveryResumeSeek = false
+    private var lastFreezeReloadAtMs = 0L
+    private var recoveryReloadPendingRunnable: Runnable? = null
     private var stallMonitor: Runnable? = null
     private var stallPlaybackRequested = false
     private var stallState = "buffering"
@@ -970,6 +976,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         showTransition(R.string.player_switching, force = true)
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
+        recoveryReloadPendingRunnable?.let(mainHandler::removeCallbacks)
+        recoveryReloadPendingRunnable = null
+        freezeRecovery.resetForPositionChange(lastPositionMs.takeIf { it > 0L })
+        activeRecoveryResumePlaying = false
+        activeRecoveryResumeSeek = false
         progressManager.saveProgress()
         val oldKind = rendererKind
         val oldSession = session
@@ -1010,6 +1021,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     override fun onDestroy() {
         cancelStallMonitor()
+        recoveryReloadPendingRunnable?.let(mainHandler::removeCallbacks)
+        recoveryReloadPendingRunnable = null
         finishingSession = true
         logPlaybackContextCheckpoint("onDestroy")
         cancelStartupWatchdog()
@@ -1081,6 +1094,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         rendererKind = targetKind
         finishingSession = false
         failureReporter.reset()
+        resetRecoveryStateForNewItem()
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
@@ -1614,7 +1628,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             renderer.attachSurface(rendererSurface, sessionId)
             applyRendererSettings(renderer, sessionId)
             // A party video loads paused; the room starts everyone together.
-            if (partyItem == null) {
+            val recoveryResuming = activeRecoveryResumePlaying
+            activeRecoveryResumePlaying = false
+            if (partyItem == null || recoveryResuming) {
                 stallPlaybackRequested = true
                 pendingPlayingState = true
                 renderer.play(sessionId)
@@ -2113,9 +2129,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun restoreProgress(sessionId: Long) {
         val explicitPosition = requestedStartPositionMs
+        val recoverySeek = activeRecoveryResumeSeek
         requestedStartPositionMs = null
+        activeRecoveryResumeSeek = false
         if (explicitPosition != null && explicitPosition > 0L) {
-            seekForSession(explicitPosition, sessionId)
+            seekForSession(explicitPosition, sessionId, trackPendingSeek = !recoverySeek)
             return
         }
         // Party videos never resume from history.
@@ -2129,20 +2147,27 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
-    private fun seekForSession(positionMs: Long, expectedSessionId: Long) {
+    private fun seekForSession(
+        positionMs: Long,
+        expectedSessionId: Long,
+        trackPendingSeek: Boolean = true,
+    ) {
         val currentSession = session ?: return
         if (currentSession.sessionId != expectedSessionId) return
         val target = positionMs.coerceAtLeast(0L)
         stallDetector.reset()
-        val origin = lastPositionMs
-        pendingSeekTracker.start(
-            sessionId = expectedSessionId,
-            originMs = origin,
-            targetMs = target,
-            nowMs = SystemClock.elapsedRealtime(),
-        )
+        if (trackPendingSeek) {
+            freezeRecovery.resetForPositionChange(target)
+            val origin = lastPositionMs
+            pendingSeekTracker.start(
+                sessionId = expectedSessionId,
+                originMs = origin,
+                targetMs = target,
+                nowMs = SystemClock.elapsedRealtime(),
+            )
+            controlsViewModel.setPendingSeekTime(target)
+        }
         lastPositionMs = target
-        controlsViewModel.setPendingSeekTime(target)
         runCatchingLogged(TAG, "Renderer seek failed", ::logPlayerFailure) {
             rendererService?.seekTo(target, expectedSessionId)
         }
@@ -2206,6 +2231,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     nowMs = SystemClock.elapsedRealtime(),
                 )
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
+                if (lastDurationMs > 0L && sessionCoordinator.current().phase >= RendererSessionPhase.READY) {
+                    itemIsKnownVod = true
+                }
                 if (partyItem != null) {
                     TvTogether.onPlayerState(lastPositionMs, rendererPlaying, state == "buffering")
                 }
@@ -2284,16 +2312,52 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 session = null
                 finish()
             }
-            RendererProtocol.EVENT_ERROR -> handleRendererFailure(
-                message = event.getString(RendererProtocol.KEY_ERROR) ?: "Renderer error",
-                severity = ExoPlaybackErrorPolicy.parseSeverity(
+            RendererProtocol.EVENT_ERROR -> {
+                val message = event.getString(RendererProtocol.KEY_ERROR) ?: "Renderer error"
+                val severity = ExoPlaybackErrorPolicy.parseSeverity(
                     event.getString(RendererProtocol.KEY_ERROR_SEVERITY),
-                ),
-                hadFirstFrame = event.getBoolean(
+                )
+                val hadFirstFrame = event.getBoolean(
                     RendererProtocol.KEY_HAD_FIRST_FRAME,
                     sessionCoordinator.current().phase == RendererSessionPhase.PLAYING,
-                ),
-            )
+                )
+                if (rendererKind == RendererKind.MPV) {
+                    val decision = freezeRecovery.evaluateRecoverableError(
+                        errorCode = message,
+                        playbackRequested = stallPlaybackRequested,
+                        isPaused = !stallPlaybackRequested,
+                        isLive = isCurrentItemLive(),
+                        isPreBuffering = controlsViewModel.controlsState.value.prePlayMetadata != null,
+                        isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+                        positionMs = lastPositionMs,
+                    )
+                    when (decision) {
+                        is PlaybackFreezeRecovery.Decision.Reload -> {
+                            scheduleMpvRecoveryReload(
+                                resumePositionMs = decision.resumePositionMs,
+                                reason = "error:$message",
+                                attempt = decision.attempt,
+                                restartProcess = message == "mpv_control_timeout",
+                            )
+                            return
+                        }
+                        is PlaybackFreezeRecovery.Decision.FailTerminal -> {
+                            handleRendererFailure(
+                                message = message,
+                                severity = ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+                                hadFirstFrame = true,
+                            )
+                            return
+                        }
+                        PlaybackFreezeRecovery.Decision.None -> Unit
+                    }
+                }
+                handleRendererFailure(
+                    message = message,
+                    severity = severity,
+                    hadFirstFrame = hadFirstFrame,
+                )
+            }
         }
         refreshKeepScreenOn()
     }
@@ -2301,6 +2365,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun startPlaylistItem() {
         if (finishingSession) return
         failureReporter.reset()
+        resetRecoveryStateForNewItem()
         restoreSavedExternalForCurrentItem = false
         stillWatchingController.onMediaChanged()
         val renderer = rendererService ?: run {
@@ -2933,6 +2998,109 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
+    private fun resetRecoveryStateForNewItem() {
+        recoveryReloadPendingRunnable?.let(mainHandler::removeCallbacks)
+        recoveryReloadPendingRunnable = null
+        freezeRecovery.resetForNewItem()
+        itemIsKnownVod = false
+        activeRecoveryResumePlaying = false
+        activeRecoveryResumeSeek = false
+    }
+
+    private fun isCurrentItemLive(): Boolean =
+        !itemIsKnownVod &&
+            sessionCoordinator.current().phase >= RendererSessionPhase.READY &&
+            controlsViewModel.controlsState.value.capabilities.isLive
+
+    private fun scheduleMpvRecoveryReload(
+        resumePositionMs: Long,
+        reason: String,
+        attempt: Int,
+        restartProcess: Boolean = false,
+    ) {
+        val elapsedSinceLastMs = SystemClock.elapsedRealtime() - lastFreezeReloadAtMs
+        val delayMs = (MIN_ERROR_RELOAD_INTERVAL_MS - elapsedSinceLastMs).coerceAtLeast(0L)
+        if (delayMs == 0L) {
+            reloadMpvForRecovery(resumePositionMs, reason, attempt, restartProcess)
+            return
+        }
+        recoveryReloadPendingRunnable?.let(mainHandler::removeCallbacks)
+        val expectedSessionId = session?.sessionId ?: return
+        val runnable = Runnable {
+            recoveryReloadPendingRunnable = null
+            if (finishingSession || isFinishing || isDestroyed) return@Runnable
+            if (session?.sessionId != expectedSessionId || rendererKind != RendererKind.MPV) return@Runnable
+            reloadMpvForRecovery(resumePositionMs, reason, attempt, restartProcess)
+        }
+        recoveryReloadPendingRunnable = runnable
+        controlsViewModel.setBuffering(true)
+        showTransition(R.string.player_preparing)
+        mainHandler.postDelayed(runnable, delayMs)
+    }
+
+    private fun reloadMpvForRecovery(
+        resumePositionMs: Long,
+        reason: String,
+        attempt: Int,
+        restartProcess: Boolean = false,
+    ) {
+        if (finishingSession || isFinishing || isDestroyed || rendererKind != RendererKind.MPV) return
+        val targetPositionMs = resumePositionMs.coerceAtLeast(0L)
+        FileLogger.w(
+            TAG,
+            "Reloading MPV stream at ${targetPositionMs}ms " +
+                "(reason=$reason, attempt=$attempt/${PlaybackFreezeRecovery.MAX_TOTAL_RECOVERIES}, " +
+                "noProgress=${freezeRecovery.recoveriesWithoutProgress}/${PlaybackFreezeRecovery.MAX_RECOVERIES_WITHOUT_PROGRESS}, " +
+                "restartProcess=$restartProcess)",
+        )
+        lastFreezeReloadAtMs = SystemClock.elapsedRealtime()
+        cancelStallMonitor()
+        cancelStartupWatchdog()
+        itemPrepareJob?.cancel()
+        itemPrepareJob = null
+        pendingSeekTracker.clear()
+        hostPlaying = false
+        pendingPlayingState = null
+        controlsViewModel.setPlaying(false)
+        controlsViewModel.setBuffering(true)
+        lastBufferedMs = 0L
+        bufferedSessionId = 0L
+        requestedStartPositionMs = targetPositionMs.takeIf { it > 0L }
+        lastPositionMs = targetPositionMs
+        activeRecoveryResumePlaying = true
+        activeRecoveryResumeSeek = requestedStartPositionMs != null
+
+        val oldSession = session
+        val currentRenderer = rendererService
+        val newSession = sessionCoordinator.begin(RendererKind.MPV)
+        session = newSession
+        showTransition(R.string.player_preparing)
+
+        if (restartProcess || currentRenderer == null) {
+            runCatchingLogged(TAG, "Renderer release before MPV recovery failed", ::logPlayerFailure) {
+                oldSession?.let { currentRenderer?.release(it.sessionId) }
+            }
+            unbindCurrentRenderer()
+            rotateRendererSurface()
+            terminateRendererProcess(RendererKind.MPV)
+            MpvProcess.awaitExit(applicationContext, MPV_RECOVERY_EXIT_TIMEOUT_MS) {
+                if (finishingSession || isFinishing || isDestroyed) return@awaitExit
+                if (session?.sessionId == newSession.sessionId && rendererKind == RendererKind.MPV) {
+                    bindRenderer(R.string.player_preparing)
+                }
+            }
+            return
+        }
+
+        scheduleRendererOpenWatchdog(newSession.sessionId, RendererKind.MPV)
+        try {
+            currentRenderer.setCallback(callback)
+            prepareRenderer(currentRenderer)
+        } catch (error: RemoteException) {
+            handleRendererFailure(error.message ?: "Renderer failed during MPV recovery reload")
+        }
+    }
+
     private fun startStallMonitor(sessionId: Long) {
         cancelStallMonitor()
         stallState = "buffering"
@@ -2941,25 +3109,69 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val monitor = object : Runnable {
             override fun run() {
                 if (finishingSession || session?.sessionId != sessionId) return
+                val nowMs = SystemClock.elapsedRealtime()
                 val firstFrame = sessionCoordinator.current().phase == RendererSessionPhase.PLAYING
-                if (stallDetector.sample(
-                        nowMs = SystemClock.elapsedRealtime(),
-                        buffering = stallState == "buffering",
+                val seeking = pendingSeekTracker.isPending(sessionId, nowMs)
+                if (rendererKind == RendererKind.MPV) {
+                    val decision = freezeRecovery.sample(
+                        nowMs = nowMs,
                         playbackRequested = stallPlaybackRequested,
+                        isPaused = !stallPlaybackRequested,
+                        isSeeking = seeking,
+                        isLive = isCurrentItemLive(),
+                        isPreBuffering = controlsViewModel.controlsState.value.prePlayMetadata != null,
+                        isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
                         hasFirstFrame = firstFrame,
+                        isBuffering = stallState == "buffering",
                         positionMs = stallPositionMs,
-                        bufferedAheadMs = stallBufferedAheadMs,
-                        seeking = pendingSeekTracker.isPending(sessionId),
-                    )) {
-                    // Exo's own recovery may win first; session fencing and cancellation keep
-                    // both paths from reporting or switching twice. Keep the 60s open backstop.
-                    handleRendererFailure(
-                        message = PlaybackStallDetector.MESSAGE,
-                        severity = if (firstFrame) ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL
-                            else ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
-                        hadFirstFrame = firstFrame,
+                        bufferedEndMs = maxOf(
+                            stallPositionMs,
+                            if (bufferedSessionId == sessionId) lastBufferedMs else 0L,
+                        ),
                     )
-                    return
+                    when (decision) {
+                        is PlaybackFreezeRecovery.Decision.Reload -> {
+                            val restartProcess = decision.withoutProgressAttempt >= 2 &&
+                                sessionCoordinator.current().phase == RendererSessionPhase.PREPARING
+                            reloadMpvForRecovery(
+                                resumePositionMs = decision.resumePositionMs,
+                                reason = "freeze_stall",
+                                attempt = decision.attempt,
+                                restartProcess = restartProcess,
+                            )
+                            return
+                        }
+                        is PlaybackFreezeRecovery.Decision.FailTerminal -> {
+                            handleRendererFailure(
+                                message = PlaybackStallDetector.MESSAGE,
+                                severity = ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+                                hadFirstFrame = true,
+                            )
+                            return
+                        }
+                        PlaybackFreezeRecovery.Decision.None -> Unit
+                    }
+                }
+                if (rendererKind != RendererKind.MPV || (!firstFrame && freezeRecovery.totalRecoveries == 0)) {
+                    if (stallDetector.sample(
+                            nowMs = nowMs,
+                            buffering = stallState == "buffering",
+                            playbackRequested = stallPlaybackRequested,
+                            hasFirstFrame = firstFrame,
+                            positionMs = stallPositionMs,
+                            bufferedAheadMs = stallBufferedAheadMs,
+                            seeking = seeking,
+                        )) {
+                        // Exo's own recovery may win first; session fencing and cancellation keep
+                        // both paths from reporting or switching twice. Keep the 60s open backstop.
+                        handleRendererFailure(
+                            message = PlaybackStallDetector.MESSAGE,
+                            severity = if (firstFrame) ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL
+                                else ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
+                            hadFirstFrame = firstFrame,
+                        )
+                        return
+                    }
                 }
                 mainHandler.postDelayed(this, 1_000L)
             }
@@ -2998,6 +3210,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // the acknowledgement for play/pause intent; a rendered frame only advances readiness.
         sessionCoordinator.markFirstFrame(sessionId)
         if (sessionCoordinator.current().phase == RendererSessionPhase.PLAYING) {
+            if (rendererKind == RendererKind.MPV) {
+                freezeRecovery.markFirstFrame()
+            }
             cancelStartupWatchdog()
         }
     }
@@ -3810,6 +4025,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         private const val IMAGE_LOAD_TIMEOUT_MS = 20_000L
         private const val FAILURE_VISIBLE_MS = 600L
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
+        private const val MIN_ERROR_RELOAD_INTERVAL_MS = 1_000L
+        private const val MPV_RECOVERY_EXIT_TIMEOUT_MS = 1_500L
         private val activeHostCount = java.util.concurrent.atomic.AtomicInteger(0)
 
         internal fun isActive(): Boolean = activeHostCount.get() > 0

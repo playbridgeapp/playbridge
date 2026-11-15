@@ -34,4 +34,18 @@ class MpvFailureLogPolicyTest {
             }
         }
     }
+
+    @Test fun truncationAndNetworkLogsAreDetectedAtWarnOrHigherOnlyForFfmpegAndCore() {
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg", 30, "Stream ends prematurely at 1024, should be 8192"))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/mov", 20, "stream 0, offset 0x100: partial file"))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/http", 30, "Will reconnect at 4096 in 1 second(s), error=End of file."))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/https", 20, "Failed to reconnect at 4096."))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/https", 20, "HTTP error 503 Service Unavailable"))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/https", 20, "HTTP error 429 Too Many Requests"))
+        assertTrue(MpvFailureLogPolicy.isTruncationOrNetworkLog("cplayer", 20, "Operation timed out"))
+        assertFalse(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg/https", 20, "HTTP error 404 Not Found"))
+        assertFalse(MpvFailureLogPolicy.isTruncationOrNetworkLog("ffmpeg", 40, "Stream ends prematurely"))
+        assertFalse(MpvFailureLogPolicy.isTruncationOrNetworkLog("sub", 20, "partial file"))
+        assertFalse(MpvFailureLogPolicy.isTruncationOrNetworkLog("cplayer", 30, "Failed to recognize file format"))
+    }
 }

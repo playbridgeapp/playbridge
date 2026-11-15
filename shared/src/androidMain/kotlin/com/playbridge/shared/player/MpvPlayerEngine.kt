@@ -257,6 +257,10 @@ class MpvPlayerEngine(
         // during repeated 4K decoder replacement.
         MPVLib.setOptionString("demuxer-max-bytes", "64M")
         MPVLib.setOptionString("demuxer-max-back-bytes", "16M")
+        // Enable bounded FFmpeg HTTP reconnect for direct streams (`stream-lavf-o`) and
+        // manifest/segment demuxers such as HLS and DASH (`demuxer-lavf-o`).
+        MPVLib.setOptionString("stream-lavf-o", MpvLavfReconnectOptions.VALUE)
+        MPVLib.setOptionString("demuxer-lavf-o", MpvLavfReconnectOptions.VALUE)
         MPVLib.setOptionString("ytdl", "no") // No youtube-dl binary is bundled; URLs are resolved by senders.
         MPVLib.setOptionString("hls-bitrate", "max") // Prefer highest quality for HLS
 
@@ -467,6 +471,7 @@ class MpvPlayerEngine(
                     transitioning = isTransitioning || stopRequested || releaseRequested.get(),
                     positionMs = _position.value,
                     durationMs = _duration.value,
+                    hadTruncationOrNetworkError = failureLogs.hadTruncationOrNetworkError,
                 )?.let { _state.value = it }
             }
             MPVLib.MpvEvent.MPV_EVENT_SHUTDOWN -> _state.value = PlaybackState.Idle
