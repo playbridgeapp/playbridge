@@ -2929,7 +2929,14 @@ private func runPhase6PureLogicTests() {
     assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"seek","position_ms":42000}}"#) == .player(.seek(positionMs: 42_000)))
     assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"rate","rate":1.05}}"#) == .player(.rate(1.05)))
     assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"go_live"}}"#) == .player(.goLive))
+    assert(TogetherJson.event(from: #"{"event":"player","command":{"action":"clear"}}"#) == .player(.clear))
+    assert(TogetherJson.event(from: #"{"event":"video_cleared"}"#) == .videoCleared)
+    assert(TogetherJson.event(from: #"{"event":"ended","item":"it1"}"#) == .ended(item: "it1"))
+    assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":95000}"#) == .duration(95_000))
+    assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":null}"#) == .duration(nil))
     assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull))
+    let clearCmd = TogetherJson.command("clear") ?? ""
+    assert(clearCmd.contains("\"command\":\"clear\""))
 
     // 3. TogetherFormatting
     assert(TogetherFormatting.groupPartyCode("418207593") == "418-207-593")

@@ -1,11 +1,18 @@
-import { HEX_ID, PROTOCOL_VERSION, clientIp, errorResponse, json, limitsFor } from "@playbridge-together/shared";
+import {
+  HEX_ID,
+  PROTOCOL_VERSION,
+  clientIp,
+  errorResponse,
+  json,
+  secondsUntilUtcMidnight,
+  underLimit,
+} from "@playbridge-together/shared";
 import { assetLinks, roomLimits, type Env } from "./config";
 import { invitePage, setupPage } from "./pages";
 
+export { Gate } from "./gate";
 export { Room } from "./room";
 export { Limits } from "@playbridge-together/shared";
-
-const CONNECTS_PER_IP_PER_MINUTE = 60;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -41,12 +48,18 @@ export default {
       if (!HEX_ID.test(member)) return errorResponse("bad_member", 400);
 
       const ip = clientIp(request);
-      if (!(await limitsFor(env.LIMITS, ip).hit("connect", CONNECTS_PER_IP_PER_MINUTE, 60_000))) {
-        return errorResponse("rate_limited", 429);
+      if (!(await underLimit(env.CONNECTS_PER_ROOM, room)) || !(await underLimit(env.CONNECTS_PER_IP, ip))) {
+        return errorResponse("rate_limited", 429, 60);
       }
       const forwarded = new Request(request);
       forwarded.headers.set("x-pb-client-ip", ip);
-      return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(forwarded);
+      try {
+        return await env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(forwarded);
+      } catch (error) {
+        // Most likely Cloudflare's daily Durable Object quota, which resets at 00:00 UTC.
+        console.log("room unavailable", String(error));
+        return errorResponse("relay_busy", 503, secondsUntilUtcMidnight());
+      }
     }
 
     return errorResponse("not_found", 404);

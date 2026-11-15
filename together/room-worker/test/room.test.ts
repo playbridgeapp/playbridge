@@ -1,4 +1,4 @@
-import { SELF, env as testEnv, runDurableObjectAlarm } from "cloudflare:test";
+import { SELF, env as testEnv, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { assetLinks, type Env } from "../src/config";
 
@@ -159,14 +159,106 @@ describe("room worker", () => {
     const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
     // Let the close handler run before firing the alarm.
     await new Promise((r) => setTimeout(r, 50));
+    await emptyFor(stub, 31 * 60_000);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     await (await member(room, hex(2), "second")).next("welcome");
   });
 
-  it("limits new rooms per IP", async () => {
+  it("limits open rooms per network and frees a slot soon after a room empties", async () => {
     const ip = "203.0.113.9";
-    for (let i = 0; i < 2; i++) await (await member(hex(100 + i), hex(1), "t", ip)).next("welcome");
-    const third = await connect(hex(102), hex(1), "t", ip);
-    expect((third as Response).status).toBe(429);
+    const first = await member(hex(100), hex(1), "t", ip);
+    await first.next("welcome");
+    await (await member(hex(101), hex(1), "t", ip)).next("welcome");
+
+    const third = (await connect(hex(102), hex(1), "t", ip)) as Response;
+    expect(third.status).toBe(429);
+    expect(await third.json()).toMatchObject({ error: "room_limit" });
+    expect(Number(third.headers.get("retry-after"))).toBeGreaterThan(0);
+
+    // The first room empties: it keeps its slot for 2 minutes, then gives it back.
+    const closed = new Promise((r) => first.ws.addEventListener("close", r));
+    first.ws.close(1000, "bye");
+    await withTimeout(closed);
+    await new Promise((r) => setTimeout(r, 50));
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(hex(100)));
+    expect(((await connect(hex(102), hex(1), "t", ip)) as Response).status).toBe(429);
+    await emptyFor(stub, 3 * 60_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await (await member(hex(102), hex(1), "t", ip)).next("welcome");
+
+    // Coming back to the emptied room needs a slot again, and this network has none left.
+    const back = (await connect(hex(100), hex(1), "t", ip)) as Response;
+    expect(back.status).toBe(429);
+    expect(await back.json()).toMatchObject({ error: "room_limit" });
+  });
+
+  it("lets members back into an empty room that still holds its slot", async () => {
+    const ip = "203.0.113.10";
+    const room = hex(110);
+    const a = await member(room, hex(1), "t", ip);
+    await a.next("welcome");
+    const closed = new Promise((r) => a.ws.addEventListener("close", r));
+    a.ws.close(1000, "bye");
+    await withTimeout(closed);
+    await new Promise((r) => setTimeout(r, 50));
+    await (await member(hex(111), hex(1), "t", ip)).next("welcome");
+    // Both slots are taken, but the empty room never gave its slot back.
+    await (await member(room, hex(1), "t", ip)).next("welcome");
+  });
+
+  it("counts open rooms and new rooms per hour in the network's limits", async () => {
+    const limits = env.LIMITS.get(env.LIMITS.idFromName("203.0.113.20"));
+    const later = Date.now() + 3_600_000;
+    expect(await limits.openRoom("a", later, 2, 3, true)).toEqual({ ok: true });
+    expect(await limits.openRoom("a", later, 2, 3, true)).toEqual({ ok: true });
+    expect(await limits.openRoom("b", Date.now() - 1, 2, 3, true)).toEqual({ ok: true });
+    // b had already expired, so it holds no slot.
+    expect(await limits.openRoom("c", later, 2, 3, true)).toEqual({ ok: true });
+    const full = await limits.openRoom("d", later, 2, 3, true);
+    expect(full.ok).toBe(false);
+    await limits.closeRoom("a");
+    // A slot is free, but this network started 3 rooms this hour.
+    const hourly = await limits.openRoom("d", later, 2, 3, true);
+    expect(hourly).toMatchObject({ ok: false });
+    expect(hourly.ok === false && hourly.retryAfterSecs).toBeGreaterThan(3_500);
+    // A room coming back after it emptied isn't a new room.
+    expect(await limits.openRoom("a", later, 2, 3, false)).toEqual({ ok: true });
+  });
+
+  it("closes a member that sends too many messages", async () => {
+    const a = await member(hex(120), hex(1));
+    await a.next("welcome");
+    const closed = new Promise<number>((r) => a.ws.addEventListener("close", (e) => r(e.code)));
+    for (let i = 0; i < 70; i++) a.send({ t: "ping", id: i, t0: i });
+    expect(await withTimeout(closed)).toBe(4029);
+  });
+
+  it("refuses new rooms once the daily budget is spent, but keeps open ones going", async () => {
+    const open = await member(hex(130), hex(1));
+    await open.next("welcome");
+    const gate = env.GATE.get(env.GATE.idFromName("daily"));
+    await gate.report(1_000_000);
+
+    const refused = (await connect(hex(131), hex(1))) as Response;
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ error: "relay_busy" });
+    expect(Number(refused.headers.get("retry-after"))).toBeLessThanOrEqual(86_400);
+
+    // The refused room gave its network slot back.
+    const limits = env.LIMITS.get(env.LIMITS.idFromName(`198.51.100.${0x31}`));
+    expect(await limits.openRoom("x", Date.now() + 60_000, 1, 10, true)).toEqual({ ok: true });
+
+    open.send({ t: "ping", id: 1, t0: 1 });
+    expect(await open.next("pong")).toMatchObject({ id: 1 });
+    await (await member(hex(130), hex(2))).next("welcome");
   });
 });
+
+/** Pretends the room has been empty for `ms`, so its next alarm acts on it. */
+async function emptyFor(stub: DurableObjectStub, ms: number): Promise<void> {
+  await runInDurableObject(stub, async (_instance, state) => {
+    const meta = await state.storage.get<any>("meta");
+    meta.emptySince -= ms;
+    await state.storage.put("meta", meta);
+  });
+}

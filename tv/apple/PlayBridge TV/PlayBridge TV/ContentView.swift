@@ -194,6 +194,13 @@ struct ContentView: View {
             together.onPlayPartyItem = { [weak server] payload, _ in
                 server?.playForWatchTogether(payload) ?? false
             }
+            together.onClearPartyItem = { [weak server, weak playlistStore, weak stillWatching] in
+                guard let server, server.currentPlayRequest?.hasItemID == true else { return }
+                server.progressWebhook.finish(clear: true)
+                playlistStore?.clear()
+                stillWatching?.reset()
+                withAnimation { server.currentPlayRequest = nil }
+            }
             server.start()
             UIApplication.shared.isIdleTimerDisabled = false
         }

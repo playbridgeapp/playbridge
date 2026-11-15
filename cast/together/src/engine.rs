@@ -26,7 +26,8 @@ pub const POSITION_HEARTBEAT_MS: f64 = 30_000.0;
 pub const DURATION_MISMATCH_MS: u64 = 3_000;
 const INITIAL_PINGS: usize = 8;
 const INITIAL_PING_SPACING_MS: f64 = 150.0;
-const PING_INTERVAL_MS: f64 = 60_000.0;
+/// Steady-state clock pings. Clocks drift slowly; the burst on each connect does the work.
+const PING_INTERVAL_MS: f64 = 120_000.0;
 /// After a seek or play, give the player this long before correcting again.
 const SETTLE_MS: f64 = 1_000.0;
 
@@ -60,6 +61,8 @@ pub enum PlayerCommand {
     SetRate(f64),
     /// A live stream: jump to this device's live point and play.
     GoLive,
+    /// Stop the shared video and return to waiting for the next one.
+    Clear,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +71,8 @@ pub enum Event {
         members: Vec<MemberId>,
     },
     Disconnected,
+    /// The relay hasn't been reachable for a while; the client keeps trying.
+    Unreachable,
     MemberJoined(MemberId),
     MemberLeft(MemberId),
     MemberInfo {
@@ -77,7 +82,12 @@ pub enum Event {
         host: bool,
     },
     VideoChanged(SharedItem),
+    VideoCleared,
     TimelineChanged(Timeline),
+    /// The video reached its end on the shared timeline (not a manual pause).
+    Ended {
+        item: String,
+    },
     /// Members everyone is waiting for; empty when nobody.
     Waiting(Vec<MemberId>),
     /// The host may now continue without these members.
@@ -104,6 +114,8 @@ pub enum Event {
     /// Whether the video is a live stream: every screen loaded it with no length.
     /// A live party shares playing or paused only, so apps hide seeking.
     Live(bool),
+    /// The party's known video duration in milliseconds, or `None` when live or unknown.
+    Duration(Option<u64>),
     /// A message was dropped; for logs, never shown as an error.
     Rejected(&'static str),
 }
@@ -118,6 +130,7 @@ pub enum Output {
 #[derive(Clone, Debug)]
 pub enum Command {
     Load(SharedItem),
+    Clear,
     Play,
     Pause,
     Seek(f64),
@@ -191,6 +204,8 @@ pub struct Engine {
     ready: HashMap<MemberId, (Option<u64>, Option<f64>)>,
     /// The last [`Event::Live`] sent.
     live: bool,
+    /// The last [`Event::Duration`] sent.
+    known_duration: Option<u64>,
     warned_duration: bool,
     buffering: HashMap<MemberId, f64>,
     ignored: HashSet<MemberId>,
@@ -247,6 +262,7 @@ impl Engine {
             load_seen_room: 0.0,
             ready: HashMap::new(),
             live: false,
+            known_duration: None,
             warned_duration: false,
             buffering: HashMap::new(),
             ignored: HashSet::new(),
@@ -421,6 +437,7 @@ impl Engine {
                 self.members.retain(|m| *m != member);
                 self.buffering.remove(&member);
                 self.ready.remove(&member);
+                self.sync_duration(&mut out);
                 out.push(Output::Event(Event::MemberLeft(member)));
             }
             ServerFrame::Error { code } => {
@@ -447,7 +464,12 @@ impl Engine {
             return out;
         }
         self.loaded_item = Some(item.to_owned());
-        if self.sent_ready.as_deref() != Some(item) {
+        // A player that took too long to learn the length reported "live"; once it
+        // knows, the video is on demand after all and positions sync again.
+        let learned_length = duration_ms.is_some()
+            && self.sent_ready.as_deref() == Some(item)
+            && matches!(self.ready.get(&self.cfg.me), Some((None, _)));
+        if self.sent_ready.as_deref() != Some(item) || learned_length {
             self.sent_ready = Some(item.to_owned());
             let rtt = self.clock.rtt_ms();
             self.ready.insert(self.cfg.me, (duration_ms, rtt));
@@ -462,6 +484,7 @@ impl Engine {
                 &mut out,
             );
             self.check_durations(&mut out);
+            self.sync_duration(&mut out);
         }
         let _ = local_ms;
         out
@@ -486,6 +509,7 @@ impl Engine {
             self.live = live;
             out.push(Output::Event(Event::Live(live)));
         }
+        self.sync_duration(&mut out);
         self.expire_requests(room_now, &mut out);
         out
     }
@@ -510,6 +534,20 @@ impl Engine {
                     self.send_credentials(&item.id, member, &mut out);
                 }
                 self.issue_load(item, room_now, &mut out);
+            }
+            Command::Clear => {
+                let allowed = self.can_sign_as_host()
+                    || (self.policy == ChangePolicy::Anyone && !self.locked);
+                if !allowed {
+                    out.push(Output::Event(Event::Rejected(
+                        "not allowed to change the video",
+                    )));
+                    return out;
+                }
+                if self.item.is_none() && self.snapshot.load.is_none() {
+                    return out;
+                }
+                self.issue_clear(&mut out);
             }
             Command::Play | Command::Pause | Command::Seek(_) => {
                 if self.locked && !self.can_sign_as_host() {
@@ -544,7 +582,7 @@ impl Engine {
                     room_now
                 };
                 self.paused_for_buffering = false;
-                self.write_timeline(playing, position, at, &mut out);
+                self.write_timeline(playing, position, at, false, &mut out);
             }
             Command::Lock(locked) => {
                 if !self.can_sign_as_host() {
@@ -712,9 +750,14 @@ impl Engine {
         for delegate in &snapshot.delegates {
             self.apply_signed_piece(frame.from, delegate, room_now, out);
         }
-        for piece in [&snapshot.lock, &snapshot.policy, &snapshot.load]
-            .into_iter()
-            .flatten()
+        for piece in [
+            &snapshot.lock,
+            &snapshot.policy,
+            &snapshot.load,
+            &snapshot.clear,
+        ]
+        .into_iter()
+        .flatten()
         {
             self.apply_signed_piece(frame.from, piece, room_now, out);
         }
@@ -817,6 +860,23 @@ impl Engine {
                 if self.own_keys.contains(&box_pk) && !self.own.contains_key(&from) {
                     self.add_own(from, box_pk, out);
                 }
+                if !known
+                    && self.connected
+                    && let Some(item) = self.item.as_ref().map(|i| i.id.clone())
+                    && self.loaded_item.as_deref() == Some(item.as_str())
+                    && let Some((duration_ms, rtt_ms)) = self.ready.get(&self.cfg.me).copied()
+                {
+                    self.send(
+                        Body::Ready {
+                            item,
+                            duration_ms,
+                            rtt_ms,
+                        },
+                        Some(from),
+                        false,
+                        out,
+                    );
+                }
             }
             Body::Delegate { member, sign_pk } => {
                 let Some(sig) = signed.s.as_deref() else {
@@ -863,7 +923,24 @@ impl Engine {
                 }
                 self.load_rev = rev;
                 self.snapshot.load = Some(signed.clone());
+                self.snapshot.clear = None;
                 self.start_item(item, room_now, out);
+            }
+            Body::Clear => {
+                let rev = signed_rev(signed);
+                let host = self.host_signed(signed);
+                let open = self.policy == ChangePolicy::Anyone && !self.locked;
+                if !host && !open {
+                    return out.push(Output::Event(Event::Rejected("clear not allowed")));
+                }
+                if rev <= self.load_rev {
+                    return;
+                }
+                self.load_rev = rev;
+                self.snapshot.load = None;
+                self.snapshot.timeline = None;
+                self.snapshot.clear = Some(signed.clone());
+                self.clear_item(out);
             }
             Body::Ready {
                 item,
@@ -873,6 +950,7 @@ impl Engine {
                 if self.item.as_ref().map(|i| i.id.as_str()) == Some(item.as_str()) {
                     self.ready.insert(from, (duration_ms, rtt_ms));
                     self.check_durations(out);
+                    self.sync_duration(out);
                 }
             }
             Body::Buffering { item, buffering } => {
@@ -996,14 +1074,41 @@ impl Engine {
         {
             return;
         }
+        let was_ended = self.timeline.as_ref().is_some_and(|t| t.ended);
+        let ended = timeline.ended;
+        let item = timeline.item.clone();
         self.settle_until = 0.0;
         self.timeline = Some(timeline.clone());
         self.snapshot.timeline = Some(timeline.clone());
         out.push(Output::Event(Event::TimelineChanged(timeline)));
+        if ended && !was_ended {
+            out.push(Output::Event(Event::Ended { item }));
+        }
     }
 
     fn start_item(&mut self, item: SharedItem, room_now: f64, out: &mut Vec<Output>) {
         self.item = Some(item.clone());
+        self.load_seen_room = room_now;
+        self.reset_item_state(out);
+        let secrets = self.secrets_for(&item);
+        out.push(Output::Event(Event::VideoChanged(item.clone())));
+        out.push(Output::Player(PlayerCommand::Load {
+            start_ms: item.start_ms as f64,
+            item,
+            secrets,
+        }));
+    }
+
+    fn clear_item(&mut self, out: &mut Vec<Output>) {
+        let had_item = self.item.take().is_some();
+        self.reset_item_state(out);
+        if had_item {
+            out.push(Output::Event(Event::VideoCleared));
+            out.push(Output::Player(PlayerCommand::Clear));
+        }
+    }
+
+    fn reset_item_state(&mut self, out: &mut Vec<Output>) {
         self.timeline = None;
         self.snapshot.timeline = None;
         self.ready.clear();
@@ -1014,15 +1119,20 @@ impl Engine {
         self.loaded_item = None;
         self.sent_ready = None;
         self.reported_buffering = false;
-        self.load_seen_room = room_now;
         self.corrector.reset();
-        let secrets = self.secrets_for(&item);
-        out.push(Output::Event(Event::VideoChanged(item.clone())));
-        out.push(Output::Player(PlayerCommand::Load {
-            start_ms: item.start_ms as f64,
-            item,
-            secrets,
-        }));
+        if !self.last_waiting.is_empty() {
+            self.last_waiting.clear();
+            out.push(Output::Event(Event::Waiting(Vec::new())));
+        }
+        if !self.last_continue.is_empty() {
+            self.last_continue.clear();
+            out.push(Output::Event(Event::ContinueWithoutAvailable(Vec::new())));
+        }
+        if self.live {
+            self.live = false;
+            out.push(Output::Event(Event::Live(false)));
+        }
+        self.set_known_duration(None, out);
     }
 
     fn secrets_for(&self, item: &SharedItem) -> BTreeMap<String, String> {
@@ -1235,7 +1345,7 @@ impl Engine {
                 .all(|m| self.ready.contains_key(m) || self.ignored.contains(m));
             if everyone || room_now - self.load_seen_room >= START_TIMEOUT_MS {
                 let at = room_now + self.start_lead();
-                self.write_timeline(true, item.start_ms as f64, at, out);
+                self.write_timeline(true, item.start_ms as f64, at, false, out);
             }
             return;
         }
@@ -1248,7 +1358,7 @@ impl Engine {
         if timeline.playing && !any_screen {
             self.paused_for_buffering = false;
             let position = timeline.expected_ms(room_now);
-            self.write_timeline(false, position, room_now, out);
+            self.write_timeline(false, position, room_now, false, out);
             return;
         }
         // The video is over: everyone stops at the end, together.
@@ -1257,7 +1367,14 @@ impl Engine {
             && timeline.expected_ms(room_now) >= end
         {
             self.paused_for_buffering = false;
-            self.write_timeline(false, end, room_now, out);
+            self.write_timeline(false, end, room_now, true, out);
+            if self.can_sign_as_host() {
+                self.issue_clear(out);
+            }
+            return;
+        }
+        if timeline.ended && self.can_sign_as_host() {
+            self.issue_clear(out);
             return;
         }
         // A live stream doesn't wait for a buffering device: pausing would put
@@ -1265,14 +1382,14 @@ impl Engine {
         if timeline.playing && !waiting.is_empty() && !self.video_live() {
             self.paused_for_buffering = true;
             let position = timeline.expected_ms(room_now);
-            self.write_timeline(false, position, room_now, out);
+            self.write_timeline(false, position, room_now, false, out);
         } else if self.paused_for_buffering
             && !timeline.playing
             && self.buffering.keys().all(|m| self.ignored.contains(m))
         {
             self.paused_for_buffering = false;
             let at = room_now + self.start_lead();
-            self.write_timeline(true, timeline.position_ms, at, out);
+            self.write_timeline(true, timeline.position_ms, at, false, out);
         }
     }
 
@@ -1286,15 +1403,35 @@ impl Engine {
         loaded.peek().is_some() && loaded.all(|(_, (duration, _))| duration.is_none())
     }
 
-    /// Where the video ends: the shortest length a screen reported. Live
-    /// streams report none, so they never end.
-    fn video_end(&self) -> Option<f64> {
+    /// Shortest known length across active screens, in milliseconds.
+    fn known_duration_ms(&self) -> Option<u64> {
         self.ready
             .iter()
             .filter(|(member, _)| !self.ignored.contains(member) && self.is_screen(member))
             .filter_map(|(_, (duration, _))| *duration)
             .min()
-            .map(|d| d as f64)
+    }
+
+    fn sync_duration(&mut self, out: &mut Vec<Output>) {
+        let next = if self.video_live() {
+            None
+        } else {
+            self.known_duration_ms()
+        };
+        self.set_known_duration(next, out);
+    }
+
+    fn set_known_duration(&mut self, next: Option<u64>, out: &mut Vec<Output>) {
+        if self.known_duration != next {
+            self.known_duration = next;
+            out.push(Output::Event(Event::Duration(next)));
+        }
+    }
+
+    /// Where the video ends: the shortest length a screen reported. Live
+    /// streams report none, so they never end.
+    fn video_end(&self) -> Option<f64> {
+        self.known_duration_ms().map(|d| d as f64)
     }
 
     fn expire_requests(&mut self, room_now: f64, out: &mut Vec<Output>) {
@@ -1375,6 +1512,7 @@ impl Engine {
         self.loaded_item = None;
         self.sent_ready = None;
         self.ready.remove(&me);
+        self.sync_duration(out);
         self.corrector.reset();
         if self.reported_buffering {
             self.reported_buffering = false;
@@ -1413,12 +1551,25 @@ impl Engine {
     }
 
     fn issue_load(&mut self, item: SharedItem, room_now: f64, out: &mut Vec<Output>) {
-        let rev = self.next_seq();
+        let rev = self.next_seq().max(self.load_rev + 1);
         let signed = self.signed(&Body::Load { item: item.clone() }, true, rev);
         self.load_rev = rev;
         self.snapshot.load = Some(signed.clone());
+        self.snapshot.clear = None;
         self.send_signed(signed, None, out);
         self.start_item(item, room_now, out);
+        self.write_state(out);
+    }
+
+    fn issue_clear(&mut self, out: &mut Vec<Output>) {
+        let rev = self.next_seq().max(self.load_rev + 1);
+        let signed = self.signed(&Body::Clear, true, rev);
+        self.load_rev = rev;
+        self.snapshot.load = None;
+        self.snapshot.timeline = None;
+        self.snapshot.clear = Some(signed.clone());
+        self.send_signed(signed, None, out);
+        self.clear_item(out);
         self.write_state(out);
     }
 
@@ -1497,6 +1648,7 @@ impl Engine {
         playing: bool,
         position_ms: f64,
         at_room_ms: f64,
+        ended: bool,
         out: &mut Vec<Output>,
     ) {
         let Some(item) = self.item.as_ref() else {
@@ -1510,6 +1662,7 @@ impl Engine {
             at_room_ms,
             rev,
             by: self.cfg.me,
+            ended,
         };
         self.accept_timeline(timeline, out);
         self.write_state(out);
@@ -1548,4 +1701,335 @@ fn credentials_context(invite: &Invite, item: &str) -> Vec<u8> {
     context.extend_from_slice(invite.room.as_bytes());
     context.extend_from_slice(item.as_bytes());
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RoomKey;
+    use crate::messages::Source;
+
+    fn test_invite(host: &MemberKeys) -> Invite {
+        Invite {
+            relay: url::Url::parse("https://relay.example").unwrap(),
+            room: crate::RoomId::generate(),
+            key: RoomKey::generate(),
+            host: host.signing_public(),
+        }
+    }
+
+    fn connected_engine(
+        invite: &Invite,
+        keys: MemberKeys,
+        name: &str,
+        screen: bool,
+        members: Vec<MemberId>,
+    ) -> Engine {
+        let me = MemberId::from_bytes(keys.box_public()[..16].try_into().unwrap());
+        let mut engine = Engine::new(EngineConfig {
+            invite: invite.clone(),
+            me,
+            keys,
+            name: name.into(),
+            kind: DeviceKind::Phone,
+            screen,
+            seq_start: 1,
+        });
+        let _ = engine.handle(
+            ServerFrame::Welcome {
+                member: me,
+                members,
+                room_time: 1_000.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: None,
+            },
+            1_000.0,
+        );
+        engine
+    }
+
+    fn item(id: &str, shared_by: MemberId) -> SharedItem {
+        SharedItem {
+            id: id.into(),
+            title: "Video".into(),
+            site: None,
+            source: Source::Url {
+                url: "https://example.com/v.mp4".into(),
+            },
+            headers: BTreeMap::new(),
+            subtitles: Vec::new(),
+            start_ms: 0,
+            shared_by,
+        }
+    }
+
+    fn deliver(sender: &Engine, outputs: Vec<Output>, receiver: &mut Engine, now: f64) -> Vec<Output> {
+        let mut out = Vec::new();
+        for o in outputs {
+            match o {
+                Output::Send(ClientFrame::Msg { seq, ct, .. }) => {
+                    out.extend(receiver.handle(
+                        ServerFrame::Msg {
+                            from: sender.me(),
+                            seq,
+                            ct,
+                        },
+                        now,
+                    ));
+                }
+                Output::Send(ClientFrame::State { seq, ct }) => {
+                    out.extend(receiver.handle(
+                        ServerFrame::State {
+                            from: sender.me(),
+                            seq,
+                            ct,
+                        },
+                        now,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn clear_permission_and_snapshot_semantics() {
+        let host_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, guest_id];
+        let mut host = connected_engine(&invite, host_keys, "Host", false, members.clone());
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members);
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 1_000.0);
+        let guest_load = deliver(&host, load_out, &mut guest, 1_000.0);
+        assert!(guest_load.iter().any(|o| matches!(o, Output::Event(Event::VideoChanged(_)))));
+
+        // By default (`OnlyHost`), a guest cannot clear.
+        let guest_try = guest.command(Command::Clear, 1_100.0);
+        assert!(guest_try.contains(&Output::Event(Event::Rejected("not allowed to change the video"))));
+
+        // Even under `Ask`, a guest cannot clear.
+        let policy_out = host.command(Command::SetPolicy(ChangePolicy::Ask), 1_200.0);
+        deliver(&host, policy_out, &mut guest, 1_200.0);
+        let guest_try_ask = guest.command(Command::Clear, 1_250.0);
+        assert!(guest_try_ask.contains(&Output::Event(Event::Rejected("not allowed to change the video"))));
+
+        // Host clears -> guest emits VideoCleared + PlayerCommand::Clear, and Snapshot has clear (no load/timeline).
+        let clear_out = host.command(Command::Clear, 1_300.0);
+        assert!(clear_out.contains(&Output::Event(Event::VideoCleared)));
+        assert!(clear_out.contains(&Output::Player(PlayerCommand::Clear)));
+        let guest_clear = deliver(&host, clear_out, &mut guest, 1_300.0);
+        assert!(guest_clear.contains(&Output::Event(Event::VideoCleared)));
+        assert!(guest_clear.contains(&Output::Player(PlayerCommand::Clear)));
+
+        assert!(host.snapshot.load.is_none());
+        assert!(host.snapshot.timeline.is_none());
+        assert!(host.snapshot.clear.is_some());
+
+        // Under `Anyone` (unlocked), a guest can clear after a load.
+        let policy_open = host.command(Command::SetPolicy(ChangePolicy::Anyone), 1_400.0);
+        deliver(&host, policy_open, &mut guest, 1_400.0);
+        let load_v2 = guest.command(Command::Load(item("v2", guest_id)), 1_500.0);
+        deliver(&guest, load_v2, &mut host, 1_500.0);
+        let guest_clear_v2 = guest.command(Command::Clear, 1_600.0);
+        let host_sees_clear = deliver(&guest, guest_clear_v2, &mut host, 1_600.0);
+        assert!(host_sees_clear.contains(&Output::Event(Event::VideoCleared)));
+    }
+
+    #[test]
+    fn old_snapshot_clear_field_and_manual_pause_do_not_emit_ended() {
+        let host_keys = MemberKeys::generate();
+        let tv_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let tv_id = MemberId::from_bytes(tv_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, tv_id];
+        let mut host = connected_engine(&invite, host_keys, "Host", false, members.clone());
+        let mut tv = connected_engine(&invite, tv_keys, "TV", true, members);
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 1_000.0);
+        deliver(&host, load_out, &mut tv, 1_000.0);
+        let ready_out = tv.player_loaded("v1", Some(10_000), 1_100.0);
+        let host_on_ready = deliver(&tv, ready_out, &mut host, 1_100.0);
+        assert!(host_on_ready.contains(&Output::Event(Event::Duration(Some(10_000)))));
+
+        // Start playback via lead().
+        let start_out = host.tick(1_200.0, None);
+        deliver(&host, start_out, &mut tv, 1_200.0);
+        let timeline_start = host.timeline.as_ref().unwrap().at_room_ms;
+
+        // Manual pause near the end does NOT emit Ended.
+        let pause_out = host.command(Command::Pause, timeline_start + 9_900.0);
+        assert!(!pause_out.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
+        let tv_pause = deliver(&host, pause_out, &mut tv, timeline_start + 9_900.0);
+        assert!(!tv_pause.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
+
+        // Resume and tick past end -> emits Ended before VideoCleared, and host auto-clears.
+        let play_out = host.command(Command::Play, timeline_start + 9_950.0);
+        deliver(&host, play_out, &mut tv, timeline_start + 9_950.0);
+        let end_out = host.tick(timeline_start + 15_000.0, None);
+        let host_ended_idx = end_out
+            .iter()
+            .position(|o| matches!(o, Output::Event(Event::Ended { item }) if item == "v1"))
+            .expect("host emits Ended");
+        let host_cleared_idx = end_out
+            .iter()
+            .position(|o| matches!(o, Output::Event(Event::VideoCleared)))
+            .expect("host emits VideoCleared");
+        assert!(host_ended_idx < host_cleared_idx, "Ended must precede VideoCleared");
+        assert!(end_out.contains(&Output::Player(PlayerCommand::Clear)));
+        assert!(host.snapshot.load.is_none());
+        assert!(host.snapshot.clear.is_some());
+
+        let tv_end = deliver(&host, end_out, &mut tv, timeline_start + 15_000.0);
+        let tv_ended_idx = tv_end
+            .iter()
+            .position(|o| matches!(o, Output::Event(Event::Ended { item }) if item == "v1"))
+            .expect("tv emits Ended");
+        let tv_cleared_idx = tv_end
+            .iter()
+            .position(|o| matches!(o, Output::Event(Event::VideoCleared)))
+            .expect("tv emits VideoCleared");
+        assert!(tv_ended_idx < tv_cleared_idx, "Ended must precede VideoCleared on peer");
+        assert!(tv_end.contains(&Output::Player(PlayerCommand::Clear)));
+    }
+
+    #[test]
+    fn two_host_capable_members_clearing_at_end_is_harmless() {
+        let host_keys = MemberKeys::generate();
+        let delegate_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let delegate_id = MemberId::from_bytes(delegate_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let delegate_pk = delegate_keys.signing_public();
+        let members = vec![host_id, delegate_id, guest_id];
+        let mut host = connected_engine(&invite, host_keys, "Host", false, members.clone());
+        let mut delegate = connected_engine(&invite, delegate_keys, "Delegate", true, members.clone());
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members);
+
+        // Hello + delegation + load.
+        let hello_out = delegate.tick(500.0, None);
+        deliver(&delegate, hello_out, &mut host, 500.0);
+        let del_out = host.command(
+            Command::Delegate {
+                member: delegate_id,
+                sign_pk: delegate_pk,
+            },
+            600.0,
+        );
+        deliver(&host, del_out.clone(), &mut delegate, 600.0);
+        deliver(&host, del_out, &mut guest, 600.0);
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 1_000.0);
+        deliver(&host, load_out.clone(), &mut delegate, 1_000.0);
+        deliver(&host, load_out, &mut guest, 1_000.0);
+
+        let d_ready = delegate.player_loaded("v1", Some(5_000), 1_100.0);
+        deliver(&delegate, d_ready.clone(), &mut host, 1_100.0);
+        deliver(&delegate, d_ready, &mut guest, 1_100.0);
+        let g_ready = guest.player_loaded("v1", Some(5_000), 1_100.0);
+        deliver(&guest, g_ready.clone(), &mut host, 1_100.0);
+        deliver(&guest, g_ready, &mut delegate, 1_100.0);
+
+        let start_out = host.tick(1_200.0, None);
+        deliver(&host, start_out.clone(), &mut delegate, 1_200.0);
+        deliver(&host, start_out, &mut guest, 1_200.0);
+
+        // Simulate both host and delegate clearing simultaneously at EOF (same or different seq).
+        let host_end = host.tick(10_000.0, None);
+        let delegate_clear = delegate.command(Command::Clear, 10_000.0);
+
+        let guest_from_host = deliver(&host, host_end.clone(), &mut guest, 10_000.0);
+        let guest_from_delegate = deliver(&delegate, delegate_clear.clone(), &mut guest, 10_000.0);
+        let host_from_delegate = deliver(&delegate, delegate_clear, &mut host, 10_000.0);
+        let _ = deliver(&host, host_end, &mut delegate, 10_000.0);
+
+        let guest_clears = guest_from_host
+            .iter()
+            .chain(guest_from_delegate.iter())
+            .filter(|o| matches!(o, Output::Event(Event::VideoCleared)))
+            .count();
+        assert_eq!(guest_clears, 1, "VideoCleared should only fire once on guest");
+        assert!(
+            !host_from_delegate.iter().any(|o| matches!(o, Output::Event(Event::VideoCleared))),
+            "host already cleared"
+        );
+        assert!(guest.item.is_none());
+        assert!(host.item.is_none());
+        assert!(delegate.item.is_none());
+    }
+
+    #[test]
+    fn guest_only_room_emits_ended_without_clearing() {
+        let host_keys = MemberKeys::generate();
+        let g1_keys = MemberKeys::generate();
+        let g2_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let g1_id = MemberId::from_bytes(g1_keys.box_public()[..16].try_into().unwrap());
+        let g2_id = MemberId::from_bytes(g2_keys.box_public()[..16].try_into().unwrap());
+        let mut host = connected_engine(&invite, host_keys, "Host", false, vec![host_id, g1_id, g2_id]);
+        let mut g1 = connected_engine(&invite, g1_keys, "G1", true, vec![host_id, g1_id, g2_id]);
+        let mut g2 = connected_engine(&invite, g2_keys, "G2", true, vec![host_id, g1_id, g2_id]);
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 1_000.0);
+        deliver(&host, load_out.clone(), &mut g1, 1_000.0);
+        deliver(&host, load_out, &mut g2, 1_000.0);
+        let r1 = g1.player_loaded("v1", Some(5_000), 1_100.0);
+        deliver(&g1, r1.clone(), &mut host, 1_100.0);
+        deliver(&g1, r1, &mut g2, 1_100.0);
+        let r2 = g2.player_loaded("v1", Some(5_000), 1_100.0);
+        deliver(&g2, r2.clone(), &mut host, 1_100.0);
+        deliver(&g2, r2, &mut g1, 1_100.0);
+        let start_out = host.tick(1_200.0, None);
+        deliver(&host, start_out.clone(), &mut g1, 1_200.0);
+        deliver(&host, start_out, &mut g2, 1_200.0);
+
+        // Host leaves; G1 becomes fallback leader while G1 & G2 keep watching.
+        let _ = host;
+        let _ = g1.handle(ServerFrame::Left { member: host_id }, 1_300.0);
+        let _ = g2.handle(ServerFrame::Left { member: host_id }, 1_300.0);
+        assert_eq!(g1.leader(), Some(g1_id));
+
+        let g1_end = g1.tick(10_000.0, None);
+        assert!(g1_end.contains(&Output::Event(Event::Ended { item: "v1".into() })));
+        assert!(!g1_end.contains(&Output::Event(Event::VideoCleared)));
+        assert!(g1.item.is_some());
+
+        let g2_end = deliver(&g1, g1_end, &mut g2, 10_000.0);
+        assert!(g2_end.contains(&Output::Event(Event::Ended { item: "v1".into() })));
+        assert!(!g2_end.contains(&Output::Event(Event::VideoCleared)));
+        assert!(g2.item.is_some());
+    }
+
+    #[test]
+    fn live_video_never_ends_or_clears() {
+        let host_keys = MemberKeys::generate();
+        let tv_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let tv_id = MemberId::from_bytes(tv_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, tv_id];
+        let mut host = connected_engine(&invite, host_keys, "Host", false, members.clone());
+        let mut tv = connected_engine(&invite, tv_keys, "TV", true, members);
+
+        let load_out = host.command(Command::Load(item("live", host_id)), 1_000.0);
+        deliver(&host, load_out, &mut tv, 1_000.0);
+        let ready_out = tv.player_loaded("live", None, 1_100.0);
+        deliver(&tv, ready_out, &mut host, 1_100.0);
+        let start_out = host.tick(1_200.0, None);
+        deliver(&host, start_out, &mut tv, 1_200.0);
+
+        let later = host.tick(999_999.0, None);
+        assert!(!later.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
+        assert!(!later.iter().any(|o| matches!(o, Output::Event(Event::VideoCleared))));
+        assert!(host.item.is_some());
+    }
 }

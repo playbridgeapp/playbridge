@@ -125,6 +125,7 @@ abstract interface class PartyControls {
   bool play();
   bool pause();
   bool seek(int positionMs);
+  void videoEnded();
 }
 
 class PlayerController extends ChangeNotifier {
@@ -1038,6 +1039,12 @@ class PlayerController extends ChangeNotifier {
       return;
     }
     _playbackBoundary('ended', sessionEnded: !hasNext);
+    if (inParty) {
+      partyControls!.videoEnded();
+      debugPrint('[player] party video finished — stopping');
+      unawaited(stop());
+      return;
+    }
     if (hasNext) {
       unawaited(next());
       return;

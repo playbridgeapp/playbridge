@@ -97,6 +97,8 @@ pub enum Body {
     Load {
         item: SharedItem,
     },
+    /// Host-signed, or unsigned when the policy is `Anyone` and unlocked.
+    Clear,
     Ready {
         item: String,
         #[serde(default)]
@@ -166,6 +168,8 @@ pub struct Snapshot {
     pub timeline: Option<Timeline>,
     #[serde(default)]
     pub load: Option<Signed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear: Option<Signed>,
     #[serde(default)]
     pub lock: Option<Signed>,
     #[serde(default)]

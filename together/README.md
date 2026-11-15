@@ -7,7 +7,7 @@ Cloudflare Workers behind PlayBridge Watch Together. See
 | --- | --- | --- |
 | `pairing-worker/` | TV codes, QR codes and sealed invites (`Lobby` Durable Object) | PlayBridge, for everyone |
 | `room-worker/` | Party clock, message routing and limits (`Room` Durable Object) | Users (recommended), or PlayBridge's shared, limited relay |
-| `shared/` | Wire types, protocol version, per-IP `Limits` Durable Object | — |
+| `shared/` | Wire types, protocol version, the room relay's per-IP `Limits` Durable Object | — |
 
 Both Workers only ever see ciphertext. They run on Cloudflare's free plan with
 SQLite-backed Durable Objects and WebSocket Hibernation.
@@ -30,7 +30,11 @@ pnpm wrangler deploy
 ```
 
 Open the deployed address and follow `/setup` to add it in PlayBridge. Limits
-come from `vars` in `room-worker/wrangler.jsonc`.
+come from `vars` in `room-worker/wrangler.jsonc`: devices per room, room
+lifetime, rooms open at once per IP, new rooms per IP per hour, and an optional
+daily budget (`DAILY_BUDGET`, in Durable Object requests; set one if the account
+runs other Workers). Connect limits use Workers rate-limit bindings; their
+`namespace_id`s only need to be unique within your account.
 
 PlayBridge's shared relay deploys with `pnpm wrangler deploy --env shared`, which
 applies the smaller shared-tier limits.
@@ -60,4 +64,7 @@ hex characters.
 | `POST /lobby/<code>/invite {"sealed"}` | Phone sends an invite sealed to that key |
 | `DELETE /lobby/<code>` (Bearer token) | Receiver releases the code |
 
-Codes last 10 minutes. Lookups and invites are rate-limited per IP.
+Codes last 10 minutes. Registers, lookups and invites are rate-limited per IP
+with Workers rate-limit bindings. Errors: `429 rate_limited` (wait for
+`Retry-After`), `409 lobby_full` (too many invites waiting) and
+`503 pairing_unavailable` (the daily quota ran out).

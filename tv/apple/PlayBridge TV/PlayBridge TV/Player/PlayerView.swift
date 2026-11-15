@@ -947,17 +947,29 @@ struct PlayerView: View {
         let isParty = together.isPartyItem(itemId)
         partySessionActive = isParty
         if isParty, let itemId {
+            engineChrome.setPartySession(true)
             partyCoordinator.begin(
                 itemID: itemId,
                 expectedGeneration: mediaGeneration,
-                engineChrome: engineChrome
+                engineChrome: engineChrome,
+                onClear: { clearPartyPlayback() }
             )
-            engineChrome.setPartySession(true)
         } else {
             partyCoordinator.end(leaveRoom: false)
             engineChrome.setPartySession(false)
             together.onOtherPlayback()
         }
+    }
+
+    private func clearPartyPlayback() {
+        suppressPartyLeaveOnDisappear = true
+        partySessionActive = false
+        partyCoordinator.end(leaveRoom: false)
+        engineChrome.setPartySession(false)
+        server.progressWebhook.finish(clear: true)
+        playlistStore.clear()
+        stillWatching.reset()
+        onDismiss()
     }
 }
 
@@ -973,8 +985,14 @@ private final class PartyPlaybackCoordinator: ObservableObject {
     private var lastDurationMs: Int64 = 0
     private var fallbackTimer: DispatchWorkItem?
     private weak var engineChrome: PlayerEngineChrome?
+    private var onClear: (() -> Void)?
 
-    func begin(itemID: String, expectedGeneration: Int, engineChrome: PlayerEngineChrome) {
+    func begin(
+        itemID: String,
+        expectedGeneration: Int,
+        engineChrome: PlayerEngineChrome,
+        onClear: @escaping () -> Void
+    ) {
         fallbackTimer?.cancel()
         fallbackTimer = nil
         let token = UUID()
@@ -982,6 +1000,7 @@ private final class PartyPlaybackCoordinator: ObservableObject {
         self.playerToken = token
         self.expectedGeneration = expectedGeneration
         self.engineChrome = engineChrome
+        self.onClear = onClear
         loadedReported = false
         ready = false
         liveKnown = nil
@@ -1050,6 +1069,7 @@ private final class PartyPlaybackCoordinator: ObservableObject {
         }
         playerToken = nil
         itemID = nil
+        onClear = nil
         if leaveRoom {
             TvTogether.shared.leave()
         }
@@ -1074,7 +1094,13 @@ private final class PartyPlaybackCoordinator: ObservableObject {
     }
 
     private func apply(_ command: TogetherPlayerCommand) {
-        guard itemID != nil, let chrome = engineChrome else { return }
+        guard itemID != nil else { return }
+        if case .clear = command {
+            let clear = onClear
+            clear?()
+            return
+        }
+        guard let chrome = engineChrome else { return }
         switch command {
         case .play:
             chrome.applyPartyPaused(false)
@@ -1086,7 +1112,7 @@ private final class PartyPlaybackCoordinator: ObservableObject {
             chrome.applyPartyRate(rate)
         case .goLive:
             chrome.applyPartyGoLive()
-        case .load:
+        case .load, .clear:
             break
         }
     }

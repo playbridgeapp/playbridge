@@ -33,6 +33,9 @@ pub enum Error {
     Crypto,
     #[error("relay error: {0}")]
     Relay(String),
+    /// The service turned the request down; the text is fit to show.
+    #[error("{0}")]
+    Refused(&'static str),
     #[error("network error: {0}")]
     Network(String),
 }

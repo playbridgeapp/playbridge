@@ -61,6 +61,7 @@ export class Lobby extends DurableObject<Env> {
   async release(token: string): Promise<boolean> {
     if (!(await this.owns(token))) return false;
     for (const ws of this.ctx.getWebSockets()) closeQuietly(ws, 1000, "released");
+    await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     return true;
   }

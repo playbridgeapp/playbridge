@@ -43,7 +43,7 @@ Common options:
   --name <name>      Name shown to other members
 
 While running, type commands:
-  play | pause | seek <seconds> | load <url> | lock | unlock
+  play | pause | seek <seconds> | load <url> | stop | lock | unlock
   policy <only-host|ask|anyone> | request <url> | allow <id> | deny <id>
   pair <code or QR link> | own <member id> <box key> | quit"#
 }
@@ -330,6 +330,7 @@ fn parse_command(line: &str) -> Result<Option<Typed>, String> {
             Command::Seek(s.parse::<f64>().map_err(|_| "seek needs seconds")? * 1000.0)
         }
         ("load", Some(url)) => Command::Load(video(url)),
+        ("stop" | "clear", _) => Command::Clear,
         ("request", Some(url)) => Command::RequestPlay(video(url)),
         ("lock", _) => Command::Lock(true),
         ("unlock", _) => Command::Lock(false),
@@ -390,6 +391,7 @@ fn print_event(event: &Event) {
     match event {
         Event::Connected { members } => println!("● connected ({} in room)", members.len()),
         Event::Disconnected => println!("○ disconnected, retrying"),
+        Event::Unreachable => println!("○ can't reach the relay, still trying"),
         Event::MemberJoined(m) => println!("+ {m} joined"),
         Event::MemberLeft(m) => println!("- {m} left"),
         Event::MemberInfo {
@@ -408,12 +410,14 @@ fn print_event(event: &Event) {
             item.title,
             item.site.as_deref().unwrap_or("?")
         ),
+        Event::VideoCleared => println!("■ video stopped"),
         Event::TimelineChanged(t) => println!(
             "  timeline: {} at {:.1}s (rev {})",
             if t.playing { "playing" } else { "paused" },
             t.position_ms / 1000.0,
             t.rev
         ),
+        Event::Ended { .. } => println!("■ video reached end"),
         Event::Waiting(list) if list.is_empty() => println!("  nobody is buffering"),
         Event::Waiting(list) => println!("… waiting for {}", ids(list)),
         Event::ContinueWithoutAvailable(list) if !list.is_empty() => {
@@ -444,6 +448,8 @@ fn print_event(event: &Event) {
         Event::Warning(text) => println!("! {text}"),
         Event::Live(true) => println!("  live stream: play and pause only"),
         Event::Live(false) => {}
+        Event::Duration(Some(ms)) => println!("  duration: {:.1}s", *ms as f64 / 1000.0),
+        Event::Duration(None) => {}
         Event::Rejected(reason) => println!("  (dropped: {reason})"),
     }
 }
@@ -548,6 +554,15 @@ impl Player for SimPlayer {
             PlayerCommand::Pause => self.playing = false,
             PlayerCommand::Seek(to) => self.position = to,
             PlayerCommand::SetRate(rate) => self.rate = rate,
+            PlayerCommand::Clear => {
+                self.item = None;
+                self.secrets = 0;
+                self.position = 0.0;
+                self.playing = false;
+                self.rate = 1.0;
+                self.loading_until = None;
+                self.loaded = None;
+            }
         }
     }
 

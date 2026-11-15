@@ -1150,6 +1150,12 @@ class _VideoCard extends StatelessWidget {
                 party.live
                     ? const Text('Live', style: _secondary)
                     : _PartyClock(together: together, party: party),
+                if (party.canChangeVideo)
+                  PbButton(
+                    label: 'Stop',
+                    variant: PbButtonVariant.secondary,
+                    onPressed: together.stopVideo,
+                  ),
               ],
             ),
             if (party.locked && !party.host)
