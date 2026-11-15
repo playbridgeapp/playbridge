@@ -1764,7 +1764,12 @@ mod tests {
         }
     }
 
-    fn deliver(sender: &Engine, outputs: Vec<Output>, receiver: &mut Engine, now: f64) -> Vec<Output> {
+    fn deliver(
+        sender: &Engine,
+        outputs: Vec<Output>,
+        receiver: &mut Engine,
+        now: f64,
+    ) -> Vec<Output> {
         let mut out = Vec::new();
         for o in outputs {
             match o {
@@ -1807,17 +1812,25 @@ mod tests {
 
         let load_out = host.command(Command::Load(item("v1", host_id)), 1_000.0);
         let guest_load = deliver(&host, load_out, &mut guest, 1_000.0);
-        assert!(guest_load.iter().any(|o| matches!(o, Output::Event(Event::VideoChanged(_)))));
+        assert!(
+            guest_load
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::VideoChanged(_))))
+        );
 
         // By default (`OnlyHost`), a guest cannot clear.
         let guest_try = guest.command(Command::Clear, 1_100.0);
-        assert!(guest_try.contains(&Output::Event(Event::Rejected("not allowed to change the video"))));
+        assert!(guest_try.contains(&Output::Event(Event::Rejected(
+            "not allowed to change the video"
+        ))));
 
         // Even under `Ask`, a guest cannot clear.
         let policy_out = host.command(Command::SetPolicy(ChangePolicy::Ask), 1_200.0);
         deliver(&host, policy_out, &mut guest, 1_200.0);
         let guest_try_ask = guest.command(Command::Clear, 1_250.0);
-        assert!(guest_try_ask.contains(&Output::Event(Event::Rejected("not allowed to change the video"))));
+        assert!(guest_try_ask.contains(&Output::Event(Event::Rejected(
+            "not allowed to change the video"
+        ))));
 
         // Host clears -> guest emits VideoCleared + PlayerCommand::Clear, and Snapshot has clear (no load/timeline).
         let clear_out = host.command(Command::Clear, 1_300.0);
@@ -1865,9 +1878,17 @@ mod tests {
 
         // Manual pause near the end does NOT emit Ended.
         let pause_out = host.command(Command::Pause, timeline_start + 9_900.0);
-        assert!(!pause_out.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
+        assert!(
+            !pause_out
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::Ended { .. })))
+        );
         let tv_pause = deliver(&host, pause_out, &mut tv, timeline_start + 9_900.0);
-        assert!(!tv_pause.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
+        assert!(
+            !tv_pause
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::Ended { .. })))
+        );
 
         // Resume and tick past end -> emits Ended before VideoCleared, and host auto-clears.
         let play_out = host.command(Command::Play, timeline_start + 9_950.0);
@@ -1881,7 +1902,10 @@ mod tests {
             .iter()
             .position(|o| matches!(o, Output::Event(Event::VideoCleared)))
             .expect("host emits VideoCleared");
-        assert!(host_ended_idx < host_cleared_idx, "Ended must precede VideoCleared");
+        assert!(
+            host_ended_idx < host_cleared_idx,
+            "Ended must precede VideoCleared"
+        );
         assert!(end_out.contains(&Output::Player(PlayerCommand::Clear)));
         assert!(host.snapshot.load.is_none());
         assert!(host.snapshot.clear.is_some());
@@ -1895,7 +1919,10 @@ mod tests {
             .iter()
             .position(|o| matches!(o, Output::Event(Event::VideoCleared)))
             .expect("tv emits VideoCleared");
-        assert!(tv_ended_idx < tv_cleared_idx, "Ended must precede VideoCleared on peer");
+        assert!(
+            tv_ended_idx < tv_cleared_idx,
+            "Ended must precede VideoCleared on peer"
+        );
         assert!(tv_end.contains(&Output::Player(PlayerCommand::Clear)));
     }
 
@@ -1906,12 +1933,14 @@ mod tests {
         let guest_keys = MemberKeys::generate();
         let invite = test_invite(&host_keys);
         let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
-        let delegate_id = MemberId::from_bytes(delegate_keys.box_public()[..16].try_into().unwrap());
+        let delegate_id =
+            MemberId::from_bytes(delegate_keys.box_public()[..16].try_into().unwrap());
         let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
         let delegate_pk = delegate_keys.signing_public();
         let members = vec![host_id, delegate_id, guest_id];
         let mut host = connected_engine(&invite, host_keys, "Host", false, members.clone());
-        let mut delegate = connected_engine(&invite, delegate_keys, "Delegate", true, members.clone());
+        let mut delegate =
+            connected_engine(&invite, delegate_keys, "Delegate", true, members.clone());
         let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members);
 
         // Hello + delegation + load.
@@ -1956,9 +1985,14 @@ mod tests {
             .chain(guest_from_delegate.iter())
             .filter(|o| matches!(o, Output::Event(Event::VideoCleared)))
             .count();
-        assert_eq!(guest_clears, 1, "VideoCleared should only fire once on guest");
+        assert_eq!(
+            guest_clears, 1,
+            "VideoCleared should only fire once on guest"
+        );
         assert!(
-            !host_from_delegate.iter().any(|o| matches!(o, Output::Event(Event::VideoCleared))),
+            !host_from_delegate
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::VideoCleared))),
             "host already cleared"
         );
         assert!(guest.item.is_none());
@@ -1975,7 +2009,13 @@ mod tests {
         let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
         let g1_id = MemberId::from_bytes(g1_keys.box_public()[..16].try_into().unwrap());
         let g2_id = MemberId::from_bytes(g2_keys.box_public()[..16].try_into().unwrap());
-        let mut host = connected_engine(&invite, host_keys, "Host", false, vec![host_id, g1_id, g2_id]);
+        let mut host = connected_engine(
+            &invite,
+            host_keys,
+            "Host",
+            false,
+            vec![host_id, g1_id, g2_id],
+        );
         let mut g1 = connected_engine(&invite, g1_keys, "G1", true, vec![host_id, g1_id, g2_id]);
         let mut g2 = connected_engine(&invite, g2_keys, "G2", true, vec![host_id, g1_id, g2_id]);
 
@@ -2028,8 +2068,16 @@ mod tests {
         deliver(&host, start_out, &mut tv, 1_200.0);
 
         let later = host.tick(999_999.0, None);
-        assert!(!later.iter().any(|o| matches!(o, Output::Event(Event::Ended { .. }))));
-        assert!(!later.iter().any(|o| matches!(o, Output::Event(Event::VideoCleared))));
+        assert!(
+            !later
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::Ended { .. })))
+        );
+        assert!(
+            !later
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::VideoCleared)))
+        );
         assert!(host.item.is_some());
     }
 }

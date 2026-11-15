@@ -163,7 +163,9 @@ void main() {
     expect(togetherLimitMessage(TogetherStop.roomFull, Duration.zero), isNull);
   });
 
-  test('parses live streams, duration, video_cleared, ended, and clear player action', () {
+  test(
+      'parses live streams, duration, video_cleared, ended, and clear player action',
+      () {
     final events = <TogetherEvent>[];
     client.events.listen(events.add);
     native.pending.addAll([

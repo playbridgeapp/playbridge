@@ -236,7 +236,8 @@ void main() {
     expect(f.player.inParty, isTrue);
   });
 
-  test('ended event without clear stops player and returns party to waiting as a screen',
+  test(
+      'ended event without clear stops player and returns party to waiting as a screen',
       () async {
     final f = await fixture();
     await joinAndLoad(f);
@@ -416,7 +417,8 @@ void main() {
         isA<UnknownCmd>());
   });
 
-  test('video cleared closes player, returns party to preplay, and stopVideo checks permission',
+  test(
+      'video cleared closes player, returns party to preplay, and stopVideo checks permission',
       () async {
     final f = await fixture();
     await joinAndLoad(f);

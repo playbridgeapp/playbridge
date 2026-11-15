@@ -687,7 +687,10 @@ fn the_party_stops_at_the_end_of_the_video() {
         e,
         Event::TimelineChanged(tl) if !tl.playing && tl.ended && tl.position_ms == 20_000.0
     )));
-    assert!(sim.saw(phone, |e| matches!(e, Event::Ended { item } if item == "v1")));
+    assert!(sim.saw(
+        phone,
+        |e| matches!(e, Event::Ended { item } if item == "v1")
+    ));
     assert!(sim.saw(phone, |e| matches!(e, Event::VideoCleared)));
     assert!(sim.devices[phone].engine.timeline().is_none());
     for tv in [tv1, tv2] {
@@ -1045,7 +1048,10 @@ fn ended_event_fires_before_auto_clear_and_not_on_manual_pause() {
             .iter()
             .position(|e| matches!(e, Event::VideoCleared))
             .expect("VideoCleared auto-fires after Ended");
-        assert!(ended_pos < cleared_pos, "Ended must arrive before VideoCleared");
+        assert!(
+            ended_pos < cleared_pos,
+            "Ended must arrive before VideoCleared"
+        );
     }
     assert_eq!(sim.devices[tv1].player.item, None);
     assert_eq!(sim.devices[guest].player.item, None);
@@ -1089,7 +1095,10 @@ fn delegate_clears_at_end_when_host_disconnects() {
     // Host disconnects while video plays; delegate takes over and auto-clears at end.
     sim.disconnect(host);
     sim.run(4_000.0);
-    assert!(sim.saw(delegate_tv, |e| matches!(e, Event::Ended { item } if item == "short")));
+    assert!(sim.saw(
+        delegate_tv,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
     assert!(sim.saw(delegate_tv, |e| matches!(e, Event::VideoCleared)));
     assert!(sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
     assert_eq!(sim.devices[delegate_tv].player.item, None);
@@ -1111,8 +1120,14 @@ fn guest_only_room_emits_ended_without_clearing_in_sim() {
     // Host leaves before the video ends; no host/delegate remains, so Ended fires without Clear.
     sim.disconnect(host);
     sim.run(4_000.0);
-    assert!(sim.saw(tv1, |e| matches!(e, Event::Ended { item } if item == "short")));
-    assert!(sim.saw(guest, |e| matches!(e, Event::Ended { item } if item == "short")));
+    assert!(sim.saw(
+        tv1,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
+    assert!(sim.saw(
+        guest,
+        |e| matches!(e, Event::Ended { item } if item == "short")
+    ));
     assert!(!sim.saw(tv1, |e| matches!(e, Event::VideoCleared)));
     assert!(!sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
 }

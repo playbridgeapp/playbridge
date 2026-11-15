@@ -377,6 +377,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     if (current == null || !current.canChangeVideo) return false;
     return _client?.clear() ?? false;
   }
+
   bool seekParty(int positionMs) =>
       _client?.seek(positionMs < 0 ? 0 : positionMs) ?? false;
 
@@ -708,8 +709,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
             _loadingItem == item ||
             party?.item?.id == item) {
           _stopWatchingPlayer(stopPlayer: true);
-          _updateParty(
-              (p) => p.item?.id == item ? _clearPartyState(p) : p);
+          _updateParty((p) => p.item?.id == item ? _clearPartyState(p) : p);
         }
       case TogetherTimeline():
         _updateParty((p) => p.copyWith(
@@ -760,8 +760,8 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
       case TogetherRejected(:final reason):
         debugPrint('[together] dropped a room message: $reason');
       case TogetherMemberJoined() ||
-          TogetherCredentialsReceived() ||
-          TogetherDuration():
+            TogetherCredentialsReceived() ||
+            TogetherDuration():
         break;
     }
   }
