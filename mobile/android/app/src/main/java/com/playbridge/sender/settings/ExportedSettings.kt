@@ -79,6 +79,12 @@ data class ExportedAppSettings(
     val phoneLeaveAction: String? = null,
     /** The phone player's subtitle style as its `subtitle_style` JSON. */
     val phoneSubtitleStyle: String? = null,
+    val castHistoryEnabled: Boolean? = null,
+    val castHistoryLimit: Int? = null,
+    val castHistoryRememberPosition: Boolean? = null,
+    val castHistoryKeepPreviews: Boolean? = null,
+    val castHistoryExcludeBridgedApps: Boolean? = null,
+    val castHistoryCheckLinks: Boolean? = null,
 )
 
 @Serializable

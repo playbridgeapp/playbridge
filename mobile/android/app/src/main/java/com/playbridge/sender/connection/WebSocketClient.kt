@@ -9,7 +9,10 @@ import com.playbridge.sender.cast.proxy.PhoneSenderServices
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import com.playbridge.sender.diagnostics.isNativePlaybackStartCommand
 import com.playbridge.sender.diagnostics.nativePlaybackRequestId
-import com.playbridge.sender.history.CastReplayStore
+import com.playbridge.sender.history.CastHistoryRepository
+import com.playbridge.sender.history.CastOrigin
+import com.playbridge.sender.history.CastStart
+import com.playbridge.sender.history.nativeCastInfo
 import com.playbridge.sender.history.replaySourceFromNativeCommand
 import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.sender.logging.WireFrameLog
@@ -54,7 +57,7 @@ private const val POINTER_FLUSH_INTERVAL_MS = 16L
 class WebSocketClient(
     private val castHistorySettings: CastHistorySettings,
     private val castAttemptDiagnostics: CastAttemptDiagnostics,
-    private val castReplayStore: CastReplayStore,
+    private val castHistory: CastHistoryRepository,
 ) {
     
     private val client = OkHttpClient.Builder()
@@ -711,8 +714,24 @@ class WebSocketClient(
 
     private fun recordPlaybackAttempt(message: String, sent: Boolean) {
         val id = castAttemptDiagnostics.recordNativePlaybackCommand(sent)
-        replaySourceFromNativeCommand(message)?.let { castReplayStore.put(id, it) }
-        castReplayStore.retainOnly(castAttemptDiagnostics.attempts.value.map { it.id }.toSet())
+        val info = nativeCastInfo(message)
+        val source = replaySourceFromNativeCommand(message)
+        // The history gates this itself: bridged-app and watch-party casts store nothing.
+        castHistory.onCastStarted(
+            CastStart(
+                id = id,
+                startedAtMs = System.currentTimeMillis(),
+                receiverKind = "PLAYBRIDGE",
+                receiverName = targetConnection?.serverName,
+                source = source,
+                title = info?.title,
+                playlistIndex = info?.takeIf { it.itemCount > 1 }?.startIndex,
+                playlistCount = info?.itemCount?.takeIf { it > 1 },
+                sent = sent,
+                origin = CastOrigin(detectedBy = info?.detectedBy),
+                previewKey = source?.url,
+            ),
+        )
     }
 
     fun send(bytes: ByteArray): Boolean {

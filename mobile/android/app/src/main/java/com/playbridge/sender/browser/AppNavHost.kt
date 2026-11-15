@@ -61,6 +61,11 @@ import com.playbridge.sender.data.history.HistoryEntity
 import com.playbridge.sender.downloads.DownloadsScreen
 import com.playbridge.sender.history.BookmarksScreen
 import com.playbridge.sender.history.CastHistoryScreen
+import kotlinx.coroutines.flow.first
+import com.playbridge.sender.history.freshLinkToast
+import com.playbridge.sender.history.canResume
+import com.playbridge.sender.history.playingUrl
+import com.playbridge.sender.history.toReplayMedia
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import com.playbridge.sender.diagnostics.shareCastAttempt
 import com.playbridge.sender.history.HistoryScreen
@@ -162,6 +167,11 @@ fun AppNavHost(
     // The browser's own toolbar and bottom bar, drawn inside the Browser screen.
     browserTopBar: @Composable () -> Unit = {},
     browserBottomBar: @Composable () -> Unit = {},
+
+    // Cast history: what the selected target is like, and the cast sheet's own play / queue paths.
+    historyTarget: com.playbridge.sender.history.TargetInfo = com.playbridge.sender.history.TargetInfo(),
+    onPlayHistory: (DetectedVideo, List<String>?) -> Unit = { _, _ -> },
+    onQueueHistory: (DetectedVideo, List<String>?) -> Unit = { _, _ -> },
 
     // Hoisted Tabs screen states
     isTabsSearchVisible: Boolean = false,
@@ -819,55 +829,98 @@ fun AppNavHost(
                     BackHandler { onScreenChange(Screen.Dashboard) }
                     val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(context)
                     val castDiagnostics: CastAttemptDiagnostics = koinInject()
-                    val replayStore: com.playbridge.sender.history.CastReplayStore = koinInject()
-                    val castAttempts by castDiagnostics.attempts.collectAsStateWithLifecycle()
-                    val replaySources by replayStore.sources.collectAsStateWithLifecycle()
+                    val castHistory: com.playbridge.sender.history.CastHistoryRepository = koinInject()
                     val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
                     val commandHistory by commandHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+                    // Opens the cast sheet on a history item so the person picks quality, target or party.
+                    val openCastSheet = { media: com.playbridge.sender.history.ReplayMedia ->
+                        onForcedVideosChange(listOf(media.video) + media.subtitleVideos)
+                        onCastSheetBrowseOverrideChange(null)
+                        onCastSheetInitialModeChange("play")
+                        onShowVideoSheetChange(true)
+                    }
                     CastHistoryScreen(
-                        historyItems = commandHistory,
-                        attempts = castAttempts,
-                        replaySources = replaySources,
+                        old = commandHistory,
+                        target = historyTarget,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onShareAttempt = { attempt ->
-                            castDiagnostics.report(attempt.id)?.let { shareCastAttempt(context, it) }
-                        },
-                        onRecastAttempt = { attempt ->
-                            val source = replaySources[attempt.id]
-                            if (source != null) {
-                                val playlist = source.playlistPayloadJson?.let {
-                                    com.playbridge.shared.protocol.decodePlaylistPayloadJson(it)?.items
+                        onOpenSettings = { onScreenChange(Screen.CastHistorySettings) },
+                        onOpenRemote = { onScreenChange(Screen.Remote) },
+                        onPlay = { id, resume ->
+                            scope.launch {
+                                val entry = castHistory.entries.first().firstOrNull { it.id == id } ?: return@launch
+                                val plan = castHistory.replayPlan(id, resume) ?: return@launch
+                                // A target that cannot start part-way still plays; it starts at the beginning and says so.
+                                val seek = historyTarget.canSeekOnLoad
+                                val media = plan.toReplayMedia(id, entry.startedAtMs, seek = seek)
+                                if (historyTarget.name == null) {
+                                    openCastSheet(media)
+                                } else {
+                                    if (resume && !seek && plan.startPositionMs > 0) {
+                                        Toast.makeText(
+                                            appContext,
+                                            "${historyTarget.name} can't start part-way. Playing from the start.",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                    onPlayHistory(media.video, media.subtitleUrls)
                                 }
-                                val media = DetectedVideo(
-                                    url = if (playlist != null) "playlist://history-${attempt.id}" else source.url,
-                                    title = source.title,
-                                    contentType = source.contentType,
-                                    headers = source.headers,
-                                    mediaKind = source.mediaKind,
-                                    detectedBy = "history",
-                                    timestamp = attempt.startedAtMs,
-                                    isPlayable = if (playlist != null) true else null,
-                                    playlistPayload = playlist,
-                                )
-                                val subtitles = if (playlist == null) source.subtitles.map { subtitleUrl ->
-                                    DetectedVideo(
-                                        url = subtitleUrl,
-                                        mediaKind = "subtitle",
-                                        detectedBy = "history",
-                                        timestamp = attempt.startedAtMs,
-                                    )
-                                } else emptyList()
-                                onForcedVideosChange(listOf(media) + subtitles)
-                                onCastSheetBrowseOverrideChange(null)
-                                onCastSheetInitialModeChange("play")
-                                onShowVideoSheetChange(true)
                             }
                         },
-                        onDeleteAttempt = { attempt ->
-                            castDiagnostics.delete(attempt.id)
-                            replayStore.delete(attempt.id)
+                        onChooseWhere = { id ->
+                            scope.launch {
+                                val entry = castHistory.entries.first().firstOrNull { it.id == id } ?: return@launch
+                                val plan = castHistory.replayPlan(id, resume = entry.canResume()) ?: return@launch
+                                openCastSheet(plan.toReplayMedia(id, entry.startedAtMs))
+                            }
                         },
-                        onItemClick = { item ->
+                        onQueue = { id ->
+                            scope.launch {
+                                val entry = castHistory.entries.first().firstOrNull { it.id == id } ?: return@launch
+                                val plan = castHistory.replayPlan(id, resume = false) ?: return@launch
+                                val media = plan.toReplayMedia(id, entry.startedAtMs, seek = false)
+                                onQueueHistory(media.video, media.subtitleUrls)
+                            }
+                        },
+                        onOpenPage = { entry, fresh ->
+                            entry.pageUrl?.let { page ->
+                                if (fresh) {
+                                    Toast.makeText(appContext, freshLinkToast(entry), Toast.LENGTH_LONG).show()
+                                }
+                                tabManager.createTab(page, store)
+                                onScreenChange(Screen.Browser)
+                            }
+                        },
+                        onSaveToCollection = { id ->
+                            scope.launch {
+                                val entry = castHistory.entries.first().firstOrNull { it.id == id } ?: return@launch
+                                val source = castHistory.replayPlan(id, resume = false)?.source ?: return@launch
+                                val index = entry.playlistIndex ?: 0
+                                onAddToCollection(
+                                    com.playbridge.sender.data.collection.CollectionItemDraft(
+                                        title = entry.title ?: source.title ?: entry.host ?: "Saved cast",
+                                        url = source.playingUrl(index),
+                                        kind = com.playbridge.sender.data.collection.CollectionItemKind.WEB,
+                                        mimeType = source.contentType,
+                                        headers = if (index == 0) source.headers else emptyMap(),
+                                        sourceTag = com.playbridge.sender.data.collection.CollectionSource.HISTORY,
+                                    )
+                                )
+                            }
+                        },
+                        onShare = { entry ->
+                            // The page it came from and the title; never the stream link itself.
+                            val text = listOfNotNull(entry.title ?: entry.host, entry.pageUrl).joinToString("\n")
+                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, text)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(send, "Share"))
+                        },
+                        onRemove = { id ->
+                            castDiagnostics.delete(id)
+                            scope.launch { castHistory.delete(id) }
+                        },
+                        onOldClick = { item ->
                             if (item.commandType == "browser") {
                                 onForcedVideosChange(null)
                                 onCastSheetBrowseOverrideChange(item.url)
@@ -885,16 +938,7 @@ fun AppNavHost(
                             }
                             onShowVideoSheetChange(true)
                         },
-                        onDelete = { item ->
-                            scope.launch(Dispatchers.IO) { db.commandHistoryDao().delete(item) }
-                        },
-                        onClearHistory = {
-                            scope.launch(Dispatchers.IO) { db.commandHistoryDao().clear() }
-                            castDiagnostics.clear()
-                            replayStore.clear()
-                        },
-                        onBack = { onScreenChange(lastMainScreen) },
-                        onAddToCollection = { item ->
+                        onOldSave = { item ->
                             onAddToCollection(
                                 com.playbridge.sender.data.collection.CollectionItemDraft(
                                     title = item.title ?: item.url,
@@ -903,8 +947,19 @@ fun AppNavHost(
                                     sourceTag = com.playbridge.sender.data.collection.CollectionSource.HISTORY,
                                 )
                             )
-                        }
+                        },
+                        onOldRemove = { item ->
+                            scope.launch(Dispatchers.IO) { db.commandHistoryDao().delete(item) }
+                        },
+                        onClearAll = {
+                            castDiagnostics.clear()
+                            scope.launch { castHistory.clearAll() }
+                        },
                     )
+                }
+                Screen.CastHistorySettings -> {
+                    BackHandler { onScreenChange(Screen.CastHistory) }
+                    com.playbridge.sender.settings.CastHistorySettingsScreen(onBack = { onScreenChange(Screen.CastHistory) })
                 }
                  Screen.Tabs -> {
                     BackHandler { onScreenChange(lastMainScreen) }

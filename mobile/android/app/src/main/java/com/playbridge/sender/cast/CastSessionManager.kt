@@ -19,7 +19,11 @@ import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.sender.diagnostics.CastAttempt
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
-import com.playbridge.sender.history.CastReplayStore
+import com.playbridge.sender.history.CastHistoryRepository
+import com.playbridge.sender.history.CastOrigin
+import com.playbridge.sender.history.CastStart
+import com.playbridge.sender.history.PlaybackSample
+import com.playbridge.sender.history.SampleState
 import com.playbridge.sender.history.replaySourceFromExternalMedia
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
@@ -119,7 +123,7 @@ class CastSessionManager(
     private val externalScreenMirrorCoordinator:
         com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator,
     private val castAttemptDiagnostics: CastAttemptDiagnostics,
-    private val castReplayStore: CastReplayStore,
+    private val castHistory: CastHistoryRepository,
 ) {
     private val TAG = "CastSessionManager"
     private var activeExternalAttemptId: String? = null
@@ -671,7 +675,11 @@ class CastSessionManager(
 
     init {
         scope.launch {
+            connectionCoordinator.playbackFailure.collect { castHistory.onReceiverFailure(it?.message) }
+        }
+        scope.launch {
             connectionCoordinator.tvPlayback.collect { playback ->
+                feedNativeHistory(playback)
                 val id = castAttemptDiagnostics.activeNativeAttemptId ?: return@collect
                 when (playback?.state?.lowercase()) {
                     "playing" -> castAttemptDiagnostics.mark(id, CastAttempt.AttemptOutcome.PLAYING)
@@ -1174,6 +1182,23 @@ class CastSessionManager(
                 }
                 observeExternalLease(status)
                 castAttemptDiagnostics.markPlayback(activeExternalAttemptId, status.state, status.failure)
+                castHistory.onReceiverFailure(status.failure?.message)
+                castHistory.onPlaybackSample(
+                    PlaybackSample(
+                        state = when (status.state) {
+                            PlaybackState.PLAYING -> SampleState.PLAYING
+                            PlaybackState.PAUSED -> SampleState.PAUSED
+                            PlaybackState.BUFFERING -> SampleState.BUFFERING
+                            PlaybackState.STOPPED -> SampleState.STOPPED
+                            PlaybackState.ERROR -> SampleState.ERROR
+                            PlaybackState.IDLE -> SampleState.IDLE
+                        },
+                        positionMs = status.positionMs,
+                        durationMs = status.durationMs,
+                        isLive = status.isLive,
+                        epoch = status.loadEpoch,
+                    ),
+                )
                 if (externalScreenMirrorCoordinator.state.value.isActive) {
                     when (status.state) {
                         PlaybackState.PLAYING -> externalScreenMirrorCoordinator.markMirroring()
@@ -1192,10 +1217,35 @@ class CastSessionManager(
 
     fun clearExternalTarget() = detachExternalTarget(stopFirst = false)
 
+    /** Native TV reports go to the history entry the latest native cast was recorded under. */
+    private fun feedNativeHistory(playback: TvPlaybackStatus?) {
+        if (castAttemptDiagnostics.activeNativeAttemptId == null) return
+        val queue = connectionCoordinator.tvPlaylistState.value
+        castHistory.onPlaybackSample(
+            playback?.let {
+                PlaybackSample(
+                    state = when (it.state.lowercase()) {
+                        "playing" -> SampleState.PLAYING
+                        "paused" -> SampleState.PAUSED
+                        "buffering", "loading" -> SampleState.BUFFERING
+                        "stopped", "ended" -> SampleState.STOPPED
+                        "error", "failed" -> SampleState.ERROR
+                        else -> SampleState.IDLE
+                    },
+                    positionMs = it.positionMs,
+                    durationMs = it.durationMs,
+                    title = it.title,
+                    playlistIndex = queue?.takeIf { q -> q.totalCount > 1 }?.currentIndex,
+                    playlistCount = queue?.totalCount?.takeIf { c -> c > 1 },
+                )
+            },
+        )
+    }
+
     /** Replace a packaged native URL with its pre-proxy source when the caller has it. */
     fun attachNativeReplaySource(media: MediaItem) {
         val id = castAttemptDiagnostics.activeNativeAttemptId ?: return
-        replaySourceFromExternalMedia(media)?.let { castReplayStore.put(id, it) }
+        replaySourceFromExternalMedia(media)?.let { castHistory.replaceReplaySource(id, it) }
     }
 
     /** Stop media before releasing transports that disconnect on release (notably CastV2). */
@@ -1333,9 +1383,31 @@ class CastSessionManager(
             },
         )
         val attemptId = activeExternalAttemptId
-        if (attemptId != null) {
-            replaySourceFromExternalMedia(media)?.let { castReplayStore.put(attemptId, it) }
-            castReplayStore.retainOnly(castAttemptDiagnostics.attempts.value.map { it.id }.toSet())
+        if (attemptId != null && !media.isScreenMirror) {
+            val source = replaySourceFromExternalMedia(media)
+            // The history gates this itself: bridged-app and watch-party casts store nothing.
+            castHistory.onCastStarted(
+                CastStart(
+                    id = attemptId,
+                    startedAtMs = System.currentTimeMillis(),
+                    receiverKind = when (target.kind) {
+                        TargetKind.NATIVE -> CastAttempt.ReceiverKind.PLAYBRIDGE
+                        TargetKind.DLNA -> CastAttempt.ReceiverKind.DLNA
+                        TargetKind.ROKU -> CastAttempt.ReceiverKind.ROKU
+                        TargetKind.GOOGLE_CAST -> CastAttempt.ReceiverKind.GOOGLE_CAST
+                        TargetKind.WEB_BROWSER -> CastAttempt.ReceiverKind.WEB_BROWSER
+                    }.name,
+                    receiverName = _activeExternalDevice.value?.name,
+                    source = source,
+                    title = media.title,
+                    playlistIndex = null,
+                    playlistCount = null,
+                    sent = true,
+                    origin = CastOrigin(),
+                    epoch = generation,
+                    previewKey = source?.url ?: media.url,
+                ),
+            )
         }
         JniUpstreamHttpClient.setDiagnosticAttempt(castAttemptDiagnostics, attemptId)
         castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.BUFFERING)

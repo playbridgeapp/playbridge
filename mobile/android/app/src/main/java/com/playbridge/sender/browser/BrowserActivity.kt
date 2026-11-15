@@ -2600,6 +2600,246 @@ class BrowserActivity : ComponentActivity() {
                         }
                     }
                 }
+                    // What Cast history needs to know about the selected target: its name, whether a
+                    // queue can take another item, and whether it can start part-way on load.
+                    val historyTarget = remember(castRoute, tvDevice, activeExternalDevice, watchPartySelected, activeParty?.canChangeVideo, tvActiveContext) {
+                        when {
+                            watchPartySelected -> com.playbridge.sender.history.TargetInfo("Watch party", canQueue = activeParty?.canChangeVideo == true, canSeekOnLoad = true)
+                            castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv ->
+                                com.playbridge.sender.history.TargetInfo(
+                                    name = tvDevice?.name,
+                                    canQueue = tvActiveContext == "player",
+                                    canSeekOnLoad = true,
+                                )
+                            castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External ->
+                                com.playbridge.sender.history.TargetInfo(
+                                    name = activeExternalDevice?.name,
+                                    canQueue = false,
+                                    // Roku's load call has no start position.
+                                    canSeekOnLoad = (castRoute as com.playbridge.sender.cast.CastSessionManager.Route.External)
+                                        .endpointKey.protocol != com.playbridge.sender.model.CastProtocol.ROKU,
+                                )
+                            else -> com.playbridge.sender.history.TargetInfo()
+                        }
+                    }
+                    val handleVideoClick: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit = handleVideoClick@ { video, subs, subtitleResources ->
+                         if (watchPartySelected) {
+                             if (video.kind == DetectedMediaKind.IMAGE) {
+                                 Toast.makeText(
+                                     this@BrowserActivity,
+                                     "Pictures can't be shared in a watch party yet",
+                                     Toast.LENGTH_SHORT,
+                                 ).show()
+                                 return@handleVideoClick
+                             }
+                             val playlist = video.playlistPayload
+                             if (playlist != null) {
+                                 playPartyPayloads(playlist, fallbackTitle = video.title ?: selectedTab?.content?.title)
+                             } else {
+                                 com.playbridge.sender.together.PhoneTogether.playInParty(
+                                     url = video.url,
+                                     title = video.title ?: selectedTab?.content?.title,
+                                     headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
+                                     subtitles = subs.orEmpty() + subtitleResources.map { it.url },
+                                     startMs = video.startPositionMs,
+                                 )
+                             }
+                             showVideoSheet = false
+                             forcePlaylistSheet = null
+                             return@handleVideoClick
+                         }
+                         when (castRoute) {
+                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
+                                 Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                 return@handleVideoClick
+                             }
+                             is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
+                                 val externalTarget = activeExternalDevice ?: return@handleVideoClick
+                                 val playlist = video.playlistPayload?.mapIndexed { index, item ->
+                                     item.copy(
+                                         start_position_ms = video.startPositionMs.takeIf {
+                                             it > 0 && index == video.startIndex
+                                         } ?: item.start_position_ms,
+                                         player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                         preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                         preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                         default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                         max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                     )
+                                 }
+                                 if (playlist != null) {
+                                     startExternalPlaylist(playlist, video.startIndex)
+                                 } else {
+                                     val mediaHeaders = video.headers
+                                         ?: com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                                     val routeMode = video.effectiveStreamRoute?.let {
+                                         com.playbridge.sender.cast.proxy.StreamRouteMode.fromPrefs(it)
+                                     }
+                                     connectionViewModel.castToSelectedExternal(
+                                         com.playbridge.sender.cast.MediaItem(
+                                             url = video.url,
+                                             headers = mediaHeaders,
+                                             mimeType = video.contentType,
+                                             mediaKind = when (video.kind) {
+                                                 DetectedMediaKind.AUDIO -> com.playbridge.sender.cast.MediaKind.AUDIO
+                                                 DetectedMediaKind.IMAGE -> com.playbridge.sender.cast.MediaKind.IMAGE
+                                                 else -> com.playbridge.sender.cast.MediaKind.VIDEO
+                                             },
+                                             title = video.title ?: selectedTab?.content?.title,
+                                             startPositionMs = video.startPositionMs,
+                                             visualMetadata = video.visualMetadata,
+                                             effectiveRoute = routeMode,
+                                             routeReason = video.streamRouteReason,
+                                         )
+                                     )
+                                 }
+                                 Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
+                                 showVideoSheet = false
+                                 forcePlaylistSheet = null
+                                 if (autoSwitchToRemote) currentScreen = Screen.Remote
+                                 return@handleVideoClick
+                             }
+                             is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
+                         }
+                         // A media bundle carries its real items in
+                         // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
+                         // not as a single video (otherwise the TV tries to play the sentinel URL).
+                         val cmd = if (video.playlistPayload != null) {
+                             val items = video.playlistPayload.mapIndexed { index, it ->
+                                 it.copy(
+                                     start_position_ms = video.startPositionMs.takeIf { p ->
+                                         p > 0 && index == video.startIndex
+                                     } ?: it.start_position_ms,
+                                     player_mode = sheetPlayerMode.takeIf { m -> m != "tv" },
+                                     preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
+                                     preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
+                                     default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
+                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                 )
+                             }
+                             com.playbridge.shared.protocol.createPlaylistCommandJson(
+                                 playbridge.PlaylistPayload(
+                                    items = items,
+                                    start_index = video.startIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0)),
+                                )
+                             )
+                         } else {
+                             val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
+                             createSingleVideoCommandJson(
+                                 PlayPayload(
+                                     url = video.url,
+                                     title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                     headers = headers,
+                                     content_type = video.contentType,
+                                     media_kind = video.kind.protocolValue,
+                                     detected_by = video.detectedBy,
+                                     subtitles = subs.orEmpty(),
+                                     subtitle_resources = subtitleResources,
+                                     start_position_ms = video.startPositionMs.takeIf { it > 0 },
+                                     player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                     preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                     preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                     default_video_quality = effectiveQuality,
+                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                 )
+                             )
+                         }
+                         val sent = when (connectionState) {
+                             is WebSocketClient.ConnectionState.Connected -> {
+                                 linkedPageCastCoordinator.supersedeIfActive()
+                                 val ok = connectionViewModel.webSocketClient.send(cmd)
+                                 if (ok) {
+                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                     if (video.playlistPayload == null) browserViewModel.logHistory(video.url, video.title)
+                                 }
+                                 ok
+                             }
+                             else -> false
+                         }
+                         if (sent) {
+                             connectionCoordinator.startLocalPlaybackSession()
+                             remoteCastSourceTabId = selectedTabId.takeIf { video.playlistPayload == null }
+                             remoteCastTitle = if (video.playlistPayload == null) {
+                                 video.title ?: selectedTab?.content?.title ?: "Video from browser"
+                             } else null
+                             Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
+                         }
+                         showVideoSheet = false
+                         forcePlaylistSheet = null
+                    }
+                    val handleQueueVideo: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit = handleQueueVideo@ { video, subtitles, subtitleResources ->
+                        if (watchPartySelected) {
+                            if (video.kind == DetectedMediaKind.IMAGE) {
+                                Toast.makeText(
+                                    this@BrowserActivity,
+                                    "Pictures can't be added to the party queue",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@handleQueueVideo
+                            }
+                            val items = video.playlistPayload?.map {
+                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                    it,
+                                    fallbackTitle = video.title ?: selectedTab?.content?.title,
+                                )
+                            } ?: listOf(
+                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
+                                    url = video.url,
+                                    title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                    headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
+                                    subtitles = subtitles.orEmpty() + subtitleResources.map { it.url },
+                                    startMs = video.startPositionMs,
+                                )
+                            )
+                            if (com.playbridge.sender.together.PhoneTogether.enqueueAll(items)) {
+                                showVideoSheet = false
+                                forcePlaylistSheet = null
+                            }
+                            return@handleQueueVideo
+                        }
+                        if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
+                            val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
+                                "Queue editing is only available with PlayBridge receivers"
+                            } else {
+                                "Choose a receiver first"
+                            }
+                            Toast.makeText(this@BrowserActivity, message, Toast.LENGTH_SHORT).show()
+                            return@handleQueueVideo
+                        }
+                        when (connectionState) {
+                            is WebSocketClient.ConnectionState.Connected -> {
+                                val items: List<PlayPayload> = video.playlistPayload ?: run {
+                                    val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                                    listOf(
+                                        PlayPayload(
+                                            url = video.url,
+                                            title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
+                                            headers = headers,
+                                            content_type = video.contentType,
+                                            media_kind = video.kind.protocolValue,
+                                            detected_by = video.detectedBy,
+                                            subtitles = subtitles.orEmpty(),
+                                            subtitle_resources = subtitleResources,
+                                            player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                            preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                            preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                            default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                            max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                        )
+                                    )
+                                }
+                                var sent = false
+                                items.forEach { item ->
+                                    if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(item))) sent = true
+                                }
+                                if (sent) Toast.makeText(this@BrowserActivity, "Added to queue", Toast.LENGTH_SHORT).show()
+                            }
+                            else -> { Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show() }
+                        }
+                        showVideoSheet = false
+                        forcePlaylistSheet = null
+                    }
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         snackbarHost = { SnackbarHost(notificationPermissionHost.snackbar) },
@@ -2710,6 +2950,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                             Screen.History -> {}
                             Screen.CastHistory -> {}
+                            Screen.CastHistorySettings -> {}
                             Screen.WatchTogether -> {}
                             Screen.Bookmarks -> {}
                             Screen.Home -> {}
@@ -2886,6 +3127,9 @@ class BrowserActivity : ComponentActivity() {
                         onShowVideoSheetChange = { showVideoSheet = it },
                         forcedVideos = forcedVideos,
                         onForcedVideosChange = { forcedVideos = it },
+                        historyTarget = historyTarget,
+                        onPlayHistory = { video, subs -> handleVideoClick(video, subs, emptyList()) },
+                        onQueueHistory = { video, subs -> handleQueueVideo(video, subs, emptyList()) },
                         castSheetInitialMode = castSheetInitialMode,
                         onCastSheetInitialModeChange = { castSheetInitialMode = it },
                         castSheetBrowseOverride = castSheetBrowseOverride,
@@ -3079,214 +3323,8 @@ class BrowserActivity : ComponentActivity() {
                         castSheetBrowseOverride = null
                         pendingContentPayload = null
                     },
-                    onVideoClick = onVideoClick@ { video, subs, subtitleResources ->
-                         if (watchPartySelected) {
-                             if (video.kind == DetectedMediaKind.IMAGE) {
-                                 Toast.makeText(
-                                     this@BrowserActivity,
-                                     "Pictures can't be shared in a watch party yet",
-                                     Toast.LENGTH_SHORT,
-                                 ).show()
-                                 return@onVideoClick
-                             }
-                             val playlist = video.playlistPayload
-                             if (playlist != null) {
-                                 playPartyPayloads(playlist, fallbackTitle = video.title ?: selectedTab?.content?.title)
-                             } else {
-                                 com.playbridge.sender.together.PhoneTogether.playInParty(
-                                     url = video.url,
-                                     title = video.title ?: selectedTab?.content?.title,
-                                     headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
-                                     subtitles = subs.orEmpty() + subtitleResources.map { it.url },
-                                     startMs = video.startPositionMs,
-                                 )
-                             }
-                             showVideoSheet = false
-                             forcePlaylistSheet = null
-                             return@onVideoClick
-                         }
-                         when (castRoute) {
-                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
-                                 Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
-                                 return@onVideoClick
-                             }
-                             is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
-                                 val externalTarget = activeExternalDevice ?: return@onVideoClick
-                                 val playlist = video.playlistPayload?.map { item ->
-                                     item.copy(
-                                         player_mode = sheetPlayerMode.takeIf { it != "tv" },
-                                         preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                         preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                         default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                         max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                     )
-                                 }
-                                 if (playlist != null) {
-                                     startExternalPlaylist(playlist)
-                                 } else {
-                                     val mediaHeaders = video.headers
-                                         ?: com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                                     val routeMode = video.effectiveStreamRoute?.let {
-                                         com.playbridge.sender.cast.proxy.StreamRouteMode.fromPrefs(it)
-                                     }
-                                     connectionViewModel.castToSelectedExternal(
-                                         com.playbridge.sender.cast.MediaItem(
-                                             url = video.url,
-                                             headers = mediaHeaders,
-                                             mimeType = video.contentType,
-                                             mediaKind = when (video.kind) {
-                                                 DetectedMediaKind.AUDIO -> com.playbridge.sender.cast.MediaKind.AUDIO
-                                                 DetectedMediaKind.IMAGE -> com.playbridge.sender.cast.MediaKind.IMAGE
-                                                 else -> com.playbridge.sender.cast.MediaKind.VIDEO
-                                             },
-                                             title = video.title ?: selectedTab?.content?.title,
-                                             startPositionMs = video.startPositionMs,
-                                             visualMetadata = video.visualMetadata,
-                                             effectiveRoute = routeMode,
-                                             routeReason = video.streamRouteReason,
-                                         )
-                                     )
-                                 }
-                                 Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
-                                 showVideoSheet = false
-                                 forcePlaylistSheet = null
-                                 if (autoSwitchToRemote) currentScreen = Screen.Remote
-                                 return@onVideoClick
-                             }
-                             is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
-                         }
-                         // A media bundle carries its real items in
-                         // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
-                         // not as a single video (otherwise the TV tries to play the sentinel URL).
-                         val cmd = if (video.playlistPayload != null) {
-                             val items = video.playlistPayload.map {
-                                 it.copy(
-                                     player_mode = sheetPlayerMode.takeIf { m -> m != "tv" },
-                                     preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
-                                     preferred_subtitle_language = preferredSubLang.takeIf { l -> l.isNotEmpty() },
-                                     default_video_quality = defaultVideoQuality.takeIf { q -> q != "Auto" },
-                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                 )
-                             }
-                             com.playbridge.shared.protocol.createPlaylistCommandJson(
-                                 playbridge.PlaylistPayload(items = items)
-                             )
-                         } else {
-                             val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
-                             createSingleVideoCommandJson(
-                                 PlayPayload(
-                                     url = video.url,
-                                     title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                     headers = headers,
-                                     content_type = video.contentType,
-                                     media_kind = video.kind.protocolValue,
-                                     detected_by = video.detectedBy,
-                                     subtitles = subs.orEmpty(),
-                                     subtitle_resources = subtitleResources,
-                                     player_mode = sheetPlayerMode.takeIf { it != "tv" },
-                                     preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                     preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                     default_video_quality = effectiveQuality,
-                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                 )
-                             )
-                         }
-                         val sent = when (connectionState) {
-                             is WebSocketClient.ConnectionState.Connected -> {
-                                 linkedPageCastCoordinator.supersedeIfActive()
-                                 val ok = connectionViewModel.webSocketClient.send(cmd)
-                                 if (ok) {
-                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
-                                     if (video.playlistPayload == null) browserViewModel.logHistory(video.url, video.title)
-                                 }
-                                 ok
-                             }
-                             else -> false
-                         }
-                         if (sent) {
-                             connectionCoordinator.startLocalPlaybackSession()
-                             remoteCastSourceTabId = selectedTabId.takeIf { video.playlistPayload == null }
-                             remoteCastTitle = if (video.playlistPayload == null) {
-                                 video.title ?: selectedTab?.content?.title ?: "Video from browser"
-                             } else null
-                             Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
-                         }
-                         showVideoSheet = false
-                         forcePlaylistSheet = null
-                    },
-                    onQueueVideo = onQueueVideo@ { video, subtitles, subtitleResources ->
-                        if (watchPartySelected) {
-                            if (video.kind == DetectedMediaKind.IMAGE) {
-                                Toast.makeText(
-                                    this@BrowserActivity,
-                                    "Pictures can't be added to the party queue",
-                                    Toast.LENGTH_SHORT,
-                                ).show()
-                                return@onQueueVideo
-                            }
-                            val items = video.playlistPayload?.map {
-                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
-                                    it,
-                                    fallbackTitle = video.title ?: selectedTab?.content?.title,
-                                )
-                            } ?: listOf(
-                                com.playbridge.sender.together.PartyMediaSupport.itemOf(
-                                    url = video.url,
-                                    title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                    headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video),
-                                    subtitles = subtitles.orEmpty() + subtitleResources.map { it.url },
-                                    startMs = video.startPositionMs,
-                                )
-                            )
-                            if (com.playbridge.sender.together.PhoneTogether.enqueueAll(items)) {
-                                showVideoSheet = false
-                                forcePlaylistSheet = null
-                            }
-                            return@onQueueVideo
-                        }
-                        if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
-                            val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
-                                "Queue editing is only available with PlayBridge receivers"
-                            } else {
-                                "Choose a receiver first"
-                            }
-                            Toast.makeText(this@BrowserActivity, message, Toast.LENGTH_SHORT).show()
-                            return@onQueueVideo
-                        }
-                        when (connectionState) {
-                            is WebSocketClient.ConnectionState.Connected -> {
-                                val items: List<PlayPayload> = video.playlistPayload ?: run {
-                                    val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                                    listOf(
-                                        PlayPayload(
-                                            url = video.url,
-                                            title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                            headers = headers,
-                                            content_type = video.contentType,
-                                            media_kind = video.kind.protocolValue,
-                                            detected_by = video.detectedBy,
-                                            subtitles = subtitles.orEmpty(),
-                                            subtitle_resources = subtitleResources,
-                                            player_mode = sheetPlayerMode.takeIf { it != "tv" },
-                                            preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
-                                            preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
-                                            default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
-                                            max_bitrate_cap_mbps = maxBitrateCapMbps,
-                                        )
-                                    )
-                                }
-                                var sent = false
-                                items.forEach { item ->
-                                    if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createQueueAddCommandJson(item))) sent = true
-                                }
-                                if (sent) Toast.makeText(this@BrowserActivity, "Added to queue", Toast.LENGTH_SHORT).show()
-                            }
-                            else -> { Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show() }
-                        }
-                        showVideoSheet = false
-                        forcePlaylistSheet = null
-                    },
+                    onVideoClick = handleVideoClick,
+                    onQueueVideo = handleQueueVideo,
                     onDownloadVideo = { video ->
                         enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer"), selectedTab?.content?.title, selectedTab?.content?.url)
                     },

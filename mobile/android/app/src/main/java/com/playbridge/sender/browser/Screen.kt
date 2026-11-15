@@ -14,6 +14,7 @@ sealed class Screen {
     object Settings : Screen()
     object History : Screen()
     object CastHistory : Screen()
+    object CastHistorySettings : Screen()
     object Bookmarks : Screen()
     object Home : Screen()
     object Remote : Screen()
@@ -51,6 +52,7 @@ sealed class Screen {
                         Settings -> "settings"
                         History -> "history"
                         CastHistory -> "casthistory"
+                        CastHistorySettings -> "casthistorysettings"
                         Bookmarks -> "bookmarks"
                         Home -> "home"
                         Remote -> "remote"
@@ -75,6 +77,7 @@ sealed class Screen {
                         "settings" -> Settings
                         "history" -> History
                         "casthistory" -> CastHistory
+                        "casthistorysettings" -> CastHistorySettings
                         "bookmarks" -> Bookmarks
                         "home" -> Home
                         "remote" -> Remote

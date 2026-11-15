@@ -77,7 +77,24 @@ val appModule = module {
     // 4. WebSocket client, persistence, and the process-wide Rust discovery owner
     single { CastHistorySettings(androidContext()) }
     single { com.playbridge.sender.diagnostics.CastAttemptDiagnostics(androidContext()) }
-    single { com.playbridge.sender.history.CastReplayStore(androidContext(), get()) }
+    single { com.playbridge.sender.history.CastReplayStore(androidContext()) }
+    single { get<HistoryDatabase>().castHistoryDao() }
+    single {
+        com.playbridge.sender.history.CastHistoryRepository(
+            dao = get(),
+            legacy = com.playbridge.sender.history.RoomLegacyHistory(get()),
+            replay = get<com.playbridge.sender.history.CastReplayStore>(),
+            previews = com.playbridge.sender.history.FilePreviewStore(androidContext()),
+            config = com.playbridge.sender.history.SettingsHistorySource(get()),
+            bridged = com.playbridge.sender.history.InstalledBridgedApps(androidContext()),
+            originResolver = com.playbridge.sender.history.DetectorPageOrigins(),
+            linkChecker = com.playbridge.sender.history.PolicyLinkChecker(get()),
+            attempts = { get<com.playbridge.sender.diagnostics.CastAttemptDiagnostics>().attempts.value },
+            partyActive = { com.playbridge.sender.together.PhoneTogether.isPartySelected() },
+            clock = System::currentTimeMillis,
+            dispatcher = Dispatchers.IO.limitedParallelism(1),
+        )
+    }
     single { WebSocketClient(get(), get(), get()) }
     single { ConnectionStore(androidContext()) }
     single {
@@ -136,7 +153,7 @@ val appModule = module {
             screenMirrorCoordinator = get(),
             externalScreenMirrorCoordinator = get(),
             castAttemptDiagnostics = get(),
-            castReplayStore = get(),
+            castHistory = get(),
         )
     }
 

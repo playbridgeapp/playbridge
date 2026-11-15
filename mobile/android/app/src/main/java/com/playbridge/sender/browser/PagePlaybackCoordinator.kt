@@ -235,6 +235,12 @@ class PagePlaybackCoordinator(
                 SubtitleRef(it.url, it.label, it.language)
             }
             val previousEpoch = connection.externalStatus.value?.loadEpoch
+            // A website asked for this cast; the history leaves it out when bridged apps are excluded.
+            runCatching {
+                org.koin.core.context.GlobalContext.get()
+                    .get<com.playbridge.sender.history.CastHistoryRepository>()
+                    .noteOrigin(request.origin, pageInitiated = true)
+            }
             if (!connection.castToSelectedExternal(MediaItem(url = value.url, headers = value.headers,
                     title = value.title, mimeType = value.content_type, subtitles = subtitles,
                     visualMetadata = value.visual_metadata, startPositionMs = value.start_position_ms ?: 0,

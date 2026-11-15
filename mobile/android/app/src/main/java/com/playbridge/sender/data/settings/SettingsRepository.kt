@@ -3,6 +3,7 @@ package com.playbridge.sender.data.settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import com.playbridge.sender.browser.CustomUserAgent
+import com.playbridge.sender.history.CastHistorySettings
 import com.playbridge.sender.player.PhoneLandscapeOpen
 import com.playbridge.sender.player.PhonePlayerMode
 import com.playbridge.shared.player.SubtitleStyle
@@ -60,6 +61,12 @@ class SettingsRepository(
          * Casting always keeps the link regardless of this toggle.
          */
         val KEEP_TV_CONNECTION_IN_BACKGROUND = booleanPreferencesKey("keep_tv_connection_in_background")
+        val CAST_HISTORY_ENABLED = booleanPreferencesKey("cast_history_enabled")
+        val CAST_HISTORY_LIMIT = intPreferencesKey("cast_history_limit")
+        val CAST_HISTORY_REMEMBER_POSITION = booleanPreferencesKey("cast_history_remember_position")
+        val CAST_HISTORY_KEEP_PREVIEWS = booleanPreferencesKey("cast_history_keep_previews")
+        val CAST_HISTORY_EXCLUDE_BRIDGED = booleanPreferencesKey("cast_history_exclude_bridged_apps")
+        val CAST_HISTORY_CHECK_LINKS = booleanPreferencesKey("cast_history_check_links")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -113,7 +120,36 @@ class SettingsRepository(
     val keepTvConnectionInBackground: Flow<Boolean> =
         dataStore.data.catch { handleException(it) }.map { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] ?: false }
 
+    /** Cast history choices; a stored limit outside the allowed steps snaps to the nearest one. */
+    val castHistory: Flow<CastHistorySettings> = dataStore.data.catch { handleException(it) }.map { prefs ->
+        CastHistorySettings(
+            enabled = prefs[Keys.CAST_HISTORY_ENABLED] ?: true,
+            limit = CastHistorySettings.coerceLimit(prefs[Keys.CAST_HISTORY_LIMIT] ?: CastHistorySettings.DEFAULT_LIMIT),
+            rememberPosition = prefs[Keys.CAST_HISTORY_REMEMBER_POSITION] ?: true,
+            keepPreviews = prefs[Keys.CAST_HISTORY_KEEP_PREVIEWS] ?: true,
+            excludeBridgedApps = prefs[Keys.CAST_HISTORY_EXCLUDE_BRIDGED] ?: true,
+            checkLinks = prefs[Keys.CAST_HISTORY_CHECK_LINKS] ?: false,
+        )
+    }
+
     // 3. Mutator methods
+    suspend fun setCastHistoryEnabled(value: Boolean) = write { it[Keys.CAST_HISTORY_ENABLED] = value }
+    suspend fun setCastHistoryLimit(value: Int) =
+        write { it[Keys.CAST_HISTORY_LIMIT] = CastHistorySettings.coerceLimit(value) }
+    suspend fun setCastHistoryRememberPosition(value: Boolean) =
+        write { it[Keys.CAST_HISTORY_REMEMBER_POSITION] = value }
+    suspend fun setCastHistoryKeepPreviews(value: Boolean) = write { it[Keys.CAST_HISTORY_KEEP_PREVIEWS] = value }
+    suspend fun setCastHistoryExcludeBridgedApps(value: Boolean) =
+        write { it[Keys.CAST_HISTORY_EXCLUDE_BRIDGED] = value }
+    suspend fun setCastHistoryCheckLinks(value: Boolean) = write { it[Keys.CAST_HISTORY_CHECK_LINKS] = value }
+    suspend fun setCastHistory(value: CastHistorySettings) = write {
+        it[Keys.CAST_HISTORY_ENABLED] = value.enabled
+        it[Keys.CAST_HISTORY_LIMIT] = CastHistorySettings.coerceLimit(value.limit)
+        it[Keys.CAST_HISTORY_REMEMBER_POSITION] = value.rememberPosition
+        it[Keys.CAST_HISTORY_KEEP_PREVIEWS] = value.keepPreviews
+        it[Keys.CAST_HISTORY_EXCLUDE_BRIDGED] = value.excludeBridgedApps
+        it[Keys.CAST_HISTORY_CHECK_LINKS] = value.checkLinks
+    }
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
     suspend fun setMaxAliveTabs(value: Int) = write { it[Keys.MAX_ALIVE_TABS] = value }
     suspend fun setPreferredAudioLang(value: String) = write { it[Keys.PREFERRED_AUDIO_LANG] = value }
