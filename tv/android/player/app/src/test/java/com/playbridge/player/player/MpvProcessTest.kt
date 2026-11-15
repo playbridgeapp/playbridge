@@ -73,4 +73,12 @@ class MpvProcessTest {
             ),
         )
     }
+
+    @Test
+    fun `mpvCanEmitError suppresses stale error while transitioning into replacement load`() {
+        val err = PlaybackState.Error("mpv_playback_failed", "mpv_playback_failed")
+        assertFalse(mpvCanEmitError(err, transitioning = true))
+        assertTrue(mpvCanEmitError(err, transitioning = false))
+        assertFalse(mpvCanEmitError(PlaybackState.Buffering, transitioning = false))
+    }
 }

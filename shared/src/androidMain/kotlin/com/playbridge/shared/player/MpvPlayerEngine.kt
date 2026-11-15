@@ -449,13 +449,15 @@ class MpvPlayerEngine(
         }
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
-                _fileLoaded.value = false
                 stopRequested = false
+                // Clear stale Error/Ended before clearing _fileLoaded or isTransitioning so
+                // observers combining state & fileLoaded never re-emit the outgoing error.
+                _state.value = PlaybackState.Buffering
+                _fileLoaded.value = false
                 isTransitioning = false // The outgoing END_FILE precedes the incoming START_FILE.
                 _position.value = 0L
                 _duration.value = -1L
                 _bufferAhead.value = 0L
-                _state.value = PlaybackState.Buffering
             }
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 _fileLoaded.value = true
