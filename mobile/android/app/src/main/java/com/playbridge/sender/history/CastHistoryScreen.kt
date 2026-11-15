@@ -107,7 +107,7 @@ import org.koin.compose.koinInject
 import java.io.File
 
 /**
- * Dashboard → Cast history. The list, the filters, the "Last watched" card, and the sheets for one
+ * Dashboard → Cast history. The list, the filters, and the sheets for one
  * cast. Casting itself is done by the callbacks, which reuse the app's existing cast paths.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -164,7 +164,6 @@ fun CastHistoryScreen(
         items.filter { it.matches(filter, now, checking) && it.matchesQuery(query) }.map { buildRow(it, ctx) }
     }
     val groups = remember(rows, now) { groupByDay(rows, now) }
-    val last = remember(entries, playingId) { lastWatched(entries, playingId) }
     val total = items.size
 
     // Back: close the search first; otherwise the host's back (Dashboard) applies.
@@ -256,15 +255,6 @@ fun CastHistoryScreen(
                             modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
-                }
-            }
-            if (filter == HistoryFilter.ALL && query.isBlank() && last != null) {
-                item(key = "last-watched") {
-                    LastWatchedCard(
-                        entry = last, now = now,
-                        onResume = { if (last.linkStatus(now) is LinkStatus.Expired) sheetId = last.id else onPlay(last.id, true) },
-                        onMore = { sheetId = last.id },
-                    )
                 }
             }
             if (rows.isEmpty()) {
@@ -525,57 +515,6 @@ private fun HistoryRowView(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun LastWatchedCard(entry: CastHistoryEntry, now: Long, onResume: () -> Unit, onMore: () -> Unit) {
-    val title = entry.title?.takeIf { it.isNotBlank() } ?: entry.host ?: "Untitled cast"
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Box {
-            Thumbnail(
-                entry.previewPath, TileKind.Video, badge = null, progress = entry.progressFraction,
-                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-            )
-            Text(
-                "Last watched",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-            if (entry.durationMs > 0) {
-                Text(
-                    "${formatClock(entry.positionMs)} / ${formatClock(entry.durationMs)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                )
-            }
-        }
-        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                "${castSubtitle(entry)} · ${formatAgo(entry.startedAtMs, now)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = onResume, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(resumeLabel(entry), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            IconButton(onClick = onMore) { Icon(Icons.Default.MoreVert, "More actions for $title") }
         }
     }
 }

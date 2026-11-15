@@ -284,27 +284,6 @@ class CastHistoryUiTest {
         assertEquals(3, groups.map { it.key }.toSet().size)
     }
 
-    // ---- last watched ----
-
-    @Test fun lastWatchedIsTheNewestUnfinishedReplayableCast() {
-        val list = listOf(
-            entry("new-done", finished = true, pos = 100_000, dur = 100_000, reported = true, startedAt = 900),
-            entry("new-failed", failed = true, startedAt = 800),
-            entry("new-noreplay", pos = 100_000, dur = 500_000, reported = true, canReplay = false, startedAt = 700),
-            entry("pick", pos = 100_000, dur = 500_000, reported = true, startedAt = 600),
-            entry("older", pos = 100_000, dur = 500_000, reported = true, startedAt = 500),
-        )
-        assertEquals("pick", lastWatched(list)!!.id)
-        assertEquals("older", lastWatched(list, playingId = "pick")!!.id)
-    }
-
-    @Test fun lastWatchedIsAbsentWithoutOne() {
-        assertNull(lastWatched(emptyList()))
-        assertNull(lastWatched(listOf(entry(finished = true, pos = 1, dur = 1, reported = true), entry(failed = true))))
-        // Under ten seconds in is not worth resuming.
-        assertNull(lastWatched(listOf(entry(pos = 3_000, dur = 100_000, reported = true))))
-    }
-
     // ---- actions ----
 
     private val seekTv = TargetInfo("Living Room TV", canQueue = true)

@@ -338,14 +338,6 @@ fun HistoryItem.matchesQuery(query: String): Boolean {
 fun mergeHistory(entries: List<CastHistoryEntry>, old: List<HistoryItem.Old>): List<HistoryItem> =
     (entries.map { HistoryItem.Cast(it) } + old).sortedByDescending { it.atMs }
 
-/**
- * The newest unfinished cast that can be replayed, for the "Last watched" card. The one playing
- * right now is not a candidate.
- */
-fun lastWatched(entries: List<CastHistoryEntry>, playingId: String? = null): CastHistoryEntry? =
-    entries.filter { it.isUnfinished() && it.canReplay && !it.failed && it.id != playingId }
-        .maxByOrNull { it.startedAtMs }
-
 // ---- actions --------------------------------------------------------------------------------
 
 enum class HistoryAction {
