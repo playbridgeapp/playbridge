@@ -463,11 +463,7 @@ impl Engine {
                 }));
                 let next_badged = self.acting_host();
                 self.badged_host = next_badged;
-                self.emit_member_info(
-                    self.cfg.me,
-                    next_badged == Some(self.cfg.me),
-                    &mut out,
-                );
+                self.emit_member_info(self.cfg.me, next_badged == Some(self.cfg.me), &mut out);
                 self.send_hello(None, &mut out);
                 if let Some(state) = state {
                     self.receive_state(state, local_ms, &mut out);
@@ -2197,7 +2193,9 @@ mod tests {
         let host_sees = deliver(&desktop, desktop_hello_to_host, &mut host, 150.0);
         assert_eq!(
             host_sees.iter().find_map(|o| match o {
-                Output::Event(Event::MemberInfo { member, kind, host, .. }) if *member == tv_id => {
+                Output::Event(Event::MemberInfo {
+                    member, kind, host, ..
+                }) if *member == tv_id => {
                     Some((*kind, *host))
                 }
                 _ => None,
@@ -2215,10 +2213,7 @@ mod tests {
             .iter()
             .find_map(|o| match o {
                 Output::Event(Event::MemberInfo {
-                    member,
-                    kind,
-                    host,
-                    ..
+                    member, kind, host, ..
                 }) if *member == tv_id => Some((*kind, *host)),
                 _ => None,
             })
@@ -2244,8 +2239,7 @@ mod tests {
         let del2_pk = del2_keys.signing_public();
         let order = vec![host_id, del1_id, del2_id, guest_id];
 
-        let mut host =
-            connected_engine(&invite, host_keys, "Host", false, order.clone());
+        let mut host = connected_engine(&invite, host_keys, "Host", false, order.clone());
         let mut del1 = connected_engine_with_kind(
             &invite,
             del1_keys,
@@ -2358,8 +2352,10 @@ mod tests {
         let _ = guest.handle(ServerFrame::Left { member: del1_id }, 401.0);
         let g_no_host = guest.handle(ServerFrame::Left { member: del2_id }, 402.0);
         assert_eq!(guest.acting_host(), None);
-        assert!(!g_no_host
-            .iter()
-            .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. }))));
+        assert!(
+            !g_no_host
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
+        );
     }
 }
