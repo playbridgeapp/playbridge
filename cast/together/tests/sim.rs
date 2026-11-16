@@ -1147,3 +1147,75 @@ fn live_stream_never_auto_clears() {
     assert!(!sim.saw(host, |e| matches!(e, Event::Ended { .. })));
     assert!(!sim.saw(host, |e| matches!(e, Event::VideoCleared)));
 }
+
+fn badged_hosts_seen_by(sim: &Sim, observer: usize) -> Vec<MemberId> {
+    let mut flags: std::collections::BTreeMap<MemberId, bool> = std::collections::BTreeMap::new();
+    for event in &sim.devices[observer].events {
+        match event {
+            Event::MemberInfo { member, host, .. } => {
+                flags.insert(*member, *host);
+            }
+            Event::MemberLeft(member) => {
+                flags.remove(member);
+            }
+            _ => {}
+        }
+    }
+    flags
+        .into_iter()
+        .filter_map(|(member, host)| host.then_some(member))
+        .collect()
+}
+
+#[test]
+fn host_badge_tracks_host_leave_return_and_earliest_delegate() {
+    let mut sim = Sim::new();
+    let host = sim.add("Host phone", true, false, 0.0);
+    let del1_keys = MemberKeys::generate();
+    let del1_pk = del1_keys.signing_public();
+    let del1 = sim.add_with("Delegate 1", del1_keys, true, 0.0);
+    let del2_keys = MemberKeys::generate();
+    let del2_pk = del2_keys.signing_public();
+    let del2 = sim.add_with("Delegate 2", del2_keys, true, 0.0);
+    let guest = sim.add("Guest", false, true, 0.0);
+    sim.run(2_000.0);
+
+    let host_id = sim.id(host);
+    let del1_id = sim.id(del1);
+    let del2_id = sim.id(del2);
+
+    sim.command(
+        host,
+        Command::Delegate {
+            member: del1_id,
+            sign_pk: del1_pk,
+        },
+    );
+    sim.command(
+        host,
+        Command::Delegate {
+            member: del2_id,
+            sign_pk: del2_pk,
+        },
+    );
+    sim.run(1_000.0);
+
+    // 1. Real host present: only host has `host: true`.
+    for idx in [host, del1, del2, guest] {
+        assert_eq!(badged_hosts_seen_by(&sim, idx), vec![host_id]);
+    }
+
+    // 2. Host leaves: earliest-joined delegate (del1) becomes acting host; del2 stays false.
+    sim.disconnect(host);
+    sim.run(1_000.0);
+    for idx in [del1, del2, guest] {
+        assert_eq!(badged_hosts_seen_by(&sim, idx), vec![del1_id]);
+    }
+
+    // 3. Real host returns: badge moves back from del1 to host on every member.
+    sim.connect(host);
+    sim.run(1_500.0);
+    for idx in [host, del1, del2, guest] {
+        assert_eq!(badged_hosts_seen_by(&sim, idx), vec![host_id]);
+    }
+}

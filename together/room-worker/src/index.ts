@@ -7,7 +7,7 @@ import {
   secondsUntilUtcMidnight,
   underLimit,
 } from "@playbridge-together/shared";
-import { assetLinks, roomLimits, type Env } from "./config";
+import { appleAppSiteAssociation, assetLinks, roomLimits, type Env } from "./config";
 import { invitePage, setupPage } from "./pages";
 
 export { Gate } from "./gate";
@@ -31,6 +31,10 @@ export default {
     if (url.pathname === "/.well-known/assetlinks.json") {
       const links = assetLinks(env);
       return links ? json(links) : errorResponse("not_found", 404);
+    }
+    if (url.pathname === "/.well-known/apple-app-site-association") {
+      const aasa = appleAppSiteAssociation(env);
+      return aasa ? json(aasa) : errorResponse("not_found", 404);
     }
     if (url.pathname === "/" || url.pathname === "/setup") {
       return html(setupPage(url.origin, limits));

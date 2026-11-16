@@ -11,46 +11,7 @@ final class TvTogether: ObservableObject {
     static let defaultPairingURL = "https://pair.playbridge.app"
     private static let pairingURLKey = "watch_together_pairing_url"
 
-    struct PartyState: Equatable {
-        var relay: String
-        var connected: Bool = false
-        var members: [String: String] = [:]
-        var memberOrder: [String] = []
-        var hostName: String? = nil
-        var title: String? = nil
-        var waitingFor: [String] = []
-        var notice: String? = nil
-
-        func toPartyUi() -> TogetherPartyUi {
-            let host = hostName.flatMap { $0.isEmpty ? nil : $0 }
-            let status: TogetherPartyStatus
-            if !connected {
-                status = .connecting(relay: relay)
-            } else if let title, !title.isEmpty {
-                status = .nowPlaying(title: title)
-            } else {
-                status = .waitingForHost
-            }
-            let orderedKeys = memberOrder.filter { members[$0] != nil }
-                + members.keys.filter { !memberOrder.contains($0) }.sorted()
-            let memberUis = orderedKeys.compactMap { key -> PartyMemberUi? in
-                guard let name = members[key] else { return nil }
-                return PartyMemberUi(
-                    id: key,
-                    name: name,
-                    isHost: host != nil && name == host,
-                    isWaiting: waitingFor.contains(name)
-                )
-            }
-            return TogetherPartyUi(
-                partyName: host.map { "\($0)’s watch party" } ?? "Watch party",
-                status: status,
-                members: memberUis,
-                waitingFor: waitingFor,
-                notice: notice
-            )
-        }
-    }
+    typealias PartyState = TogetherTvPartyState
 
     enum State: Equatable {
         case idle
@@ -245,7 +206,7 @@ final class TvTogether: ObservableObject {
         if let client { return client }
         do {
             let created = try TogetherClient { [weak self] event in
-                Task { @MainActor [weak self] in
+                DispatchQueue.main.async {
                     self?.onEvent(event)
                 }
             }
@@ -291,29 +252,30 @@ final class TvTogether: ObservableObject {
                 party.notice = "Reconnecting…"
             }
 
+        case .unreachable:
+            noticeClearTask?.cancel()
+            noticeClearTask = nil
+            updateParty { party in
+                party.notice = "Can't reach \(party.relay). Still trying…"
+            }
+
         case .member(let member, let name, _, let host):
             let wasConnected = currentParty?.connected == true
             let wasMember = currentParty?.members[member] != nil
+            let myID = me
             updateParty { party in
-                if party.members[member] == nil {
-                    party.memberOrder.append(member)
-                }
-                party.members[member] = name
-                if host && (party.hostName == nil || party.hostName?.isEmpty == true) {
-                    party.hostName = name
-                }
+                party.applyMember(member: member, name: name, host: host, selfMemberID: myID)
             }
             if wasConnected && !wasMember && member != me && !name.isEmpty {
                 showTransientNotice("\(name) joined", durationSeconds: 3)
             }
 
         case .memberLeft(let member):
-            let departedName = currentParty?.members[member]
+            var departedName: String?
             updateParty { party in
-                party.members.removeValue(forKey: member)
-                party.memberOrder.removeAll { $0 == member }
+                departedName = party.applyMemberLeft(member: member)
             }
-            if let departedName, !departedName.isEmpty {
+            if member != me, let departedName, !departedName.isEmpty {
                 showTransientNotice("\(departedName) left", durationSeconds: 3)
             }
 
@@ -331,10 +293,9 @@ final class TvTogether: ObservableObject {
             }
 
         case .waiting(let members):
+            let myID = me
             updateParty { party in
-                party.waitingFor = members
-                    .filter { $0 != me }
-                    .map { party.members[$0] ?? "a device" }
+                party.applyWaiting(memberIDs: members, selfMemberID: myID)
             }
 
         case .warning(let message):
@@ -352,7 +313,7 @@ final class TvTogether: ObservableObject {
                 state = .ended(message: message.isEmpty ? "Something went wrong." : message)
             }
 
-        case .stopped(let roomId, let reason):
+        case .stopped(let roomId, let reason, let retryAfterSecs):
             if !roomId.isEmpty, roomId != room { return }
             noticeClearTask?.cancel()
             noticeClearTask = nil
@@ -373,6 +334,8 @@ final class TvTogether: ObservableObject {
                     state = .ended(message: "This invite isn't valid any more.")
                 case .replaced:
                     state = .ended(message: "This TV joined the party somewhere else.")
+                case .roomLimit, .relayBusy:
+                    state = .ended(message: TogetherFormatting.limitMessage(reason, retryAfterSecs: retryAfterSecs) ?? "The watch party connection failed.")
                 case .error:
                     state = .ended(message: "The watch party connection failed.")
                 }

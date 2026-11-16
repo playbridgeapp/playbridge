@@ -109,6 +109,8 @@ enum TogetherStop: String, Equatable {
     case roomFull = "room_full"
     case expired
     case replaced
+    case roomLimit = "room_limit"
+    case relayBusy = "relay_busy"
     case error
 
     static func from(_ wire: String?) -> TogetherStop {
@@ -128,6 +130,7 @@ enum TogetherEvent: Equatable {
     )
     case connected(members: [String])
     case disconnected
+    case unreachable
     case memberJoined(member: String)
     case memberLeft(member: String)
     case member(member: String, name: String, kind: TogetherDeviceKind, host: Bool)
@@ -152,7 +155,7 @@ enum TogetherEvent: Equatable {
     case pairingInvite(from: String, relay: String)
     case pairSent(id: String?)
     case error(context: String, message: String, id: String?)
-    case stopped(roomId: String, reason: TogetherStop)
+    case stopped(roomId: String, reason: TogetherStop, retryAfterSecs: Int64 = 0)
 }
 
 enum TogetherJson {
@@ -228,6 +231,8 @@ enum TogetherJson {
             return .connected(members: strings(object, "members"))
         case "disconnected":
             return .disconnected
+        case "unreachable":
+            return .unreachable
         case "member_joined":
             guard let member = string(object, "member") else { return nil }
             return .memberJoined(member: member)
@@ -323,7 +328,8 @@ enum TogetherJson {
         case "stopped":
             return .stopped(
                 roomId: string(object, "room") ?? "",
-                reason: TogetherStop.from(string(object, "reason"))
+                reason: TogetherStop.from(string(object, "reason")),
+                retryAfterSecs: int64(object, "retry_after")
             )
         default:
             return nil
@@ -479,6 +485,27 @@ enum TogetherFormatting {
         }
         return chunks.joined(separator: "-")
     }
+
+    static func retryIn(_ retryAfterSecs: Int64) -> String {
+        let clamped = max(0, retryAfterSecs)
+        let minutes = (clamped + 59) / 60
+        let hours = (clamped + 1800) / 3600
+        if minutes <= 1 { return "in a minute" }
+        if minutes < 60 { return "in \(minutes) minutes" }
+        if hours <= 1 { return "in about an hour" }
+        return "in about \(hours) hours"
+    }
+
+    static func limitMessage(_ reason: TogetherStop, retryAfterSecs: Int64) -> String? {
+        switch reason {
+        case .roomLimit:
+            return "Too many watch parties are open on your network. End one, or try again \(retryIn(retryAfterSecs))."
+        case .relayBusy:
+            return "The watch party relay is busy today. Try again \(retryIn(retryAfterSecs))."
+        default:
+            return nil
+        }
+    }
 }
 
 /// Pure decision logic for reporting `loaded` with duration once known,
@@ -631,33 +658,5 @@ enum TogetherPlaybackPolicy {
         guard itemLoaded else { return false }
         if durationSeconds.isFinite, durationSeconds > 0 { return false }
         return true
-    }
-}
-
-/// Identifies the primary action that receives focus on entry and state transitions in `WatchTogetherView`.
-enum TogetherStepFocusTarget: String, Hashable, CaseIterable {
-    case unavailableBack
-    case joinParty
-    case cancelRegistering
-    case cancelCode
-    case joinInvite
-    case leaveParty
-    case endedOk
-
-    static func target(isAvailable: Bool, stepKey: String) -> TogetherStepFocusTarget {
-        guard isAvailable else { return .unavailableBack }
-        switch stepKey {
-        case "idle": return .joinParty
-        case "registering": return .cancelRegistering
-        case "code": return .cancelCode
-        case "invited": return .joinInvite
-        case "inParty": return .leaveParty
-        case "ended": return .endedOk
-        default: return .joinParty
-        }
-    }
-
-    static func shouldRefocus(previousStepKey: String?, currentStepKey: String) -> Bool {
-        previousStepKey != currentStepKey
     }
 }

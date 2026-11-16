@@ -87,10 +87,63 @@ final class TogetherClient {
     static let expectedAbiVersion: UInt32 = 1
     private static let pollMs: UInt64 = 500
 
-    private let native: TogetherNativeBoundary
-    private let lock = NSLock()
-    private var handle: OpaquePointer?
-    private var closed = false
+    private final class HandleBox {
+        let native: TogetherNativeBoundary
+        private let lock = NSLock()
+        private var handle: OpaquePointer?
+        private var closed = false
+        private var freed = false
+
+        init(native: TogetherNativeBoundary, handle: OpaquePointer) {
+            self.native = native
+            self.handle = handle
+        }
+
+        func submit(_ json: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !closed, !freed, let current = handle else { return false }
+            return native.submitJson(handle: current, commandJson: json)
+        }
+
+        func shouldContinue(_ expected: OpaquePointer) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !closed && !freed && handle == expected
+        }
+
+        func close() {
+            lock.lock()
+            guard !closed, !freed, let current = handle else {
+                closed = true
+                lock.unlock()
+                return
+            }
+            closed = true
+            native.cancel(handle: current)
+            lock.unlock()
+        }
+
+        func finishAndFree() {
+            lock.lock()
+            guard !freed, let current = handle else {
+                closed = true
+                freed = true
+                lock.unlock()
+                return
+            }
+            if !closed {
+                closed = true
+                native.cancel(handle: current)
+            }
+            handle = nil
+            freed = true
+            native.free(handle: current)
+            lock.unlock()
+        }
+    }
+
+    private let box: HandleBox
     private let onEvent: (TogetherEvent) -> Void
 
     init(native: TogetherNativeBoundary = RustTogetherBoundary(), onEvent: @escaping (TogetherEvent) -> Void) throws {
@@ -102,16 +155,15 @@ final class TogetherClient {
         guard let started = native.start() else {
             throw TogetherClientError.unavailable
         }
-        self.native = native
-        self.handle = started
+        let box = HandleBox(native: native, handle: started)
+        self.box = box
         self.onEvent = onEvent
 
-        let thread = Thread { [weak self, native] in
+        let thread = Thread { [weak self, box] in
             if let self {
                 self.runPump(started: started)
             } else {
-                native.cancel(handle: started)
-                native.free(handle: started)
+                box.finishAndFree()
             }
         }
         thread.name = "PlayBridge.TogetherPump"
@@ -124,27 +176,10 @@ final class TogetherClient {
     }
 
     private func runPump(started: OpaquePointer) {
-        defer {
-            lock.lock()
-            let shouldFree = (handle == started)
-            if shouldFree {
-                handle = nil
-            }
-            closed = true
-            if shouldFree {
-                native.cancel(handle: started)
-                native.free(handle: started)
-            }
-            lock.unlock()
-        }
+        defer { box.finishAndFree() }
 
-        while true {
-            lock.lock()
-            let shouldContinue = !closed && handle == started
-            lock.unlock()
-            guard shouldContinue else { break }
-
-            guard let text = native.nextEvent(handle: started, waitMs: Self.pollMs) else {
+        while box.shouldContinue(started) {
+            guard let text = box.native.nextEvent(handle: started, waitMs: Self.pollMs) else {
                 continue
             }
             if let event = TogetherJson.event(from: text) {
@@ -173,8 +208,10 @@ final class TogetherClient {
     }
 
     @discardableResult
-    func pairAccept(device: TogetherDevice) -> Bool {
-        submit(TogetherJson.command("pair_accept", fields: TogetherJson.deviceFields(device)))
+    func pairAccept(device: TogetherDevice, guest: Bool = false) -> Bool {
+        var fields = TogetherJson.deviceFields(device)
+        fields["guest"] = guest
+        return submit(TogetherJson.command("pair_accept", fields: fields))
     }
 
     @discardableResult
@@ -287,21 +324,11 @@ final class TogetherClient {
     }
 
     func close() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !closed, let current = handle else {
-            closed = true
-            return
-        }
-        closed = true
-        native.cancel(handle: current)
+        box.close()
     }
 
     private func submit(_ json: String?) -> Bool {
         guard let json else { return false }
-        lock.lock()
-        defer { lock.unlock() }
-        guard !closed, let current = handle else { return false }
-        return native.submitJson(handle: current, commandJson: json)
+        return box.submit(json)
     }
 }

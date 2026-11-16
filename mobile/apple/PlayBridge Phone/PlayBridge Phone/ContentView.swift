@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var store: BrowserStore
+    @EnvironmentObject private var together: PhoneTogether
     @StateObject private var pageCasting = PageCastCoordinator()
     @StateObject private var atv = AtvRemoteCoordinator()
     @StateObject private var remoteTVBrowser = AtvBonjourBrowser()
@@ -14,7 +15,7 @@ struct ContentView: View {
     private var showsMiniBar: Bool {
         switch nav.currentScreen {
         case .browser: return false
-        case .dashboard, .remote, .history, .bookmarks, .browserSettings:
+        case .dashboard, .remote, .history, .bookmarks, .browserSettings, .watchTogether:
             return false
         default:
             return true
@@ -48,6 +49,17 @@ struct ContentView: View {
                 ""
 #endif
             }, onDismiss: { vm.websitePlayerItem = nil })
+        }
+        .fullScreenCover(item: $together.activePlayerItem, onDismiss: {
+            together.userClosedPlayer()
+        }) { item in
+            FullScreenVideoPlayerView(
+                session: item.session,
+                diagnosticsReport: { "" },
+                onDismiss: { together.userClosedPlayer() },
+                autoPlayOnAppear: false,
+                closeSessionOnDisappear: false
+            )
         }
         .sheet(item: $nav.playOnRequest) { request in
             DeviceConnectionSheet(initialPage: request.page, openedForPicking: request.openedForPicking)
@@ -89,6 +101,10 @@ struct ContentView: View {
             }
             reconnectOnActivation()
             updateAtv()
+            if together.pendingOpenScreen {
+                together.consumePendingOpenScreen()
+                nav.navigate(to: .watchTogether)
+            }
         }
         .onReceive(atv.$records) { records in
             vm.remoteTVRecords = records
@@ -109,14 +125,21 @@ struct ContentView: View {
         .onReceive(vm.$nativeReceiverSelected) { selected in updateAtv(selection: (selected, vm.pairedDevice)) }
         .onReceive(nav.$currentScreen) { screen in updateAtv(screen: screen) }
         .onChange(of: vm.state) { state in presentPairingIfNeeded(state) }
+        .onChange(of: together.pendingOpenScreen) { open in
+            guard open else { return }
+            together.consumePendingOpenScreen()
+            nav.navigate(to: .watchTogether)
+        }
         .onChange(of: scenePhase) { phase in
             if phase != .active { vm.pendingPlayBridgeLaunch = nil }
             updateAtv()
             updateRemoteTVDiscovery()
             if phase == .background {
                 attemptedReconnectInForeground = false
+                together.applicationEnteredBackground()
             } else if phase == .active {
                 reconnectOnActivation()
+                together.applicationBecameActive()
             }
         }
     }
@@ -187,6 +210,7 @@ struct ContentView: View {
         case .history: HistoryScreen()
         case .bookmarks: BookmarksScreen()
         case .browserSettings: BrowserSettingsScreen()
+        case .watchTogether: WatchTogetherScreen()
         }
     }
 }

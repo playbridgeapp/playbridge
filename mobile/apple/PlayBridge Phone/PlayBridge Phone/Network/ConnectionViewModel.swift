@@ -128,6 +128,11 @@ final class ConnectionViewModel: ObservableObject {
         publish: { [weak self] results in self?.onlineStatus = results }
     )
     private static let savedReconnectDiscoveryTimeout: TimeInterval = 10
+    private var pendingWatchTogetherJoin: (
+        id: UUID,
+        deviceName: String?,
+        continuation: CheckedContinuation<WatchTogetherTvJoinResult, Error>
+    )?
 
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
 
@@ -171,6 +176,10 @@ final class ConnectionViewModel: ObservableObject {
             store.saveSavedDevices(savedDevices)
         }
 
+        coordinator.onWatchTogetherJoined = { [weak self] json in
+            self?.handleWatchTogetherJoined(json)
+        }
+
         ws.onMessage = { [weak self] text in
             guard let self, !isExternalReceiver, !isAirPlay else { return }
             let sessionID = ws.capabilitySessionID
@@ -205,7 +214,10 @@ final class ConnectionViewModel: ObservableObject {
                 guard let self else { return }
                 if isExternalReceiver || isAirPlay {
                     // The sheet reads the socket while AirPlay is the output. Refresh when that link drops.
-                    if !value.isConnected { self.objectWillChange.send() }
+                    if !value.isConnected {
+                        self.failPendingWatchTogetherJoin(WatchTogetherTvJoinError.disconnected())
+                        self.objectWillChange.send()
+                    }
                     return
                 }
                 state = value
@@ -213,6 +225,7 @@ final class ConnectionViewModel: ObservableObject {
                 if !value.isConnected {
                     pendingSubtitleConfirmations.values.forEach { $0.cancel() }
                     pendingSubtitleConfirmations.removeAll()
+                    failPendingWatchTogetherJoin(WatchTogetherTvJoinError.disconnected())
                 }
             }
             .store(in: &cancellables)
@@ -1943,6 +1956,128 @@ extension ConnectionViewModel: PageCastTransport {
         noteNewCast(mediaKind: item["mediaKind"] as? String ?? "video", title: item["title"] as? String)
         routedStreamRegistrations.removeAll()
         recordCast(command)
+    }
+
+    var connectedPlayBridgeTvName: String? {
+        guard playBridgeLinkConnected, !isAirPlay else { return nil }
+        return pairedDevice?.name
+    }
+
+    var connectedPlayBridgeTvIdentity: WatchTogetherConnectedTv? {
+        guard playBridgeLinkConnected, !isAirPlay, let device = pairedDevice else { return nil }
+        let endpoint = device.ip.isEmpty ? nil : "\(device.ip):\(device.port)"
+        return WatchTogetherConnectedTv(
+            name: device.name,
+            uuid: device.uuid,
+            endpointKey: endpoint
+        )
+    }
+
+    var tvSupportsWatchTogether: Bool {
+        guard playBridgeLinkConnected, !isAirPlay else { return false }
+        return pairedDevice?.features?.contains("watch_together_v1") == true
+    }
+
+    @MainActor
+    func addTvToWatchTogether(invite: String, from: String) async throws -> WatchTogetherTvJoinResult {
+        let deviceName = pairedDevice?.name
+        guard tvSupportsWatchTogether, !invite.isEmpty else {
+            throw WatchTogetherTvJoinError.unavailable(deviceName: deviceName)
+        }
+        failPendingWatchTogetherJoin(WatchTogetherTvJoinError.replaced)
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pendingWatchTogetherJoin = (id, deviceName, continuation)
+                guard ws.send(WireProtocol.watchTogetherJoin(invite: invite, from: from)) else {
+                    failPendingWatchTogetherJoin(WatchTogetherTvJoinError.disconnected(deviceName: deviceName), id: id)
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    self?.failPendingWatchTogetherJoin(WatchTogetherTvJoinError.timedOut(deviceName: deviceName), id: id)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.failPendingWatchTogetherJoin(CancellationError(), id: id)
+            }
+        }
+    }
+
+    private func handleWatchTogetherJoined(_ json: [String: Any]) {
+        guard let pending = pendingWatchTogetherJoin else { return }
+        pendingWatchTogetherJoin = nil
+        if (json["ok"] as? Bool) == true,
+           let member = json["member"] as? String, !member.isEmpty,
+           let boxKey = json["box_pk"] as? String, !boxKey.isEmpty,
+           let signKey = json["sign_pk"] as? String, !signKey.isEmpty {
+            pending.continuation.resume(returning: WatchTogetherTvJoinResult(
+                member: member, boxKey: boxKey, signKey: signKey
+            ))
+        } else {
+            let reason = (json["error"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "unavailable"
+            pending.continuation.resume(throwing: WatchTogetherTvJoinError.rejected(reason, deviceName: pending.deviceName))
+        }
+    }
+
+    private func failPendingWatchTogetherJoin(_ error: Error, id: UUID? = nil) {
+        guard let pending = pendingWatchTogetherJoin else { return }
+        if let id, pending.id != id { return }
+        pendingWatchTogetherJoin = nil
+        if let joinError = error as? WatchTogetherTvJoinError {
+            pending.continuation.resume(throwing: joinError.withDeviceNameIfMissing(pending.deviceName))
+        } else {
+            pending.continuation.resume(throwing: error)
+        }
+    }
+}
+
+extension ConnectionViewModel: WatchTogetherTvBridge {}
+
+enum WatchTogetherTvJoinError: LocalizedError, Equatable {
+    case unavailable(deviceName: String? = nil)
+    case disconnected(deviceName: String? = nil)
+    case timedOut(deviceName: String? = nil)
+    case replaced
+    case rejected(String, deviceName: String? = nil)
+
+    func withDeviceNameIfMissing(_ name: String?) -> WatchTogetherTvJoinError {
+        switch self {
+        case .unavailable(nil): return .unavailable(deviceName: name)
+        case .disconnected(nil): return .disconnected(deviceName: name)
+        case .timedOut(nil): return .timedOut(deviceName: name)
+        case .rejected(let code, nil): return .rejected(code, deviceName: name)
+        default: return self
+        }
+    }
+
+    private static func label(for deviceName: String?) -> String {
+        let trimmed = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "That device" : trimmed
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let deviceName):
+            return "\(Self.label(for: deviceName)) does not support Watch Together yet."
+        case .disconnected(let deviceName):
+            return "Lost connection to \(Self.label(for: deviceName))."
+        case .timedOut(let deviceName):
+            return "\(Self.label(for: deviceName)) didn't answer the party invite in time."
+        case .replaced:
+            return "Cancelled by a newer join request."
+        case .rejected(let code, let deviceName):
+            let label = Self.label(for: deviceName)
+            switch code {
+            case "busy": return "\(label) is busy or already in another watch party."
+            case "unreachable": return "\(label) couldn't reach the watch party server."
+            case "room_limit": return "This watch party is full."
+            case "relay_busy": return "The watch party server is busy. Try again in a moment."
+            case "invalid_invite": return "The party invite couldn't be read by \(label)."
+            default: return "\(label) couldn't join the watch party (\(code))."
+            }
+        }
     }
 }
 

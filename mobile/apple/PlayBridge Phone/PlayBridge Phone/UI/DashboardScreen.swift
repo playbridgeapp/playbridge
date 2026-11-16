@@ -8,6 +8,7 @@ struct DashboardScreen: View {
     @EnvironmentObject private var iptv: IptvStore
     @EnvironmentObject private var collections: CollectionsStore
     @EnvironmentObject private var library: PhoneMediaLibrary
+    @EnvironmentObject private var together: PhoneTogether
     @State private var appToInspect: BridgedApp?
     @State private var showCustomize = false
     @AppStorage("dashboard_tile_order") private var savedOrder = "[]"
@@ -185,6 +186,12 @@ struct DashboardScreen: View {
                           systemImage: "play.rectangle.fill",
                           gradient: [Color(hex: 0x7B0D45), Color(hex: 0x9C1155)], isOpen: isSource(.collections),
                           action: { nav.navigate(to: .collections) }),
+            DashboardTile(id: "watch-together", title: "Watch Together",
+                          subtitle: together.isInParty ? "In a party" : "Watch in sync",
+                          systemImage: "person.3.fill",
+                          gradient: [Color(hex: 0x1B5E20), Color(hex: 0x2E7D32)],
+                          isOpen: isSource(.watchTogether) || together.isInParty,
+                          action: { nav.navigate(to: .watchTogether) }),
             DashboardTile(id: "cast-history", title: "Cast History", subtitle: lastCastSubtitle, systemImage: "clock.arrow.circlepath",
                           gradient: [Color(hex: 0x4E342E), Color(hex: 0x6D4C41)], isOpen: isSource(.castHistory),
                           action: { nav.navigate(to: .castHistory) }),
@@ -335,10 +342,12 @@ private struct DashboardTileCard: View {
                             .font(Theme.font(size: tall ? 17 : 14, weight: .semibold))
                             .foregroundColor(tile.isAddPlaceholder ? Theme.onSurface : .white)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                         Text(tile.subtitle)
                             .font(Theme.font(size: tall ? 13 : 12))
                             .foregroundColor(tile.isAddPlaceholder ? Theme.onSurfaceVariant : Color.white.opacity(0.86))
                             .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
                 }
                 .padding(tall ? 16 : 12)

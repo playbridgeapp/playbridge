@@ -19,6 +19,7 @@ enum AppScreen: Hashable {
     case history
     case bookmarks
     case browserSettings
+    case watchTogether
 }
 
 final class NavigationViewModel: ObservableObject {

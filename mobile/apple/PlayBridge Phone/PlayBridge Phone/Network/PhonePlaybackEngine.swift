@@ -15,6 +15,7 @@ struct PhonePlaybackState {
     var duration: Double = 0
     var paused = true
     var buffering = false
+    var loaded = false
     var audioTracks: [PhonePlaybackTrack] = []
     var subtitleTracks: [PhonePlaybackTrack] = []
     var selectedAudio: Int?
@@ -66,6 +67,7 @@ enum PhonePlaybackNetworkIssue: Equatable {
     func play()
     func pause()
     func seek(to seconds: Double)
+    func setSpeed(_ speed: Double)
     func selectAudio(_ id: Int?)
     func selectSubtitle(_ id: Int?)
     func close()
@@ -74,4 +76,113 @@ enum PhonePlaybackNetworkIssue: Equatable {
 extension PhoneAlternativePlaybackEngine {
     var failureContext: String { "playback" }
     var networkIssue: PhonePlaybackNetworkIssue? { nil }
+    func setSpeed(_ speed: Double) {}
+}
+
+/// Filters captured browser transport artifacts out of `mpv`'s `http-header-fields`
+/// (especially `Range: bytes=0-`, which would otherwise pin seeks back to byte 0) while
+/// rejecting control characters and routing `User-Agent` separately.
+enum PhoneMPVHTTPHeaders {
+    private static let excludedNames: Set<String> = [
+        "user-agent",
+        "range",
+        "if-range",
+        "host",
+        "connection",
+        "accept-encoding",
+        "content-length",
+        "transfer-encoding",
+        "te",
+        "upgrade-insecure-requests",
+        "priority",
+        "pragma",
+    ]
+
+    private static func hasControlCharacter(_ text: String) -> Bool {
+        text.unicodeScalars.contains { $0 == "\r" || $0 == "\n" || $0 == "\0" }
+    }
+
+    static func filteredEntries(from headers: [String: String]) -> [String]? {
+        var result: [String] = []
+        for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else { continue }
+            guard !hasControlCharacter(name), !hasControlCharacter(value) else {
+                return nil
+            }
+            let lower = trimmedName.lowercased()
+            if excludedNames.contains(lower) || lower.hasPrefix("sec-") {
+                continue
+            }
+            result.append("\(trimmedName): \(value)")
+        }
+        return result
+    }
+
+    static func userAgent(from headers: [String: String], default defaultUA: String = "PlayBridge") -> String {
+        let candidate = headers.first { $0.key.lowercased() == "user-agent" }?.value ?? defaultUA
+        if hasControlCharacter(candidate) || candidate.isEmpty {
+            return defaultUA
+        }
+        return candidate
+    }
+}
+
+/// Tracks an in-flight mpv seek until playback restarts or times out so stale
+/// pre-seek `time-pos` readings and paused cache states do not cause re-seek loops.
+struct PhoneMPVSeekState: Equatable {
+    static let unseekableDropSeconds: TimeInterval = 0.75
+    static let maxSeekDurationSeconds: TimeInterval = 15.0
+
+    private(set) var targetSeconds: Double?
+    private(set) var mpvSeeking = false
+    private var issuedAt: TimeInterval?
+
+    var isSeeking: Bool { targetSeconds != nil || mpvSeeking }
+
+    mutating func beginSeek(to seconds: Double, now: TimeInterval) {
+        targetSeconds = max(0, seconds)
+        mpvSeeking = false
+        issuedAt = now
+    }
+
+    mutating func markMPVSeekingEvent(now: TimeInterval? = nil) {
+        mpvSeeking = true
+        if issuedAt == nil, let now {
+            issuedAt = now
+        }
+    }
+
+    mutating func finishSeek() {
+        targetSeconds = nil
+        mpvSeeking = false
+        issuedAt = nil
+    }
+
+    mutating func reset() {
+        finishSeek()
+    }
+
+    mutating func sample(
+        mpvSeeking: Bool,
+        timePos: Double?,
+        paused: Bool,
+        pausedForCache: Bool,
+        now: TimeInterval
+    ) -> (position: Double?, buffering: Bool) {
+        self.mpvSeeking = mpvSeeking
+        if mpvSeeking && issuedAt == nil {
+            issuedAt = now
+        }
+        if let issuedAt, now - issuedAt >= Self.maxSeekDurationSeconds {
+            finishSeek()
+        } else if targetSeconds != nil, !mpvSeeking, let issuedAt, now - issuedAt >= Self.unseekableDropSeconds {
+            targetSeconds = nil
+            self.issuedAt = nil
+        }
+        let active = targetSeconds != nil || self.mpvSeeking
+        let resolvedPosition = targetSeconds ?? timePos
+        let resolvedBuffering = active || (!paused && pausedForCache)
+        return (resolvedPosition, resolvedBuffering)
+    }
 }

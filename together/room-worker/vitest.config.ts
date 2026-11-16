@@ -14,6 +14,7 @@ export default defineConfig({
           DAILY_BUDGET: "1000000",
           ANDROID_APP_PACKAGE: "com.playbridge.sender",
           ANDROID_CERT_SHA256: Array.from({ length: 32 }, () => "ab").join(":"),
+          APPLE_APP_IDS: "4VL6AT677Y.app.playbridge.phone",
         },
       },
     }),

@@ -192,6 +192,7 @@ pub struct Engine {
     // Host-signed state and the signed messages that established it.
     snapshot: Snapshot,
     delegates: HashMap<MemberId, [u8; 32]>,
+    badged_host: Option<MemberId>,
     locked: bool,
     lock_rev: u64,
     policy: ChangePolicy,
@@ -252,6 +253,7 @@ impl Engine {
             last_seq: HashMap::new(),
             snapshot: Snapshot::default(),
             delegates: HashMap::new(),
+            badged_host: None,
             locked: false,
             lock_rev: 0,
             policy: ChangePolicy::default(),
@@ -347,6 +349,15 @@ impl Engine {
         self.is_host() || self.delegates.get(&self.cfg.me) == Some(&self.cfg.keys.signing_public())
     }
 
+    fn is_real_host(&self, member: &MemberId) -> bool {
+        if *member == self.cfg.me {
+            return self.is_host();
+        }
+        self.peers
+            .get(member)
+            .is_some_and(|p| p.sign_pk == self.cfg.invite.host)
+    }
+
     fn is_hostish(&self, member: &MemberId) -> bool {
         if *member == self.cfg.me {
             return self.can_sign_as_host();
@@ -365,6 +376,53 @@ impl Engine {
             .find(|m| self.is_hostish(m))
             .or_else(|| self.members.first())
             .copied()
+    }
+
+    /// The member wearing the party's Host badge: the real host while present,
+    /// otherwise the acting host chosen by the engine (`leader()` when a host or
+    /// delegated device is present), else `None`.
+    pub fn acting_host(&self) -> Option<MemberId> {
+        if let Some(&host_id) = self.members.iter().find(|m| self.is_real_host(m)) {
+            return Some(host_id);
+        }
+        self.leader().filter(|m| self.is_hostish(m))
+    }
+
+    fn emit_member_info(&self, member: MemberId, host: bool, out: &mut Vec<Output>) {
+        if member == self.cfg.me {
+            out.push(Output::Event(Event::MemberInfo {
+                member: self.cfg.me,
+                name: self.cfg.name.clone(),
+                kind: self.cfg.kind,
+                host,
+            }));
+        } else if let Some(peer) = self.peers.get(&member) {
+            out.push(Output::Event(Event::MemberInfo {
+                member,
+                name: peer.name.clone(),
+                kind: peer.kind,
+                host,
+            }));
+        }
+    }
+
+    fn sync_badged_host(&mut self, skip_emit: Option<MemberId>, out: &mut Vec<Output>) {
+        let prev = self.badged_host;
+        let next = self.acting_host();
+        self.badged_host = next;
+        if prev != next {
+            if let Some(old) = prev
+                && Some(old) != skip_emit
+                && self.members.contains(&old)
+            {
+                self.emit_member_info(old, false, out);
+            }
+            if let Some(new) = next
+                && Some(new) != skip_emit
+            {
+                self.emit_member_info(new, true, out);
+            }
+        }
     }
 
     /// Members are screens until their hello says otherwise.
@@ -403,6 +461,13 @@ impl Engine {
                 out.push(Output::Event(Event::Connected {
                     members: self.members.clone(),
                 }));
+                let next_badged = self.acting_host();
+                self.badged_host = next_badged;
+                self.emit_member_info(
+                    self.cfg.me,
+                    next_badged == Some(self.cfg.me),
+                    &mut out,
+                );
                 self.send_hello(None, &mut out);
                 if let Some(state) = state {
                     self.receive_state(state, local_ms, &mut out);
@@ -423,6 +488,7 @@ impl Engine {
                 if !self.members.contains(&member) {
                     self.members.push(member);
                 }
+                self.sync_badged_host(None, &mut out);
                 out.push(Output::Event(Event::MemberJoined(member)));
                 self.send_hello(Some(member), &mut out);
                 // Our own devices get the sign-in for a video we are sharing.
@@ -437,6 +503,7 @@ impl Engine {
                 self.members.retain(|m| *m != member);
                 self.buffering.remove(&member);
                 self.ready.remove(&member);
+                self.sync_badged_host(None, &mut out);
                 self.sync_duration(&mut out);
                 out.push(Output::Event(Event::MemberLeft(member)));
             }
@@ -846,17 +913,17 @@ impl Engine {
                         sign_pk,
                     },
                 );
-                let host =
-                    sign_pk == self.cfg.invite.host || self.delegates.get(&from) == Some(&sign_pk);
+                if !known && !self.members.contains(&from) {
+                    self.members.push(from);
+                }
+                self.sync_badged_host(Some(from), out);
+                let host = self.badged_host == Some(from);
                 out.push(Output::Event(Event::MemberInfo {
                     member: from,
                     name,
                     kind,
                     host,
                 }));
-                if !known && !self.members.contains(&from) {
-                    self.members.push(from);
-                }
                 if self.own_keys.contains(&box_pk) && !self.own.contains_key(&from) {
                     self.add_own(from, box_pk, out);
                 }
@@ -891,6 +958,7 @@ impl Engine {
                 if self.delegates.insert(member, pk) != Some(pk) {
                     self.snapshot.delegates.push(signed.clone());
                 }
+                self.sync_badged_host(None, out);
             }
             Body::Lock { locked } => {
                 if !self.host_signed(signed) {
@@ -1725,13 +1793,24 @@ mod tests {
         screen: bool,
         members: Vec<MemberId>,
     ) -> Engine {
+        connected_engine_with_kind(invite, keys, name, DeviceKind::Phone, screen, members)
+    }
+
+    fn connected_engine_with_kind(
+        invite: &Invite,
+        keys: MemberKeys,
+        name: &str,
+        kind: DeviceKind,
+        screen: bool,
+        members: Vec<MemberId>,
+    ) -> Engine {
         let me = MemberId::from_bytes(keys.box_public()[..16].try_into().unwrap());
         let mut engine = Engine::new(EngineConfig {
             invite: invite.clone(),
             me,
             keys,
             name: name.into(),
-            kind: DeviceKind::Phone,
+            kind,
             screen,
             seq_start: 1,
         });
@@ -2079,5 +2158,208 @@ mod tests {
                 .any(|o| matches!(o, Output::Event(Event::VideoCleared)))
         );
         assert!(host.item.is_some());
+    }
+
+    #[test]
+    fn delegated_member_is_hostish_without_member_info_host_flag() {
+        let host_keys = MemberKeys::generate();
+        let tv_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let tv_id = MemberId::from_bytes(tv_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+
+        let tv_sign_pk = tv_keys.signing_public();
+        let members = vec![host_id, tv_id];
+        let mut host = connected_engine(&invite, host_keys, "Host phone", false, members.clone());
+        let mut desktop = connected_engine_with_kind(
+            &invite,
+            tv_keys,
+            "Desktop",
+            DeviceKind::Desktop,
+            true,
+            members,
+        );
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, vec![]);
+
+        let del_out = host.command(
+            Command::Delegate {
+                member: tv_id,
+                sign_pk: tv_sign_pk,
+            },
+            100.0,
+        );
+        deliver(&host, del_out, &mut guest, 100.0);
+
+        // Host receives Desktop's Hello AFTER Command::Delegate: must see host=false.
+        let desktop_hello_to_host = desktop.handle(ServerFrame::Joined { member: host_id }, 150.0);
+        let host_sees = deliver(&desktop, desktop_hello_to_host, &mut host, 150.0);
+        assert_eq!(
+            host_sees.iter().find_map(|o| match o {
+                Output::Event(Event::MemberInfo { member, kind, host, .. }) if *member == tv_id => {
+                    Some((*kind, *host))
+                }
+                _ => None,
+            }),
+            Some((DeviceKind::Desktop, false))
+        );
+
+        // Guest receives Host's Hello so Host is a present known member.
+        let host_hello = host.handle(ServerFrame::Joined { member: guest_id }, 120.0);
+        deliver(&host, host_hello, &mut guest, 120.0);
+
+        let desktop_hello = desktop.handle(ServerFrame::Joined { member: guest_id }, 200.0);
+        let from_desktop = deliver(&desktop, desktop_hello, &mut guest, 200.0);
+        let info = from_desktop
+            .iter()
+            .find_map(|o| match o {
+                Output::Event(Event::MemberInfo {
+                    member,
+                    kind,
+                    host,
+                    ..
+                }) if *member == tv_id => Some((*kind, *host)),
+                _ => None,
+            })
+            .expect("guest should observe delegate's MemberInfo");
+        assert_eq!(info, (DeviceKind::Desktop, false));
+        assert!(guest.is_hostish(&tv_id));
+    }
+
+    #[test]
+    fn acting_host_transitions_on_host_leave_return_and_late_delegate() {
+        let host_keys = MemberKeys::generate();
+        let del1_keys = MemberKeys::generate();
+        let del2_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let del1_id = MemberId::from_bytes(del1_keys.box_public()[..16].try_into().unwrap());
+        let del2_id = MemberId::from_bytes(del2_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+
+        let del1_pk = del1_keys.signing_public();
+        let del2_pk = del2_keys.signing_public();
+        let order = vec![host_id, del1_id, del2_id, guest_id];
+
+        let mut host =
+            connected_engine(&invite, host_keys, "Host", false, order.clone());
+        let mut del1 = connected_engine_with_kind(
+            &invite,
+            del1_keys,
+            "Desktop",
+            DeviceKind::Desktop,
+            true,
+            order.clone(),
+        );
+        let mut del2 = connected_engine_with_kind(
+            &invite,
+            del2_keys,
+            "TV",
+            DeviceKind::Tv,
+            true,
+            order.clone(),
+        );
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, order);
+
+        // Exchange Hellos so guest and del1 know everyone.
+        for peer in [&mut host, &mut del1, &mut del2] {
+            let hello = peer.handle(ServerFrame::Joined { member: guest_id }, 50.0);
+            deliver(peer, hello, &mut guest, 50.0);
+        }
+        let host_hello = host.handle(ServerFrame::Joined { member: del1_id }, 50.0);
+        deliver(&host, host_hello, &mut del1, 50.0);
+        let del2_hello = del2.handle(ServerFrame::Joined { member: del1_id }, 50.0);
+        deliver(&del2, del2_hello, &mut del1, 50.0);
+
+        // Delegate del2 first (later member), then del1 AFTER host leaves (late delegation test on guest).
+        let out2 = host.command(
+            Command::Delegate {
+                member: del2_id,
+                sign_pk: del2_pk,
+            },
+            100.0,
+        );
+        deliver(&host, out2.clone(), &mut del1, 100.0);
+        deliver(&host, out2, &mut guest, 100.0);
+
+        // Real host is still present: badged host is still host_id.
+        assert_eq!(guest.acting_host(), Some(host_id));
+        assert_eq!(del1.acting_host(), Some(host_id));
+
+        // Real host leaves: del2 becomes badged acting host.
+        let g_left = guest.handle(ServerFrame::Left { member: host_id }, 200.0);
+        assert!(g_left.contains(&Output::Event(Event::MemberInfo {
+            member: del2_id,
+            name: "TV".into(),
+            kind: DeviceKind::Tv,
+            host: true,
+        })));
+        let _ = del1.handle(ServerFrame::Left { member: host_id }, 200.0);
+
+        // Now delegation for earliest-joined member `del1` arrives AFTER del1's Hello while host is absent:
+        // del2 loses the badge and del1 takes it cleanly.
+        let out1 = host.command(
+            Command::Delegate {
+                member: del1_id,
+                sign_pk: del1_pk,
+            },
+            250.0,
+        );
+        let g_del1 = deliver(&host, out1.clone(), &mut guest, 250.0);
+        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
+            member: del2_id,
+            name: "TV".into(),
+            kind: DeviceKind::Tv,
+            host: false,
+        })));
+        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: true,
+        })));
+        let d1_self = deliver(&host, out1, &mut del1, 250.0);
+        assert!(d1_self.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: true,
+        })));
+
+        // Real host returns (`Joined` + `Hello`): del1 loses badge, host_id regains it even at end of `members`.
+        let g_ret = guest.handle(ServerFrame::Joined { member: host_id }, 300.0);
+        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: false,
+        })));
+        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
+            member: host_id,
+            name: "Host".into(),
+            kind: DeviceKind::Phone,
+            host: true,
+        })));
+        let d1_ret = del1.handle(ServerFrame::Joined { member: host_id }, 300.0);
+        assert!(d1_ret.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: false,
+        })));
+        assert_eq!(guest.acting_host(), Some(host_id));
+        assert_eq!(del1.acting_host(), Some(host_id));
+
+        // Guests never get the host badge when neither host nor delegates remain.
+        let _ = guest.handle(ServerFrame::Left { member: host_id }, 400.0);
+        let _ = guest.handle(ServerFrame::Left { member: del1_id }, 401.0);
+        let g_no_host = guest.handle(ServerFrame::Left { member: del2_id }, 402.0);
+        assert_eq!(guest.acting_host(), None);
+        assert!(!g_no_host
+            .iter()
+            .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. }))));
     }
 }

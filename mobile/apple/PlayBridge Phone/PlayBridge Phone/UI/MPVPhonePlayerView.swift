@@ -434,6 +434,12 @@ private final class MPVPhoneSurfaceView: UIView {
         self.engine = engine; attached = false; lastDrawableSize = .zero
         setNeedsLayout()
     }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            setNeedsLayout()
+        }
+    }
     override func layoutSubviews() {
         super.layoutSubviews()
         let metal = layer as! CAMetalLayer

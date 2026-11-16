@@ -2934,7 +2934,7 @@ private func runPhase6PureLogicTests() {
     assert(TogetherJson.event(from: #"{"event":"ended","item":"it1"}"#) == .ended(item: "it1"))
     assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":95000}"#) == .duration(95_000))
     assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":null}"#) == .duration(nil))
-    assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull))
+    assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull, retryAfterSecs: 0))
     let clearCmd = TogetherJson.command("clear") ?? ""
     assert(clearCmd.contains("\"command\":\"clear\""))
 
@@ -3109,6 +3109,49 @@ private func runPhase6PureLogicTests() {
     assert(deallocFake.callsAfterFree == 0)
     assert(deallocFake.doubleFrees == 0)
     assert(deallocFake.freeCount == 50)
+
+    // 6. TogetherTvPartyState excludes self from members/waitingFor & tracks acting host (including self & none)
+    var tvParty = TogetherTvPartyState(relay: "relay.example", connected: true)
+    tvParty.applyMember(member: "me-tv", name: "Living Room TV", host: false, selfMemberID: "me-tv")
+    tvParty.applyMember(member: "host-1", name: "Alex", host: true, selfMemberID: "me-tv")
+    tvParty.applyMember(member: "guest-2", name: "Sam", host: false, selfMemberID: "me-tv")
+    tvParty.applyWaiting(memberIDs: ["me-tv", "host-1"], selfMemberID: "me-tv")
+    assert(tvParty.members == ["host-1": "Alex", "guest-2": "Sam"])
+    assert(tvParty.memberOrder == ["host-1", "guest-2"])
+    assert(tvParty.waitingFor == ["Alex"])
+    var tvUi = tvParty.toPartyUi()
+    assert(tvUi.partyName == "Alex’s watch party")
+    assert(tvUi.members.count == 2)
+    assert(tvUi.members[0].isHost && !tvUi.members[1].isHost)
+
+    // Real host leaves; this TV becomes acting host.
+    tvParty.applyMember(member: "me-tv", name: "Living Room TV", host: true, selfMemberID: "me-tv")
+    _ = tvParty.applyMemberLeft(member: "host-1")
+    tvUi = tvParty.toPartyUi()
+    assert(tvParty.members == ["guest-2": "Sam"])
+    assert(tvUi.partyName == "Living Room TV’s watch party")
+    assert(tvUi.members.count == 1 && !tvUi.members[0].isHost)
+
+    // Real host returns; badge moves back from TV to real host.
+    tvParty.applyMember(member: "me-tv", name: "Living Room TV", host: false, selfMemberID: "me-tv")
+    tvParty.applyMember(member: "host-1", name: "Alex", host: true, selfMemberID: "me-tv")
+    tvUi = tvParty.toPartyUi()
+    assert(tvUi.partyName == "Alex’s watch party")
+    assert(tvUi.members.first { $0.id == "host-1" }?.isHost == true)
+
+    // Last host leaves with no delegate: falls back to "Watch party" and no Host badge.
+    _ = tvParty.applyMemberLeft(member: "host-1")
+    tvUi = tvParty.toPartyUi()
+    assert(tvParty.hostName == nil)
+    assert(tvUi.partyName == "Watch party")
+    assert(!tvUi.members.contains { $0.isHost })
+
+    // Duplicate display names only badge the matching host member ID.
+    var dupParty = TogetherTvPartyState(relay: "relay.example", connected: true)
+    dupParty.applyMember(member: "m1", name: "Pixel", host: true, selfMemberID: "me-tv")
+    dupParty.applyMember(member: "m2", name: "Pixel", host: false, selfMemberID: "me-tv")
+    let dupUi = dupParty.toPartyUi()
+    assert(dupUi.members.count == 2 && dupUi.members[0].isHost && !dupUi.members[1].isHost)
 
     print("PASS: phase 6 Watch Together pure logic (JSON protocol, formatting, loaded duration planner, FFI concurrency & integers)")
 }
