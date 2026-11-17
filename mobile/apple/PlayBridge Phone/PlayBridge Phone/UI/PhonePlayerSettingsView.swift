@@ -66,7 +66,7 @@ struct PhonePlayerSettingsView: View {
                 Section {
                     Text("Subtitle style").font(Theme.font(size: 17, weight: .semibold))
                 } footer: {
-                    Text("Also in Settings → Subtitles. Image-based subtitles can't be restyled.")
+                    Text("Also in Settings → Audio & subtitles. Image-based subtitles can't be restyled.")
                 }
                 PhoneSubtitleStyleSections()
             }

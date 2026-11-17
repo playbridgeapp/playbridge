@@ -23,7 +23,7 @@ struct PageCastRequestSheet: View {
                         Section {
                             Label(site, systemImage: "globe").font(Theme.font(.headline))
                             Text("This website can start casts and stay linked to manage its playlist on your selected device. You can still use PlayBridge’s playback controls.")
-                            Text("Your choice is remembered. Change it in Browser settings → Website casting permissions. Local-network media requires separate permission.")
+                            Text("Your choice is remembered. Change it in Settings → Casting → Website casting permissions. Local-network media requires separate permission.")
                                 .font(Theme.font(.footnote)).foregroundStyle(.secondary)
                         }
                         consentButtons

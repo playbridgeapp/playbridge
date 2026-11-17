@@ -245,7 +245,7 @@ struct ContentView: View {
         case .castHistory: CastHistoryScreen()
         case .history: HistoryScreen()
         case .bookmarks: BookmarksScreen()
-        case .browserSettings: BrowserSettingsScreen()
+        case .browserSettings: SettingsScreen()
         case .watchTogether: WatchTogetherScreen()
         }
     }
