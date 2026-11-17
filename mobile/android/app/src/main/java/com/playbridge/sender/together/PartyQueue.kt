@@ -1,6 +1,7 @@
 package com.playbridge.sender.together
 
 import com.playbridge.sender.cast.proxy.StreamRouteService
+import com.playbridge.shared.player.sanitizePlayerHeaders
 import com.playbridge.shared.together.TogetherEvent
 import com.playbridge.shared.together.TogetherItem
 import com.playbridge.shared.together.TogetherPolicy
@@ -347,7 +348,7 @@ object PartyMediaSupport {
             url = url,
             title = title?.trim()?.takeIf { it.isNotEmpty() } ?: site ?: "Video",
             site = site,
-            headers = headers,
+            headers = sanitizePlayerHeaders(headers),
             subtitles = subtitles,
             startMs = (startMs ?: 0L).coerceAtLeast(0L),
         )

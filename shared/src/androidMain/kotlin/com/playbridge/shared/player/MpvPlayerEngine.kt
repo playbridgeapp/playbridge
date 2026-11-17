@@ -575,8 +575,9 @@ class MpvPlayerEngine(
         logger.i(TAG, "load() queued for ${redactUrlForLog(payload.url)}")
         playbackSignals.isPaused = false
         enqueueControl("load") {
+            val safeHeaders = sanitizePlayerHeaders(payload.headers)
             var userAgentSet = false
-            payload.headers.forEach { (k, v) ->
+            safeHeaders.forEach { (k, v) ->
                 if (k.equals("user-agent", true)) {
                     MPVLib.setOptionString("user-agent", v)
                     userAgentSet = true
@@ -587,11 +588,11 @@ class MpvPlayerEngine(
             }
             // http-header-fields is a comma-separated string-list option in mpv.
             // Header values that contain commas (e.g. Accept) must be escaped as \,.
-            val headerString = payload.headers
+            val headerString = safeHeaders
                 .filterKeys { !it.equals("user-agent", ignoreCase = true) }
                 .entries
                 .joinToString(",") { "${it.key}: ${it.value.replace("\\", "\\\\").replace(",", "\\,")}" }
-            logger.d(TAG, "Setting ${payload.headers.size} HTTP header field(s)")
+            logger.d(TAG, "Setting ${safeHeaders.size} HTTP header field(s)")
             MPVLib.setOptionString("http-header-fields", headerString)
 
             // Be explicit about replacement semantics. Android TV callers wait for any prior

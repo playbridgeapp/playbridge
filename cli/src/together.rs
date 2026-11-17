@@ -265,7 +265,7 @@ async fn room(
                     && let Some(item) = pending_first.take() {
                         let _ = commands_tx.send(Command::Load(item));
                     }
-                print_event(&event);
+                print_event(&event, &me);
             }
             line = stdin.next_line() => {
                 let Ok(Some(line)) = line else {
@@ -387,7 +387,7 @@ async fn send_pairing(
         .map_err(|e| e.to_string())
 }
 
-fn print_event(event: &Event) {
+fn print_event(event: &Event, me: &MemberId) {
     match event {
         Event::Connected { members } => println!("● connected ({} in room)", members.len()),
         Event::Disconnected => println!("○ disconnected, retrying"),
@@ -400,10 +400,7 @@ fn print_event(event: &Event) {
             kind,
             host,
         } => {
-            println!(
-                "  {member} is {name} ({kind:?}{})",
-                if *host { ", host" } else { "" }
-            )
+            println!("{}", format_member_info(member, me, name, *kind, *host))
         }
         Event::VideoChanged(item) => println!(
             "▶ video: {} ({})",
@@ -452,6 +449,18 @@ fn print_event(event: &Event) {
         Event::Duration(None) => {}
         Event::Rejected(reason) => println!("  (dropped: {reason})"),
     }
+}
+
+fn format_member_info(
+    member: &MemberId,
+    me: &MemberId,
+    name: &str,
+    kind: DeviceKind,
+    host: bool,
+) -> String {
+    let you = if member == me { ", you" } else { "" };
+    let host = if host { ", host" } else { "" };
+    format!("  {member} is {name} ({kind:?}{you}{host})")
 }
 
 fn ids(list: &[MemberId]) -> String {
@@ -581,5 +590,23 @@ impl Player for SimPlayer {
 
     fn take_loaded(&mut self) -> Option<(String, Option<u64>)> {
         self.loaded.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn member_info_marks_self_as_you() {
+        let me = MemberId::from_bytes([1; 16]);
+        let other = MemberId::from_bytes([2; 16]);
+        let self_line = format_member_info(&me, &me, "CLI screen", DeviceKind::Cli, false);
+        assert!(self_line.contains("(Cli, you)"));
+        let self_host_line = format_member_info(&me, &me, "CLI screen", DeviceKind::Cli, true);
+        assert!(self_host_line.contains("(Cli, you, host)"));
+        let peer_line = format_member_info(&other, &me, "Alex", DeviceKind::Phone, true);
+        assert!(peer_line.contains("(Phone, host)"));
+        assert!(!peer_line.contains(", you"));
     }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../engines/mpv_engine.dart';
 import '../player_controller.dart';
 import '../player_engine.dart';
 import '../tv_sender_controller.dart';
@@ -449,11 +450,12 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
       return "Only web links can play in a watch party";
     }
     final site = uri.host.startsWith('www.') ? uri.host.substring(4) : uri.host;
+    final cleanHeaders = sanitizePlayerHeaders(headers) ?? const {};
     final item = TogetherItem(
       title: (title?.trim().isNotEmpty ?? false) ? title!.trim() : site,
       site: site.isEmpty ? null : site,
       source: TogetherUrl(url),
-      headers: headers,
+      headers: cleanHeaders,
       subtitles: subtitles,
       startMs: startMs,
     );
@@ -670,6 +672,13 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
           me: event.member,
           host: event.host,
           watching: _watchOnJoin,
+          members: {
+            event.member: PartyMember(
+              _deviceName(),
+              TogetherDeviceKind.desktop,
+              host: event.host,
+            ),
+          },
         )));
       case TogetherPlayer(:final command):
         _onPlayerCommand(command);
@@ -688,10 +697,14 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
                   PartyMember(event.name, event.kind, host: event.host),
             }));
       case TogetherMemberLeft(:final member):
-        _updateParty((p) => p.copyWith(
-              members: Map.of(p.members)..remove(member),
-              own: p.own.difference({member}),
-            ));
+        _updateParty((p) {
+          final nextMembers =
+              member == p.me ? p.members : (Map.of(p.members)..remove(member));
+          return p.copyWith(
+            members: nextMembers,
+            own: p.own.difference({member}),
+          );
+        });
       case TogetherVideo(:final item):
         _updateParty((p) => p.copyWith(
               item: () => item,
@@ -752,7 +765,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
       case TogetherPairingInvite():
         if (!isInParty) _set(TogetherInvited(event.from, event.relay));
       case TogetherPairSent():
-        _toast('Invite sent. Confirm on the TV.');
+        _toast('Invite sent. Confirm on that device.');
       case TogetherError():
         _onError(event);
       case TogetherStopped():
@@ -781,7 +794,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     debugPrint('[together] ${event.context} failed');
     switch (event.context) {
       case 'pair_send':
-        _toast("Couldn't invite that TV: ${event.message}");
+        _toast("Couldn't invite that device: ${event.message}");
       case 'host' || 'join':
         _phoneJoin
             ?.complete(const WatchTogetherJoinReply.failed('invalid_invite'));

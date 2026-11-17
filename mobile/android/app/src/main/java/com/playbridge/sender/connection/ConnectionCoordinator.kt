@@ -7,6 +7,7 @@ import com.playbridge.sender.cast.TvPlayerSettings
 import com.playbridge.sender.cast.TvTimeline
 import com.playbridge.sender.cast.parseTvTimeline
 import com.playbridge.sender.cast.remote.RemoteObservation
+import com.playbridge.sender.together.PhoneTogether
 import android.os.SystemClock
 import com.playbridge.sender.connection.ReceiverQueueItem
 import com.playbridge.sender.connection.ReceiverQueueState
@@ -127,11 +128,23 @@ class ConnectionCoordinator internal constructor(
         }
     }
 
-    /** The connected TV's name, when connected. */
+    /** The connected receiver's name, when connected. */
     val connectedTvName: String?
         get() = (webSocketClient?.connectionState?.value as? WebSocketClient.ConnectionState.Connected)?.serverName
 
-    /** Whether the connected TV can join a Watch Together room. */
+    /** Stable identity of the currently connected PlayBridge receiver, or null when disconnected. */
+    val connectedTvIdentity: PhoneTogether.OwnTvIdentity?
+        get() {
+            val name = connectedTvName ?: return null
+            val client = webSocketClient ?: return null
+            return PhoneTogether.OwnTvIdentity(
+                name = name,
+                uuid = client.connectedTvUuid,
+                endpointKey = client.connectedTvEndpointKey(),
+            )
+        }
+
+    /** Whether the connected receiver can join a Watch Together room. */
     val tvSupportsWatchTogether: Boolean
         get() = webSocketClient?.connectionState?.value is WebSocketClient.ConnectionState.Connected &&
             com.playbridge.shared.protocol.WATCH_TOGETHER_FEATURE in webSocketClient.tvCapabilitiesState.value.features
@@ -139,8 +152,8 @@ class ConnectionCoordinator internal constructor(
     @Volatile private var pendingWatchTogetherReply: CompletableDeferred<org.json.JSONObject>? = null
 
     /**
-     * Asks the connected TV to join the room in [invite]. Returns its member ID and keys,
-     * which make it one of this phone's own devices, or the TV's error code.
+     * Asks the connected receiver to join the room in [invite]. Returns its member ID and keys,
+     * which make it one of this phone's own devices, or the receiver's error code.
      */
     suspend fun addTvToWatchTogether(invite: String, from: String): Result<WatchTogetherTv> {
         val client = webSocketClient
@@ -158,7 +171,7 @@ class ConnectionCoordinator internal constructor(
         return if (json.optBoolean("ok") && member.isNotEmpty() && box.isNotEmpty() && sign.isNotEmpty()) {
             Result.success(
                 WatchTogetherTv(
-                    name = connectedTvName ?: "TV",
+                    name = connectedTvName ?: "That device",
                     member = member,
                     boxKey = box,
                     signKey = sign,

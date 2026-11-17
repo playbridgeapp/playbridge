@@ -16,6 +16,7 @@ import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.playbridge.shared.player.AndroidBufferConfig
 import com.playbridge.shared.player.ExoPlayerSetup
+import com.playbridge.shared.player.sanitizePlayerHeaders
 
 /**
  * Phone in-app [ExoPlayer] builder — aligned with TV
@@ -49,13 +50,15 @@ object PhoneExoPlayerFactory {
 
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     fun create(context: Context, headers: Map<String, String> = emptyMap()): ExoPlayer {
+        val safeHeaders = sanitizePlayerHeaders(headers)
+        val userAgent = safeHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value ?: DEFAULT_UA
         val httpFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(30_000)
             .setReadTimeoutMs(30_000)
-            .setUserAgent(headers["User-Agent"] ?: DEFAULT_UA)
-        if (headers.isNotEmpty()) {
-            httpFactory.setDefaultRequestProperties(headers)
+            .setUserAgent(userAgent)
+        if (safeHeaders.isNotEmpty()) {
+            httpFactory.setDefaultRequestProperties(safeHeaders)
         }
         val dataSourceFactory: DataSource.Factory =
             DefaultDataSource.Factory(context, httpFactory)

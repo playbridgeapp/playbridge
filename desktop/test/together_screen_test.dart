@@ -216,4 +216,46 @@ void main() {
     expect(groupPartyCode('482913057'), '482 913 057');
     expect(groupPartyCode('AB12'), 'AB12');
   });
+
+  testWidgets('device count includes self and Host badge follows acting host',
+      (tester) async {
+    final f = await make(tester);
+    f.together.join(invite, watchHere: false);
+    deliver(f, room(host: false));
+    deliver(f, {
+      'event': 'connected',
+      'members': ['me', 'phone1']
+    });
+    deliver(f, {
+      'event': 'member',
+      'member': 'phone1',
+      'name': 'Phone',
+      'kind': 'phone',
+      'host': true,
+    });
+    await pump(tester, f.together);
+    await tester.pump();
+
+    expect(find.text('2 devices · relay.test'), findsOneWidget);
+    expect(find.text('Office Mac (you)'), findsOneWidget);
+    expect(find.text('Host'), findsOneWidget);
+
+    // Remote host leaves; engine promotes this computer to acting host.
+    deliver(f, {'event': 'member_left', 'member': 'phone1'});
+    deliver(f, {
+      'event': 'member',
+      'member': 'me',
+      'name': 'Office Mac',
+      'kind': 'desktop',
+      'host': true,
+    });
+    await tester.pump();
+
+    expect(
+        find.text('1 device · you are the host · relay.test'), findsOneWidget);
+    expect(find.text('Host'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    f.together.dispose();
+  });
 }

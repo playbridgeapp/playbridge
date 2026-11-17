@@ -80,34 +80,55 @@ internal fun onSelectPartyTarget(): PartyTargetSelectionState =
 internal fun onLeaveOrEndParty(): PartyTargetSelectionState =
     PartyTargetSelectionState(partySelected = false, restoreRoute = null)
 
+internal fun TogetherDeviceKind.isReceiverKind(): Boolean =
+    this == TogetherDeviceKind.Tv || this == TogetherDeviceKind.Desktop
+
 /**
- * Matches whether [device] is one of this phone's own TVs currently in [party].
+ * Matches whether a PlayBridge receiver ([uuid], [endpointKey], [name], optional [alternateName])
+ * is one of this phone's own receivers currently in [party].
  *
- * When a TV was added over LAN (`addConnectedTv`), [ownTvIdentities] records its `uuid` and
+ * When a receiver was added over LAN (`addConnectedTv`), [ownTvIdentities] records its `uuid` and
  * `endpointKey`, so matching compares stable IDs rather than display names (preventing collisions
- * between two TVs of the same name and surviving renames). Only `party.own` TV members without a
- * recorded LAN identity (e.g., joined via pairing code) fall back to display name matching.
+ * between two receivers of the same name and surviving renames). Only `party.own` receiver members
+ * (`.Tv` or `.Desktop`) without a recorded LAN identity (e.g., joined via pairing code) fall back to
+ * strict display-name matching. Phones and CLIs are never matched.
  */
+internal fun isOwnReceiverMemberMatch(
+    name: String,
+    alternateName: String? = null,
+    uuid: String = "",
+    endpointKey: String? = null,
+    party: PhoneTogether.Party,
+    ownTvIdentities: Map<String, PhoneTogether.OwnTvIdentity>,
+): Boolean = party.own.any { memberId ->
+    val member = party.members[memberId]
+    if (member != null && !member.kind.isReceiverKind()) return@any false
+    val recorded = ownTvIdentities[memberId]
+    if (recorded != null) {
+        when {
+            recorded.uuid.isNotEmpty() && uuid.isNotEmpty() -> uuid == recorded.uuid
+            recorded.endpointKey != null && endpointKey != null -> endpointKey == recorded.endpointKey
+            else -> false
+        }
+    } else {
+        member != null && member.kind.isReceiverKind() &&
+            member.name.isNotEmpty() &&
+            (member.name == name || (alternateName != null && member.name == alternateName))
+    }
+}
+
 internal fun isOwnTvMemberMatch(
     device: TvDevice,
     party: PhoneTogether.Party,
     ownTvIdentities: Map<String, PhoneTogether.OwnTvIdentity>,
 ): Boolean {
     if (device.resolvedProtocol != CastProtocol.PLAYBRIDGE) return false
-    val deviceEndpointKey = device.endpointKey.toString()
-    return party.own.any { memberId ->
-        val member = party.members[memberId]
-        if (member != null && member.kind != TogetherDeviceKind.Tv) return@any false
-        val recorded = ownTvIdentities[memberId]
-        if (recorded != null) {
-            when {
-                recorded.uuid.isNotEmpty() && device.uuid.isNotEmpty() -> device.uuid == recorded.uuid
-                recorded.endpointKey != null -> deviceEndpointKey == recorded.endpointKey
-                else -> false
-            }
-        } else {
-            member != null && member.kind == TogetherDeviceKind.Tv &&
-                (member.name == device.name || member.name == device.playOnName)
-        }
-    }
+    return isOwnReceiverMemberMatch(
+        name = device.name,
+        alternateName = device.playOnName,
+        uuid = device.uuid,
+        endpointKey = device.endpointKey.toString(),
+        party = party,
+        ownTvIdentities = ownTvIdentities,
+    )
 }

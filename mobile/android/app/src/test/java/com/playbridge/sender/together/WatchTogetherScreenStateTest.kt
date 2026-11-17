@@ -1,5 +1,6 @@
 package com.playbridge.sender.together
 
+import com.playbridge.shared.together.TogetherDeviceKind
 import com.playbridge.shared.together.TogetherEvent
 import com.playbridge.shared.together.TogetherItem
 import com.playbridge.shared.together.TogetherPolicy
@@ -110,5 +111,25 @@ class WatchTogetherScreenStateTest {
         assertFalse(cleared.live)
         assertTrue(cleared.watching)
         assertEquals("room1", cleared.roomId)
+    }
+
+    @Test
+    fun `member ordering puts host and self first and memberLeft cannot drop self`() {
+        val withSelf = party(host = false).copy(
+            me = "m1",
+            members = mapOf(
+                "m1" to PhoneTogether.Member(name = "My Phone", kind = TogetherDeviceKind.Phone, host = false),
+                "m-host" to PhoneTogether.Member(name = "Zed Host", kind = TogetherDeviceKind.Tv, host = true),
+                "m-desk" to PhoneTogether.Member(name = "Alice Mac", kind = TogetherDeviceKind.Desktop, host = false),
+            ),
+        )
+        assertEquals(listOf("m-host", "m1", "m-desk"), orderedPartyMembers(withSelf).map { it.first })
+
+        val afterStraySelfLeave = reducePartyEvent(withSelf, TogetherEvent.MemberLeft("m1"), elapsedMs = 4_000L)
+        assertTrue("m1" in afterStraySelfLeave.members)
+
+        val afterPeerLeave = reducePartyEvent(withSelf, TogetherEvent.MemberLeft("m-desk"), elapsedMs = 4_100L)
+        assertFalse("m-desk" in afterPeerLeave.members)
+        assertEquals(2, afterPeerLeave.members.size)
     }
 }

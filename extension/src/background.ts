@@ -1383,7 +1383,15 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     if (!canHandleMediaData()) return;
     if (details.method === "OPTIONS") return;
     const headers: Record<string, string> = {};
-    const skip = ["host", "connection", "accept-encoding", "content-length", "upgrade-insecure-requests"];
+    const skip = [
+      "range",
+      "if-range",
+      "host",
+      "connection",
+      "accept-encoding",
+      "content-length",
+      "upgrade-insecure-requests",
+    ];
     for (const h of details.requestHeaders ?? []) {
       if (!skip.includes(h.name.toLowerCase())) headers[h.name] = h.value ?? "";
     }
