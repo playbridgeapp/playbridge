@@ -33,6 +33,14 @@ protocol TogetherSessionProtocol: AnyObject {
 
 extension TogetherClient: TogetherSessionProtocol {}
 
+/// The invite link can hold secrets: never log it.
+struct WatchTogetherSwitchRequest: Equatable, CustomStringConvertible {
+    let invite: String
+    let watchHere: Bool
+
+    var description: String { "WatchTogetherSwitchRequest(watchHere=\(watchHere))" }
+}
+
 struct WatchTogetherTvJoinResult: Equatable {
     let member: String
     let boxKey: String
@@ -315,6 +323,8 @@ final class PhoneTogether: ObservableObject {
     @Published private(set) var ownTvIdentities: [String: WatchTogetherConnectedTv] = [:]
     @Published var activePlayerItem: PartyPlaybackPresentation?
     @Published var pendingOpenScreen = false
+    /// An invite to another party that arrived while this phone is in one.
+    @Published private(set) var switchRequest: WatchTogetherSwitchRequest?
 
     private let defaults: UserDefaults
     private let clockMs: () -> Int64
@@ -420,9 +430,33 @@ final class PhoneTogether: ObservableObject {
         guard let invite = WatchTogetherLinks.invite(url.absoluteString) else {
             return false
         }
-        join(invite: invite, watchHere: watchHereByDefault(connectedTvName: connectedTvName))
+        openInvite(invite, watchHere: watchHereByDefault(connectedTvName: connectedTvName))
         pendingOpenScreen = true
         return true
+    }
+
+    /// Opens an invite link that came from outside the app. The link of the party this phone is
+    /// in leaves it there: joining again would cost it its keys, and a host its host role.
+    /// Another party's link waits for `confirmSwitch()`.
+    func openInvite(_ invite: String, watchHere: Bool) {
+        guard let party = currentParty else {
+            join(invite: invite, watchHere: watchHere)
+            return
+        }
+        if party.roomId == WatchTogetherLinks.roomId(invite) { return }
+        switchRequest = WatchTogetherSwitchRequest(invite: invite, watchHere: watchHere)
+    }
+
+    /// Leaves the current party and joins the one in the pending `switchRequest`.
+    func confirmSwitch() {
+        guard let request = switchRequest else { return }
+        switchRequest = nil
+        leave()
+        join(invite: request.invite, watchHere: request.watchHere)
+    }
+
+    func cancelSwitch() {
+        switchRequest = nil
     }
 
     // MARK: - Lifecycle (No background audio keep-alive, reconnect cleanly on foreground)

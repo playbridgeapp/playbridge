@@ -161,6 +161,19 @@ fun WatchTogetherScreen(
             Spacer(Modifier.height(8.dp))
         }
     }
+
+    val switchRequest by PhoneTogether.switchRequest.collectAsState()
+    if (switchRequest != null) {
+        AlertDialog(
+            onDismissRequest = PhoneTogether::cancelSwitch,
+            title = { Text("Join another party?") },
+            text = { Text("You'll leave the party you're in now.") },
+            confirmButton = {
+                TextButton(onClick = { PhoneTogether.confirmSwitch(context) }) { Text("Leave and join") }
+            },
+            dismissButton = { TextButton(onClick = PhoneTogether::cancelSwitch) { Text("Stay") } },
+        )
+    }
 }
 
 // -- Not in a party

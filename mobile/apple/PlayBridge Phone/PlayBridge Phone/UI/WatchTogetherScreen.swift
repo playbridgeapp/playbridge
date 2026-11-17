@@ -34,6 +34,15 @@ struct WatchTogetherScreen: View {
             }
         }
         .background(Theme.surface.ignoresSafeArea())
+        .alert("Join another party?", isPresented: Binding(
+            get: { together.switchRequest != nil },
+            set: { if !$0 { together.cancelSwitch() } }
+        )) {
+            Button("Leave and join", role: .destructive) { together.confirmSwitch() }
+            Button("Stay", role: .cancel) { together.cancelSwitch() }
+        } message: {
+            Text("You'll leave the party you're in now.")
+        }
         .overlay(alignment: .bottom) {
             if let toast = together.toastMessage {
                 Text(toast)

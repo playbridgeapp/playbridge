@@ -145,6 +145,7 @@ struct WatchTogetherTests {
         try await testOwnTvMemberMatchAndAddVisibility()
         testMPVSeekStateTracking()
         testReconnectAndNoPersistence()
+        testOpeningInviteLinksWhileInAParty()
         print("PASS: Phone Watch Together checks")
     }
 
@@ -160,6 +161,9 @@ struct WatchTogetherTests {
         precondition(!WatchTogetherLinks.isInvite("https://party.playbridge.app/j/\(room)#k=abc"))
         precondition(!WatchTogetherLinks.isInvite("https://party.playbridge.app/j/notaroom#k=abc&h=def"))
         precondition(!WatchTogetherLinks.isInvite("https://example.com/watch?v=1"))
+        precondition(WatchTogetherLinks.roomId("https://party.playbridge.app/j/\(room)#k=abc&h=def") == room)
+        precondition(WatchTogetherLinks.roomId("https://party.playbridge.app/j/\(room)?k=abc&h=def") == room)
+        precondition(WatchTogetherLinks.roomId("https://party.playbridge.app/j/\(room)") == nil)
     }
 
     private static func testProtocolAndGuestJson() {
@@ -609,6 +613,46 @@ struct WatchTogetherTests {
         precondition(relaunched.state == .idle)
         precondition(!relaunched.isInParty)
         precondition(relaunched.relayURL == "https://custom.relay.example")
+    }
+
+    @MainActor
+    private static func testOpeningInviteLinksWhileInAParty() {
+        let suite = "PhoneTogetherOpenInvite.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let session = FakeTogetherSession()
+        let together = PhoneTogether(defaults: defaults, sessionFactory: { _ in session })
+        let room = "0123456789abcdef0123456789abcdef"
+        let link = "https://party.playbridge.app/j/\(room)#k=abc&h=def"
+        together.handleEventForTesting(.room(
+            roomId: room, invite: link, relay: "https://party.playbridge.app",
+            member: "me", boxKey: "b", signKey: "s", host: true
+        ))
+        together.handleEventForTesting(.connected(members: ["me"]))
+
+        // This party's own link, in the form the invite page hands over: stays put, as host.
+        let own = URL(string: "https://party.playbridge.app/j/\(room)?k=abc&h=def")!
+        precondition(together.handleIncomingURL(own, connectedTvName: nil))
+        precondition(session.joined.isEmpty)
+        precondition(together.switchRequest == nil)
+        precondition(together.currentParty?.host == true)
+
+        // Another party's link asks first; staying keeps this party.
+        let other = "https://party.playbridge.app/j/fedcba9876543210fedcba9876543210#k=xyz&h=uvw"
+        precondition(together.handleIncomingURL(URL(string: other)!, connectedTvName: nil))
+        precondition(together.switchRequest?.invite == other)
+        precondition(session.joined.isEmpty)
+        together.cancelSwitch()
+        precondition(together.switchRequest == nil)
+        precondition(together.currentParty?.roomId == room)
+
+        // Confirming leaves this party and joins the other.
+        precondition(together.handleIncomingURL(URL(string: other)!, connectedTvName: nil))
+        together.confirmSwitch()
+        precondition(together.switchRequest == nil)
+        precondition(session.joined.map(\.0) == [other])
+        precondition(together.state == .starting)
     }
 }
 
