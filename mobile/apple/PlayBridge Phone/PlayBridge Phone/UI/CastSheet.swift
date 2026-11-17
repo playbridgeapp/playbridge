@@ -72,6 +72,7 @@ struct CastSheet: View {
 
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var together: PhoneTogether
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedVideo: DetectedVideo?
@@ -113,8 +114,31 @@ struct CastSheet: View {
         vm.isConnected && (vm.isAirPlay || vm.isExternalReceiver || vm.playBridgeOutputSelected)
     }
 
+    /// The watch party is where Send goes. It plays direct links, without the phone's routes.
+    private var partySelected: Bool { together.isPartySelected }
+    private var party: TogetherPartyState? { partySelected ? together.currentParty : nil }
+    /// Guests under "Ask me": Send asks the host to play it.
+    private var partyMustAsk: Bool {
+        guard let party else { return false }
+        return !party.host && party.policy == .ask && !party.locked
+    }
+    private var partyHostName: String {
+        party?.members.values.first(where: \.host)?.name ?? "The host"
+    }
+    /// Why Send can't change the party's video, when it can't.
+    private var partyLimit: String? {
+        guard let party, !party.canChangeVideo else { return nil }
+        if partyMustAsk { return "\(partyHostName) approves each video. Send asks them to play it." }
+        if party.locked { return "\(partyHostName) locked the controls." }
+        return "Only \(partyHostName) can change the video."
+    }
+
     private var sendEnabled: Bool {
         if playbackPreparationID != nil { return false }
+        if let party {
+            guard castAction != "browse", let selectedVideo, !selectedVideo.isImage else { return false }
+            return party.canChangeVideo || partyMustAsk
+        }
         if castAction == "browse" {
             return sendsToSelectedReceiver && !browseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } else {
@@ -130,7 +154,12 @@ struct CastSheet: View {
                 // Keep casting actions and list tabs visible while results scroll.
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    if !vm.isConnected, let row = vm.selectedRemoteTV, row.paired {
+                    if let partyLimit {
+                        Text(partyLimit)
+                            .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                            .padding(.horizontal, 16)
+                    }
+                    if !partySelected, !vm.isConnected, let row = vm.selectedRemoteTV, row.paired {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(RemoteAvailability.receiverMissing)
                             Button("Open PlayBridge on \(row.device.name)") {
@@ -149,7 +178,7 @@ struct CastSheet: View {
                     }
                     if castAction != "browse" {
                         tabsSection
-                        if vm.isAirPlay {
+                        if !partySelected && vm.isAirPlay {
                             Text("AirPlay uses this phone for protected streams and added subtitles.")
                                 .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
                         }
@@ -261,7 +290,7 @@ struct CastSheet: View {
                 if browseUrl.isEmpty {
                     browseUrl = tab.urlString
                 }
-                if (media.isEmpty || tab.isCastingBlocked) && vm.supportsBrowser {
+                if !partySelected && (media.isEmpty || tab.isCastingBlocked) && vm.supportsBrowser {
                     castAction = "browse"
                 }
             }
@@ -273,6 +302,12 @@ struct CastSheet: View {
                 if selectedVideo == nil, let first = preferredMedia {
                     selectVideo(first)
                 }
+            }
+            .onChange(of: partySelected) { selected in
+                if selected && castAction == "browse" { castAction = "play" }
+            }
+            .onChange(of: party?.canChangeVideo) { canChange in
+                if canChange == false && castAction == "queue" { castAction = "play" }
             }
             .onChange(of: castAction) { newAction in
                 if newAction == "browse", !TvCapabilityOptions.browserOptions(for: vm.pairedDevice).contains(where: { $0.id == browserMode }) {
@@ -292,6 +327,12 @@ struct CastSheet: View {
         castAction == "browse" ? "globe" : castAction == "queue" ? "text.badge.plus" : "play.fill"
     }
 
+    /// Queue goes to the party's Up next, or to a receiver whose player is open.
+    private var canQueue: Bool {
+        if let party { return party.canChangeVideo }
+        return sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player"
+    }
+
     private var destinationDescription: String {
         if vm.playBridgeLinkConnected && !vm.playBridgeOutputSelected && !vm.isAirPlay && !vm.isExternalReceiver {
             return "Connected · Standing by"
@@ -309,10 +350,10 @@ struct CastSheet: View {
                     if !tab.isCastingBlocked {
                         Label("Play", systemImage: "play.fill").tag("play")
                     }
-                    if !tab.isCastingBlocked && sendsToSelectedReceiver && vm.supportsQueue && vm.coordinator.activeContext == "player" {
+                    if !tab.isCastingBlocked && canQueue {
                         Label("Queue", systemImage: "text.badge.plus").tag("queue")
                     }
-                    if vm.supportsBrowser {
+                    if !partySelected && vm.supportsBrowser {
                         Label("Browse", systemImage: "globe").tag("browse")
                     }
                 }
@@ -332,7 +373,7 @@ struct CastSheet: View {
             .accessibilityLabel("Cast action")
             .accessibilityValue(actionLabel)
 
-            if castAction != "browse" { routeMenu }
+            if castAction != "browse" && !partySelected { routeMenu }
 
             Spacer(minLength: 0)
 
@@ -341,12 +382,13 @@ struct CastSheet: View {
                 playOnPicking = true
                 showDestination = true
             } label: {
-                Image(systemName: "tv")
+                Image(systemName: partySelected ? PartyTargetStyle.symbol : "tv")
                     .font(Theme.font(size: 20))
-                    .foregroundColor(vm.isConnected ? Theme.primary : Theme.onSurfaceVariant)
+                    .foregroundColor(partySelected ? PartyTargetStyle.accent
+                                     : vm.isConnected ? Theme.primary : Theme.onSurfaceVariant)
                     .frame(width: 44, height: 44)
             }
-            .accessibilityLabel(destinationDescription)
+            .accessibilityLabel(partySelected ? "Watch party" : destinationDescription)
             .accessibilityHint("Show cast destination")
 
             Button { sendAction() } label: {
@@ -357,7 +399,7 @@ struct CastSheet: View {
             }
             .disabled(!sendEnabled)
             .accessibilityLabel("Send")
-            .accessibilityHint("\(actionLabel) on the connected receiver")
+            .accessibilityHint(partySelected ? "\(actionLabel) in the watch party" : "\(actionLabel) on the connected receiver")
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
@@ -816,6 +858,16 @@ struct CastSheet: View {
         }
         guard !tab.isCastingBlocked else { playbackError = BrowserCastingPolicy.message; return }
         guard let video = selectedVideo else { return }
+        if partySelected {
+            let url = selectedQuality?.url ?? video.url
+            guard tab.allowsCasting(url) else { playbackError = BrowserCastingPolicy.message; return }
+            let subtitleURLs = subtitles.map(\.url).filter { attachedSubtitles.contains($0) && video.isVideo }
+            vm.onUserMediaAction?()
+            vm.castToParty(video.withCastTitle(pageTitle: tab.title), quality: selectedQuality,
+                           subtitles: subtitleURLs, queue: castAction == "queue")
+            dismiss()
+            return
+        }
         playbackPreparation?.cancel()
         let attempt = UUID()
         playbackPreparationID = attempt

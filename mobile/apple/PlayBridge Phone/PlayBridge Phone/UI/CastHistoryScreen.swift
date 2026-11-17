@@ -54,12 +54,12 @@ private struct CastHistoryList: View {
                             .font(Theme.font(.caption2)).foregroundStyle(.secondary)
                         }
                     }
-                    .disabled(replaying || !vm.isConnected)
+                    .disabled(replaying || !(vm.isConnected || vm.partyTargetActive))
                     .swipeActions {
                         Button("Delete", role: .destructive) { store.delete(entry.id) }
                     }
                 }
-                if !vm.isConnected && !store.entries.isEmpty {
+                if !vm.isConnected && !vm.partyTargetActive && !store.entries.isEmpty {
                     Button("Connect a device to replay") { nav.openPlayOn() }
                 }
             }

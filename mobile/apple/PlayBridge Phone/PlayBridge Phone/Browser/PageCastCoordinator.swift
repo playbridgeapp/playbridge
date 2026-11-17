@@ -27,9 +27,15 @@ protocol PageCastTransport: AnyObject {
     func sendWebsiteCommand(action: String, payload: [String: Any]) -> Bool
     func queryContext()
     func queryWebsiteState()
+    /// The watch party is the selected target.
+    @MainActor var websitePartySelected: Bool { get }
+    /// Plays the request's items in the party from its start index: the first plays, the rest go to Up next.
+    @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool
 }
 
 extension PageCastTransport {
+    @MainActor var websitePartySelected: Bool { false }
+    @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool { false }
     var playbackDestination: [String: Any] { ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": destinationID == nil ? "local" : "native", "connected": destinationID == nil || isConnected] }
     var websiteLocalState: [String: Any]? { nil }
     @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws { throw PageCastError(code: "unsupported_target") }
@@ -226,7 +232,8 @@ final class PageCastCoordinator: ObservableObject {
                 reply(request, error: code)
                 completePending()
                 // Legacy cast() has no promise. Report a useful native error as well.
-                if request.operation == "cast", !["not_allowed", "user_cancelled", "session_ended"].contains(code) {
+                if code == "party_unsupported" || (request.operation == "cast"
+                    && !["not_allowed", "user_cancelled", "session_ended", "party_refused"].contains(code)) {
                     onError?(Self.message(for: code))
                 }
             }
@@ -288,6 +295,17 @@ final class PageCastCoordinator: ObservableObject {
             if let title = request.source?.pageCastTitle, !title.isEmpty, title != "New Tab" {
                 parsed.items[index]["title"] = String(title.prefix(4096))
             }
+        }
+        if let transport, transport.websitePartySelected {
+            // A site can send videos to the party, but can't run a linked session with it yet.
+            guard request.operation == "cast" else { throw PageCastError(code: "party_unsupported") }
+            _ = try await authorize(request, items: parsed.items, declared: parsed.privateOrigins, metadata: parsed.metadata)
+            try check(request)
+            endSession("superseded")
+            // The party explains any link it refuses.
+            guard transport.sendWebsiteToParty(parsed) else { throw PageCastError(code: "party_refused") }
+            reply(request)
+            return
         }
         let expected: String?
         if request.operation == "play" {
@@ -652,6 +670,7 @@ final class PageCastCoordinator: ObservableObject {
         case "private_network_denied": return "The website requested a local address that cannot be used for casting."
         case "session_ended", "navigation", "superseded": return "This website’s cast session has ended."
         case "stale_request": return "This playlist request is no longer current."
+        case "party_unsupported": return "This site can't control a watch party yet. Pick a TV or This phone in Play on to cast from it."
         default: return "Couldn’t start the website cast. Try again."
         }
     }

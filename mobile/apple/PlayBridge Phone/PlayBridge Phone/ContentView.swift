@@ -40,6 +40,30 @@ struct ContentView: View {
         .environmentObject(pageCasting)
         .environmentObject(atv)
         .tint(Theme.primary)
+        .overlay(alignment: .bottom) {
+            if let toast = together.toastMessage {
+                Text(toast)
+                    .font(Theme.font(.subheadline))
+                    .foregroundStyle(Theme.onSurface)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Theme.surfaceContainerHigh, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 1))
+                    .padding(.bottom, 16)
+                    .padding(.horizontal, 16)
+                    .allowsHitTesting(false)
+                    // A new message is a new view, so its own timer clears it.
+                    .id(toast)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+                            if together.toastMessage == toast {
+                                together.consumeToast()
+                            }
+                        }
+                    }
+            }
+        }
         .fullScreenCover(item: $vm.websitePlayerItem) { item in
             FullScreenVideoPlayerView(session: item.session, diagnosticsReport: {
 #if DEBUG
@@ -105,6 +129,17 @@ struct ContentView: View {
             }
             vm.unlinkWebsite = { [weak pageCasting] in
                 MainActor.assumeIsolated { pageCasting?.unlink() }
+            }
+            let party = together
+            PartyMediaURL.ownAddresses = { LocalFileServer.lanIPAddress().map { [$0] } ?? [] }
+            vm.isPartySelected = { [weak party] in
+                MainActor.assumeIsolated { party?.isPartySelected == true }
+            }
+            vm.sendToParty = { [weak party] items, queue in
+                MainActor.assumeIsolated { party?.send(items, queue: queue) == true }
+            }
+            vm.partyNotice = { [weak party] message in
+                MainActor.assumeIsolated { party?.notify(message) }
             }
             reconnectOnActivation()
             updateAtv()

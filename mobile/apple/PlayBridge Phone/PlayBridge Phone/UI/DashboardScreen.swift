@@ -70,9 +70,11 @@ struct DashboardScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 topBar
-                DashboardDeviceChip(status: playOnDashboard) { nav.openPlayOn() }
+                DashboardDeviceChip(status: playOnDashboard,
+                                    party: together.isPartySelected ? together.currentParty : nil) { nav.openPlayOn() }
                 // A dropped TV stays chosen; switching to this phone is the user's call.
-                if playOnDashboard.state == .reconnecting || playOnDashboard.state == .offline {
+                if !together.isPartySelected,
+                   playOnDashboard.state == .reconnecting || playOnDashboard.state == .offline {
                     LostTVNotice(tvName: playOnDashboard.deviceName) { vm.selectThisPhone() }
                 }
                 HStack {
@@ -409,9 +411,12 @@ private struct LostTVNotice: View {
 /// Where videos play: a chosen TV or this phone. Opens the Play on sheet.
 struct DashboardDeviceChip: View {
     let status: PlayOnDashboardStatus
+    /// The watch party, when it's the selected target.
+    var party: TogetherPartyState? = nil
     let action: () -> Void
 
     private var accent: Color? {
+        if party != nil { return PartyTargetStyle.accent }
         switch status.state {
         case .connected: return status.unencrypted ? Color(hex: 0xFFB74D) : Color(hex: 0x46D483)
         case .connecting, .reconnecting: return Color(hex: 0xFFB74D)
@@ -421,12 +426,21 @@ struct DashboardDeviceChip: View {
     }
 
     private var systemImage: String {
+        if party != nil { return PartyTargetStyle.symbol }
         if !status.tvChosen { return "iphone" }
         switch status.receiver {
         case "AirPlay": return "airplayvideo"
         case nil, "PlayBridge": return "tv"
         default: return "dot.radiowaves.left.and.right"
         }
+    }
+
+    private var deviceName: String { party == nil ? status.deviceName : "Watch party" }
+
+    private var statusLine: String {
+        guard let party else { return status.statusLine }
+        let watching = "\(PartyTargetStyle.watchingCount(party)) watching"
+        return party.item.map { "\(watching) · \($0.title)" } ?? watching
     }
 
     var body: some View {
@@ -445,11 +459,11 @@ struct DashboardDeviceChip: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(status.deviceName)
+                    Text(deviceName)
                         .font(Theme.font(size: 16, weight: .medium))
                         .foregroundColor(Theme.onSurface)
                         .lineLimit(1)
-                    Text(status.statusLine)
+                    Text(statusLine)
                         .font(Theme.font(size: 13))
                         .foregroundColor(Theme.onSurfaceVariant)
                         .lineLimit(1)
@@ -466,7 +480,7 @@ struct DashboardDeviceChip: View {
             .overlay(Capsule().stroke(accent?.opacity(0.35) ?? Theme.outlineVariant, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(status.deviceName), \(status.statusLine)")
+        .accessibilityLabel("\(deviceName), \(statusLine)")
         .accessibilityHint("Change where to play")
         .accessibilityIdentifier("dashboard-device-chip")
     }

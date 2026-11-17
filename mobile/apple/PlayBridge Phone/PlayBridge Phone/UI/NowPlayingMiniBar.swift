@@ -6,6 +6,7 @@ struct NowPlayingMiniBar: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var pageCasting: PageCastCoordinator
+    @EnvironmentObject private var together: PhoneTogether
 
     private var playback: TvPlaybackStatus? { vm.coordinator.playback }
     private var playing: Bool {
@@ -59,6 +60,14 @@ struct NowPlayingMiniBar: View {
     private var ready: Bool { !playing && vm.isConnected }
 
     var body: some View {
+        if together.isPartySelected, let party = together.currentParty {
+            PartyMiniBar(party: party)
+        } else {
+            receiverBar
+        }
+    }
+
+    private var receiverBar: some View {
         HStack(spacing: 8) {
             Button {
                 if playing || vm.selectedRemoteTV?.paired == true {
@@ -178,5 +187,93 @@ struct NowPlayingMiniBar: View {
         .background(Theme.surface.opacity(0.96))
         .onAppear { if vm.isConnected { vm.queryContext() } }
         .onChange(of: vm.state) { state in if state.isConnected { vm.queryContext() } }
+    }
+}
+
+/// The mini bar while the watch party is the target: what the party plays, Up next, and
+/// play/pause for members who may control it. Tapping it opens the party.
+private struct PartyMiniBar: View {
+    let party: TogetherPartyState
+    @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var together: PhoneTogether
+
+    private var watching: Int { PartyTargetStyle.watchingCount(party) }
+    private var playing: Bool { party.item != nil }
+    private var canControl: Bool { party.host || !party.locked }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { nav.navigate(to: .watchTogether) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: PartyTargetStyle.symbol)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(PartyTargetStyle.accent)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(PartyTargetStyle.accent.opacity(0.16)))
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(party.item?.title ?? "Watch party · \(watching)")
+                            .font(Theme.font(size: playing ? 14 : 15, weight: .medium))
+                            .lineLimit(1)
+                        Text(playing ? "\(party.playing ? "" : "Paused · ")Watch party · \(watching) watching"
+                             : "Ready · Tap to open the party")
+                            .font(Theme.font(size: 12))
+                            .foregroundColor(Theme.onSurfaceVariant)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(playing ? "Watch party: \(party.item?.title ?? ""). Open the party" : "Watch party. Open the party")
+
+            if !together.queue.isEmpty {
+                Button { nav.navigate(to: .watchTogether) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.line.first.and.arrowtriangle.forward").font(.system(size: 14))
+                        Text("\(together.queue.count)").font(Theme.font(size: 13, weight: .medium))
+                    }
+                    .padding(.horizontal, 12).frame(height: 40)
+                    .background(Capsule().fill(Theme.onSurface.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Up next, \(together.queue.count) items")
+            }
+            if playing && canControl {
+                Button { _ = party.playing ? together.pause() : together.play() } label: {
+                    Image(systemName: party.playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(PartyTargetStyle.surface)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(PartyTargetStyle.accent))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(party.playing ? "Pause" : "Play")
+            }
+        }
+        .foregroundColor(Theme.onSurface)
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .frame(height: 64)
+        .overlay(alignment: .bottomLeading) {
+            if playing, !party.live, let duration = party.durationMs, duration > 0 {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    GeometryReader { geometry in
+                        let progress = min(1, max(0, Double(party.positionNow()) / Double(duration)))
+                        PartyTargetStyle.accent.frame(width: geometry.size.width * progress, height: 2)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                }
+                .accessibilityHidden(true)
+            }
+        }
+        .background(PartyTargetStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(PartyTargetStyle.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.surface.opacity(0.96))
     }
 }

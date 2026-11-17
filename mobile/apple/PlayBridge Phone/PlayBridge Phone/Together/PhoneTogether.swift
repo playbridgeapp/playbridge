@@ -166,24 +166,54 @@ enum PartyMediaURL {
 
     static var privateNetworkNotice: String { privateNotice }
 
+    /// This phone's own addresses: links to them are served by this phone, and other
+    /// members can't open them. The app sets it to the Wi-Fi address; tests set their own.
+    static var ownAddresses: () -> Set<String> = { [] }
+
     static func evaluate(_ raw: String) -> PartyMediaURLCheck {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty else {
-            return PartyMediaURLCheck(
-                normalizedURL: nil,
-                rejection: "Only web video links (http/https) can be played in a watch party.",
-                isPrivateNetwork: false
-            )
+        func refused(_ reason: String) -> PartyMediaURLCheck {
+            PartyMediaURLCheck(normalizedURL: nil, rejection: reason, isPrivateNetwork: false)
+        }
+        guard !trimmed.isEmpty else { return refused("This video doesn't have a playable link.") }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
+            return refused("This video's link isn't valid for a watch party.")
+        }
+        switch scheme {
+        case "http", "https": break
+        case "file": return refused("Files stored on this phone can't be played in a watch party.")
+        case "data", "blob": return refused("This phone-only stream can't be shared with a watch party.")
+        default: return refused("Only web video links (http/https) can be played in a watch party.")
+        }
+        guard let rawHost = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !rawHost.isEmpty else {
+            return refused("This video's link isn't valid for a watch party.")
+        }
+        let host = normalized(rawHost)
+        if isLoopbackHost(host) {
+            return refused("Links to this phone itself can't be played in a watch party, because other devices can't reach them.")
+        }
+        if ownAddresses().contains(where: { normalized($0) == host }) {
+            return refused("Links served by this phone can't be played in a watch party.")
         }
         return PartyMediaURLCheck(
             normalizedURL: url.absoluteString,
             rejection: nil,
             isPrivateNetwork: isPrivateHost(host)
         )
+    }
+
+    private static func normalized(_ host: String) -> String {
+        var lower = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if let zone = lower.firstIndex(of: "%") { lower = String(lower[..<zone]) }
+        return lower
+    }
+
+    static func isLoopbackHost(_ host: String) -> Bool {
+        let lower = normalized(host)
+        if lower == "localhost" || lower.hasSuffix(".localhost") { return true }
+        if lower == "::1" || lower == "::" || lower == "0.0.0.0" { return true }
+        let octets = lower.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        return octets.count == 4 && octets[0] == 127 && octets.allSatisfy { $0.map { (0...255).contains($0) } == true }
     }
 
     static func isPrivateHost(_ host: String) -> Bool {
@@ -201,6 +231,7 @@ enum PartyMediaURL {
         switch (octets[0], octets[1]) {
         case (10, _), (127, _): return true
         case (169, 254): return true
+        case (100, 64...127): return true
         case (172, 16...31): return true
         case (192, 168): return true
         default: return false
@@ -331,6 +362,28 @@ final class PhoneTogether: ObservableObject {
     @Published private(set) var switchRequest: WatchTogetherSwitchRequest?
     /// Parties this phone can rejoin, newest first. Fills once `loadSavedParties()` ran.
     @Published private(set) var savedParties: [SavedWatchParty] = []
+    /// The party is where casts go. Joining selects it; picking another device in Play on
+    /// clears it, and the phone stays in the party.
+    @Published private(set) var partyTargetSelected = false
+    /// Up next: videos this phone queued for the party. Other members see only the current one.
+    @Published private(set) var queue: [PartyQueueItem] = []
+    /// Why Up next isn't moving on, when it paused.
+    @Published private(set) var queueNotice: String?
+
+    /// How long to wait after a video ends for the party's own clear before loading the next.
+    static let endClearGraceNs: UInt64 = 1_500_000_000
+    private var partyQueue = PartyQueue()
+    private var advanceTracker = PartyAdvanceTracker()
+    private var graceAdvanceTask: Task<Void, Never>?
+    /// After the party's video ends or clears, the player stays up (paused) for a moment so
+    /// a next video loads into it. Dismissing the full-screen player and presenting a new one
+    /// straight after fails on iOS.
+    private var holdingPlayer = false
+    private var holdPlayerTask: Task<Void, Never>?
+    /// This phone pressed Stop: close the player at once.
+    private var stopRequestedHere = false
+    static let playerHoldNs: UInt64 = 2_500_000_000
+    static let playerHoldForQueueNs: UInt64 = 8_000_000_000
 
     /// Where saved parties are kept. Tests swap in memory so they never touch the Keychain.
     static var makeSavedBackend: () -> SavedWatchPartyBackend = { KeychainSavedWatchPartyBackend() }
@@ -412,6 +465,17 @@ final class PhoneTogether: ObservableObject {
     var isInParty: Bool {
         if case .inParty = state { return true }
         return false
+    }
+
+    /// In a party, with the party picked as the place casts go.
+    var isPartySelected: Bool { isInParty && partyTargetSelected }
+
+    func selectPartyTarget() {
+        if isInParty { partyTargetSelected = true }
+    }
+
+    func deselectPartyTarget() {
+        partyTargetSelected = false
     }
 
     var currentParty: TogetherPartyState? {
@@ -621,6 +685,7 @@ final class PhoneTogether: ObservableObject {
         _ = client?.leave()
         roomId = nil
         resetSessionTracking()
+        clearQueueAndTarget()
         state = .idle
         closePlayerProgrammatically()
     }
@@ -718,13 +783,17 @@ final class PhoneTogether: ObservableObject {
 
     // MARK: - Media & Playback Controls
 
+    /// Plays a video in the party: changes it when allowed, otherwise asks the host.
+    /// `queueItems` (the rest of a playlist) go to Up next in order. `headers` may hold
+    /// sign-in headers; only this phone's own devices get them.
     @discardableResult
     func playInParty(
         url: String,
         title: String? = nil,
         headers: [String: String] = [:],
         subtitles: [String] = [],
-        startMs: Int64 = 0
+        startMs: Int64 = 0,
+        queueItems: [PartyQueueItem] = []
     ) -> Bool {
         guard let party = currentParty else { return false }
         let check = PartyMediaURL.evaluate(url)
@@ -732,28 +801,26 @@ final class PhoneTogether: ObservableObject {
             showToast(check.rejection ?? "This video can't be played in a watch party.")
             return false
         }
-        let cleanTitle = (title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
-            ?? URL(string: validURL)?.host
-            ?? "Video"
-        let item = TogetherItem(
-            title: cleanTitle,
-            site: URL(string: validURL)?.host,
-            source: .url(validURL),
-            headers: headers,
-            subtitles: subtitles,
-            startMs: max(0, startMs)
-        )
+        let queued = PartyQueueItem.of(url: validURL, title: title, headers: headers,
+                                       subtitles: subtitles, startMs: startMs)
+        let item = queued.togetherItem
         if party.canChangeVideo {
-            if !headers.isEmpty {
-                localSecretsPendingItemTitle = cleanTitle
-            }
-            let sent = client?.load(item: item) == true
-            if !sent {
-                localSecretsPendingItemTitle = nil
+            advanceTracker.explicitLoadSent(fromQueue: false)
+            guard sendLoad(item) else {
                 showToast("Couldn't send video to the watch party")
                 return false
             }
-            showToast(check.isPrivateNetwork ? PartyMediaURL.privateNetworkNotice : "Playing in the watch party")
+            queueNotice = nil
+            let checked = queueItems.map { ($0, PartyMediaURL.evaluate($0.url)) }.filter { $0.1.rejection == nil }
+            let anyPrivate = check.isPrivateNetwork || checked.contains { $0.1.isPrivateNetwork }
+            if checked.isEmpty {
+                showToast(anyPrivate ? PartyMediaURL.privateNetworkNotice : "Playing in the watch party")
+            } else {
+                partyQueue.append(checked.map(\.0))
+                syncQueue()
+                showToast(anyPrivate ? PartyMediaURL.privateNetworkNotice
+                          : "Playing in the watch party · \(checked.count) up next")
+            }
             return true
         } else if party.locked {
             showToast("The host locked the controls")
@@ -762,8 +829,8 @@ final class PhoneTogether: ObservableObject {
             showToast("Only the host can change the video")
             return false
         } else {
-            if !headers.isEmpty {
-                localSecretsPendingItemTitle = cleanTitle
+            if !item.headers.isEmpty {
+                localSecretsPendingItemTitle = item.title
             }
             let requested = client?.requestPlay(item: item) == true
             if !requested {
@@ -776,13 +843,189 @@ final class PhoneTogether: ObservableObject {
         }
     }
 
+    /// Loads `item` for the whole party, remembering whether it carries this phone's sign-in.
+    private func sendLoad(_ item: TogetherItem) -> Bool {
+        if !item.headers.isEmpty { localSecretsPendingItemTitle = item.title }
+        guard client?.load(item: item) == true else {
+            localSecretsPendingItemTitle = nil
+            return false
+        }
+        return true
+    }
+
+    /// Sends videos cast elsewhere in the app: the first plays and the rest go to Up next,
+    /// or with `queue` all of them go to Up next.
+    @discardableResult
+    func send(_ items: [PartyQueueItem], queue: Bool) -> Bool {
+        guard let first = items.first else {
+            showToast("This playlist doesn't contain playable links.")
+            return false
+        }
+        if queue { return enqueue(items) }
+        return playInParty(url: first.url, title: first.title, headers: first.headers,
+                           subtitles: first.subtitles, startMs: first.startMs,
+                           queueItems: Array(items.dropFirst()))
+    }
+
+    /// Shows a message about the party, from anywhere in the app.
+    func notify(_ message: String) { showToast(message) }
+
+    // MARK: - Up next
+
+    /// Adds videos to the end of Up next without playing them. Only for members who can
+    /// change the video; links other members can't open are skipped.
+    @discardableResult
+    func enqueue(_ items: [PartyQueueItem]) -> Bool {
+        guard let party = currentParty else { return false }
+        guard party.canChangeVideo else {
+            showToast("Only people who can change the video can add to the party queue.")
+            return false
+        }
+        guard !items.isEmpty else { return false }
+        let checked = items.map { ($0, PartyMediaURL.evaluate($0.url)) }
+        let valid = checked.filter { $0.1.rejection == nil }
+        guard !valid.isEmpty else {
+            showToast(checked.first?.1.rejection ?? "This video can't be added to a watch party.")
+            return false
+        }
+        partyQueue.append(valid.map(\.0))
+        queueNotice = nil
+        syncQueue()
+        if valid.contains(where: { $0.1.isPrivateNetwork }) {
+            showToast(PartyMediaURL.privateNetworkNotice)
+        } else if valid.count < items.count {
+            showToast("Added \(valid.count) to the party queue (skipped \(items.count - valid.count) that only work on this phone)")
+        } else {
+            showToast(valid.count == 1 ? "Added to the party queue" : "Added \(valid.count) videos to the party queue")
+        }
+        return true
+    }
+
+    func removeFromQueue(_ id: String) {
+        if partyQueue.remove(id) != nil { syncQueue() }
+    }
+
+    func moveQueueItem(from: Int, to: Int) {
+        if partyQueue.move(from: from, to: to) { syncQueue() }
+    }
+
+    func clearQueue() {
+        partyQueue.clear()
+        queueNotice = nil
+        syncQueue()
+    }
+
+    @discardableResult
+    func playNextInQueueNow() -> Bool {
+        guard let next = partyQueue.first else { return false }
+        return playQueuedItemNow(next.id)
+    }
+
+    /// Plays a queued video now and takes it out of Up next.
+    @discardableResult
+    func playQueuedItemNow(_ id: String) -> Bool {
+        guard let party = currentParty else { return false }
+        guard party.canChangeVideo else {
+            showToast(party.locked ? "The host locked the controls" : "Only the host can change the video")
+            return false
+        }
+        guard let target = partyQueue.items.first(where: { $0.id == id }) else { return false }
+        advanceTracker.explicitLoadSent(fromQueue: true)
+        guard sendLoad(target.togetherItem) else {
+            if case .paused(let reason) = advanceTracker.queuedLoadFailed() { queueNotice = reason }
+            showToast("Couldn't send \"\(target.title)\" to the watch party")
+            return false
+        }
+        partyQueue.remove(id)
+        queueNotice = nil
+        syncQueue()
+        if PartyMediaURL.evaluate(target.url).isPrivateNetwork { showToast(PartyMediaURL.privateNetworkNotice) }
+        return true
+    }
+
+    /// Runs the post-end wait right away. For tests.
+    func elapseEndClearGraceForTesting() {
+        graceAdvanceTask?.cancel()
+        graceAdvanceTask = nil
+        guard let party = currentParty else { return }
+        graceElapsed(party)
+    }
+
+    private func graceElapsed(_ party: TogetherPartyState) {
+        let decision = advanceTracker.graceElapsed(party: party, queue: &partyQueue)
+        if decision == .none { closeHeldPlayer() }
+        handleAdvance(decision)
+    }
+
+    private func advance(on event: TogetherEvent) -> PartyAdvanceDecision {
+        guard let party = currentParty else { return .none }
+        return advanceTracker.onEvent(event, party: party, queue: &partyQueue)
+    }
+
+    private func handleAdvance(_ decision: PartyAdvanceDecision) {
+        switch decision {
+        case .none:
+            break
+        case .waitForClear:
+            graceAdvanceTask?.cancel()
+            graceAdvanceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: Self.endClearGraceNs)
+                guard !Task.isCancelled, let self, let party = self.currentParty else { return }
+                self.graceAdvanceTask = nil
+                self.graceElapsed(party)
+            }
+        case .paused(let reason):
+            closeHeldPlayer()
+            syncQueue()
+            queueNotice = reason
+            showToast(reason)
+        case .load(let item):
+            syncQueue()
+            if sendLoad(item.togetherItem) {
+                queueNotice = nil
+            } else {
+                closeHeldPlayer()
+                if case .paused(let reason) = advanceTracker.queuedLoadFailed() {
+                    queueNotice = reason
+                    showToast(reason)
+                }
+            }
+        }
+    }
+
+    private func cancelGraceAdvance() {
+        graceAdvanceTask?.cancel()
+        graceAdvanceTask = nil
+    }
+
+    private func syncQueue() {
+        if queue != partyQueue.items { queue = partyQueue.items }
+    }
+
+    private func clearQueueAndTarget() {
+        cancelGraceAdvance()
+        partyQueue.clear()
+        advanceTracker.reset()
+        syncQueue()
+        queueNotice = nil
+        partyTargetSelected = false
+    }
+
     @discardableResult func play() -> Bool { client?.play() == true }
     @discardableResult func pause() -> Bool { client?.pause() == true }
 
     @discardableResult
     func stopVideo() -> Bool {
         guard let party = currentParty, party.canChangeVideo else { return false }
-        return client?.clear() == true
+        advanceTracker.manualStopRequested(currentItem: party.item?.id)
+        stopRequestedHere = true
+        guard client?.clear() == true else {
+            advanceTracker.manualStopSendFailed()
+            stopRequestedHere = false
+            return false
+        }
+        cancelGraceAdvance()
+        return true
     }
 
     @discardableResult
@@ -823,6 +1066,7 @@ final class PhoneTogether: ObservableObject {
     // MARK: - Player Callbacks
 
     func userClosedPlayer() {
+        releaseHoldKeepingPlayer()
         let wasProgrammatic = suppressUserDismissWatchStop
         suppressUserDismissWatchStop = false
         let closingSession = activePlayerItem?.session
@@ -865,6 +1109,7 @@ final class PhoneTogether: ObservableObject {
         case .room(let roomId, let invite, let relay, let member, _, _, let host, let endsAtMs, let saved):
             if self.roomId != roomId {
                 resetSessionTracking()
+                clearQueueAndTarget()
             }
             self.roomId = roomId
             let selfMember = TogetherPartyMember(
@@ -882,6 +1127,7 @@ final class PhoneTogether: ObservableObject {
                 watching: watchOnJoin,
                 members: [member: selfMember]
             ))
+            partyTargetSelected = true
             rememberParty(roomId: roomId, relay: relay, host: host, endsAtMs: endsAtMs, saved: saved)
 
         case .player(let command):
@@ -922,6 +1168,9 @@ final class PhoneTogether: ObservableObject {
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
 
         case .video(let item):
+            cancelGraceAdvance()
+            stopRequestedHere = false
+            handleAdvance(advance(on: event))
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
             if let pending = localSecretsPendingItemTitle, pending == item.title {
                 localSecretsItemID = item.id
@@ -933,20 +1182,34 @@ final class PhoneTogether: ObservableObject {
             }
 
         case .videoCleared:
-            closePlayerProgrammatically()
+            cancelGraceAdvance()
+            let decision = advance(on: event)
+            if stopRequestedHere {
+                stopRequestedHere = false
+                closePlayerProgrammatically()
+            } else if case .load = decision {
+                holdPlayer(Self.playerHoldForQueueNs)
+            } else if !holdingPlayer {
+                // Someone else's Up next may load the next video right away.
+                holdPlayer(Self.playerHoldNs)
+            }
             localSecretsItemID = nil
             hasLocalSecretsForCurrentItem = false
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
+            handleAdvance(decision)
 
         case .ended(let item):
+            let decision = advance(on: event)
             if loadingItem == item || playerItem == item {
-                closePlayerProgrammatically()
+                if case .waitForClear = decision { holdPlayer(Self.playerHoldForQueueNs) }
+                else { holdPlayer(Self.playerHoldNs) }
             }
             if currentParty?.item?.id == item {
                 localSecretsItemID = nil
                 hasLocalSecretsForCurrentItem = false
             }
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
+            handleAdvance(decision)
 
         case .member(let member, let name, _, let host):
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
@@ -954,7 +1217,11 @@ final class PhoneTogether: ObservableObject {
                 savedStore.update(party.roomId) { $0.hostName = name }
             }
 
-        case .timeline, .waiting, .continueWithoutAvailable, .locked, .policy,
+        case .locked, .policy:
+            updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
+            if !advanceTracker.haltedOnFailure, currentParty?.canChangeVideo == true { queueNotice = nil }
+
+        case .timeline, .waiting, .continueWithoutAvailable,
              .playRequested, .requestExpired, .warning, .live, .duration:
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
 
@@ -977,6 +1244,7 @@ final class PhoneTogether: ObservableObject {
             }
 
         case .error(let context, let message, _):
+            if isInParty { handleAdvance(advance(on: event)) }
             handleErrorEvent(context: context, message: message)
 
         case .stopped(let roomId, let reason, let retryAfterSecs):
@@ -987,6 +1255,7 @@ final class PhoneTogether: ObservableObject {
             }
             self.roomId = nil
             resetSessionTracking()
+            clearQueueAndTarget()
             closePlayerProgrammatically()
             if isInParty || isStarting {
                 state = Self.stoppedState(reason: reason, retryAfterSecs: retryAfterSecs)
@@ -1047,7 +1316,8 @@ final class PhoneTogether: ObservableObject {
         case .load(let item, let headers, let startMs):
             openOrReplacePlayer(item: item, headers: headers, startMs: startMs)
         case .clear:
-            closePlayerProgrammatically()
+            if stopRequestedHere { closePlayerProgrammatically() }
+            else if !holdingPlayer { holdPlayer(Self.playerHoldNs) }
         case .play:
             guard playerItem != nil || loadingItem != nil else { return }
             activePlayerItem?.session.applyPartyPlay()
@@ -1074,6 +1344,7 @@ final class PhoneTogether: ObservableObject {
             showToast("This phone can't play \"\(item.title)\" yet")
             return
         }
+        releaseHoldKeepingPlayer()
         loadingItem = item.id
         loadedSent = false
         loadedReportedEarly = false
@@ -1124,6 +1395,10 @@ final class PhoneTogether: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self, weak session] failure in
                 guard let self, let session, self.activePlayerItem?.session === session else { return }
+                if let item = self.loadingItem, !self.loadedSent,
+                   self.advanceTracker.phonePlayerLoadFailed(item: item) {
+                    self.queueNotice = PartyAdvanceTracker.pausedOnFailure
+                }
                 self.showToast(failure.message)
             }
             .store(in: &playerStateCancellables)
@@ -1186,7 +1461,40 @@ final class PhoneTogether: ObservableObject {
         snapshotTimer = nil
     }
 
+    /// Pauses the player and keeps it up for `ns`, then closes it unless a next video came.
+    private func holdPlayer(_ ns: UInt64) {
+        guard let held = activePlayerItem else {
+            closePlayerProgrammatically()
+            return
+        }
+        held.session.applyPartyPause()
+        loadingItem = nil
+        playerItem = nil
+        loadedSent = false
+        loadedReportedEarly = false
+        holdingPlayer = true
+        holdPlayerTask?.cancel()
+        holdPlayerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: ns)
+            guard !Task.isCancelled, let self, self.holdingPlayer else { return }
+            self.closePlayerProgrammatically()
+        }
+    }
+
+    /// A next video arrived: it reuses the held player.
+    private func releaseHoldKeepingPlayer() {
+        holdPlayerTask?.cancel()
+        holdPlayerTask = nil
+        holdingPlayer = false
+    }
+
+    /// Up next won't load anything: close a held player now.
+    private func closeHeldPlayer() {
+        if holdingPlayer { closePlayerProgrammatically() }
+    }
+
     private func closePlayerProgrammatically() {
+        releaseHoldKeepingPlayer()
         loadingItem = nil
         playerItem = nil
         loadedSent = false

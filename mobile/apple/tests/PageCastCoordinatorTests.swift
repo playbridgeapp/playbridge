@@ -82,6 +82,14 @@ private final class FakeTransport: PageCastTransport {
         return true
     }
     func queryContext() { queryCount += 1 }
+    var partySelected = false
+    var partyAccepts = true
+    var partySends: [PageCastRequest] = []
+    @MainActor var websitePartySelected: Bool { partySelected }
+    @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool {
+        partySends.append(request)
+        return partyAccepts
+    }
 }
 
 @MainActor private final class ResolveGate {
@@ -683,6 +691,26 @@ private final class FakeTransport: PageCastTransport {
         print("PASS per-origin destination ids")
     }
 
+    @MainActor static func watchPartyTarget() async {
+        let f = Fixture(approved: true)
+        f.transport.partySelected = true
+        // A one-off cast goes to the party, never to the TV.
+        _ = await f.response(f.send("cast", payload: ["items": [Fixture.item("one"), Fixture.item("two")], "startIndex": 1]))
+        precondition(f.transport.partySends.count == 1 && f.transport.sends.isEmpty && f.transport.externalOpens == 0)
+        precondition(f.transport.partySends[0].startIndex == 1 && f.transport.partySends[0].items.count == 2)
+        // Linked sessions can't run against the party yet.
+        for operation in ["open", "play"] {
+            _ = await f.response(f.send(operation, payload: ["items": [Fixture.item()], "destinationId": "x"]),
+                                 error: "party_unsupported")
+        }
+        precondition(!f.coordinator.isLinked && f.transport.sends.isEmpty)
+        // A cast the party refuses fails without reaching the TV.
+        f.transport.partyAccepts = false
+        _ = await f.response(f.send("cast", payload: ["url": "https://media.example/local.mp4"]), error: "party_refused")
+        precondition(f.transport.sends.isEmpty)
+        print("PASS website casts go to a selected watch party; linked sessions are refused")
+    }
+
     @MainActor static func main() async {
         for host in BrowserCastingPolicy.blockedHosts {
             let restricted = Fixture(approved: true)
@@ -703,6 +731,7 @@ private final class FakeTransport: PageCastTransport {
             else { UserDefaults.standard.removeObject(forKey: "website_cast_prefetch") }
         }
         await rejectsWebsiteWebhooks()
+        await watchPartyTarget()
         destinationIdsArePerOrigin()
         await destinationConsent()
         await unifiedPlayback()

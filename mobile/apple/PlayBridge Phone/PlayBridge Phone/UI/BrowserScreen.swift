@@ -37,8 +37,9 @@ struct BrowserScreen: View {
                                       headers: VideoDetector.requestHeaders(originUrl: origin),
                                       kind: DetectedVideo.classify(url: url, contentType: payload["contentType"] as? String))
                     .withCastTitle(pageTitle: payload["title"] as? String)
+                let toParty = vm.partyTargetActive
                 vm.castStream(v)
-                nav.navigate(to: .remote)
+                if !toParty { nav.navigate(to: .remote) }
             }
         }
         .onDisappear { store.browserVisible = false; store.activeTab?.cancelPrompt() }
@@ -53,6 +54,7 @@ private struct ActiveTabView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var data: BrowserDataStore
+    @EnvironmentObject private var together: PhoneTogether
     @Binding var showTabs: Bool
 
     @State private var address = ""
@@ -287,14 +289,15 @@ private struct ActiveTabView: View {
     }
 
     private var tvButton: some View {
-        Button { nav.openPlayOn() } label: {
+        let party = together.isPartySelected
+        return Button { nav.openPlayOn() } label: {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: "tv")
-                    .font(.system(size: 22))
-                    .foregroundColor(vm.isConnected ? Theme.primary : Theme.onSurface)
+                Image(systemName: party ? PartyTargetStyle.symbol : "tv")
+                    .font(.system(size: party ? 19 : 22))
+                    .foregroundColor(party ? PartyTargetStyle.accent : vm.isConnected ? Theme.primary : Theme.onSurface)
                     .frame(width: 44, height: 44).contentShape(Rectangle())
-                if vm.isConnected {
-                    Circle().fill(Color(hex: 0x4CAF50)).frame(width: 8, height: 8)
+                if party || vm.isConnected {
+                    Circle().fill(party ? PartyTargetStyle.accent : Color(hex: 0x4CAF50)).frame(width: 8, height: 8)
                         .overlay(Circle().stroke(Theme.surface, lineWidth: 1.5))
                         .offset(x: -5, y: 5)
                 }
@@ -302,11 +305,12 @@ private struct ActiveTabView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Play on")
+        .accessibilityValue(party ? "Watch party" : "")
     }
 
     private var playButton: some View {
         let count = tab.isCastingBlocked ? 0 : tab.detector.videos.count
-        let enabled = tab.isCastingBlocked || count > 0 || vm.isConnected
+        let enabled = tab.isCastingBlocked || count > 0 || vm.isConnected || together.isPartySelected
         return Button {
             // Blocked sites can still be opened in a receiver's own browser; no media is cast.
             if tab.isCastingBlocked && !vm.supportsBrowser { tab.showBrowserMessage(BrowserCastingPolicy.message) }
