@@ -23,6 +23,13 @@ class WatchTogetherLinksTest {
     }
 
     @Test
+    fun `reads the room of an invite in either form`() {
+        assertEquals(room, WatchTogetherLinks.roomId("https://relay.example.workers.dev/j/$room#k=abc&h=def"))
+        assertEquals(room, WatchTogetherLinks.roomId("https://relay.example.workers.dev/j/$room?k=abc&h=def"))
+        assertEquals(null, WatchTogetherLinks.roomId("https://example.com/j/$room"))
+    }
+
+    @Test
     fun `leaves ordinary pages to the browser`() {
         assertFalse(WatchTogetherLinks.isInvite("https://example.com/j/$room"))
         assertFalse(WatchTogetherLinks.isInvite("https://example.com/j/$room#k=abc"))

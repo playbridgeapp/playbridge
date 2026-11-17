@@ -223,6 +223,41 @@ object PhoneTogether {
         }
     }
 
+    /** An invite to another party that arrived while this phone is in one. */
+    data class SwitchRequest(val link: String, val watchHere: Boolean) {
+        override fun toString(): String = "SwitchRequest(watchHere=$watchHere)"
+    }
+
+    private val mutableSwitchRequest = MutableStateFlow<SwitchRequest?>(null)
+    /** Asks before leaving the current party for the one in a link; see [openInvite]. */
+    val switchRequest: StateFlow<SwitchRequest?> = mutableSwitchRequest.asStateFlow()
+
+    /**
+     * Opens an invite link that came from outside the app. The link of the party this phone is
+     * in leaves it there: joining again would cost it its keys, and a host its host role. Another
+     * party's link waits for [confirmSwitch].
+     */
+    fun openInvite(context: Context, link: String, watchHere: Boolean) {
+        val current = party()
+        when {
+            current == null -> join(context, link, watchHere)
+            current.roomId == WatchTogetherLinks.roomId(link) -> Unit
+            else -> mutableSwitchRequest.value = SwitchRequest(link, watchHere)
+        }
+    }
+
+    /** Leaves the current party and joins the one in the pending [switchRequest]. */
+    fun confirmSwitch(context: Context) {
+        val request = mutableSwitchRequest.value ?: return
+        mutableSwitchRequest.value = null
+        leave()
+        join(context, request.link, request.watchHere)
+    }
+
+    fun cancelSwitch() {
+        mutableSwitchRequest.value = null
+    }
+
     fun join(context: Context, link: String, watchHere: Boolean) {
         val session = ensureClient(context) ?: return
         if (isJoiningByCode()) session.pairCancel()

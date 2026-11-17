@@ -18,4 +18,10 @@ object WatchTogetherLinks {
     }
 
     fun isInvite(link: String): Boolean = invite(link) != null
+
+    /** The room ID in invite [link], or null for other links. Not secret, unlike the link. */
+    fun roomId(link: String): String? =
+        invite(link)?.let { roomPath.find(it)?.groupValues?.get(1) }
+
+    private val roomPath = Regex("""/j/([0-9a-f]{32})#""")
 }

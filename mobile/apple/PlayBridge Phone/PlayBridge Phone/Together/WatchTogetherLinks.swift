@@ -28,4 +28,15 @@ enum WatchTogetherLinks {
         let rebuilt = "\(trimmed[baseRange])#\(trimmed[queryRange])"
         return isInvite(rebuilt) ? rebuilt : nil
     }
+
+    private static let roomRegex = try! NSRegularExpression(pattern: #"/j/([0-9a-f]{32})#"#)
+
+    /// The room ID in an invite link, or nil for other links. Not secret, unlike the link.
+    static func roomId(_ raw: String) -> String? {
+        guard let link = invite(raw) else { return nil }
+        let range = NSRange(link.startIndex..<link.endIndex, in: link)
+        guard let match = roomRegex.firstMatch(in: link, range: range),
+              let roomRange = Range(match.range(at: 1), in: link) else { return nil }
+        return String(link[roomRange])
+    }
 }

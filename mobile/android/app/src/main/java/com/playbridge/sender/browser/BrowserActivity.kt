@@ -422,7 +422,7 @@ class BrowserActivity : ComponentActivity() {
         val link = pendingLinkUrl.value?.let(com.playbridge.sender.together.WatchTogetherLinks::invite) ?: return
         pendingLinkUrl.value = null
         val together = com.playbridge.sender.together.PhoneTogether
-        together.join(this, link, together.watchHereByDefault(connectionCoordinator))
+        together.openInvite(this, link, together.watchHereByDefault(connectionCoordinator))
         pendingWatchTogether.value = true
     }
 

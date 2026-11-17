@@ -244,6 +244,8 @@ impl Drop for TogetherHandle {
 struct Room {
     commands: async_mpsc::UnboundedSender<RoomCommand>,
     feed: Arc<Mutex<Feed>>,
+    /// The room's ID. Not secret, unlike `link`.
+    room_id: String,
     link: String,
     name: String,
     task: JoinHandle<()>,
@@ -334,6 +336,9 @@ impl Worker {
                 self.enter(invite, keys, device);
             }
             Call::Join { invite, device } => match Invite::parse(&invite) {
+                // Opening the link of the party this device is in keeps it there. Joining
+                // again would drop its keys, and with them a host's right to act as host.
+                Ok(invite) if self.in_room(&invite.room.to_string()) => {}
                 Ok(invite) => self.enter(invite, MemberKeys::generate(), device),
                 Err(_) => self.error("join", "invalid invite link", None),
             },
@@ -416,6 +421,7 @@ impl Worker {
         let relay = invite.relay.host_str().unwrap_or_default().to_owned();
         let host = invite.host == keys.signing_public();
         let room_id = invite.room.to_string();
+        let room_id_for_room = room_id.clone();
         self.emit(json!({
             "event": "room",
             "room": room_id,
@@ -489,10 +495,18 @@ impl Worker {
         self.room = Some(Room {
             commands,
             feed,
+            room_id: room_id_for_room,
             link,
             name: device.name,
             task,
         });
+    }
+
+    /// Whether this device is still connected to, or reconnecting to, room `room_id`.
+    fn in_room(&self, room_id: &str) -> bool {
+        self.room
+            .as_ref()
+            .is_some_and(|room| room.room_id == room_id && !room.task.is_finished())
     }
 
     fn leave(&mut self) {
@@ -1003,6 +1017,43 @@ mod tests {
         assert_eq!(b64::encode(invite.host), room["sign_pk"].as_str().unwrap());
         assert!(handle.submit(r#"{"command":"leave"}"#));
         assert_eq!(next(&handle, "stopped")["reason"], "left");
+    }
+
+    #[test]
+    fn opening_the_link_of_the_current_party_keeps_this_device_in_it() {
+        let handle = TogetherHandle::start().unwrap();
+        assert!(handle.submit(
+            r#"{"command":"host","relay":"https://relay.invalid","name":"Phone","kind":"phone","screen":false}"#
+        ));
+        let room = next(&handle, "room");
+        let link = room["invite"].as_str().unwrap();
+        let join = |invite: &str| {
+            json!({"command": "join", "invite": invite, "name": "Phone", "kind": "phone", "screen": false})
+                .to_string()
+        };
+
+        // Same party: no new room, no new keys, and no `stopped` for the one it is in.
+        assert!(handle.submit(&join(link)));
+        let deadline = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < deadline {
+            if let Some(value) = handle.next_event(100) {
+                assert_ne!(value["event"], "room", "joined its own party again");
+                assert_ne!(value["event"], "stopped", "left its own party");
+            }
+        }
+
+        // Another party: leaves this one and joins that one, as a guest.
+        let other = Invite {
+            relay: url::Url::parse("https://relay.invalid").unwrap(),
+            room: playbridge_together::RoomId::generate(),
+            key: RoomKey::generate(),
+            host: MemberKeys::generate().signing_public(),
+        };
+        assert!(handle.submit(&join(&other.to_link())));
+        let joined = next(&handle, "room");
+        assert_eq!(joined["room"], other.room.to_string());
+        assert_eq!(joined["host"], false);
+        assert!(handle.submit(r#"{"command":"leave"}"#));
     }
 
     #[test]
