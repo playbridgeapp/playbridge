@@ -150,6 +150,10 @@ struct WatchTogetherTests {
         testOpeningInviteLinksWhileInAParty()
         testSavedPartyRules()
         testSavedPartiesRejoinAsTheSameMember()
+        testPartyLinkChecks()
+        testPartyQueueAndAdvanceRules()
+        testPartyTargetAndUpNext()
+        try await testQueuedVideoReusesThePlayer()
         print("PASS: Phone Watch Together checks")
     }
 
@@ -325,8 +329,10 @@ struct WatchTogetherTests {
         together.handleEventForTesting(.player(.load(item: ep2, headers: [:], startMs: 0)))
         precondition(engines.count == 1 && together.activePlayerItem?.itemID == "item-2")
 
-        // EOF closes player without disabling watching!
+        // EOF closes the player after a short hold (a next video could reuse it), without disabling watching.
         together.handleEventForTesting(.ended(item: "item-2"))
+        precondition(together.activePlayerItem != nil)
+        try await Task.sleep(nanoseconds: PhoneTogether.playerHoldNs + 300_000_000)
         precondition(together.activePlayerItem == nil)
         precondition(together.currentParty?.watching == true)
         together.userClosedPlayer()
@@ -765,6 +771,225 @@ extension WatchTogetherTests {
         precondition(third.savedParties.map(\.roomId) == ["r2"])
         third.forgetSaved("r2")
         precondition(third.savedParties.isEmpty && backend.items.isEmpty)
+    }
+
+    static func testPartyLinkChecks() {
+        PartyMediaURL.ownAddresses = { ["192.168.1.29"] }
+        defer { PartyMediaURL.ownAddresses = { [] } }
+        for loopback in ["http://127.0.0.1:8080/v.mp4", "http://localhost/v.mp4", "http://[::1]/v.mp4", "http://0.0.0.0/v.mp4"] {
+            precondition(PartyMediaURL.evaluate(loopback).rejection != nil, loopback)
+        }
+        precondition(PartyMediaURL.evaluate("http://192.168.1.29:51234/proxy/x").rejection != nil)
+        precondition(PartyMediaURL.evaluate("blob:https://site.test/1").rejection != nil)
+        precondition(PartyMediaURL.evaluate("").rejection != nil)
+        let nas = PartyMediaURL.evaluate("http://192.168.1.40:8096/v.mkv")
+        precondition(nas.rejection == nil && nas.isPrivateNetwork)
+        precondition(PartyMediaURL.evaluate("http://100.80.1.2/v.mp4").isPrivateNetwork)
+        precondition(PartyMediaURL.evaluate("http://nas.local/v.mp4").isPrivateNetwork)
+        precondition(!PartyMediaURL.evaluate("https://127.example.com/v.mp4").isPrivateNetwork)
+
+        let item = PartyQueueItem.of(url: " https://www.example.com/a.mp4 ", title: "  ", headers: ["Cookie": "c"])
+        precondition(item.title == "example.com" && item.site == "example.com")
+        precondition(!String(describing: item).contains("Cookie") && !String(describing: item).contains("example.com/a"))
+    }
+
+    static func testPartyQueueAndAdvanceRules() {
+        var queue = PartyQueue()
+        let a = PartyQueueItem(url: "https://e.test/a", title: "A")
+        let b = PartyQueueItem(url: "https://e.test/b", title: "B")
+        let c = PartyQueueItem(url: "https://e.test/c", title: "C")
+        queue.append([a, b, c])
+        precondition(queue.move(from: 2, to: 0) && queue.items.map(\.title) == ["C", "A", "B"])
+        precondition(!queue.move(from: 0, to: 5))
+        precondition(queue.remove(a.id)?.title == "A" && queue.items.map(\.title) == ["C", "B"])
+
+        func video(_ id: String) -> TogetherItem {
+            TogetherItem(id: id, title: id, source: .url("https://e.test/\(id)"))
+        }
+        var party = TogetherPartyState(roomId: "r", invite: "i", relay: "x", me: "m", host: true)
+        party.item = video("v1")
+        var tracker = PartyAdvanceTracker()
+
+        // A real end waits for the party's clear, then loads the next.
+        precondition(tracker.onEvent(.video(item: video("v1")), party: party, queue: &queue) == .none)
+        precondition(tracker.onEvent(.ended(item: "v1"), party: party, queue: &queue) == .waitForClear(item: "v1"))
+        precondition(tracker.onEvent(.ended(item: "v1"), party: party, queue: &queue) == .none)
+        precondition(tracker.onEvent(.videoCleared, party: party, queue: &queue) == .load(c))
+        precondition(queue.items.map(\.title) == ["B"])
+
+        // A clear nobody asked for (Stop) doesn't advance.
+        party.item = video("v2")
+        _ = tracker.onEvent(.video(item: video("v2")), party: party, queue: &queue)
+        precondition(tracker.onEvent(.videoCleared, party: party, queue: &queue) == .none)
+        precondition(queue.count == 1)
+
+        // This phone's Stop: the end that follows doesn't advance either.
+        party.item = video("v3")
+        _ = tracker.onEvent(.video(item: video("v3")), party: party, queue: &queue)
+        tracker.manualStopRequested(currentItem: "v3")
+        precondition(tracker.onEvent(.ended(item: "v3"), party: party, queue: &queue) == .none)
+
+        // No clear within the grace period: advance anyway.
+        party.item = video("v4")
+        _ = tracker.onEvent(.video(item: video("v4")), party: party, queue: &queue)
+        precondition(tracker.onEvent(.ended(item: "v4"), party: party, queue: &queue) == .waitForClear(item: "v4"))
+        precondition(tracker.graceElapsed(party: party, queue: &queue) == .load(b))
+        precondition(tracker.graceElapsed(party: party, queue: &queue) == .none)
+
+        // A queued video that fails pauses Up next instead of skipping the rest.
+        queue.append([a])
+        precondition(tracker.onEvent(.error(context: "load", message: "x", id: nil), party: party, queue: &queue)
+                     == .paused(reason: PartyAdvanceTracker.pausedOnFailure))
+        party.item = video("v5")
+        _ = tracker.onEvent(.video(item: video("v5")), party: party, queue: &queue)
+        precondition(tracker.onEvent(.ended(item: "v5"), party: party, queue: &queue) == .none)
+        tracker.explicitLoadSent(fromQueue: false)
+        party.item = video("v6")
+        _ = tracker.onEvent(.video(item: video("v6")), party: party, queue: &queue)
+        precondition(tracker.onEvent(.ended(item: "v6"), party: party, queue: &queue) == .waitForClear(item: "v6"))
+
+        // A guest who lost the right to change the video pauses instead of loading.
+        var guest = TogetherPartyState(roomId: "r", invite: "i", relay: "x", me: "m", host: false)
+        guest.item = party.item
+        guest.policy = .onlyHost
+        precondition(tracker.onEvent(.videoCleared, party: guest, queue: &queue)
+                     == .paused(reason: "Up next paused: only the host can change the video."))
+        precondition(queue.count == 1)
+    }
+
+    @MainActor
+    static func testQueuedVideoReusesThePlayer() async throws {
+        let suite = "PhoneTogetherHold.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = FakeTogetherSession()
+        var engines: [TestAlternativeEngine] = []
+        let together = PhoneTogether(
+            defaults: defaults, sessionFactory: { _ in session },
+            playerSessionFactory: { routed, _, resume in
+                let engine = TestAlternativeEngine()
+                engines.append(engine)
+                return PlaybackSession(media: routed, route: .direct, initialResume: resume,
+                                       preferencesStore: defaults, alternativeFactory: { engine }) { routed }
+            })
+        together.startHosting(watchHere: true)
+        together.handleEventForTesting(.room(
+            roomId: "h1", invite: "https://party.playbridge.app/j/h1#k=1&h=2",
+            relay: "party.playbridge.app", member: "me", boxKey: "b", signKey: "s", host: true))
+        precondition(together.playInParty(url: "https://e.test/1.mp4", title: "One"))
+        precondition(together.enqueue([PartyQueueItem.of(url: "https://e.test/2.mp4", title: "Two")]))
+        let one = TogetherItem(id: "i1", title: "One", source: .url("https://e.test/1.mp4"))
+        together.handleEventForTesting(.video(item: one))
+        together.handleEventForTesting(.player(.load(item: one, headers: [:], startMs: 0)))
+        let first = together.activePlayerItem?.session
+        precondition(first != nil && engines.count == 1)
+
+        // The end, the party's clear and the queued load keep the same player up.
+        together.handleEventForTesting(.ended(item: "i1"))
+        precondition(together.activePlayerItem?.session === first)
+        together.handleEventForTesting(.player(.clear))
+        together.handleEventForTesting(.videoCleared)
+        precondition(together.activePlayerItem?.session === first)
+        precondition(session.loadedItems.last?.title == "Two")
+        let two = TogetherItem(id: "i2", title: "Two", source: .url("https://e.test/2.mp4"))
+        together.handleEventForTesting(.video(item: two))
+        together.handleEventForTesting(.player(.load(item: two, headers: [:], startMs: 0)))
+        precondition(together.activePlayerItem?.session === first && engines.count == 1)
+        precondition(together.activePlayerItem?.itemID == "i2")
+        precondition(engines[0].loads.last?.0.absoluteString == "https://e.test/2.mp4")
+
+        // This phone's Stop closes the player straight away.
+        precondition(together.stopVideo())
+        together.handleEventForTesting(.player(.clear))
+        precondition(together.activePlayerItem == nil)
+        together.handleEventForTesting(.videoCleared)
+
+        // An end with nothing next closes the player after the short hold.
+        let three = TogetherItem(id: "i3", title: "Three", source: .url("https://e.test/3.mp4"))
+        together.handleEventForTesting(.video(item: three))
+        together.handleEventForTesting(.player(.load(item: three, headers: [:], startMs: 0)))
+        precondition(together.activePlayerItem != nil)
+        together.handleEventForTesting(.ended(item: "i3"))
+        precondition(together.activePlayerItem != nil)
+        try await Task.sleep(nanoseconds: PhoneTogether.playerHoldNs + 300_000_000)
+        precondition(together.activePlayerItem == nil)
+        together.leave()
+    }
+
+    @MainActor
+    static func testPartyTargetAndUpNext() {
+        let suite = "PhoneTogetherQueue.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = FakeTogetherSession()
+        let together = PhoneTogether(defaults: defaults, sessionFactory: { _ in session })
+        precondition(!together.isPartySelected)
+        together.startHosting(watchHere: false)
+        together.handleEventForTesting(.room(
+            roomId: "q1", invite: "https://party.playbridge.app/j/q1#k=1&h=2",
+            relay: "party.playbridge.app", member: "me", boxKey: "b", signKey: "s", host: true
+        ))
+        // Joining picks the party; picking another device keeps the phone in it.
+        precondition(together.isPartySelected)
+        together.deselectPartyTarget()
+        precondition(!together.isPartySelected && together.isInParty)
+        together.selectPartyTarget()
+        precondition(together.isPartySelected)
+
+        // A playlist: the first plays, the rest wait in Up next; local links are skipped.
+        let rest = [
+            PartyQueueItem.of(url: "https://e.test/2.mp4", title: "Two"),
+            PartyQueueItem.of(url: "http://127.0.0.1:9/3.mp4", title: "Local"),
+            PartyQueueItem.of(url: "https://e.test/4.mp4", title: "Four"),
+        ]
+        precondition(together.playInParty(url: "https://e.test/1.mp4", title: "One", queueItems: rest))
+        precondition(session.loadedItems.map(\.title) == ["One"])
+        precondition(together.queue.map(\.title) == ["Two", "Four"])
+        precondition(together.enqueue([PartyQueueItem.of(url: "https://e.test/5.mp4", title: "Five")]))
+        together.moveQueueItem(from: 2, to: 0)
+        precondition(together.queue.map(\.title) == ["Five", "Two", "Four"])
+
+        // The video ends and the party clears it: the next one loads.
+        let one = TogetherItem(id: "i1", title: "One", source: .url("https://e.test/1.mp4"))
+        together.handleEventForTesting(.video(item: one))
+        together.handleEventForTesting(.ended(item: "i1"))
+        precondition(session.loadedItems.count == 1)
+        together.handleEventForTesting(.videoCleared)
+        precondition(session.loadedItems.map(\.title) == ["One", "Five"])
+        precondition(together.queue.map(\.title) == ["Two", "Four"])
+
+        // Stop keeps the queue and doesn't advance it.
+        let five = TogetherItem(id: "i5", title: "Five", source: .url("https://e.test/5.mp4"))
+        together.handleEventForTesting(.video(item: five))
+        precondition(together.stopVideo() && session.clears == 1)
+        together.handleEventForTesting(.videoCleared)
+        precondition(session.loadedItems.count == 2 && together.queue.count == 2)
+
+        // No clear after an end: the grace period moves on.
+        let again = TogetherItem(id: "i6", title: "Again", source: .url("https://e.test/6.mp4"))
+        together.handleEventForTesting(.video(item: again))
+        together.handleEventForTesting(.ended(item: "i6"))
+        together.elapseEndClearGraceForTesting()
+        precondition(session.loadedItems.last?.title == "Two" && together.queue.map(\.title) == ["Four"])
+
+        // Play now, then Clear.
+        precondition(together.enqueue([PartyQueueItem.of(url: "https://e.test/7.mp4", title: "Seven")]))
+        precondition(together.playQueuedItemNow(together.queue[1].id))
+        precondition(session.loadedItems.last?.title == "Seven" && together.queue.map(\.title) == ["Four"])
+        together.clearQueue()
+        precondition(together.queue.isEmpty)
+
+        // A guest who can't change the video can't queue.
+        together.handleEventForTesting(.room(
+            roomId: "q2", invite: "https://party.playbridge.app/j/q2#k=1",
+            relay: "party.playbridge.app", member: "me2", boxKey: "b", signKey: "s", host: false
+        ))
+        precondition(together.isPartySelected && together.queue.isEmpty)
+        precondition(!together.enqueue([PartyQueueItem.of(url: "https://e.test/8.mp4", title: "Eight")]))
+
+        // Leaving drops the queue and the target.
+        together.leave()
+        precondition(!together.isPartySelected && together.queue.isEmpty && !together.partyTargetSelected)
     }
 }
 

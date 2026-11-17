@@ -49,26 +49,6 @@ struct WatchTogetherScreen: View {
         } message: {
             Text("You'll leave the party you're in now.")
         }
-        .overlay(alignment: .bottom) {
-            if let toast = together.toastMessage {
-                Text(toast)
-                    .font(Theme.font(.subheadline))
-                    .foregroundStyle(Theme.onSurface)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Theme.surfaceContainerHigh, in: Capsule())
-                    .overlay(Capsule().stroke(Theme.outlineVariant, lineWidth: 1))
-                    .padding(.bottom, 16)
-                    .padding(.horizontal, 16)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
-                            if together.toastMessage == toast {
-                                together.consumeToast()
-                            }
-                        }
-                    }
-            }
-        }
     }
 
     private var headerBar: some View {
@@ -185,6 +165,8 @@ private struct StartPartySection: View {
                 Text("Friends and your other devices each play their own copy. Only play, pause and seek are shared, end-to-end encrypted.")
                     .font(Theme.font(.subheadline))
                     .foregroundStyle(Theme.onSurfaceVariant)
+                    .multilineTextAlignment(.center)
+                PartyLinksNote()
                     .multilineTextAlignment(.center)
             }
             .padding(.vertical, 8)
@@ -508,6 +490,10 @@ private struct ActivePartySection: View {
             canControl: canControl,
             onOpenLinkSheet: { showVideoLinkPrompt = true }
         )
+
+        if party.canChangeVideo || !together.queue.isEmpty {
+            UpNextSection(party: party)
+        }
 
         PartyPanel("In the party") {
             ForEach(party.orderedMembers, id: \.id) { member in
@@ -837,6 +823,7 @@ private struct NowPlayingSection: View {
                         : "Waiting for the host to pick a video."))
                     .font(Theme.font(.subheadline))
                     .foregroundStyle(Theme.onSurfaceVariant)
+                PartyLinksNote()
                 if party.canChangeVideo || (party.policy == .ask && !party.locked) {
                     Button(action: onOpenLinkSheet) {
                         Label(party.canChangeVideo ? "Play video link" : "Ask host to play a link", systemImage: "link")
@@ -880,6 +867,128 @@ private struct NowPlayingSection: View {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+/// Which links play for everyone. Shown where a party starts and while it waits for a video.
+private struct PartyLinksNote: View {
+    var body: some View {
+        Text("Each device loads the video itself. Public links, and sites that let several devices watch at once, work best. Links tied to one device or one IP address, and files on this phone, won't play for others.")
+            .font(Theme.font(.caption))
+            .foregroundStyle(Theme.onSurfaceVariant)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Up next: the videos this phone queued, in order. The next one starts when the current one ends.
+private struct UpNextSection: View {
+    let party: TogetherPartyState
+    @EnvironmentObject private var together: PhoneTogether
+
+    var body: some View {
+        let queue = together.queue
+        let canChange = party.canChangeVideo
+        PartyPanel {
+            HStack(spacing: 8) {
+                Text("UP NEXT · \(queue.count)")
+                    .font(Theme.font(.caption).weight(.semibold))
+                    .foregroundStyle(Theme.onSurfaceVariant)
+                Spacer()
+                if !queue.isEmpty && canChange {
+                    Button { together.playNextInQueueNow() } label: {
+                        Image(systemName: "forward.end.fill")
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Play the next video now")
+                }
+                if !queue.isEmpty {
+                    Button("Clear") { together.clearQueue() }
+                        .frame(minHeight: 44)
+                }
+            }
+            if let notice = together.queueNotice {
+                Text(notice)
+                    .font(Theme.font(.caption))
+                    .foregroundStyle(Theme.danger)
+            }
+            if queue.isEmpty {
+                Text("Nothing queued yet. Choose Queue in the cast sheet to add videos to Up next.")
+                    .font(Theme.font(.subheadline))
+                    .foregroundStyle(Theme.onSurfaceVariant)
+            } else {
+                ForEach(Array(queue.enumerated()), id: \.element.id) { index, item in
+                    UpNextRow(item: item, index: index, count: queue.count, canChange: canChange)
+                }
+            }
+            Text("Up next is kept on this phone. The next video starts when this one ends. If you leave the party, the list goes with you.")
+                .font(Theme.font(.caption))
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct UpNextRow: View {
+    let item: PartyQueueItem
+    let index: Int
+    let count: Int
+    let canChange: Bool
+    @EnvironmentObject private var together: PhoneTogether
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(index + 1)")
+                .font(Theme.font(.caption).monospacedDigit())
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .frame(minWidth: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(Theme.font(.body))
+                    .foregroundStyle(Theme.onSurface)
+                    .lineLimit(2)
+                if let site = item.site {
+                    Text(site)
+                        .font(Theme.font(.caption))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if canChange {
+                Button { together.playQueuedItemNow(item.id) } label: {
+                    Image(systemName: "play.fill").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Play \(item.title) now")
+            }
+            Menu {
+                if index > 0 {
+                    Button { together.moveQueueItem(from: index, to: index - 1) } label: {
+                        Label("Move up", systemImage: "arrow.up")
+                    }
+                }
+                if index < count - 1 {
+                    Button { together.moveQueueItem(from: index, to: index + 1) } label: {
+                        Label("Move down", systemImage: "arrow.down")
+                    }
+                }
+                Button(role: .destructive) { together.removeFromQueue(item.id) } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("More for \(item.title)")
+        }
+        .foregroundStyle(Theme.onSurface)
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Move up") {
+            if index > 0 { together.moveQueueItem(from: index, to: index - 1) }
+        }
+        .accessibilityAction(named: "Move down") {
+            if index < count - 1 { together.moveQueueItem(from: index, to: index + 1) }
+        }
+        .accessibilityAction(named: "Remove") { together.removeFromQueue(item.id) }
     }
 }
 

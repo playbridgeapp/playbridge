@@ -8,6 +8,7 @@ struct DeviceConnectionSheet: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var atv: AtvRemoteCoordinator
+    @EnvironmentObject private var together: PhoneTogether
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @StateObject private var pathMonitor = PlayOnPathMonitor()
@@ -75,6 +76,7 @@ struct DeviceConnectionSheet: View {
                 if let target {
                     select(target)
                 } else {
+                    together.deselectPartyTarget()
                     vm.selectThisPhone()
                     dismiss()
                 }
@@ -141,7 +143,11 @@ struct DeviceConnectionSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     networkBanners
-                    if showNowCard { nowCard }
+                    if partySelected, let party = together.currentParty {
+                        partyCard(party)
+                    } else if showNowCard {
+                        nowCard
+                    }
                     devicesSection
                     nearbySection
                     unavailableSection
@@ -327,7 +333,10 @@ struct DeviceConnectionSheet: View {
         .frame(minHeight: 44)
         return VStack(alignment: .leading, spacing: 8) {
             if receiverStandingBy {
-                tonalCapsule("Play on \(nowName)") { vm.selectNativeReceiver() }
+                tonalCapsule("Play on \(nowName)") {
+                    together.deselectPartyTarget()
+                    vm.selectNativeReceiver()
+                }
             }
             if stacks {
                 VStack(alignment: .leading, spacing: 4) {
@@ -399,13 +408,131 @@ struct DeviceConnectionSheet: View {
 
     private var devicesSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            sectionLabel("Devices")
+            sectionLabel(partySelected ? "Play somewhere else" : "Devices")
+            if !partySelected, let party = together.currentParty {
+                partyRow(party)
+            }
             phoneRow
             AirPlayDestinationRow(flat: true)
             ForEach(sections.ready) { row in
                 deviceRow(row)
             }
+            if partySelected {
+                Text("Picking another device keeps you in the party. Watch party moves to the top of this list so you can switch back.")
+                    .font(Theme.font(size: 13))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .padding(.top, 6)
+            }
         }
+        .onChange(of: vm.isAirPlay) { airPlay in
+            // Choosing AirPlay in the system picker is picking another device.
+            if airPlay { together.deselectPartyTarget() }
+        }
+    }
+
+    // MARK: - Watch party
+
+    private var partySelected: Bool { together.isPartySelected }
+
+    private func partyStatus(_ party: TogetherPartyState) -> String {
+        let upNext = "\(together.queue.count) up next"
+        if let item = party.item { return "Playing \(item.title) · \(upNext)" }
+        return "Nothing playing · \(upNext)"
+    }
+
+    private func partyCard(_ party: TogetherPartyState) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: PartyTargetStyle.symbol)
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(PartyTargetStyle.accent)
+                    .frame(width: 44, height: 44)
+                    .background(PartyTargetStyle.accent.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Watch party")
+                        .font(Theme.font(size: 16, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                    Text("Selected · \(PartyTargetStyle.watchingCount(party)) watching")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(PartyTargetStyle.accent)
+                    Text(partyStatus(party))
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 8) {
+                tonalCapsule("Open party") {
+                    nav.navigate(to: .watchTogether)
+                    dismiss()
+                }
+                Spacer(minLength: 8)
+                Button("Leave party") {
+                    together.leave()
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(Theme.danger)
+                .frame(minHeight: 44)
+            }
+        }
+        .padding(14)
+        .background(PartyTargetStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(PartyTargetStyle.border, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Shown while another device is picked: tap to send casts to the party again.
+    private func partyRow(_ party: TogetherPartyState) -> some View {
+        Button {
+            together.selectPartyTarget()
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: PartyTargetStyle.symbol)
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(PartyTargetStyle.accent)
+                    .frame(width: 28, height: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Watch party")
+                        .font(Theme.font(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.onSurface)
+                    Text("\(PartyTargetStyle.watchingCount(party)) watching · Tap to switch back")
+                        .font(Theme.font(size: 13))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+                Text("Party")
+                    .font(Theme.font(size: 12, weight: .semibold))
+                    .foregroundColor(PartyTargetStyle.accent)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 24)
+                    .background(PartyTargetStyle.accent.opacity(0.16), in: Capsule())
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 64)
+            .background(PartyTargetStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Send casts to the watch party")
+    }
+
+    /// One of this phone's TVs that is in the party: casting to it takes it out.
+    private func isOwnTvInParty(_ row: PlayOnSheetRow) -> Bool {
+        guard let party = together.currentParty else { return false }
+        let name = row.playBridge?.name ?? row.discovered?.name ?? row.listed.name
+        let uuid = row.playBridge?.uuid ?? row.discovered?.uuid ?? ""
+        let endpoint = row.playBridge.flatMap { $0.ip.isEmpty ? nil : "\($0.ip):\($0.port)" }
+            ?? row.discovered.flatMap { $0.ip.isEmpty ? nil : "\($0.ip):\($0.port)" }
+        guard row.listed.kind == .playBridge else { return false }
+        return PhoneTogether.isOwnTvMemberMatch(
+            device: WatchTogetherConnectedTv(name: name, uuid: uuid, endpointKey: endpoint),
+            party: party, ownTvIdentities: together.ownTvIdentities)
     }
 
     private var switchWarningMessage: String {
@@ -451,6 +578,12 @@ struct DeviceConnectionSheet: View {
 
     /// Pick another device, confirming first when leaving the current one would cost something.
     private func requestSelect(_ row: PlayOnSheetRow) {
+        if partySelected && isCurrentDestination(row) && vm.isConnected {
+            // Already connected: picking it only stops sending casts to the party.
+            together.deselectPartyTarget()
+            dismiss()
+            return
+        }
         if !isCurrentDestination(row), let warning = currentSwitchWarning {
             switchTarget = row
             switchWarning = warning
@@ -465,6 +598,7 @@ struct DeviceConnectionSheet: View {
                 switchTarget = nil
                 switchWarning = warning
             } else {
+                together.deselectPartyTarget()
                 vm.selectThisPhone()
                 dismiss()
             }
@@ -479,7 +613,7 @@ struct DeviceConnectionSheet: View {
                     Text("This phone")
                         .font(Theme.font(size: 15, weight: .semibold))
                         .foregroundColor(Theme.onSurface)
-                    Text("Play here")
+                    Text(together.isInParty ? "Play here, outside the party" : "Play here")
                         .font(Theme.font(size: 13))
                         .foregroundColor(Theme.onSurfaceVariant)
                 }
@@ -1283,7 +1417,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private var thisPhoneSelected: Bool {
-        !vm.playBridgeOutputSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.connectionIsConnecting
+        !partySelected && !vm.playBridgeOutputSelected && !vm.isAirPlay && vm.externalReceiver == nil && !vm.connectionIsConnecting
             && (!vm.isConnected || receiverStandingBy)
     }
 
@@ -1460,7 +1594,12 @@ struct DeviceConnectionSheet: View {
     }
 
     @ViewBuilder private func rowSubtitleView(_ row: PlayOnSheetRow) -> some View {
-        if row.listed.saved && row.listed.reachable {
+        if isOwnTvInParty(row) {
+            Text("In the party · casting to it takes it out")
+                .font(Theme.font(size: 13))
+                .foregroundColor(PartyTargetStyle.accent)
+                .lineLimit(1)
+        } else if row.listed.saved && row.listed.reachable {
             HStack(spacing: 4) {
                 Text("\(row.listed.protocolName) ·")
                 Circle().fill(PlayOnStatusGreen.color).frame(width: 6, height: 6).accessibilityHidden(true)
@@ -1526,6 +1665,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private func select(_ row: PlayOnSheetRow) {
+        together.deselectPartyTarget()
         if let device = row.playBridge {
             userPicked = true
             vm.connectSaved(device)
@@ -1538,6 +1678,7 @@ struct DeviceConnectionSheet: View {
     }
 
     private func pickExternal(_ device: ExternalReceiverDevice) {
+        together.deselectPartyTarget()
         pendingExternalID = device.identity
         userPicked = true
         vm.connectExternalReceiver(device)

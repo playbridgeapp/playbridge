@@ -78,6 +78,43 @@ final class ConnectionViewModel: ObservableObject {
     var linkedReceiverSite: (() -> String?)?
     /// Unlink that website before the receiver link closes.
     var unlinkWebsite: (() -> Void)?
+    /// The watch party is the selected target (set by ContentView from PhoneTogether).
+    var isPartySelected: () -> Bool = { false }
+    /// The selected party's room ID, for what websites see as their destination.
+    var selectedPartyRoomId: () -> String? = { nil }
+    /// Plays items in the party (the first plays, the rest go to Up next), or queues them all.
+    var sendToParty: (_ items: [PartyQueueItem], _ queue: Bool) -> Bool = { _, _ in false }
+    /// Tells the user why something can't go to the party.
+    var partyNotice: (String) -> Void = { _ in }
+
+    /// Casts go to the watch party, not a receiver.
+    var partyTargetActive: Bool { isPartySelected() }
+
+    @MainActor var websitePartySelected: Bool { partyTargetActive }
+
+    /// A website's videos for the party, from its start index.
+    @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool {
+        let items = request.items.dropFirst(request.startIndex).compactMap { item -> PartyQueueItem? in
+            guard let url = item["url"] as? String else { return nil }
+            let subtitles = (item["subtitles"] as? [String] ?? [])
+                + (item["subtitleResources"] as? [[String: Any]] ?? []).compactMap { $0["url"] as? String }
+            return PartyQueueItem.of(url: url, title: item["title"] as? String,
+                                     headers: item["headers"] as? [String: String] ?? [:],
+                                     subtitles: subtitles.filter { PartyMediaURL.evaluate($0).rejection == nil },
+                                     startMs: (item["start_position_ms"] as? NSNumber)?.int64Value ?? 0)
+        }
+        // No onUserMediaAction: this is the website's own request, already in progress.
+        return sendToParty(items, false)
+    }
+
+    /// With the party selected, sends a link there and returns true. Links only this phone
+    /// can open are refused by the party with a message.
+    private func castToPartyIfSelected(url: String, title: String?, headers: [String: String] = [:],
+                                       subtitles: [String] = [], queue: Bool = false) -> Bool {
+        guard partyTargetActive else { return false }
+        _ = sendToParty([PartyQueueItem.of(url: url, title: title, headers: headers, subtitles: subtitles)], queue)
+        return true
+    }
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
     let castPlaybackSession = CastPlaybackSession(renderer: CastSystemPlayback.shared)
@@ -818,6 +855,7 @@ final class ConnectionViewModel: ObservableObject {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onUserMediaAction?()
+        if castToPartyIfSelected(url: trimmed, title: title) { return }
         if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: [:], contentType: nil); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: nil, headers: [:]); return }
         SenderDebugNetwork.request("Cast output", url: trimmed)
@@ -884,6 +922,10 @@ final class ConnectionViewModel: ObservableObject {
     func castLocalMedia(url: String, title: String, contentType: String, subtitles: [String] = [], displayDurationMs: Int? = nil,
                         visualMetadata: [String: Any]? = nil, itemId: String? = nil) -> Bool {
         onUserMediaAction?()
+        if partyTargetActive {
+            partyNotice("Files stored on this phone can't be played in a watch party.")
+            return false
+        }
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return true }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         noteNewCast(mediaKind: kind, title: title)
@@ -906,6 +948,7 @@ final class ConnectionViewModel: ObservableObject {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         onUserMediaAction?()
+        if castToPartyIfSelected(url: trimmed, title: title, headers: headers) { return }
         if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: headers, contentType: contentType); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: contentType, headers: headers); return }
         SenderDebugNetwork.request("Cast output", url: trimmed, headers: headers)
@@ -923,6 +966,7 @@ final class ConnectionViewModel: ObservableObject {
     /// attached subtitles. Mirrors the Android `CastSheet` → `createSingleVideoCommandJson` path.
     func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
         onUserMediaAction?()
+        if castToParty(video, quality: quality, subtitles: subtitles, queue: false) { return }
         if isAirPlay {
             sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
                 headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType,
@@ -948,6 +992,22 @@ final class ConnectionViewModel: ObservableObject {
             detectedBy: video.detectedBy,
             playerMode: playerMode
         ))
+    }
+
+    /// With the party selected, sends a detected video there (direct link, page headers) and
+    /// returns true. Pictures aren't shared in parties.
+    @discardableResult
+    func castToParty(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], queue: Bool) -> Bool {
+        guard partyTargetActive else { return false }
+        if video.isImage {
+            partyNotice(queue ? "Pictures can't be added to the party queue." : "Pictures can't be shared in a watch party yet.")
+            return true
+        }
+        _ = sendToParty([PartyQueueItem.of(url: quality?.url ?? video.url, title: video.displayTitle,
+                                           headers: VideoDetector.mediaHeaders(for: video),
+                                           // Subtitles this phone serves can't reach the others.
+                                           subtitles: subtitles.filter { PartyMediaURL.evaluate($0).rejection == nil })], queue)
+        return true
     }
 
     /// Retain phone routes beyond sheet dismissal and across queued items.
@@ -1017,6 +1077,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Queue a browser-detected stream.
     func queueStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
         onUserMediaAction?()
+        if castToParty(video, quality: quality, subtitles: subtitles, queue: true) { return }
         if isAirPlay {
             sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
                 headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType, queue: true,
@@ -1580,6 +1641,17 @@ final class ConnectionViewModel: ObservableObject {
 
     @MainActor
     func replayCast(_ entry: CastHistoryStore.Entry) async {
+        if partyTargetActive, let items = CastHistoryStore.items(in: entry.command) {
+            onUserMediaAction?()
+            let partyItems = items.compactMap { item -> PartyQueueItem? in
+                guard let url = item["url"] as? String else { return nil }
+                return PartyQueueItem.of(url: url, title: item["title"] as? String ?? entry.title,
+                                         headers: item["headers"] as? [String: String] ?? [:],
+                                         subtitles: item["subtitles"] as? [String] ?? [])
+            }
+            _ = sendToParty(partyItems, false)
+            return
+        }
         guard isConnected, let items = CastHistoryStore.items(in: entry.command) else {
             operationError = "Connect a device before replaying this cast."
             return
@@ -1868,6 +1940,10 @@ final class ConnectionViewModel: ObservableObject {
 extension ConnectionViewModel: PageCastTransport {
     /// Internal route identity. Session checks compare this; do not send it to a website.
     var playbackDestination: [String: Any] {
+        // Sites see the party as their destination while it's selected, as on Android.
+        if let room = selectedPartyRoomId() {
+            return ["id": "watch_party:\(room)", "name": "Watch party", "kind": "external", "connected": true]
+        }
         let local = UserDefaults.standard.string(forKey: "last_receiver_protocol") == "this_phone" || (destinationID == nil)
         if local { return ["id": "this-device", "name": "This device", "kind": "local", "connected": true] }
         return ["id": destinationID ?? "unavailable", "name": receiverName ?? "TV",

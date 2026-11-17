@@ -134,9 +134,9 @@ struct IptvDetailScreen: View {
     }
 
     private func cast(_ ch: IptvChannel) {
-        guard vm.isConnected else { nav.openPlayOn(); return }
+        guard vm.isConnected || vm.partyTargetActive else { nav.openPlayOn(); return }
         vm.castMedia(url: ch.url, title: ch.name, headers: ch.headers)
-        showToast("Casting \(ch.name)")
+        if !vm.partyTargetActive { showToast("Casting \(ch.name)") }
     }
 
     private func refresh() {

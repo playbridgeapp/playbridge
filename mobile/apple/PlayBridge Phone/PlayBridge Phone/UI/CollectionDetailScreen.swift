@@ -135,14 +135,14 @@ struct CollectionDetailScreen: View {
             localItem = media
             return
         }
-        guard vm.isConnected else {
+        guard vm.isConnected || vm.partyTargetActive else {
             playOnPage = nil
             playOnPicking = true
             showPlayOn = true
             return
         }
         vm.castMedia(url: item.url, title: item.title, headers: item.headers, contentType: item.mimeType)
-        showToast("Casting \(item.title)")
+        if !vm.partyTargetActive { showToast("Casting \(item.title)") }
     }
 
     private func host(_ url: String) -> String { URL(string: url)?.host ?? url }

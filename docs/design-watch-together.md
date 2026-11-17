@@ -447,6 +447,11 @@ Party-as-target and phone-side queue (Android phone):
   queued item fails to load, and can be reordered, played immediately, or cleared
   in **Watch together**. Multi-device queue sync inside the Rust room worker is
   not part of this phone-side queue.
+- The iPhone app has the same target and Up next (`PartyQueue.swift`, ported
+  from Android, with the same advance rules). Websites can send one-off casts to
+  the party (first item plays, the rest go to Up next); a linked session from a
+  bridged app is refused with a message while the party is selected, until the
+  iPhone gets Android's party linked session.
 
 ### Phase 2 status (Apple TV)
 
