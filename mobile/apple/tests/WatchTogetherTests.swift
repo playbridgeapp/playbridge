@@ -154,6 +154,8 @@ struct WatchTogetherTests {
         testPartyQueueAndAdvanceRules()
         testPartyTargetAndUpNext()
         try await testQueuedVideoReusesThePlayer()
+        try await testWebsiteLinkedSessionInParty()
+        try await testWebsiteLinkedSessionLimits()
         print("PASS: Phone Watch Together checks")
     }
 
@@ -990,6 +992,159 @@ extension WatchTogetherTests {
         // Leaving drops the queue and the target.
         together.leave()
         precondition(!together.isPartySelected && together.queue.isEmpty && !together.partyTargetSelected)
+    }
+
+    private static func pageRequest(_ items: [(String, String)], start: Int = 0) -> PageCastRequest {
+        PageCastRequest(items: items.map { ["id": $0.0, "url": $0.1, "title": $0.0.uppercased()] },
+                        startIndex: start, metadata: nil, skipPreplay: false, privateOrigins: [])
+    }
+
+    private static func settle() async throws { try await Task.sleep(nanoseconds: 30_000_000) }
+
+    @MainActor
+    private static func hostedParty(host: Bool = true, room: String = "web1") -> (PhoneTogether, FakeTogetherSession) {
+        let suite = "PhoneTogetherLinked.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let session = FakeTogetherSession()
+        let together = PhoneTogether(defaults: defaults, sessionFactory: { _ in session })
+        together.startHosting(watchHere: false)
+        together.handleEventForTesting(.room(
+            roomId: room, invite: "https://party.playbridge.app/j/\(room)#k=1&h=2",
+            relay: "party.playbridge.app", member: "me", boxKey: "b", signKey: "s", host: host
+        ))
+        return (together, session)
+    }
+
+    @MainActor
+    static func testWebsiteLinkedSessionInParty() async throws {
+        let (together, session) = hostedParty()
+        var changes = 0
+        var finished: [String] = []
+        let request = pageRequest([("a", "https://e.test/a.mp4"), ("b", "https://e.test/b.mp4"),
+                                   ("c", "http://127.0.0.1:9/c.mp4")])
+        let link = try PartyLinkedSession.start(request, gateway: together)
+        link.onChange = { _ in changes += 1 }
+        link.onFinish = { finished.append($0) }
+        // The first plays, the rest wait in Up next; links only this phone can open are left out.
+        precondition(session.loadedItems.map(\.title) == ["A"])
+        precondition(together.queue.map(\.title) == ["B"] && link.knownIds == ["a", "b"])
+        var snapshot = link.snapshot()
+        precondition(snapshot.state == "connecting" && snapshot.items.map(\.id) == ["a", "b"] && snapshot.currentIndex == 0)
+
+        // The party starts the video: the site sees it paused, then playing.
+        together.handleEventForTesting(.video(item: TogetherItem(id: "ra", title: "A", source: .url("https://e.test/a.mp4"))))
+        try await settle()
+        precondition(link.snapshot().state == "paused" && changes > 0)
+        together.handleEventForTesting(.timeline(item: "ra", playing: true, positionMs: 4_000, rev: 1))
+        try await settle()
+        snapshot = link.snapshot()
+        precondition(snapshot.state == "playing" && snapshot.title == "A" && snapshot.positionMs >= 4_000)
+
+        // The site supplies more; removing one from Up next drops it from the site's list.
+        precondition(link.supply([["id": "d", "url": "https://e.test/d.mp4", "title": "D"]]) == nil)
+        precondition(together.queue.map(\.title) == ["B", "D"])
+        together.removeFromQueue(together.queue[0].id)
+        try await settle()
+        precondition(link.snapshot().items.map(\.id) == ["a", "d"])
+
+        // The video ends and Up next moves on: the site's index follows.
+        together.handleEventForTesting(.ended(item: "ra"))
+        together.handleEventForTesting(.videoCleared)
+        try await settle()
+        precondition(session.loadedItems.map(\.title) == ["A", "D"])
+        snapshot = link.snapshot()
+        precondition(snapshot.currentIndex == 1 && snapshot.state == "connecting")
+        together.handleEventForTesting(.video(item: TogetherItem(id: "rd", title: "D", source: .url("https://e.test/d.mp4"))))
+        try await settle()
+        precondition(link.snapshot().state == "paused")
+
+        // Jumping back plays the earlier video again; it becomes the current one after the
+        // ones already played (same order as Android).
+        precondition(link.jump(0) == nil && session.loadedItems.last?.title == "A")
+        snapshot = link.snapshot()
+        precondition(snapshot.items.map(\.id) == ["d", "a"] && snapshot.currentIndex == 1)
+        precondition(link.jump(5) == PageCastPartyFailure(code: "invalid_request"))
+
+        // Replace swaps the site's queued videos for the new list, leaving others' alone.
+        precondition(together.enqueue([PartyQueueItem.of(url: "https://e.test/mine.mp4", title: "Mine")]))
+        precondition(link.append([["id": "e", "url": "https://e.test/e.mp4", "title": "E"]]) == nil)
+        precondition(link.replace([["id": "x", "url": "https://e.test/x.mp4", "title": "X"],
+                                   ["id": "y", "url": "https://e.test/y.mp4", "title": "Y"]], startIndex: 0) == nil)
+        precondition(session.loadedItems.last?.title == "X" && together.queue.map(\.title) == ["Mine", "Y"])
+        precondition(link.knownIds == ["x", "y"])
+
+        // Clearing Up next stops the site being asked for more.
+        precondition(!link.isDemandSuppressed)
+        together.clearQueue()
+        try await settle()
+        precondition(link.isDemandSuppressed && link.snapshot().items.map(\.id) == ["x"])
+
+        // Playing something by hand takes over.
+        precondition(finished.isEmpty)
+        precondition(together.playInParty(url: "https://e.test/other.mp4", title: "Other"))
+        try await settle()
+        precondition(finished == ["superseded"])
+        link.close()
+
+        // Picking another device, or leaving, ends a session.
+        let second = try PartyLinkedSession.start(pageRequest([("p", "https://e.test/p.mp4")]), gateway: together)
+        var secondFinished: [String] = []
+        second.onFinish = { secondFinished.append($0) }
+        together.deselectPartyTarget()
+        try await settle()
+        precondition(secondFinished == ["receiver_changed"])
+        precondition(second.validateAvailable()?.endSession == "receiver_changed")
+        together.selectPartyTarget()
+        let third = try PartyLinkedSession.start(pageRequest([("q", "https://e.test/q.mp4")]), gateway: together)
+        var thirdFinished: [String] = []
+        third.onFinish = { thirdFinished.append($0) }
+        together.leave()
+        try await settle()
+        precondition(thirdFinished.first == "receiver_stopped" || thirdFinished.first == "receiver_changed")
+        print("PASS website linked session in the watch party")
+    }
+
+    @MainActor
+    static func testWebsiteLinkedSessionLimits() async throws {
+        // A guest in an "Ask me" party asks the host for the first video and queues nothing.
+        let (guest, guestSession) = hostedParty(host: false, room: "ask1")
+        guest.handleEventForTesting(.policy(.ask))
+        let asking = try PartyLinkedSession.start(pageRequest([("a", "https://e.test/a.mp4"), ("b", "https://e.test/b.mp4")]),
+                                                  gateway: guest)
+        precondition(guestSession.playRequests.map(\.title) == ["A"] && guestSession.loadedItems.isEmpty)
+        precondition(guest.queue.isEmpty && asking.isDemandSuppressed && asking.knownIds == ["a"])
+        precondition(asking.append([["id": "c", "url": "https://e.test/c.mp4"]])?.code == "unsupported_queue")
+        precondition(asking.replace([["id": "c", "url": "https://e.test/c.mp4"], ["id": "d", "url": "https://e.test/d.mp4"]],
+                                    startIndex: 0)?.code == "unsupported_queue")
+        precondition(asking.jump(0) == nil && guestSession.playRequests.count == 2)
+        // The host turns on "Anyone": the guest may queue again.
+        guest.handleEventForTesting(.policy(.anyone))
+        try await settle()
+        precondition(!asking.isDemandSuppressed)
+        // The host switches to "Only me": the session can't go on.
+        var finished: [String] = []
+        asking.onFinish = { finished.append($0) }
+        guest.handleEventForTesting(.policy(.onlyHost))
+        try await settle()
+        precondition(finished == ["not_allowed"] && asking.validateAvailable()?.code == "not_allowed")
+        asking.close()
+        do {
+            _ = try PartyLinkedSession.start(pageRequest([("a", "https://e.test/a.mp4")]), gateway: guest)
+            preconditionFailure("A guest in a host-only party can't start one")
+        } catch let error as PageCastError { precondition(error.code == "not_allowed") }
+
+        // A locked party refuses websites, and so does a link nobody else can open.
+        let (host, _) = hostedParty(room: "lock1")
+        do {
+            _ = try PartyLinkedSession.start(pageRequest([("a", "http://127.0.0.1:9/a.mp4")]), gateway: host)
+            preconditionFailure("Local links can't start a party session")
+        } catch let error as PageCastError { precondition(error.code == "unsupported_target") }
+        host.handleEventForTesting(.locked(true))
+        do {
+            _ = try PartyLinkedSession.start(pageRequest([("a", "https://e.test/a.mp4")]), gateway: host)
+            preconditionFailure("A locked party refuses websites")
+        } catch let error as PageCastError { precondition(error.code == "not_allowed") }
+        print("PASS website linked session limits in the watch party")
     }
 }
 

@@ -70,6 +70,8 @@ Local playback and native PlayBridge receivers support the website's lazy episod
 
 `destination.kind` tells the website what the selected device supports. `local` (this phone) and `native` (a PlayBridge TV) accept a lazy queue. `external` (Google Cast, DLNA, AirPlay and similar) accepts exactly one item: a `play()` with more than one item is rejected with `unsupported_queue` on Android and `unsupported_target` on iOS, and the session ends. Check `kind` before building a queue and send a single item to `external` destinations.
 
+A watch party picked as the target reports `kind: "external"` with the name "Watch party", but on both phones it runs a full linked session: the first item plays in the party, the rest go to its Up next, and the host asks for more with `needitems`. A guest in an "Ask me" party can only ask the host for one video: queue requests fail with `unsupported_queue` and no `needitems` follow. A locked party, or a guest in a party only the host controls, gets `not_allowed`. Links other party members can't open (this phone's own address, loopback) are left out.
+
 ### Photos
 
 An item is treated as a photo when its `contentType` starts with `image/`, or, without a content type, when its URL path ends in a common image extension (`jpg`, `jpeg`, `png`, `webp`, `avif`, `gif`, `bmp`, `heic`, `heif`). Anything else plays as video. A photo has no display time: it stays on screen until the user moves to the next item. The iOS host also accepts the item fields `mediaKind` (`video`, `audio` or `image`) and `displayDurationMs`; the Android host ignores them, so websites cannot rely on either yet.

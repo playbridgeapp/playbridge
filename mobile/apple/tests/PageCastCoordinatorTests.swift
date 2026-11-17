@@ -29,7 +29,8 @@ private final class FakeTransport: PageCastTransport {
     var phoneFetchedItems: [[String: Any]] = []
     var playbackKind = "native"
     var playbackDestination: [String: Any] {
-        ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": playbackKind,
+        if partySelected { return ["id": "watch_party:room-1", "name": "Watch party", "kind": "external", "connected": true] }
+        return ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": playbackKind,
          "connected": playbackKind == "local" || isConnected]
     }
     @MainActor var websiteLocalState: [String: Any]? { localState }
@@ -90,6 +91,60 @@ private final class FakeTransport: PageCastTransport {
         partySends.append(request)
         return partyAccepts
     }
+    var partyLinks: [FakePartyLink] = []
+    var partyStartFailure: String?
+    @MainActor func startWebsitePartyLink(_ request: PageCastRequest) throws -> PageCastPartyLink {
+        if let partyStartFailure { throw PageCastError(code: partyStartFailure) }
+        let link = FakePartyLink(request)
+        partyLinks.append(link)
+        return link
+    }
+}
+
+@MainActor private final class FakePartyLink: PageCastPartyLink {
+    var ids: [String]
+    var current: Int
+    var state = "connecting"
+    var closed = false
+    var suppressed = false
+    var failure: PageCastPartyFailure?
+    var availability: PageCastPartyFailure?
+    var jumps: [Int] = []
+    var supplied = 0
+    var onChange: ((Bool) -> Void)?
+    var onFinish: ((String) -> Void)?
+    init(_ request: PageCastRequest) {
+        ids = request.items.compactMap { $0["id"] as? String }
+        current = request.startIndex
+    }
+    var knownIds: Set<String> { Set(ids) }
+    var isDemandSuppressed: Bool { suppressed }
+    func snapshot() -> PageCastPartySnapshot {
+        PageCastPartySnapshot(state: state, positionMs: 5_000, durationMs: 60_000, title: "Party video",
+                              currentIndex: current, items: ids.map { .init(id: $0, title: nil) })
+    }
+    func validateAvailable() -> PageCastPartyFailure? { availability }
+    func append(_ items: [[String: Any]]) -> PageCastPartyFailure? { add(items) }
+    func supply(_ items: [[String: Any]]) -> PageCastPartyFailure? {
+        if failure == nil { supplied += items.count }
+        return add(items)
+    }
+    private func add(_ items: [[String: Any]]) -> PageCastPartyFailure? {
+        if let failure { return failure }
+        ids += items.compactMap { $0["id"] as? String }
+        return nil
+    }
+    func replace(_ items: [[String: Any]], startIndex: Int) -> PageCastPartyFailure? {
+        if let failure { return failure }
+        ids = items.compactMap { $0["id"] as? String }; current = startIndex
+        return nil
+    }
+    func jump(_ index: Int) -> PageCastPartyFailure? {
+        if let failure { return failure }
+        jumps.append(index); current = index
+        return nil
+    }
+    func close() { closed = true }
 }
 
 @MainActor private final class ResolveGate {
@@ -698,17 +753,94 @@ private final class FakeTransport: PageCastTransport {
         _ = await f.response(f.send("cast", payload: ["items": [Fixture.item("one"), Fixture.item("two")], "startIndex": 1]))
         precondition(f.transport.partySends.count == 1 && f.transport.sends.isEmpty && f.transport.externalOpens == 0)
         precondition(f.transport.partySends[0].startIndex == 1 && f.transport.partySends[0].items.count == 2)
-        // Linked sessions can't run against the party yet.
-        for operation in ["open", "play"] {
-            _ = await f.response(f.send(operation, payload: ["items": [Fixture.item()], "destinationId": "x"]),
-                                 error: "party_unsupported")
-        }
-        precondition(!f.coordinator.isLinked && f.transport.sends.isEmpty)
         // A cast the party refuses fails without reaching the TV.
         f.transport.partyAccepts = false
         _ = await f.response(f.send("cast", payload: ["url": "https://media.example/local.mp4"]), error: "party_refused")
         precondition(f.transport.sends.isEmpty)
-        print("PASS website casts go to a selected watch party; linked sessions are refused")
+
+        // A linked session runs in the party: play() names the party's per-site id.
+        _ = await f.response(f.send("play", payload: ["items": [Fixture.item()], "destinationId": "watch_party:room-1"]),
+                             error: "receiver_changed")
+        precondition(f.transport.partyLinks.isEmpty)
+        let opened = await f.response(f.send("open", payload: ["items": [Fixture.item("one")]]))
+        let first = f.transport.partyLinks[0]
+        precondition(f.coordinator.isLinked && !f.coordinator.isLinkedToReceiver && opened["sessionId"] != nil)
+        let play = await f.response(f.send("play", payload: ["destinationId": f.pageDestinationId(),
+            "items": [Fixture.item("a"), Fixture.item("b")], "startIndex": 0]))
+        let session = play["sessionId"] as! String
+        precondition(first.closed && f.page.events("ended").last.map { ($0["detail"] as? [String: Any])?["reason"] as? String } == "superseded")
+        let link = f.transport.partyLinks[1]
+        precondition(f.transport.sends.isEmpty && f.transport.externalOpens == 0 && f.transport.commands.isEmpty)
+
+        // Nothing reaches the page until it's ready; then it hears the state and gets asked for more.
+        precondition(f.page.events("statechange").isEmpty && f.page.events("needitems").isEmpty)
+        _ = await f.response(f.send("ping", session: session, payload: ["ready": true]))
+        let state = f.page.events("statechange").last?["detail"] as! [String: Any]
+        precondition(state["state"] as? String == "connecting" && state["totalCount"] as? Int == 2 && state["positionMs"] as? Int64 == 5_000)
+        let need = f.page.events("needitems").last?["detail"] as! [String: Any]
+        precondition(need["count"] as? Int == 2 && need["afterIndex"] as? Int == 1 && need["afterItemId"] as? String == "b")
+        // A paused party isn't re-sent every second; a playing one is.
+        let sent = f.page.events("statechange").count
+        f.coordinator.refresh(now: Date().addingTimeInterval(2))
+        precondition(f.page.events("statechange").count == sent)
+        link.state = "playing"
+        link.onChange?(false)
+        f.coordinator.refresh(now: Date().addingTimeInterval(3))
+        precondition(f.page.events("statechange").count == sent + 2)
+
+        // Supply, append, jump and replace go to the party.
+        _ = await f.response(f.send("supply", session: session, payload: ["requestId": need["requestId"]!,
+            "items": [Fixture.item("c"), Fixture.item("d"), Fixture.item("e")]]), error: "invalid_request")
+        _ = await f.response(f.send("supply", session: session, payload: ["requestId": need["requestId"]!,
+            "items": [Fixture.item("c")]]))
+        precondition(link.supplied == 1 && link.ids == ["a", "b", "c"])
+        _ = await f.response(f.send("supply", session: session, payload: ["requestId": need["requestId"]!, "items": [Fixture.item("x")]]))
+        precondition(link.supplied == 1, "A repeated supply is accepted once")
+        _ = await f.response(f.send("append", session: session, payload: ["items": [Fixture.item("b")]]), error: "invalid_request")
+        _ = await f.response(f.send("append", session: session, payload: ["items": [Fixture.item("d")]]))
+        _ = await f.response(f.send("jump", session: session, payload: ["index": 2]))
+        precondition(link.jumps == [2])
+        _ = await f.response(f.send("replace", session: session, payload: ["items": [Fixture.item("r1"), Fixture.item("r2")], "startIndex": 1]))
+        precondition(link.ids == ["r1", "r2"] && link.current == 1)
+
+        // A refused supply that settles the request isn't asked for again.
+        f.coordinator.refresh(now: Date().addingTimeInterval(4))
+        let next = f.page.events("needitems").last?["detail"] as! [String: Any]
+        link.failure = PageCastPartyFailure(code: "unsupported_target", clearNeed: true)
+        _ = await f.response(f.send("supply", session: session, payload: ["requestId": next["requestId"]!,
+            "items": [Fixture.item("local")], "endOfList": true]), error: "unsupported_target")
+        let asked = f.page.events("needitems").count
+        f.coordinator.refresh(now: Date().addingTimeInterval(20))
+        precondition(f.page.events("needitems").count == asked && f.coordinator.isLinked)
+
+        // A refusal that ends the session replies with its code and ends it.
+        link.failure = PageCastPartyFailure(code: "not_allowed", endSession: "not_allowed")
+        _ = await f.response(f.send("jump", session: session, payload: ["index": 0]), error: "not_allowed")
+        precondition(!f.coordinator.isLinked && link.closed)
+        precondition(f.page.events("ended").last.map { ($0["detail"] as? [String: Any])?["reason"] as? String } == "not_allowed")
+
+        // The party ending the session, or the party going away, unlinks the website.
+        let again = await f.response(f.send("open", payload: ["items": [Fixture.item("z")]]))["sessionId"] as! String
+        _ = await f.response(f.send("ping", session: again, payload: ["ready": true]))
+        f.transport.partyLinks.last!.onFinish?("superseded")
+        precondition(!f.coordinator.isLinked)
+        _ = await f.response(f.send("open", payload: ["items": [Fixture.item("y")]]))
+        f.transport.partyLinks.last!.availability = PageCastPartyFailure(code: "receiver_stopped", endSession: "receiver_stopped")
+        f.coordinator.refresh()
+        precondition(!f.coordinator.isLinked)
+        precondition(f.page.events("ended").last.map { ($0["detail"] as? [String: Any])?["reason"] as? String } == "receiver_stopped")
+
+        // Waiting for the host (an "Ask me" party) never asks the website for more.
+        let asking = await f.response(f.send("open", payload: ["items": [Fixture.item("w")]]))["sessionId"] as! String
+        f.transport.partyLinks.last!.suppressed = true
+        let before = f.page.events("needitems").count
+        _ = await f.response(f.send("ping", session: asking, payload: ["ready": true]))
+        precondition(f.page.events("needitems").count == before)
+        // The party can refuse to start.
+        f.transport.partyStartFailure = "not_allowed"
+        _ = await f.response(f.send("open", payload: ["items": [Fixture.item("v")]]), error: "not_allowed")
+        precondition(!f.coordinator.isLinked)
+        print("PASS website casts and linked sessions go to a selected watch party")
     }
 
     @MainActor static func main() async {

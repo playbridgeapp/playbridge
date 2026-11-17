@@ -10,6 +10,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$phone/Browser/PageCastRequest.swift" \
   "$phone/Browser/PageCastPermissions.swift" \
   "$phone/Browser/PageCastSource.swift" \
+  "$phone/Browser/PageCastPartyLink.swift" \
   "$phone/Browser/PageCastCoordinator.swift" \
   "$repo_root/mobile/apple/tests/PageCastCoordinatorTests.swift" \
   -o "$test_dir/check"

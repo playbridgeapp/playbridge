@@ -29,6 +29,8 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$phone_together/WatchTogetherLinks.swift" \
   "$phone_together/SavedWatchParties.swift" \
   "$phone_together/PartyQueue.swift" \
+  "$phone_together/PartyLinkedSession.swift" \
+  "$phone/Browser/PageCastPartyLink.swift" \
   "$phone_together/PhoneTogether.swift" \
   "$phone/Network/WireProtocol.swift" \
   "$phone/Browser/BrowserCastingPolicy.swift" \

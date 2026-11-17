@@ -449,9 +449,11 @@ Party-as-target and phone-side queue (Android phone):
   not part of this phone-side queue.
 - The iPhone app has the same target and Up next (`PartyQueue.swift`, ported
   from Android, with the same advance rules). Websites can send one-off casts to
-  the party (first item plays, the rest go to Up next); a linked session from a
-  bridged app is refused with a message while the party is selected, until the
-  iPhone gets Android's party linked session.
+  the party (first item plays, the rest go to Up next). A bridged app's linked
+  session runs in the party too (`PartyLinkedSession.swift`, a port of Android's
+  `WatchPartyLinkedSessionSink`): the site's next videos go to Up next as it
+  supplies them, it can jump and replace, it hears the party's state, and under
+  "Ask me" a guest's site asks the host for one video and isn't asked for more.
 
 ### Phase 2 status (Apple TV)
 
