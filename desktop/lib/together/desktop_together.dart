@@ -698,9 +698,8 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
             }));
       case TogetherMemberLeft(:final member):
         _updateParty((p) {
-          final nextMembers = member == p.me
-              ? p.members
-              : (Map.of(p.members)..remove(member));
+          final nextMembers =
+              member == p.me ? p.members : (Map.of(p.members)..remove(member));
           return p.copyWith(
             members: nextMembers,
             own: p.own.difference({member}),
