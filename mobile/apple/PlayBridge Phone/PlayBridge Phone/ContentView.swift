@@ -135,6 +135,9 @@ struct ContentView: View {
             vm.isPartySelected = { [weak party] in
                 MainActor.assumeIsolated { party?.isPartySelected == true }
             }
+            vm.selectedPartyRoomId = { [weak party] in
+                MainActor.assumeIsolated { party?.isPartySelected == true ? party?.currentParty?.roomId : nil }
+            }
             vm.sendToParty = { [weak party] items, queue in
                 MainActor.assumeIsolated { party?.send(items, queue: queue) == true }
             }
@@ -162,6 +165,10 @@ struct ContentView: View {
         }
         .onReceive(vm.objectWillChange) { _ in
             Task { @MainActor in pageCasting.refresh(); updateAtv() }
+        }
+        .onReceive(together.$partyTargetSelected) { _ in
+            // A linked website session aimed elsewhere ends when the party is picked.
+            Task { @MainActor in pageCasting.refresh() }
         }
         .onReceive(vm.$pairedDevice) { device in updateAtv(selection: (vm.nativeReceiverSelected, device)) }
         .onReceive(vm.$nativeReceiverSelected) { selected in updateAtv(selection: (selected, vm.pairedDevice)) }

@@ -80,6 +80,8 @@ final class ConnectionViewModel: ObservableObject {
     var unlinkWebsite: (() -> Void)?
     /// The watch party is the selected target (set by ContentView from PhoneTogether).
     var isPartySelected: () -> Bool = { false }
+    /// The selected party's room ID, for what websites see as their destination.
+    var selectedPartyRoomId: () -> String? = { nil }
     /// Plays items in the party (the first plays, the rest go to Up next), or queues them all.
     var sendToParty: (_ items: [PartyQueueItem], _ queue: Bool) -> Bool = { _, _ in false }
     /// Tells the user why something can't go to the party.
@@ -1938,6 +1940,10 @@ final class ConnectionViewModel: ObservableObject {
 extension ConnectionViewModel: PageCastTransport {
     /// Internal route identity. Session checks compare this; do not send it to a website.
     var playbackDestination: [String: Any] {
+        // Sites see the party as their destination while it's selected, as on Android.
+        if let room = selectedPartyRoomId() {
+            return ["id": "watch_party:\(room)", "name": "Watch party", "kind": "external", "connected": true]
+        }
         let local = UserDefaults.standard.string(forKey: "last_receiver_protocol") == "this_phone" || (destinationID == nil)
         if local { return ["id": "this-device", "name": "This device", "kind": "local", "connected": true] }
         return ["id": destinationID ?? "unavailable", "name": receiverName ?? "TV",
