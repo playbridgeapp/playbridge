@@ -7,6 +7,7 @@ import UIKit
 protocol TogetherSessionProtocol: AnyObject {
     @discardableResult func host(relay: String, device: TogetherDevice) -> Bool
     @discardableResult func join(invite: String, device: TogetherDevice) -> Bool
+    @discardableResult func rejoin(saved: String, device: TogetherDevice) -> Bool
     @discardableResult func pairRegister(pairing: String) -> Bool
     @discardableResult func pairAccept(device: TogetherDevice, guest: Bool) -> Bool
     @discardableResult func pairCancel() -> Bool
@@ -22,7 +23,6 @@ protocol TogetherSessionProtocol: AnyObject {
     @discardableResult func lock(_ locked: Bool) -> Bool
     @discardableResult func policy(_ policy: TogetherPolicy) -> Bool
     @discardableResult func reply(request: String, allowed: Bool, always: Bool) -> Bool
-    @discardableResult func delegate(member: String, signKey: String) -> Bool
     @discardableResult func addOwn(member: String, boxKey: String) -> Bool
     @discardableResult func continueWithout(member: String) -> Bool
     @discardableResult func shareCredentials(member: String) -> Bool
@@ -33,12 +33,16 @@ protocol TogetherSessionProtocol: AnyObject {
 
 extension TogetherClient: TogetherSessionProtocol {}
 
-/// The invite link can hold secrets: never log it.
+/// Another party to go to, picked while this phone is in one: an invite link, or a saved
+/// party to rejoin. Both hold secrets: never log them.
 struct WatchTogetherSwitchRequest: Equatable, CustomStringConvertible {
-    let invite: String
+    let invite: String?
     let watchHere: Bool
+    var saved: SavedWatchParty? = nil
 
-    var description: String { "WatchTogetherSwitchRequest(watchHere=\(watchHere))" }
+    var description: String {
+        "WatchTogetherSwitchRequest(room=\(saved?.roomId ?? "-"), watchHere=\(watchHere))"
+    }
 }
 
 struct WatchTogetherTvJoinResult: Equatable {
@@ -325,6 +329,19 @@ final class PhoneTogether: ObservableObject {
     @Published var pendingOpenScreen = false
     /// An invite to another party that arrived while this phone is in one.
     @Published private(set) var switchRequest: WatchTogetherSwitchRequest?
+    /// Parties this phone can rejoin, newest first. Fills once `loadSavedParties()` ran.
+    @Published private(set) var savedParties: [SavedWatchParty] = []
+
+    /// Where saved parties are kept. Tests swap in memory so they never touch the Keychain.
+    static var makeSavedBackend: () -> SavedWatchPartyBackend = { KeychainSavedWatchPartyBackend() }
+    private var savedStoreInstance: SavedWatchPartyStore?
+    private var savedStore: SavedWatchPartyStore {
+        if let savedStoreInstance { return savedStoreInstance }
+        let store = SavedWatchPartyStore(backend: Self.makeSavedBackend())
+        store.onChange = { [weak self] parties in self?.savedParties = parties }
+        savedStoreInstance = store
+        return store
+    }
 
     private let defaults: UserDefaults
     private let clockMs: () -> Int64
@@ -439,12 +456,17 @@ final class PhoneTogether: ObservableObject {
     /// in leaves it there: joining again would cost it its keys, and a host its host role.
     /// Another party's link waits for `confirmSwitch()`.
     func openInvite(_ invite: String, watchHere: Bool) {
-        guard let party = currentParty else {
+        let roomId = WatchTogetherLinks.roomId(invite)
+        // A party this phone was in comes back as the same member, so a host stays host.
+        let saved = roomId.flatMap { savedStore.get($0) }
+        if let party = currentParty {
+            if let roomId, party.roomId == roomId { return }
+            switchRequest = WatchTogetherSwitchRequest(invite: invite, watchHere: watchHere, saved: saved)
+        } else if let saved {
+            enterSaved(saved, watchHere: watchHere)
+        } else {
             join(invite: invite, watchHere: watchHere)
-            return
         }
-        if party.roomId == WatchTogetherLinks.roomId(invite) { return }
-        switchRequest = WatchTogetherSwitchRequest(invite: invite, watchHere: watchHere)
     }
 
     /// Leaves the current party and joins the one in the pending `switchRequest`.
@@ -452,7 +474,70 @@ final class PhoneTogether: ObservableObject {
         guard let request = switchRequest else { return }
         switchRequest = nil
         leave()
-        join(invite: request.invite, watchHere: request.watchHere)
+        if let saved = request.saved {
+            enterSaved(saved, watchHere: request.watchHere)
+        } else if let invite = request.invite {
+            join(invite: invite, watchHere: request.watchHere)
+        }
+    }
+
+    // MARK: - Saved parties
+
+    /// Reads the saved parties and drops the ones that ended.
+    func loadSavedParties() {
+        savedStore.prune()
+    }
+
+    /// Comes back to `saved` as the same member: as host if this phone started it. In another
+    /// party, asks first through `switchRequest`.
+    func rejoin(_ saved: SavedWatchParty, watchHere: Bool) {
+        if let party = currentParty {
+            if party.roomId == saved.roomId { return }
+            switchRequest = WatchTogetherSwitchRequest(invite: nil, watchHere: watchHere, saved: saved)
+        } else {
+            enterSaved(saved, watchHere: watchHere)
+        }
+    }
+
+    /// Forgets a saved party; this phone can't rejoin it as the same member after that.
+    func forgetSaved(_ roomId: String) {
+        savedStore.remove(roomId)
+    }
+
+    private func enterSaved(_ saved: SavedWatchParty, watchHere: Bool) {
+        guard let session = ensureClient() else { return }
+        if isJoiningByCode { _ = session.pairCancel() }
+        resetSessionTracking()
+        state = .starting
+        watchOnJoin = watchHere
+        if !session.rejoin(saved: saved.saved, device: makeDevice(screen: watchHere)) {
+            state = .ended(message: "Couldn't rejoin that party.")
+        }
+    }
+
+    /// Keeps the party this phone just entered, so it can come back after the app is closed.
+    private func rememberParty(roomId: String, relay: String, host: Bool, endsAtMs: Int64?, saved: String?) {
+        guard let saved else { return }
+        let previous = savedStore.get(roomId)
+        let joinedAt = previous?.joinedAtMs ?? SavedWatchParties.nowMs()
+        savedStore.put(SavedWatchParty(
+            roomId: roomId,
+            relay: relay,
+            host: host,
+            saved: saved,
+            joinedAtMs: joinedAt,
+            endsAtMs: SavedWatchParties.endsAt(roomEndsAtMs: endsAtMs, joinedAtMs: joinedAt),
+            hostName: previous?.hostName,
+            own: previous?.own ?? []
+        ))
+        // Back as the same member: the devices this phone added are still its own.
+        guard let own = previous?.own, !own.isEmpty else { return }
+        for device in own {
+            _ = client?.addOwn(member: device.member, boxKey: device.boxKey)
+        }
+        updateParty { party in
+            for device in own { party.own.insert(device.member) }
+        }
     }
 
     func cancelSwitch() {
@@ -599,7 +684,6 @@ final class PhoneTogether: ObservableObject {
         guard let party = currentParty, tvBridge.tvSupportsWatchTogether, !addingConnectedTv else { return }
         addingConnectedTv = true
         let invite = party.invite
-        let isHost = party.host
         let fromName = deviceDisplayName
         let connectedIdentity = tvBridge.connectedPlayBridgeTvIdentity
         Task { @MainActor [weak self] in
@@ -609,8 +693,9 @@ final class PhoneTogether: ObservableObject {
                 let tv = try await tvBridge.addTvToWatchTogether(invite: invite, from: fromName)
                 guard let latest = self.currentParty, latest.roomId == party.roomId else { return }
                 _ = self.client?.addOwn(member: tv.member, boxKey: tv.boxKey)
-                if isHost {
-                    _ = self.client?.delegate(member: tv.member, signKey: tv.signKey)
+                self.savedStore.update(party.roomId) { saved in
+                    saved.own.removeAll { $0.member == tv.member }
+                    saved.own.append(SavedOwnDevice(member: tv.member, boxKey: tv.boxKey))
                 }
                 if let connectedIdentity {
                     self.ownTvIdentities[tv.member] = connectedIdentity
@@ -777,7 +862,7 @@ final class PhoneTogether: ObservableObject {
 
     private func onEvent(_ event: TogetherEvent) {
         switch event {
-        case .room(let roomId, let invite, let relay, let member, _, _, let host):
+        case .room(let roomId, let invite, let relay, let member, _, _, let host, let endsAtMs, let saved):
             if self.roomId != roomId {
                 resetSessionTracking()
             }
@@ -797,6 +882,7 @@ final class PhoneTogether: ObservableObject {
                 watching: watchOnJoin,
                 members: [member: selfMember]
             ))
+            rememberParty(roomId: roomId, relay: relay, host: host, endsAtMs: endsAtMs, saved: saved)
 
         case .player(let command):
             onPlayerCommand(command)
@@ -862,7 +948,13 @@ final class PhoneTogether: ObservableObject {
             }
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
 
-        case .member, .timeline, .waiting, .continueWithoutAvailable, .locked, .policy,
+        case .member(let member, let name, _, let host):
+            updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
+            if host, let party = currentParty, member != party.me {
+                savedStore.update(party.roomId) { $0.hostName = name }
+            }
+
+        case .timeline, .waiting, .continueWithoutAvailable, .locked, .policy,
              .playRequested, .requestExpired, .warning, .live, .duration:
             updateParty { $0 = PhoneTogetherReducer.reduce($0, event: event, nowMs: clockMs()) }
 
@@ -889,6 +981,10 @@ final class PhoneTogether: ObservableObject {
 
         case .stopped(let roomId, let reason, let retryAfterSecs):
             if !roomId.isEmpty, roomId != self.roomId { return }
+            // A party that ended, or whose link stopped working, can't be rejoined.
+            if reason == .expired || reason == .unauthorized, let ended = self.roomId {
+                savedStore.remove(ended)
+            }
             self.roomId = nil
             resetSessionTracking()
             closePlayerProgrammatically()

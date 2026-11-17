@@ -226,9 +226,9 @@ final class TvTogether: ObservableObject {
         case .pairingInvite(let from, let relay):
             state = .invited(from: from, relay: relay)
 
-        case .room(_, _, let relay, let member, let boxKey, let signKey, _):
+        case .room(_, _, let relay, let member, let boxKey, let signKey, _, _, _):
             // Note: `roomId` is stored to scope `.stopped` events.
-            if case .room(let roomId, _, _, _, _, _, _) = event {
+            if case .room(let roomId, _, _, _, _, _, _, _, _) = event {
                 room = roomId
             }
             me = member

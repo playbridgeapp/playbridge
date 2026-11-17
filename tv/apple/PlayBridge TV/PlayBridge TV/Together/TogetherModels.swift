@@ -126,7 +126,11 @@ enum TogetherEvent: Equatable {
         member: String,
         boxKey: String,
         signKey: String,
-        host: Bool
+        host: Bool,
+        /// When the room ends (Unix ms), from its ID; nil for rooms made before dated IDs.
+        endsAtMs: Int64? = nil,
+        /// What `rejoin` needs to come back as this same member. Secret like `invite`.
+        saved: String? = nil
     )
     case connected(members: [String])
     case disconnected
@@ -225,7 +229,9 @@ enum TogetherJson {
                 member: member,
                 boxKey: boxKey,
                 signKey: signKey,
-                host: bool(object, "host")
+                host: bool(object, "host"),
+                endsAtMs: double(object, "ends_at").map { Int64($0) },
+                saved: string(object, "saved")
             )
         case "connected":
             return .connected(members: strings(object, "members"))

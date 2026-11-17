@@ -6,6 +6,7 @@ import UIKit
 struct WatchTogetherScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var together: PhoneTogether
+    @State private var showSaved = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +35,11 @@ struct WatchTogetherScreen: View {
             }
         }
         .background(Theme.surface.ignoresSafeArea())
+        .onAppear { together.loadSavedParties() }
+        .sheet(isPresented: $showSaved) {
+            SavedPartiesSheet(watchHere: together.watchHereByDefault(connectedTvName: vm.connectedPlayBridgeTvName))
+                .environmentObject(together)
+        }
         .alert("Join another party?", isPresented: Binding(
             get: { together.switchRequest != nil },
             set: { if !$0 { together.cancelSwitch() } }
@@ -72,6 +78,15 @@ struct WatchTogetherScreen: View {
                 .font(Theme.font(.title2).weight(.semibold))
                 .foregroundStyle(Theme.onSurface)
             Spacer()
+            Button {
+                showSaved = true
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Recent parties")
+            .foregroundStyle(Theme.onSurface)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -413,7 +428,7 @@ private struct ActivePartySection: View {
                     .font(.title2)
                     .foregroundStyle(Theme.primary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(party.host ? "Your watch party" : "\(hostName(party) ?? "A") watch party")
+                    Text(party.host ? "Your watch party" : "\(hostName(party) ?? savedHostName ?? "A") watch party")
                         .font(Theme.font(.title3).weight(.semibold))
                         .foregroundStyle(Theme.onSurface)
                     HStack(spacing: 6) {
@@ -452,6 +467,8 @@ private struct ActivePartySection: View {
                 .buttonStyle(.bordered)
             }
         }
+
+        HostAwayNote(party: party)
 
         if let notice = party.notice, !notice.isEmpty {
             PartyPanel {
@@ -655,6 +672,11 @@ private struct ActivePartySection: View {
 
     private func hostName(_ party: TogetherPartyState) -> String? {
         party.members.values.first(where: { $0.host })?.name
+    }
+
+    /// While the host is away, the name this phone saw before.
+    private var savedHostName: String? {
+        together.savedParties.first(where: { $0.roomId == party.roomId })?.hostName
     }
 
     private func memberName(_ party: TogetherPartyState, id: String) -> String {
@@ -884,3 +906,102 @@ private struct ActivityShareView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 #endif
+
+/// Only the host can act as host, so while the host is away nobody stands in. Waits a few
+/// seconds after joining, while the host's hello is still on its way.
+private struct HostAwayNote: View {
+    let party: TogetherPartyState
+    @State private var shown = false
+
+    private var away: Bool { !party.host && party.connected && !party.members.values.contains { $0.host } }
+
+    var body: some View {
+        Group {
+            if away && shown {
+                PartyPanel {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("The host is away")
+                            .font(Theme.font(.headline))
+                            .foregroundStyle(Theme.onSurface)
+                        Text(hostAwayMessage(party))
+                            .font(Theme.font(.subheadline))
+                            .foregroundStyle(Theme.onSurfaceVariant)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .task(id: away) {
+            shown = false
+            guard away else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            shown = !Task.isCancelled
+        }
+    }
+}
+
+func hostAwayMessage(_ party: TogetherPartyState) -> String {
+    if party.locked { return "The video keeps playing. Controls stay locked until they're back." }
+    if party.policy == .anyone { return "The video keeps playing, and anyone can still change it." }
+    return "The video keeps playing. Nobody can change it until they're back."
+}
+
+/// Parties this phone joined recently and can go back to, as the same member.
+private struct SavedPartiesSheet: View {
+    let watchHere: Bool
+    @EnvironmentObject private var together: PhoneTogether
+    @Environment(\.dismiss) private var dismiss
+    @State private var now = SavedWatchParties.nowMs()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if together.savedParties.isEmpty {
+                    Text("Parties you start or join show up here until they end, so you can go back to them.")
+                        .font(Theme.font(.subheadline))
+                        .foregroundStyle(Theme.onSurfaceVariant)
+                }
+                ForEach(together.savedParties, id: \.roomId) { saved in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(saved.title)
+                                .font(Theme.font(.body))
+                                .lineLimit(1)
+                            Text("\(SavedWatchParties.endsIn(saved, nowMs: now)) · \(saved.relay)")
+                                .font(Theme.font(.caption))
+                                .foregroundStyle(Theme.onSurfaceVariant)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        if saved.roomId == together.currentParty?.roomId {
+                            Text("You're in it")
+                                .font(Theme.font(.caption).weight(.semibold))
+                                .foregroundStyle(Theme.primary)
+                        } else {
+                            Button(saved.host ? "Rejoin as host" : "Rejoin") {
+                                together.rejoin(saved, watchHere: watchHere)
+                                dismiss()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .swipeActions {
+                        Button("Remove", role: .destructive) { together.forgetSaved(saved.roomId) }
+                    }
+                }
+            }
+            .navigationTitle("Recent parties")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                now = SavedWatchParties.nowMs()
+                together.loadSavedParties()
+            }
+        }
+    }
+}
