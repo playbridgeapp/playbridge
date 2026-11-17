@@ -7,6 +7,7 @@ import 'package:playbridge_desktop/pairing_store.dart';
 import 'package:playbridge_desktop/player_controller.dart';
 import 'package:playbridge_desktop/stream_proxy_server.dart';
 import 'package:playbridge_desktop/together/desktop_together.dart';
+import 'package:playbridge_desktop/together/saved_parties.dart';
 import 'package:playbridge_desktop/together/together_screen.dart';
 import 'package:playbridge_desktop/tv_connection_store.dart';
 import 'package:playbridge_desktop/tv_sender_controller.dart';
@@ -38,6 +39,7 @@ void main() {
       prefs: identity.prefs,
       deviceName: () => 'Office Mac',
       createClient: () => client,
+      savedParties: SavedPartyStore(MemorySavedPartyVault()),
     );
     addTearDown(sender.dispose);
     addTearDown(player.dispose);

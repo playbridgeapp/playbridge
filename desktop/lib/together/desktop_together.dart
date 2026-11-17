@@ -8,6 +8,7 @@ import '../engines/mpv_engine.dart';
 import '../player_controller.dart';
 import '../player_engine.dart';
 import '../tv_sender_controller.dart';
+import 'saved_parties.dart';
 import 'watch_together_join.dart';
 
 /// PlayBridge's shared relay: up to 4 devices for 3 hours.
@@ -195,13 +196,20 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     required String Function() deviceName,
     TogetherClient Function()? createClient,
     int Function()? clock,
+    SavedPartyStore? savedParties,
     this.liveWait = const Duration(seconds: 2),
   })  : _prefs = prefs,
         _deviceName = deviceName,
         _createClient = createClient ?? TogetherClient.new,
-        clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
+        clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch),
+        savedParties =
+            savedParties ?? SavedPartyStore(SecureSavedPartyVault()) {
     player.addListener(_onPlayerChanged);
   }
+
+  /// Parties this computer can rejoin as the same member. Call
+  /// [SavedPartyStore.load] before showing them.
+  final SavedPartyStore savedParties;
 
   static const _relayKey = 'pb.together.relay_url';
   static const _pairingKey = 'pb.together.pairing_url';
@@ -285,7 +293,17 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     }
   }
 
+  /// Joins the party in [link]. The current party's link does nothing: joining
+  /// again would cost this computer its keys, and a host its host role. A party
+  /// this computer was in comes back as the same member, so a host stays host.
   void join(String link, {required bool watchHere}) {
+    final room = watchTogetherRoomId(link);
+    if (room != null && room == party?.roomId) return;
+    final saved = room == null ? null : savedParties.get(room);
+    if (saved != null) {
+      rejoin(saved, watchHere: watchHere);
+      return;
+    }
     final client = _ensureClient();
     if (client == null) return;
     _watchOnJoin = watchHere;
@@ -293,6 +311,48 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
     if (!client.join(link.trim(), _device(watchHere))) {
       _set(const TogetherEnded("That invite link isn't valid."));
     }
+  }
+
+  /// Comes back to [saved] as the same member: as host if this computer
+  /// started it. Leaves the current party first.
+  void rejoin(SavedParty saved, {required bool watchHere}) {
+    if (saved.roomId == party?.roomId) return;
+    final client = _ensureClient();
+    if (client == null) return;
+    _watchOnJoin = watchHere;
+    _set(const TogetherStarting());
+    if (!client.rejoin(saved.saved, _device(watchHere))) {
+      _set(const TogetherEnded("Couldn't rejoin that party."));
+    }
+  }
+
+  /// Keeps the party this computer just entered, so it can come back after
+  /// the app is closed.
+  Future<void> _rememberParty(TogetherRoom event) async {
+    final saved = event.saved;
+    if (saved == null) return;
+    await savedParties.load();
+    final previous = savedParties.get(event.roomId);
+    final joinedAt =
+        previous?.joinedAtMs ?? DateTime.now().millisecondsSinceEpoch;
+    await savedParties.put(SavedParty(
+      roomId: event.roomId,
+      relay: event.relay,
+      host: event.host,
+      saved: saved,
+      joinedAtMs: joinedAt,
+      endsAtMs: SavedParties.endsAt(event.endsAtMs, joinedAt),
+      hostName: previous?.hostName,
+      own: previous?.own ?? const [],
+    ));
+    // Back as the same member: the devices this computer added are still its own.
+    final own = previous?.own ?? const <SavedOwnDevice>[];
+    if (own.isEmpty || _room != event.roomId) return;
+    for (final device in own) {
+      _client?.addOwn(device.member, device.boxKey);
+    }
+    _updateParty(
+        (p) => p.copyWith(own: {...p.own, ...own.map((d) => d.member)}));
   }
 
   void leave() {
@@ -415,14 +475,18 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
         await sender.addTvToWatchTogether(current.invite, _deviceName());
     final member = reply.member;
     final boxKey = reply.boxKey;
-    final signKey = reply.signKey;
-    if (!reply.ok || member == null || boxKey == null || signKey == null) {
+    if (!reply.ok || member == null || boxKey == null) {
       _toast("$name couldn't join (${reply.error ?? 'unavailable'})");
       return;
     }
     _client?.addOwn(member, boxKey);
-    // The host's own TV can carry on as host if this computer leaves.
-    if (current.host) _client?.delegate(member, signKey);
+    unawaited(savedParties.update(
+      current.roomId,
+      (saved) => saved.copyWith(own: [
+        ...saved.own.where((d) => d.member != member),
+        SavedOwnDevice(member, boxKey),
+      ]),
+    ));
     _updateParty((p) => p.copyWith(own: {...p.own, member}));
     _toast('$name joined the party');
   }
@@ -680,6 +744,7 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
             ),
           },
         )));
+        unawaited(_rememberParty(event));
       case TogetherPlayer(:final command):
         _onPlayerCommand(command);
       case TogetherConnected():
@@ -696,6 +761,11 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
               event.member:
                   PartyMember(event.name, event.kind, host: event.host),
             }));
+        final current = party;
+        if (event.host && current != null && event.member != current.me) {
+          unawaited(savedParties.update(
+              current.roomId, (saved) => saved.copyWith(hostName: event.name)));
+        }
       case TogetherMemberLeft(:final member):
         _updateParty((p) {
           final nextMembers =
@@ -813,6 +883,13 @@ class DesktopTogether extends ChangeNotifier implements PartyControls {
   void _onStopped(TogetherStopped event) {
     // A room this computer already left. No room ID: the engine itself stopped.
     if (event.roomId.isNotEmpty && event.roomId != _room) return;
+    // A party that ended, or whose link stopped working, can't be rejoined.
+    final ended = _room;
+    if (ended != null &&
+        (event.reason == TogetherStop.expired ||
+            event.reason == TogetherStop.unauthorized)) {
+      unawaited(savedParties.remove(ended));
+    }
     _room = null;
     _stopWatchingPlayer(stopPlayer: true);
     if (_state is TogetherInParty || _state is TogetherStarting) {

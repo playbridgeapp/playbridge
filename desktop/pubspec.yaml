@@ -55,6 +55,7 @@ dependencies:
   tray_manager: ^0.5.1
   window_manager: ^0.4.3
   path_provider: ^2.1.5
+  flutter_secure_storage: ^9.2.4
 
   # Native file picker for the "Cast a file" action (desktop sender).
   file_selector: ^1.0.3

@@ -43,6 +43,36 @@ void main() {
 
   tearDown(() => client.close());
 
+  test('rejoins from saved text, and reads the room end and saved text', () {
+    const device =
+        TogetherDevice('Mac', TogetherDeviceKind.desktop, screen: false);
+    client.rejoin('SAVED', device);
+    expect(native.submitted.single['command'], 'rejoin');
+    expect(native.submitted.single['saved'], 'SAVED');
+
+    final events = <TogetherEvent>[];
+    client.events.listen(events.add);
+    native.pending.add(jsonEncode({
+      'event': 'room',
+      'room': 'r',
+      'invite': 'https://relay.test/j/r#k=x&h=y',
+      'relay': 'relay.test',
+      'member': 'm',
+      'box_pk': 'b',
+      'sign_pk': 's',
+      'host': true,
+      'ends_at': 1800000000000.0,
+      'saved': 'SAVED',
+    }));
+    client.poll();
+    return Future<void>.delayed(Duration.zero, () {
+      final room = events.single as TogetherRoom;
+      expect(room.endsAtMs, 1800000000000);
+      expect(room.saved, 'SAVED');
+      expect(room.toString(), isNot(contains('SAVED')));
+    });
+  });
+
   test('sends commands in the engine format', () {
     const device =
         TogetherDevice('Mac', TogetherDeviceKind.desktop, screen: true);
@@ -133,6 +163,8 @@ void main() {
     final room = events[0] as TogetherRoom;
     expect(room.host, isTrue);
     expect(room.toString(), isNot(contains('k=x')));
+    expect(room.endsAtMs, isNull);
+    expect(room.saved, isNull);
     final load = (events[1] as TogetherPlayer).command as TogetherLoad;
     expect(load.item.id, 'i1');
     expect((load.item.source as TogetherUrl).url, 'https://example.com/v.mp4');

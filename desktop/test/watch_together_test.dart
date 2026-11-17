@@ -7,6 +7,7 @@ import 'package:playbridge_desktop/player_controller.dart';
 import 'package:playbridge_desktop/protocol.dart';
 import 'package:playbridge_desktop/stream_proxy_server.dart';
 import 'package:playbridge_desktop/together/desktop_together.dart';
+import 'package:playbridge_desktop/together/saved_parties.dart';
 import 'package:playbridge_desktop/together/watch_together_join.dart';
 import 'package:playbridge_desktop/tv_connection_store.dart';
 import 'package:playbridge_desktop/tv_sender_controller.dart';
@@ -94,7 +95,7 @@ void main() {
         Engine engine,
         fixtures.FakeTransport transport,
         TvSenderController sender,
-      })> fixture() async {
+      })> fixture({SavedPartyVault? vault}) async {
     final transport = fixtures.FakeTransport();
     final store = await TvConnectionStore.load();
     await store.upsert(fixtures.saved('tv', name: 'Living Room TV'));
@@ -114,6 +115,7 @@ void main() {
       deviceName: () => 'Office Mac',
       createClient: () => client,
       liveWait: const Duration(milliseconds: 50),
+      savedParties: SavedPartyStore(vault ?? MemorySavedPartyVault()),
     );
     addTearDown(together.dispose);
     addTearDown(sender.dispose);
@@ -377,7 +379,7 @@ void main() {
         {'type': 'url', 'url': 'https://www.media.example/c.mp4'});
   });
 
-  test('adds the connected TV as its own and hands it host duties', () async {
+  test('adds the connected TV as its own without host duties', () async {
     final f = await fixture();
     f.transport.features = {watchTogetherFeature};
     expect((await f.sender.selectDevice('playBridge:tv'))['ok'], isTrue);
@@ -403,9 +405,125 @@ void main() {
 
     expect(f.room.last('add_own'),
         {'command': 'add_own', 'member': 'tv1', 'box_pk': 'tvbox'});
-    expect(f.room.last('delegate'),
-        {'command': 'delegate', 'member': 'tv1', 'sign_pk': 'tvsign'});
+    // Only the host acts as host: the TV gets no host duties.
+    expect(f.room.names, isNot(contains('delegate')));
     expect(f.together.party!.own, {'tv1'});
+  });
+
+  group('saved parties', () {
+    const roomId = '00000000000000000000000000000001';
+    final endsAt = DateTime.now().millisecondsSinceEpoch + 3600000;
+    Map<String, Object?> savedRoom({bool host = true}) => {
+          ...room(host: host),
+          'room': roomId,
+          'ends_at': endsAt.toDouble(),
+          'saved': 'SAVED-TEXT',
+        };
+
+    test('a host comes back as host after a restart, from the list or the link',
+        () async {
+      final vault = MemorySavedPartyVault();
+      final first = await fixture(vault: vault);
+      first.together.start(watchHere: false);
+      deliver(first.client, first.room, savedRoom());
+      await waitFor(() => first.together.savedParties.parties.isNotEmpty);
+      final saved = first.together.savedParties.parties.single;
+      expect(saved.host, isTrue);
+      expect(saved.endsAtMs, endsAt);
+      expect(saved.title, 'Your party');
+      expect(vault.items.values.single, contains('SAVED-TEXT'));
+      expect(saved.toString(), isNot(contains('SAVED-TEXT')));
+
+      // Opening the current party's link changes nothing.
+      first.together.join(invite, watchHere: false);
+      expect(first.room.names, isNot(contains('join')));
+
+      // A new run of the app: the link rejoins with the saved keys.
+      final second = await fixture(vault: vault);
+      await second.together.savedParties.load();
+      expect(
+          second.together.savedParties.parties.map((p) => p.roomId), [roomId]);
+      second.together.join(invite, watchHere: false);
+      expect(second.room.names, isNot(contains('join')));
+      expect(second.room.last('rejoin')['saved'], 'SAVED-TEXT');
+      expect(second.together.state, isA<TogetherStarting>());
+    });
+
+    test('a rejoin restores own TVs, and an ended party is forgotten',
+        () async {
+      final vault = MemorySavedPartyVault()
+        ..items[roomId] = jsonEncode(SavedParty(
+          roomId: roomId,
+          relay: 'relay.test',
+          host: true,
+          saved: 'SAVED-TEXT',
+          joinedAtMs: DateTime.now().millisecondsSinceEpoch,
+          endsAtMs: endsAt,
+          own: const [SavedOwnDevice('tv1', 'tvbox')],
+        ).toJson());
+      final f = await fixture(vault: vault);
+      await f.together.savedParties.load();
+      f.together
+          .rejoin(f.together.savedParties.parties.single, watchHere: false);
+      deliver(f.client, f.room, savedRoom());
+      await waitFor(() => f.room.names.contains('add_own'));
+      expect(f.room.last('add_own'),
+          {'command': 'add_own', 'member': 'tv1', 'box_pk': 'tvbox'});
+      await waitFor(() => f.together.party!.own.contains('tv1'));
+
+      deliver(f.client, f.room,
+          {'event': 'stopped', 'room': roomId, 'reason': 'expired'});
+      await waitFor(() => vault.items.isEmpty);
+      expect(f.together.savedParties.parties, isEmpty);
+    });
+
+    test('a guest remembers the host\'s name', () async {
+      final f = await fixture();
+      f.together.join(invite, watchHere: false);
+      deliver(f.client, f.room, savedRoom(host: false));
+      await waitFor(() => f.together.savedParties.parties.isNotEmpty);
+      deliver(f.client, f.room, {
+        'event': 'member',
+        'member': 'h1',
+        'name': 'Sam',
+        'kind': 'phone',
+        'host': true,
+      });
+      await waitFor(
+          () => f.together.savedParties.parties.single.hostName == 'Sam');
+      expect(f.together.savedParties.parties.single.title, "Sam's party");
+    });
+  });
+
+  test('saved party rules', () {
+    const now = 1800000000000;
+    SavedParty party(String room, {int joinedAt = now, int? endsAt}) =>
+        SavedParty(
+          roomId: room,
+          relay: 'r',
+          host: false,
+          saved: 's',
+          joinedAtMs: joinedAt,
+          endsAtMs: SavedParties.endsAt(endsAt, joinedAt),
+        );
+    expect(party('a').endsAtMs, now + SavedParties.undatedLifetimeMs);
+    final many = [
+      for (var i = 0; i < 22; i++) party('r$i', joinedAt: now + i),
+      party('gone', endsAt: now - 1),
+    ];
+    final live = SavedParties.live(many, now);
+    expect(live.length, SavedParties.maxSaved);
+    expect(live.first.roomId, 'r21');
+    expect(live.any((p) => p.roomId == 'gone'), isFalse);
+    expect(SavedParties.endsIn(party('a', endsAt: now + 130 * 60000), now),
+        'Ends in 2 h 10 min');
+    expect(SavedParties.endsIn(party('a', endsAt: now + 1000), now),
+        'Ends in less than a minute');
+    expect(
+        watchTogetherRoomId(
+            'https://party.playbridge.app/j/0123456789abcdef0123456789abcdef#k=a&h=b'),
+        '0123456789abcdef0123456789abcdef');
+    expect(watchTogetherRoomId('https://example.com/watch?v=1'), isNull);
   });
 
   test('parses a paired phone\'s join and refuses a bad one', () {

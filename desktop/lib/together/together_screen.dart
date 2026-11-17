@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 
 import 'desktop_together.dart';
+import 'saved_parties.dart';
 import '../ui/pb_theme.dart';
 import '../ui/pb_widgets.dart';
 
@@ -18,7 +21,20 @@ class TogetherScreen extends StatelessWidget {
   final VoidCallback? onOpenVideo;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => Stack(children: [
+        Positioned.fill(child: _content()),
+        Positioned(
+          top: 24,
+          right: 24,
+          child: IconButton(
+            tooltip: 'Recent parties',
+            icon: const Icon(Icons.history, color: PbColors.textSecondary),
+            onPressed: () => _showSavedParties(context, together),
+          ),
+        ),
+      ]);
+
+  Widget _content() => ListenableBuilder(
         listenable: Listenable.merge([together, together.sender]),
         builder: (context, _) => switch (together.state) {
           TogetherIdle() => _StartView(together: together),
@@ -40,6 +56,215 @@ class TogetherScreen extends StatelessWidget {
             _EndedView(message: message, onDone: together.dismissEnded),
         },
       );
+}
+
+// ─── Recent parties ─────────────────────────────────────────────────────────
+
+Future<void> _showSavedParties(BuildContext context, DesktopTogether together) {
+  unawaited(together.savedParties.load());
+  return showDialog<void>(
+    context: context,
+    builder: (context) => _SavedPartiesDialog(together: together),
+  );
+}
+
+/// Parties this computer joined recently and can go back to, as the same member.
+class _SavedPartiesDialog extends StatelessWidget {
+  const _SavedPartiesDialog({required this.together});
+
+  final DesktopTogether together;
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+          child: ListenableBuilder(
+            listenable: Listenable.merge([together, together.savedParties]),
+            builder: (context, _) {
+              final parties = together.savedParties.parties;
+              final now = DateTime.now().millisecondsSinceEpoch;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Semantics(
+                      header: true,
+                      child: const Text('Recent parties',
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: PbColors.text)),
+                    ),
+                    const SizedBox(height: 12),
+                    if (parties.isEmpty)
+                      const Text(
+                          'Parties you start or join show up here until they end, '
+                          'so you can go back to them.',
+                          style: _secondary),
+                    Flexible(
+                      child: ListView(shrinkWrap: true, children: [
+                        for (final saved in parties)
+                          _SavedPartyRow(
+                            saved: saved,
+                            nowMs: now,
+                            current: saved.roomId == together.party?.roomId,
+                            onRejoin: () {
+                              Navigator.of(context).pop();
+                              together.rejoin(saved,
+                                  watchHere: together.watchHereByDefault);
+                            },
+                            onRemove: () =>
+                                together.savedParties.remove(saved.roomId),
+                          ),
+                      ]),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Done'),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+}
+
+class _SavedPartyRow extends StatelessWidget {
+  const _SavedPartyRow({
+    required this.saved,
+    required this.nowMs,
+    required this.current,
+    required this.onRejoin,
+    required this.onRemove,
+  });
+
+  final SavedParty saved;
+  final int nowMs;
+  final bool current;
+  final VoidCallback onRejoin;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(saved.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 15, color: PbColors.text)),
+                Text('${SavedParties.endsIn(saved, nowMs)} · ${saved.relay}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _small),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          if (current)
+            const Text("You're in it",
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: PbColors.accent))
+          else ...[
+            PbButton(
+              label: saved.host ? 'Rejoin as host' : 'Rejoin',
+              variant: PbButtonVariant.secondary,
+              onPressed: onRejoin,
+            ),
+            IconButton(
+              tooltip: 'Remove ${saved.title}',
+              icon: const Icon(Icons.close, color: PbColors.textSecondary),
+              onPressed: onRemove,
+            ),
+          ],
+        ]),
+      );
+}
+
+/// Only the host can act as host, so while the host is away nobody stands in.
+/// Waits a few seconds after joining, while the host's hello is on its way.
+class _HostAwayNote extends StatefulWidget {
+  const _HostAwayNote({required this.party});
+
+  final Party party;
+
+  @override
+  State<_HostAwayNote> createState() => _HostAwayNoteState();
+}
+
+class _HostAwayNoteState extends State<_HostAwayNote> {
+  Timer? _grace;
+  bool _shown = false;
+
+  bool get _away =>
+      !widget.party.host &&
+      widget.party.connected &&
+      !widget.party.members.values.any((m) => m.host);
+
+  @override
+  void initState() {
+    super.initState();
+    _arm();
+  }
+
+  @override
+  void didUpdateWidget(_HostAwayNote old) {
+    super.didUpdateWidget(old);
+    final wasAway = !old.party.host &&
+        old.party.connected &&
+        !old.party.members.values.any((m) => m.host);
+    if (wasAway != _away) _arm();
+  }
+
+  void _arm() {
+    _grace?.cancel();
+    _shown = false;
+    if (!_away) return;
+    _grace = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _shown = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _grace?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_away || !_shown) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: _Panel(
+        title: 'The host is away',
+        children: [Text(hostAwayMessage(widget.party), style: _secondary)],
+      ),
+    );
+  }
+}
+
+String hostAwayMessage(Party party) {
+  if (party.locked) {
+    return "The video keeps playing. Controls stay locked until they're back.";
+  }
+  if (party.policy == TogetherPolicy.anyone) {
+    return 'The video keeps playing, and anyone can still change it.';
+  }
+  return "The video keeps playing. Nobody can change it until they're back.";
 }
 
 // ─── Shared pieces ──────────────────────────────────────────────────────────
@@ -706,6 +931,7 @@ class _PartyViewState extends State<_PartyView> {
             '${selfHost ? ' · you are the host' : ''} · ${party.relay}';
 
     final main = <Widget>[
+      _HostAwayNote(party: party),
       _VideoCard(
         together: together,
         party: party,

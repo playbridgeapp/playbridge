@@ -305,6 +305,11 @@ sealed class TogetherEvent {
           boxKey: boxKey,
           signKey: signKey,
           host: b('host'),
+          endsAtMs: switch (json['ends_at']) {
+            final num n => n.toInt(),
+            _ => null,
+          },
+          saved: s('saved'),
         );
       case 'connected':
         return TogetherConnected(_strings(json['members']));
@@ -440,6 +445,8 @@ final class TogetherRoom extends TogetherEvent {
     required this.boxKey,
     required this.signKey,
     required this.host,
+    this.endsAtMs,
+    this.saved,
   });
 
   /// The room ID, which is not secret; [TogetherStopped.roomId] names the same room.
@@ -450,6 +457,13 @@ final class TogetherRoom extends TogetherEvent {
   final String boxKey;
   final String signKey;
   final bool host;
+
+  /// When the room ends (Unix ms), from its ID; null for rooms made before dated IDs.
+  final int? endsAtMs;
+
+  /// What [TogetherClient.rejoin] needs to come back as this same member after the
+  /// app was closed. Secret like [invite]: keep it encrypted and never log it.
+  final String? saved;
 
   @override
   String toString() =>
@@ -690,6 +704,10 @@ final class TogetherClient {
   bool join(String invite, TogetherDevice device) =>
       _submit({'command': 'join', 'invite': invite, ...device.toJson()});
 
+  /// Comes back to a party as the same member, from [TogetherRoom.saved].
+  bool rejoin(String saved, TogetherDevice device) =>
+      _submit({'command': 'rejoin', 'saved': saved, ...device.toJson()});
+
   /// Receiver: show a code and wait for an invite.
   bool pairRegister(String pairing) =>
       _submit({'command': 'pair_register', 'pairing': pairing});
@@ -745,10 +763,6 @@ final class TogetherClient {
         'allowed': allowed,
         'always': always,
       });
-
-  /// Hand host duties to one of this device's own devices.
-  bool delegate(String member, String signKey) =>
-      _submit({'command': 'delegate', 'member': member, 'sign_pk': signKey});
 
   /// A device this one added over its paired LAN connection.
   bool addOwn(String member, String boxKey) =>
