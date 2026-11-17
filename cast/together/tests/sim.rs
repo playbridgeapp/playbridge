@@ -1219,3 +1219,136 @@ fn host_badge_tracks_host_leave_return_and_earliest_delegate() {
         assert_eq!(badged_hosts_seen_by(&sim, idx), vec![host_id]);
     }
 }
+
+#[test]
+fn reconnecting_member_drops_peers_who_left_offline_and_updates_host_badge() {
+    let mut sim = Sim::new();
+    let host_c = sim.add("Host C", true, false, 0.0);
+    let del_keys = MemberKeys::generate();
+    let del_pk = del_keys.signing_public();
+    let del_d = sim.add_with("Delegate D", del_keys, true, 0.0);
+    let guest_b = sim.add("Guest B", false, false, 0.0);
+    sim.run(2_000.0);
+
+    let host_id = sim.id(host_c);
+    let del_id = sim.id(del_d);
+    let guest_id = sim.id(guest_b);
+    sim.command(
+        host_c,
+        Command::Delegate {
+            member: del_id,
+            sign_pk: del_pk,
+        },
+    );
+    sim.run(1_000.0);
+    assert_eq!(badged_hosts_seen_by(&sim, guest_b), vec![host_id]);
+
+    // B goes offline; while B is offline, host C leaves.
+    sim.disconnect(guest_b);
+    let d_out = sim.devices[guest_b].engine.disconnected();
+    sim.dispatch(guest_b, d_out);
+    sim.run(500.0);
+    sim.disconnect(host_c);
+    sim.run(500.0);
+
+    // B reconnects: B must learn C left (not self) and see Delegate D wear the Host badge.
+    sim.connect(guest_b);
+    sim.run(1_500.0);
+    assert!(sim.saw(
+        guest_b,
+        |e| matches!(e, Event::MemberLeft(id) if *id == host_id)
+    ));
+    assert!(!sim.saw(
+        guest_b,
+        |e| matches!(e, Event::MemberLeft(id) if *id == guest_id)
+    ));
+    assert_eq!(badged_hosts_seen_by(&sim, guest_b), vec![del_id]);
+
+    // If C rejoins later, B gets C's MemberInfo again and badge returns to C.
+    sim.connect(host_c);
+    sim.run(1_500.0);
+    assert_eq!(badged_hosts_seen_by(&sim, guest_b), vec![host_id]);
+}
+
+#[test]
+fn host_offline_stop_load_pause_and_delegate_override_converge() {
+    let mut sim = Sim::new();
+    let host = sim.add("Host", true, true, 0.0);
+    let del_keys = MemberKeys::generate();
+    let del_pk = del_keys.signing_public();
+    let delegate = sim.add_with("Delegate", del_keys, true, 0.0);
+    let guest = sim.add("Guest", false, true, 0.0);
+    sim.run(2_000.0);
+
+    let del_id = sim.id(delegate);
+    sim.command(
+        host,
+        Command::Delegate {
+            member: del_id,
+            sign_pk: del_pk,
+        },
+    );
+    sim.run(500.0);
+
+    // Play v1 across the room.
+    sim.command(host, Command::Load(item("v1")));
+    sim.run(1_500.0);
+    assert!(sim.devices[guest].player.item.as_deref() == Some("v1"));
+
+    // 1. Host goes offline, presses Stop (Clear), then reconnects: guest clears v1.
+    sim.disconnect(host);
+    let d_out = sim.devices[host].engine.disconnected();
+    sim.dispatch(host, d_out);
+    sim.run(300.0);
+    sim.command(host, Command::Clear);
+    sim.connect(host);
+    sim.run(1_500.0);
+    assert!(sim.devices[host].player.item.is_none());
+    assert!(sim.devices[guest].player.item.is_none());
+    assert!(sim.devices[delegate].player.item.is_none());
+    assert!(sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
+
+    // 2. Host goes offline, loads v2, then reconnects: everyone loads v2.
+    sim.disconnect(host);
+    let d_out = sim.devices[host].engine.disconnected();
+    sim.dispatch(host, d_out);
+    sim.run(300.0);
+    sim.command(host, Command::Load(item("v2")));
+    sim.connect(host);
+    sim.run(1_500.0);
+    assert_eq!(sim.devices[guest].player.item.as_deref(), Some("v2"));
+    assert_eq!(sim.devices[delegate].player.item.as_deref(), Some("v2"));
+    assert!(sim.devices[guest].player.playing);
+
+    // 3. Host goes offline, pauses, then reconnects: everyone pauses.
+    sim.disconnect(host);
+    let d_out = sim.devices[host].engine.disconnected();
+    sim.dispatch(host, d_out);
+    sim.run(300.0);
+    sim.command(host, Command::Pause);
+    sim.connect(host);
+    sim.run(1_500.0);
+    assert!(!sim.devices[host].player.playing);
+    assert!(!sim.devices[guest].player.playing);
+    assert!(!sim.devices[delegate].player.playing);
+
+    // 4. Host loads v_old while offline, meanwhile online Delegate advances load_rev past host
+    //    and loads v_new -> Delegate's newer change wins across all members when Host returns.
+    sim.disconnect(host);
+    let d_out = sim.devices[host].engine.disconnected();
+    sim.dispatch(host, d_out);
+    sim.run(300.0);
+    sim.command(host, Command::Load(item("v_old")));
+    for i in 0..10 {
+        sim.command(delegate, Command::Load(item(&format!("v_step_{i}"))));
+    }
+    sim.run(200.0);
+    sim.command(delegate, Command::Load(item("v_new")));
+    sim.run(500.0);
+
+    sim.connect(host);
+    sim.run(1_500.0);
+    assert_eq!(sim.devices[host].player.item.as_deref(), Some("v_new"));
+    assert_eq!(sim.devices[delegate].player.item.as_deref(), Some("v_new"));
+    assert_eq!(sim.devices[guest].player.item.as_deref(), Some("v_new"));
+}

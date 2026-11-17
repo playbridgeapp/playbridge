@@ -76,6 +76,8 @@ pub mod close {
     pub const ROOM_FULL: u16 = 4003;
     pub const REPLACED: u16 = 4004;
     pub const EXPIRED: u16 = 4008;
+    /// The room heard nothing from this member for too long; reconnecting is fine.
+    pub const SILENT: u16 = 4009;
     pub const RATE_LIMITED: u16 = 4029;
     pub const BAD_MESSAGE: u16 = 4400;
 }
