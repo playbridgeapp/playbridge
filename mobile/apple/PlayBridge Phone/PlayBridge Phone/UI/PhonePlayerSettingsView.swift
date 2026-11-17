@@ -63,20 +63,12 @@ struct PhonePlayerSettingsView: View {
                     Button("Reset timing") { session.setSubtitleDelay(0) }
                     Text("Positive delays subtitles; negative advances them. Timing resets for a new episode.").font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Subtitle appearance") {
-                    HStack {
-                        Text("Text size")
-                        Spacer()
-                        Text(String(format: "%.0f%%", session.preferences.subtitleScale * 100)).monospacedDigit()
-                    }
-                    Slider(value: preference(\.subtitleScale), in: 0.75...2, step: 0.05).accessibilityLabel("Subtitle text size")
-                    Picker("Text colour", selection: preference(\.subtitleColor)) {
-                        Text("White").tag(PhoneSubtitleColor.white)
-                        Text("Yellow").tag(PhoneSubtitleColor.yellow)
-                    }
-                    Toggle("Dark background", isOn: preference(\.subtitleBackground))
-                    Text("Appearance overrides embedded subtitle styling. Image-based subtitles may not support text styling.").font(.footnote).foregroundStyle(.secondary)
+                Section {
+                    Text("Subtitle style").font(Theme.font(size: 17, weight: .semibold))
+                } footer: {
+                    Text("Also in Settings → Subtitles. Image-based subtitles can't be restyled.")
                 }
+                PhoneSubtitleStyleSections()
             }
             .navigationTitle("Player settings")
             .navigationBarTitleDisplayMode(.inline)

@@ -11,7 +11,10 @@ struct PlayBridgePhoneApp: App {
     @StateObject private var collections = CollectionsStore()
     @StateObject private var together = PhoneTogether.shared
 
-    init() { Theme.configureTypography() }
+    init() {
+        Theme.configureTypography()
+        PhoneSubtitleStyleMigration.migrateIfNeeded()
+    }
 
     var body: some Scene {
         WindowGroup {

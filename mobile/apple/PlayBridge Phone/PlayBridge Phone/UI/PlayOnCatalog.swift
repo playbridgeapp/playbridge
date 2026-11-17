@@ -371,6 +371,7 @@ enum PlayOnPage: Hashable {
     case add
     case actions(String)
     case configure
+    case tvSubtitles
     case manualPlayBridge
     case manualRoku
     case manualDLNA

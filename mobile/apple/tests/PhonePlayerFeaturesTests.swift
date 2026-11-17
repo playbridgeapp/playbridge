@@ -18,8 +18,8 @@ final class PhoneSenderServices {
         precondition(PhonePlayerPreferences.matches("fra", preference: "fr-CA"))
         precondition(PhonePlayerPreferences.languageCode("und") == nil)
         precondition(PhonePlayerPreferences.languageCode("https://private.test/token") == nil)
-        var invalid = PhonePlayerPreferences(); invalid.speed = .infinity; invalid.subtitleScale = .nan
-        precondition(invalid.sanitized().speed == 1 && invalid.sanitized().subtitleScale == 1)
+        var invalid = PhonePlayerPreferences(); invalid.speed = .infinity
+        precondition(invalid.sanitized().speed == 1)
         store.set(Data("corrupt".utf8), forKey: PhonePlayerPreferences.key)
         precondition(PhonePlayerPreferences.load(from: store) == PhonePlayerPreferences())
         store.removeObject(forKey: PhonePlayerPreferences.key)
@@ -42,7 +42,7 @@ final class PhoneSenderServices {
         session.selectAudio(2); session.selectEmbeddedSubtitle(4)
         precondition(session.preferences.audioLanguage == "fr" && session.preferences.subtitleLanguage == "fr")
         precondition(first.selectedAudio == 2 && first.selectedSubtitle == 4)
-        session.updatePreferences { $0.speed = 1.5; $0.sizing = .fill; $0.subtitleScale = 1.25; $0.subtitleColor = .yellow; $0.subtitleBackground = false }
+        session.updatePreferences { $0.speed = 1.5; $0.sizing = .fill }
         session.setSubtitleDelay(2)
         precondition(first.configurations.last!.preferences == session.preferences && first.configurations.last!.subtitleDelay == 2)
         first.onState?(state)

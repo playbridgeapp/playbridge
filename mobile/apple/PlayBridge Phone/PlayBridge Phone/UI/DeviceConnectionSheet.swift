@@ -359,6 +359,10 @@ struct DeviceConnectionSheet: View {
         case .add: addPage
         case .actions(let id): actionsPage(id)
         case .configure: configurePage
+        case .tvSubtitles:
+            Form { TvSubtitleStyleSections(controller: vm.tvSubtitles) }
+                .navigationTitle("TV subtitles")
+                .navigationBarTitleDisplayMode(.inline)
         case .manualPlayBridge: manualPlayBridgePage
         case .manualRoku: manualRokuPage
         case .manualDLNA: manualDLNAPage
@@ -1091,6 +1095,7 @@ struct DeviceConnectionSheet: View {
         let selected = vm.coordinator.playerEngine
         return ScrollView {
             VStack(alignment: .leading, spacing: 8) {
+                if showsPlayerChoice {
                 sectionLabel("Playback")
                 if options.isEmpty {
                     Text("This TV hasn’t reported a video player yet.")
@@ -1134,6 +1139,31 @@ struct DeviceConnectionSheet: View {
                     .font(Theme.font(size: 13))
                     .foregroundColor(Theme.onSurfaceVariant)
                     .padding(.horizontal, 4)
+                }
+                if vm.tvSupportsSubtitleStyle {
+                    sectionLabel("Subtitles")
+                    Button { path.append(.tvSubtitles) } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Subtitle style")
+                                    .font(Theme.font(size: 15, weight: .semibold))
+                                    .foregroundColor(Theme.onSurface)
+                                Text("Size, background, edge and font on this TV")
+                                    .font(Theme.font(size: 13))
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Theme.onSurfaceVariant)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -1451,8 +1481,12 @@ struct DeviceConnectionSheet: View {
 
     private var showConfigure: Bool {
         guard vm.isConnected, vm.playBridgeOutputSelected, !vm.isExternalReceiver, !vm.isAirPlay else { return false }
-        // TV Default is always first. Configure needs two real engines past that.
-        return TvCapabilityOptions.playerOptions(for: vm.pairedDevice).count > 2
+        return showsPlayerChoice || vm.tvSupportsSubtitleStyle
+    }
+
+    /// TV Default is always first. A player choice needs two real engines past that.
+    private var showsPlayerChoice: Bool {
+        TvCapabilityOptions.playerOptions(for: vm.pairedDevice).count > 2
     }
 
     private var showsFailure: Bool {

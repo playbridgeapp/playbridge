@@ -27,10 +27,20 @@ registration lifetimes are unchanged; no route silently becomes Direct.
   Fit preserves the entire image; Fill crops without stretching. The fullscreen
   toolbar overlays the image and system chrome is hidden.
 - Player settings include audio/subtitle tracks, remembered language preferences,
-  subtitle delay (±10 seconds), text size, white/yellow text and a dark background.
-  Native and website captions share delay/style choices; embedded text styling is
-  overridden, while bitmap subtitles may not support it. A positive delay moves
+  subtitle delay (±10 seconds) and the subtitle style. A positive delay moves
   captions later. Delay resets on episode changes but survives retry.
+- The subtitle style (size, background, edge, font, and whether styled subtitles
+  such as ASS are restyled) is the same model and editor as the TV's
+  (`Subtitles/SubtitleStyleSettings.swift`, kept byte-identical with tvOS and
+  checked by `run-subtitle-style-checks.sh`). It is also in Settings → Subtitles,
+  next to the connected TV's own style. Up to 5 custom `.ttf`/`.otf` fonts (30 MB)
+  are kept on the phone; only the selected one is linked into mpv's
+  `sub-fonts-dir`. Native and website captions share the style; bitmap
+  subtitles can't be restyled. The old size and dark-background choices were
+  carried over once; the yellow text option is gone, as on Android.
+- Configure TV (Play on) and Settings → Subtitles edit a connected TV's style
+  (`subtitle_style_v1`) and send it fonts in acknowledged chunks
+  (`subtitle_font_v1`, see `protocol/docs/WSS_FLOW.md`). Font bytes are never logged.
 - Only display choices and normalized language codes are persisted, never URLs,
   track labels or credentials. Selected languages are restored after track discovery
   on retries/episode changes, with website sidecar fallback when available. Missing

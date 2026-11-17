@@ -74,6 +74,8 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var userAgentActive = ""
     @Published var savedUserAgents: [(name: String, value: String)] = []
     var onWatchTogetherJoined: (([String: Any]) -> Void)?
+    /// The TV's subtitle style and font replies, with the connection session they came on.
+    var onSubtitleMessage: (([String: Any], UUID?) -> Void)?
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
     func handle(
@@ -237,6 +239,9 @@ final class ConnectionCoordinator: ObservableObject {
 
         case "watch_together_joined":
             onWatchTogetherJoined?(json)
+
+        case "subtitle_style", "subtitle_font_ack", "subtitle_font_result":
+            onSubtitleMessage?(json, playbackSessionID)
 
         default:
             break
