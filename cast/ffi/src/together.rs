@@ -25,6 +25,7 @@ use playbridge_together::engine::{
 };
 use playbridge_together::messages::{ChangePolicy, DeviceKind, SharedItem, Source};
 use playbridge_together::pairing::{Lobby, PairingInvite, PairingService, QrPayload};
+use playbridge_together::saved::SavedParty;
 use playbridge_together::sync::PlayerSnapshot;
 use playbridge_together::{Invite, MemberId, MemberKeys, RoomKey};
 use serde::Deserialize;
@@ -47,6 +48,13 @@ enum Call {
     /// Join the room in an invite link.
     Join {
         invite: String,
+        #[serde(flatten)]
+        device: DeviceInput,
+    },
+    /// Come back to a party as the same member, from the `saved` text of its
+    /// `room` event: a host as the host.
+    Rejoin {
+        saved: String,
         #[serde(flatten)]
         device: DeviceInput,
     },
@@ -333,14 +341,21 @@ impl Worker {
                     key: RoomKey::generate(),
                     host: keys.signing_public(),
                 };
-                self.enter(invite, keys, device);
+                self.enter(invite, keys, MemberId::generate(), device);
             }
             Call::Join { invite, device } => match Invite::parse(&invite) {
                 // Opening the link of the party this device is in keeps it there. Joining
                 // again would drop its keys, and with them a host's right to act as host.
                 Ok(invite) if self.in_room(&invite.room.to_string()) => {}
-                Ok(invite) => self.enter(invite, MemberKeys::generate(), device),
+                Ok(invite) => {
+                    self.enter(invite, MemberKeys::generate(), MemberId::generate(), device)
+                }
                 Err(_) => self.error("join", "invalid invite link", None),
+            },
+            Call::Rejoin { saved, device } => match SavedParty::decode(&saved) {
+                Ok(party) if self.in_room(&party.invite.room.to_string()) => {}
+                Ok(party) => self.enter(party.invite, party.keys, party.me, device),
+                Err(_) => self.error("rejoin", "invalid saved party", None),
             },
             Call::PairRegister { pairing } => self.pair_register(&pairing).await,
             Call::PairAccept { device, guest } => {
@@ -357,7 +372,7 @@ impl Worker {
                     // that sent it can recognise this device as its own.
                     Ok(parsed) => {
                         let keys = if guest { MemberKeys::generate() } else { keys };
-                        self.enter(parsed, keys, device)
+                        self.enter(parsed, keys, MemberId::generate(), device)
                     }
                     Err(_) => self.error("pair", "invalid invite", None),
                 }
@@ -414,10 +429,13 @@ impl Worker {
         }
     }
 
-    fn enter(&mut self, invite: Invite, keys: MemberKeys, device: DeviceInput) {
+    fn enter(&mut self, invite: Invite, keys: MemberKeys, me: MemberId, device: DeviceInput) {
         self.leave();
-        let me = MemberId::generate();
+        let party = SavedParty { invite, keys, me };
+        let saved = party.encode();
+        let SavedParty { invite, keys, me } = party;
         let link = invite.to_link();
+        let ends_at = invite.room.expires_at_ms();
         let relay = invite.relay.host_str().unwrap_or_default().to_owned();
         let host = invite.host == keys.signing_public();
         let room_id = invite.room.to_string();
@@ -431,6 +449,9 @@ impl Worker {
             "box_pk": b64::encode(keys.box_public()),
             "sign_pk": b64::encode(keys.signing_public()),
             "host": host,
+            "ends_at": ends_at,
+            // Secret, like `invite`: what `rejoin` needs to come back as this member.
+            "saved": saved,
         }));
         let engine = Engine::new(EngineConfig {
             invite,
@@ -1053,6 +1074,52 @@ mod tests {
         let joined = next(&handle, "room");
         assert_eq!(joined["room"], other.room.to_string());
         assert_eq!(joined["host"], false);
+        assert!(handle.submit(r#"{"command":"leave"}"#));
+    }
+
+    #[test]
+    fn a_host_rejoins_from_its_saved_party_as_the_same_member_and_host() {
+        let handle = TogetherHandle::start().unwrap();
+        assert!(handle.submit(
+            r#"{"command":"host","relay":"https://relay.invalid","name":"Phone","kind":"phone","screen":false}"#
+        ));
+        let first = next(&handle, "room");
+        let saved = first["saved"].as_str().unwrap().to_owned();
+        assert!(!saved.is_empty());
+        // An unreachable relay gives no dated room ID, so no end time.
+        assert!(first["ends_at"].is_null());
+        assert!(handle.submit(r#"{"command":"leave"}"#));
+        assert_eq!(next(&handle, "stopped")["reason"], "left");
+
+        // As after a kill: a fresh session, only the saved text.
+        let handle = TogetherHandle::start().unwrap();
+        let rejoin = json!({
+            "command": "rejoin", "saved": saved, "name": "Phone", "kind": "phone", "screen": false,
+        })
+        .to_string();
+        assert!(handle.submit(&rejoin));
+        let back = next(&handle, "room");
+        for field in ["room", "member", "box_pk", "sign_pk", "invite"] {
+            assert_eq!(back[field], first[field], "{field} changed");
+        }
+        assert_eq!(back["host"], true);
+
+        // Rejoining the party it is in changes nothing.
+        assert!(handle.submit(&rejoin));
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            if let Some(value) = handle.next_event(100) {
+                assert_ne!(value["event"], "room");
+            }
+        }
+
+        // Damaged text is refused without being quoted.
+        assert!(handle.submit(
+            r#"{"command":"rejoin","saved":"c2VjcmV0","name":"Phone","kind":"phone","screen":false}"#
+        ));
+        let error = next(&handle, "error");
+        assert_eq!(error["context"], "rejoin");
+        assert!(!error.to_string().contains("c2VjcmV0"));
         assert!(handle.submit(r#"{"command":"leave"}"#));
     }
 

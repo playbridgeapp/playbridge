@@ -186,7 +186,6 @@ struct PendingRequest {
 
 #[derive(Clone, Default)]
 struct PendingSync {
-    delegates: Vec<(Signed, f64)>,
     lock_rev: Option<(u64, f64)>,
     policy_rev: Option<(u64, f64)>,
     load_rev: Option<(u64, f64)>,
@@ -195,8 +194,7 @@ struct PendingSync {
 
 impl PendingSync {
     fn is_empty(&self) -> bool {
-        self.delegates.is_empty()
-            && self.lock_rev.is_none()
+        self.lock_rev.is_none()
             && self.policy_rev.is_none()
             && self.load_rev.is_none()
             && self.timeline.is_none()
@@ -204,11 +202,6 @@ impl PendingSync {
 
     fn promote_since(&mut self, unconfirmed: &mut Self, cutoff: f64) {
         let taken = std::mem::take(unconfirmed);
-        for (signed, ts) in taken.delegates {
-            if ts >= cutoff {
-                self.delegates.push((signed, ts));
-            }
-        }
         if let Some((rev, ts)) = taken.lock_rev
             && ts >= cutoff
         {
@@ -249,7 +242,6 @@ pub struct Engine {
 
     // Host-signed state and the signed messages that established it.
     snapshot: Snapshot,
-    delegates: HashMap<MemberId, [u8; 32]>,
     badged_host: Option<MemberId>,
     locked: bool,
     lock_rev: u64,
@@ -314,7 +306,6 @@ impl Engine {
             peers: HashMap::new(),
             last_seq: HashMap::new(),
             snapshot: Snapshot::default(),
-            delegates: HashMap::new(),
             badged_host: None,
             locked: false,
             lock_rev: 0,
@@ -408,10 +399,6 @@ impl Engine {
         self.cfg.keys.signing_public() == self.cfg.invite.host
     }
 
-    fn can_sign_as_host(&self) -> bool {
-        self.is_host() || self.delegates.get(&self.cfg.me) == Some(&self.cfg.keys.signing_public())
-    }
-
     fn is_real_host(&self, member: &MemberId) -> bool {
         if *member == self.cfg.me {
             return self.is_host();
@@ -421,34 +408,16 @@ impl Engine {
             .is_some_and(|p| p.sign_pk == self.cfg.invite.host)
     }
 
-    fn is_hostish(&self, member: &MemberId) -> bool {
-        if *member == self.cfg.me {
-            return self.can_sign_as_host();
-        }
-        let Some(peer) = self.peers.get(member) else {
-            return false;
-        };
-        peer.sign_pk == self.cfg.invite.host || self.delegates.get(member) == Some(&peer.sign_pk)
-    }
-
-    /// The member that schedules starts and buffering pauses: the first
-    /// online host or delegate, else the earliest member.
+    /// The member that schedules starts and buffering pauses: the host while present,
+    /// else the earliest member. Scheduling carries no host powers.
     pub fn leader(&self) -> Option<MemberId> {
-        self.members
-            .iter()
-            .find(|m| self.is_hostish(m))
-            .or_else(|| self.members.first())
-            .copied()
+        self.acting_host().or_else(|| self.members.first().copied())
     }
 
-    /// The member wearing the party's Host badge: the real host while present,
-    /// otherwise the acting host chosen by the engine (`leader()` when a host or
-    /// delegated device is present), else `None`.
+    /// The member wearing the party's Host badge: the host, and only while present.
+    /// Nobody stands in for an absent host; the party keeps its settings until they return.
     pub fn acting_host(&self) -> Option<MemberId> {
-        if let Some(&host_id) = self.members.iter().find(|m| self.is_real_host(m)) {
-            return Some(host_id);
-        }
-        self.leader().filter(|m| self.is_hostish(m))
+        self.members.iter().find(|m| self.is_real_host(m)).copied()
     }
 
     fn clear_member_state(&mut self, member: &MemberId) {
@@ -673,8 +642,8 @@ impl Engine {
         let room_now = self.clock.room_time(local_ms).unwrap_or(local_ms);
         match command {
             Command::Load(mut item) => {
-                let allowed = self.can_sign_as_host()
-                    || (self.policy == ChangePolicy::Anyone && !self.locked);
+                let allowed =
+                    self.is_host() || (self.policy == ChangePolicy::Anyone && !self.locked);
                 if !allowed {
                     out.push(Output::Event(Event::Rejected(
                         "not allowed to change the video",
@@ -690,8 +659,8 @@ impl Engine {
                 self.issue_load(item, room_now, local_ms, &mut out);
             }
             Command::Clear => {
-                let allowed = self.can_sign_as_host()
-                    || (self.policy == ChangePolicy::Anyone && !self.locked);
+                let allowed =
+                    self.is_host() || (self.policy == ChangePolicy::Anyone && !self.locked);
                 if !allowed {
                     out.push(Output::Event(Event::Rejected(
                         "not allowed to change the video",
@@ -704,7 +673,7 @@ impl Engine {
                 self.issue_clear(local_ms, &mut out);
             }
             Command::Play | Command::Pause | Command::Seek(_) => {
-                if self.locked && !self.can_sign_as_host() {
+                if self.locked && !self.is_host() {
                     out.push(Output::Event(Event::Rejected("controls are locked")));
                     return out;
                 }
@@ -739,7 +708,7 @@ impl Engine {
                 self.write_timeline(playing, position, at, false, local_ms, &mut out);
             }
             Command::Lock(locked) => {
-                if !self.can_sign_as_host() {
+                if !self.is_host() {
                     return out;
                 }
                 let rev = self.next_seq().max(self.lock_rev + 1);
@@ -750,7 +719,7 @@ impl Engine {
                 self.write_state(&mut out);
             }
             Command::SetPolicy(change) => {
-                if !self.can_sign_as_host() {
+                if !self.is_host() {
                     return out;
                 }
                 let rev = self.next_seq().max(self.policy_rev + 1);
@@ -779,7 +748,7 @@ impl Engine {
                 allowed,
                 always,
             } => {
-                if !self.can_sign_as_host() {
+                if !self.is_host() {
                     return out;
                 }
                 let Some(pending) = self.pending.remove(&request) else {
@@ -790,22 +759,9 @@ impl Engine {
                 }
                 self.answer(request, pending, allowed, room_now, local_ms, &mut out);
             }
-            Command::Delegate { member, sign_pk } => {
-                if !self.is_host() {
-                    return out;
-                }
-                let body = Body::Delegate {
-                    member,
-                    sign_pk: b64::encode(sign_pk),
-                };
-                let signed = self.signed(&body, true, 0);
-                if self.delegates.insert(member, sign_pk) != Some(sign_pk) {
-                    self.snapshot.delegates.push(signed.clone());
-                }
-                self.record_delegate(signed.clone(), local_ms);
-                self.send_signed(signed, None, &mut out);
-                self.write_state(&mut out);
-            }
+            // Older apps still hand their own TVs host duties. Host powers stay with the
+            // host's keys, so a delegation changes nothing.
+            Command::Delegate { .. } => {}
             Command::AddOwn { member, box_pk } => self.add_own(member, box_pk, &mut out),
             Command::AddOwnKey(box_pk) => {
                 self.own_keys.insert(box_pk);
@@ -905,9 +861,6 @@ impl Engine {
         };
         let room_now = self.clock.room_time(local_ms).unwrap_or(local_ms);
         // Host-signed pieces first: they decide what the timeline may do.
-        for delegate in &snapshot.delegates {
-            self.apply_signed_piece(frame.from, delegate, room_now, out);
-        }
         for piece in [
             &snapshot.lock,
             &snapshot.policy,
@@ -923,7 +876,7 @@ impl Engine {
             let signed_ok = signed
                 .s
                 .as_deref()
-                .is_some_and(|s| self.verify_hostish(&signed.b, s));
+                .is_some_and(|s| self.verify_host(&signed.b, s));
             if self.locked && !signed_ok {
                 return out.push(Output::Event(Event::Rejected(
                     "timeline change while locked",
@@ -949,19 +902,11 @@ impl Engine {
         crypto::verify(&self.cfg.invite.host, bytes.as_bytes(), sig)
     }
 
-    fn verify_hostish(&self, bytes: &str, sig: &str) -> bool {
-        self.verify_host(bytes, sig)
-            || self
-                .delegates
-                .values()
-                .any(|pk| crypto::verify(pk, bytes.as_bytes(), sig))
-    }
-
     fn host_signed(&self, signed: &Signed) -> bool {
         signed
             .s
             .as_deref()
-            .is_some_and(|s| self.verify_hostish(&signed.b, s))
+            .is_some_and(|s| self.verify_host(&signed.b, s))
     }
 
     fn apply(
@@ -1049,21 +994,8 @@ impl Engine {
                     );
                 }
             }
-            Body::Delegate { member, sign_pk } => {
-                let Some(sig) = signed.s.as_deref() else {
-                    return;
-                };
-                if !self.verify_host(&signed.b, sig) {
-                    return out.push(Output::Event(Event::Rejected("unsigned delegation")));
-                }
-                let Ok(pk) = b64::decode_32(&sign_pk) else {
-                    return;
-                };
-                if self.delegates.insert(member, pk) != Some(pk) {
-                    self.snapshot.delegates.push(signed.clone());
-                }
-                self.sync_badged_host(None, out);
-            }
+            // Sent by older hosts; see `Command::Delegate`.
+            Body::Delegate { .. } => {}
             Body::Lock { locked } => {
                 if !self.host_signed(signed) {
                     return out.push(Output::Event(Event::Rejected("unsigned lock")));
@@ -1137,7 +1069,7 @@ impl Engine {
             }
             Body::Position { .. } => {}
             Body::RequestPlay { request, item } => {
-                if !self.can_sign_as_host() || item.shared_by != from {
+                if !self.is_host() || item.shared_by != from {
                     return;
                 }
                 if self.policy != ChangePolicy::Ask {
@@ -1490,7 +1422,7 @@ impl Engine {
             self.last_waiting = waiting.clone();
             out.push(Output::Event(Event::Waiting(waiting.clone())));
         }
-        if self.can_sign_as_host() {
+        if self.is_host() {
             let stuck: Vec<MemberId> = {
                 let mut list: Vec<_> = self
                     .buffering
@@ -1509,7 +1441,7 @@ impl Engine {
             }
         }
 
-        if !self.is_leader() || (self.locked && !self.can_sign_as_host()) {
+        if !self.is_leader() || (self.locked && !self.is_host()) {
             return;
         }
         let Some(item) = self.item.clone() else {
@@ -1554,12 +1486,12 @@ impl Engine {
         {
             self.paused_for_buffering = false;
             self.write_timeline(false, end, room_now, true, local_ms, out);
-            if self.can_sign_as_host() {
+            if self.is_host() {
                 self.issue_clear(local_ms, out);
             }
             return;
         }
-        if timeline.ended && self.can_sign_as_host() {
+        if timeline.ended && self.is_host() {
             self.issue_clear(local_ms, out);
             return;
         }
@@ -1650,7 +1582,7 @@ impl Engine {
             value["rev"] = rev.into();
         }
         let b = value.to_string();
-        let s = (sign && self.can_sign_as_host()).then(|| self.cfg.keys.sign(b.as_bytes()));
+        let s = (sign && self.is_host()).then(|| self.cfg.keys.sign(b.as_bytes()));
         Signed { b, s }
     }
 
@@ -1874,10 +1806,6 @@ impl Engine {
         }
     }
 
-    fn record_delegate(&mut self, signed: Signed, local_ms: f64) {
-        self.sync_slot().delegates.push((signed, local_ms));
-    }
-
     fn record_lock(&mut self, rev: u64, local_ms: f64) {
         self.sync_slot().lock_rev = Some((rev, local_ms));
     }
@@ -1903,18 +1831,7 @@ impl Engine {
         }
         let mut need_state = false;
 
-        if self.can_sign_as_host() {
-            for (signed, _) in pending.delegates {
-                if let Ok(Body::Delegate { member, sign_pk }) =
-                    serde_json::from_str::<Body>(&signed.b)
-                    && let Ok(pk) = b64::decode_32(&sign_pk)
-                    && self.delegates.get(&member) == Some(&pk)
-                {
-                    self.send_signed(signed.clone(), None, out);
-                    self.unconfirmed_sync.delegates.push((signed, local_ms));
-                    need_state = true;
-                }
-            }
+        if self.is_host() {
             if pending
                 .lock_rev
                 .is_some_and(|(rev, _)| rev == self.lock_rev)
@@ -1936,7 +1853,7 @@ impl Engine {
         }
 
         let can_change_video =
-            self.can_sign_as_host() || (self.policy == ChangePolicy::Anyone && !self.locked);
+            self.is_host() || (self.policy == ChangePolicy::Anyone && !self.locked);
         if pending
             .load_rev
             .is_some_and(|(rev, _)| rev == self.load_rev)
@@ -1962,7 +1879,7 @@ impl Engine {
             }
         }
 
-        let can_control = !self.locked || self.can_sign_as_host();
+        let can_control = !self.locked || self.is_host();
         if can_control
             && let Some((item_id, rev, _)) = pending.timeline
             && self.item.as_ref().is_some_and(|i| i.id == item_id)
@@ -1985,9 +1902,7 @@ impl Engine {
             return;
         }
         let b = serde_json::to_string(&self.snapshot).expect("snapshot serializes");
-        let s = self
-            .can_sign_as_host()
-            .then(|| self.cfg.keys.sign(b.as_bytes()));
+        let s = self.is_host().then(|| self.cfg.keys.sign(b.as_bytes()));
         let plain = serde_json::to_vec(&Signed { b, s }).expect("signed serializes");
         let seq = self.next_seq();
         let ct = self.cfg.invite.key.seal(
@@ -2405,7 +2320,7 @@ mod tests {
     }
 
     #[test]
-    fn delegated_member_is_hostish_without_member_info_host_flag() {
+    fn delegated_member_gets_no_host_powers() {
         let host_keys = MemberKeys::generate();
         let tv_keys = MemberKeys::generate();
         let guest_keys = MemberKeys::generate();
@@ -2467,144 +2382,73 @@ mod tests {
             })
             .expect("guest should observe delegate's MemberInfo");
         assert_eq!(info, (DeviceKind::Desktop, false));
-        assert!(guest.is_hostish(&tv_id));
+        assert!(!guest.is_real_host(&tv_id));
+        assert_eq!(guest.acting_host(), Some(host_id));
     }
 
     #[test]
-    fn acting_host_transitions_on_host_leave_return_and_late_delegate() {
+    fn host_badge_stays_with_the_host_and_nobody_stands_in() {
         let host_keys = MemberKeys::generate();
-        let del1_keys = MemberKeys::generate();
-        let del2_keys = MemberKeys::generate();
+        let tv_keys = MemberKeys::generate();
         let guest_keys = MemberKeys::generate();
         let invite = test_invite(&host_keys);
 
         let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
-        let del1_id = MemberId::from_bytes(del1_keys.box_public()[..16].try_into().unwrap());
-        let del2_id = MemberId::from_bytes(del2_keys.box_public()[..16].try_into().unwrap());
+        let tv_id = MemberId::from_bytes(tv_keys.box_public()[..16].try_into().unwrap());
         let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
-
-        let del1_pk = del1_keys.signing_public();
-        let del2_pk = del2_keys.signing_public();
-        let order = vec![host_id, del1_id, del2_id, guest_id];
+        let tv_pk = tv_keys.signing_public();
+        let order = vec![host_id, tv_id, guest_id];
 
         let mut host = connected_engine(&invite, host_keys, "Host", false, order.clone());
-        let mut del1 = connected_engine_with_kind(
-            &invite,
-            del1_keys,
-            "Desktop",
-            DeviceKind::Desktop,
-            true,
-            order.clone(),
-        );
-        let mut del2 = connected_engine_with_kind(
-            &invite,
-            del2_keys,
-            "TV",
-            DeviceKind::Tv,
-            true,
-            order.clone(),
-        );
+        let mut tv =
+            connected_engine_with_kind(&invite, tv_keys, "TV", DeviceKind::Tv, true, order.clone());
         let mut guest = connected_engine(&invite, guest_keys, "Guest", true, order);
-
-        // Exchange Hellos so guest and del1 know everyone.
-        for peer in [&mut host, &mut del1, &mut del2] {
+        for peer in [&mut host, &mut tv] {
             let hello = peer.handle(ServerFrame::Joined { member: guest_id }, 50.0);
             deliver(peer, hello, &mut guest, 50.0);
         }
-        let host_hello = host.handle(ServerFrame::Joined { member: del1_id }, 50.0);
-        deliver(&host, host_hello, &mut del1, 50.0);
-        let del2_hello = del2.handle(ServerFrame::Joined { member: del1_id }, 50.0);
-        deliver(&del2, del2_hello, &mut del1, 50.0);
 
-        // Delegate del2 first (later member), then del1 AFTER host leaves (late delegation test on guest).
-        let out2 = host.command(
+        // An older host app still hands its TV host duties; it changes nothing.
+        let delegation = host.command(
             Command::Delegate {
-                member: del2_id,
-                sign_pk: del2_pk,
+                member: tv_id,
+                sign_pk: tv_pk,
             },
             100.0,
         );
-        deliver(&host, out2.clone(), &mut del1, 100.0);
-        deliver(&host, out2, &mut guest, 100.0);
-
-        // Real host is still present: badged host is still host_id.
+        assert!(delegation.is_empty());
         assert_eq!(guest.acting_host(), Some(host_id));
-        assert_eq!(del1.acting_host(), Some(host_id));
 
-        // Real host leaves: del2 becomes badged acting host.
-        let g_left = guest.handle(ServerFrame::Left { member: host_id }, 200.0);
-        assert!(g_left.contains(&Output::Event(Event::MemberInfo {
-            member: del2_id,
-            name: "TV".into(),
-            kind: DeviceKind::Tv,
-            host: true,
-        })));
-        let _ = del1.handle(ServerFrame::Left { member: host_id }, 200.0);
-
-        // Now delegation for earliest-joined member `del1` arrives AFTER del1's Hello while host is absent:
-        // del2 loses the badge and del1 takes it cleanly.
-        let out1 = host.command(
-            Command::Delegate {
-                member: del1_id,
-                sign_pk: del1_pk,
-            },
-            250.0,
+        // The host leaves: no badge moves, and the TV still cannot change the video.
+        let left = guest.handle(ServerFrame::Left { member: host_id }, 200.0);
+        let _ = tv.handle(ServerFrame::Left { member: host_id }, 200.0);
+        assert_eq!(guest.acting_host(), None);
+        assert!(
+            !left
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
         );
-        let g_del1 = deliver(&host, out1.clone(), &mut guest, 250.0);
-        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
-            member: del2_id,
-            name: "TV".into(),
-            kind: DeviceKind::Tv,
-            host: false,
-        })));
-        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
-            member: del1_id,
-            name: "Desktop".into(),
-            kind: DeviceKind::Desktop,
-            host: true,
-        })));
-        let d1_self = deliver(&host, out1, &mut del1, 250.0);
-        assert!(d1_self.contains(&Output::Event(Event::MemberInfo {
-            member: del1_id,
-            name: "Desktop".into(),
-            kind: DeviceKind::Desktop,
-            host: true,
-        })));
+        let tv_load = tv.command(Command::Load(item("v2", tv_id)), 250.0);
+        let at_guest = deliver(&tv, tv_load, &mut guest, 250.0);
+        assert!(guest.item.is_none());
+        assert!(
+            !at_guest
+                .iter()
+                .any(|o| matches!(o, Output::Player(PlayerCommand::Load { .. })))
+        );
+        // Scheduling still has someone to do it.
+        assert_eq!(guest.leader(), Some(tv_id));
 
-        // Real host returns (`Joined` + `Hello`): del1 loses badge, host_id regains it even at end of `members`.
-        let g_ret = guest.handle(ServerFrame::Joined { member: host_id }, 300.0);
-        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
-            member: del1_id,
-            name: "Desktop".into(),
-            kind: DeviceKind::Desktop,
-            host: false,
-        })));
-        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
+        // The host returns and wears the badge again.
+        let back = guest.handle(ServerFrame::Joined { member: host_id }, 300.0);
+        assert!(back.contains(&Output::Event(Event::MemberInfo {
             member: host_id,
             name: "Host".into(),
             kind: DeviceKind::Phone,
             host: true,
         })));
-        let d1_ret = del1.handle(ServerFrame::Joined { member: host_id }, 300.0);
-        assert!(d1_ret.contains(&Output::Event(Event::MemberInfo {
-            member: del1_id,
-            name: "Desktop".into(),
-            kind: DeviceKind::Desktop,
-            host: false,
-        })));
         assert_eq!(guest.acting_host(), Some(host_id));
-        assert_eq!(del1.acting_host(), Some(host_id));
-
-        // Guests never get the host badge when neither host nor delegates remain.
-        let _ = guest.handle(ServerFrame::Left { member: host_id }, 400.0);
-        let _ = guest.handle(ServerFrame::Left { member: del1_id }, 401.0);
-        let g_no_host = guest.handle(ServerFrame::Left { member: del2_id }, 402.0);
-        assert_eq!(guest.acting_host(), None);
-        assert!(
-            !g_no_host
-                .iter()
-                .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
-        );
+        assert_eq!(guest.leader(), Some(host_id));
     }
 
     #[test]
@@ -2727,13 +2571,12 @@ mod tests {
         );
         assert!(reconnect.contains(&Output::Event(Event::MemberLeft(host_id))));
         assert!(!reconnect.contains(&Output::Event(Event::MemberLeft(me_id))));
-        assert!(reconnect.contains(&Output::Event(Event::MemberInfo {
-            member: del_id,
-            name: "Delegate TV".into(),
-            kind: DeviceKind::Tv,
-            host: true,
-        })));
-        assert_eq!(me.acting_host(), Some(del_id));
+        assert!(
+            !reconnect
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
+        );
+        assert_eq!(me.acting_host(), None);
         assert!(!me.ready.contains_key(&host_id));
 
         // If `host_id` rejoins later, Hello still emits MemberInfo and moves badge back.
@@ -2746,12 +2589,7 @@ mod tests {
             kind: DeviceKind::Phone,
             host: true,
         })));
-        assert!(rejoined.contains(&Output::Event(Event::MemberInfo {
-            member: del_id,
-            name: "Delegate TV".into(),
-            kind: DeviceKind::Tv,
-            host: false,
-        })));
+        assert_eq!(me.acting_host(), Some(host_id));
     }
 
     #[test]
@@ -3006,25 +2844,16 @@ mod tests {
             Output::Event(Event::VideoChanged(_)) | Output::Player(PlayerCommand::Load { .. })
         )));
 
-        // 2. Newer change from Delegate wins when Host returns with an older offline change.
+        // 2. While locked, the TV an older host app delegated to cannot change the video;
+        // the host's offline change reaches everyone when it reconnects.
         let _ = host.disconnected();
-        let _ = host.command(Command::Load(item("v_old_host", host_id)), 1_120.0);
-        // Ensure Delegate creates a strictly higher rev.
-        let _ = del.command(Command::Load(item("v_tmp", del_id)), 1_130.0);
-        let d_new = del.command(Command::Load(item("v_new_del", del_id)), 1_140.0);
-        let newer_del_state = d_new
-            .iter()
-            .find_map(|o| match o {
-                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
-                    from: del_id,
-                    seq: *seq,
-                    ct: ct.clone(),
-                }),
-                _ => None,
-            })
-            .unwrap();
-        deliver(&del, d_new, &mut guest, 1_140.0);
-
+        let _ = host.command(Command::Load(item("v3", host_id)), 1_120.0);
+        let d_try = del.command(Command::Load(item("v_tv", del_id)), 1_130.0);
+        assert!(
+            !d_try
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::State { .. })))
+        );
         let host_reconnect = host.handle(
             ServerFrame::Welcome {
                 member: host_id,
@@ -3032,13 +2861,15 @@ mod tests {
                 room_time: 1_150.0,
                 expires_at: 0.0,
                 max_members: 16,
-                state: Some(newer_del_state.clone()),
+                state: None,
             },
             1_150.0,
         );
-        deliver(&host, host_reconnect, &mut del, 1_160.0);
-        assert_eq!(host.item.as_ref().map(|i| i.id.as_str()), Some("v_new_del"));
-        assert_eq!(del.item.as_ref().map(|i| i.id.as_str()), Some("v_new_del"));
+        deliver(&host, host_reconnect.clone(), &mut del, 1_160.0);
+        deliver(&host, host_reconnect, &mut guest, 1_160.0);
+        assert_eq!(host.item.as_ref().map(|i| i.id.as_str()), Some("v3"));
+        assert_eq!(del.item.as_ref().map(|i| i.id.as_str()), Some("v3"));
+        assert_eq!(guest.item.as_ref().map(|i| i.id.as_str()), Some("v3"));
 
         // 3. Guest offline pause in unlocked party converges; if Host locked meanwhile, guest does not publish.
         let unlock = host.command(Command::Lock(false), 1_200.0);
@@ -3060,11 +2891,11 @@ mod tests {
             playing: false,
             buffering: false,
         });
-        let d_r = del.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        let d_r = del.player_loaded("v3", Some(300_000), 1_205.0);
         deliver(&del, d_r, &mut host, 1_205.0);
-        let g_r = guest.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        let g_r = guest.player_loaded("v3", Some(300_000), 1_205.0);
         deliver(&guest, g_r, &mut host, 1_205.0);
-        let h_r = host.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        let h_r = host.player_loaded("v3", Some(300_000), 1_205.0);
         deliver(&host, h_r.clone(), &mut del, 1_205.0);
         deliver(&host, h_r, &mut guest, 1_205.0);
         let play = host.tick(2_500.0, snap);

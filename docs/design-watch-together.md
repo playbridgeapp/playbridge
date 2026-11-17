@@ -75,10 +75,17 @@ needs no new phone-to-TV protocol command.
   `lock`, `change_policy`, `request_reply`, `host`). Members drop unsigned or
   wrongly signed host messages, so a guest holding the room key still cannot act
   as host.
-- When the host phone hands the room to one of its own TVs, it signs a
-  delegation for that TV. If the host leaves, host duties pass to the
-  earliest-joined delegated device. If none is left, the current video keeps
-  playing under the existing policy, but nobody can change the video.
+- Only the host's own keys can act as host. While the host is away, nobody
+  stands in: the current video keeps playing under the existing settings, and
+  anyone can still play, pause and seek (unless controls are locked). Nobody
+  can change the settings, and nobody can change the video unless the host
+  chose **Anyone**, so Up next stops at the end of the current video. Requests
+  under **Ask me** go unanswered and expire. Nobody else gets the Host badge;
+  apps show that the host is away. The host gets its powers back on return. A TV the host phone added is still the host's own
+  device (it gets the host's sign-ins) but never acts as host. Older apps still
+  send a host-signed `delegate` for such a TV; members ignore it.
+- One member still schedules starts and buffering pauses: the host while
+  present, else the earliest-joined member. That carries no host powers.
 - Anyone can play, pause and seek. The host can turn on **Lock controls**, which
   overrides everything below.
 - Every member has an **owner**: the person whose phone added it. The host's
@@ -161,6 +168,25 @@ start one dated further out than its own party length. Emptying and reopening th
 does not move the end. Relays that report no clock, and apps from before this, use plain
 random IDs, which a later connect can still start again.
 
+### Coming back after the app was closed
+
+Phones and desktop keep the parties they joined recently, so the app can come back to one
+after it was closed or killed: **Rejoin**, or **Rejoin as host** on the device that started
+it. The engine's `room` event carries `saved`, an opaque text holding the invite, the
+member's private keys and member ID, and `ends_at`, the room's end time from its ID (null
+for undated rooms). `rejoin {saved}` joins as that same member, so the others see the same
+device return, the host is recognised by its key, and a guest's own TVs still count it as
+their owner. Joining or rejoining the room a device is already in does nothing.
+
+- Apps keep `saved` encrypted with the platform keystore (Android Keystore, iOS and macOS
+  Keychain, Windows DPAPI, Linux Secret Service) and never log it.
+- A saved party is deleted at its end time, or eight hours after joining for undated
+  rooms, when removed from the list, and on the host's device when the host ends the
+  party.
+- Nothing rejoins by itself: the user picks the party from the list.
+- A room empty for longer than the relay's idle time has been deleted. Rejoining opens a
+  fresh, empty room on the same link until its end time.
+
 ## 6. Playback sync
 
 ### Starting
@@ -231,8 +257,9 @@ when it belongs to the person who shared the video, and **other** otherwise.
 - Party playback never goes into TV history, phone cast history, resume progress
   or Continue Watching, whoever shared the video.
 - Logs redact URLs and headers.
-- Room keys and shared credentials live in memory only and are dropped when the
-  member leaves.
+- Shared credentials live in memory only and are dropped when the member leaves.
+  Room keys stay in memory too, except in a saved party (§5), which is encrypted
+  with the platform keystore and deleted when the room ends.
 
 ## 8. Security
 
@@ -331,7 +358,7 @@ Only the host's relay setting matters. Guests follow the invite link.
 - **LAN command** (phone to paired PlayBridge receiver): `watch_together_join
   {invite, from}`, answered by `watch_together_joined {ok, member, box_pk,
   sign_pk}`, advertised with the `watch_together_v1` capability. The phone
-  counts the TV as its own and, as host, delegates host duties to it.
+  counts the TV as its own. (It used to delegate host duties to it as well; see §4.)
 
 ## 11. Phases
 
@@ -474,7 +501,7 @@ remote and host from a Watch Together screen in the sidebar.
 - **Remote and host.** Start a party (shared relay or your own), copy the
   invite, play, pause, seek, and stop the video (under the video-change
   permission), add the connected PlayBridge TV (it becomes
-  this computer's own and, for the host, its delegate) or a TV by code, lock,
+  this computer's own) or a TV by code, lock,
   who can change the video, requests, and sign-in sharing. A video sent from
   the browser extension during a party plays in the party (direct links; a
   synthetic playlist only exists on this computer, so it's refused).

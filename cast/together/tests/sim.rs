@@ -1069,7 +1069,7 @@ fn ended_event_fires_before_auto_clear_and_not_on_manual_pause() {
 }
 
 #[test]
-fn delegate_clears_at_end_when_host_disconnects() {
+fn a_tv_handed_the_party_ends_the_video_without_clearing_while_the_host_is_away() {
     let mut sim = Sim::new();
     let host = sim.add("Host phone", true, false, 0.0);
     let tv_keys = MemberKeys::generate();
@@ -1092,17 +1092,17 @@ fn delegate_clears_at_end_when_host_disconnects() {
 
     sim.command(host, Command::Load(item("short")));
     sim.run(2_500.0);
-    // Host disconnects while video plays; delegate takes over and auto-clears at end.
+    // Host disconnects while the video plays. An older host app's delegation gives the TV no
+    // host powers, so the video ends for everyone but stays until the host returns.
     sim.disconnect(host);
     sim.run(4_000.0);
-    assert!(sim.saw(
-        delegate_tv,
-        |e| matches!(e, Event::Ended { item } if item == "short")
-    ));
-    assert!(sim.saw(delegate_tv, |e| matches!(e, Event::VideoCleared)));
-    assert!(sim.saw(guest, |e| matches!(e, Event::VideoCleared)));
-    assert_eq!(sim.devices[delegate_tv].player.item, None);
-    assert_eq!(sim.devices[guest].player.item, None);
+    for idx in [delegate_tv, guest] {
+        assert!(sim.saw(
+            idx,
+            |e| matches!(e, Event::Ended { item } if item == "short")
+        ));
+        assert!(!sim.saw(idx, |e| matches!(e, Event::VideoCleared)));
+    }
 }
 
 #[test]
@@ -1168,7 +1168,7 @@ fn badged_hosts_seen_by(sim: &Sim, observer: usize) -> Vec<MemberId> {
 }
 
 #[test]
-fn host_badge_tracks_host_leave_return_and_earliest_delegate() {
+fn host_badge_never_moves_while_the_host_is_away() {
     let mut sim = Sim::new();
     let host = sim.add("Host phone", true, false, 0.0);
     let del1_keys = MemberKeys::generate();
@@ -1205,14 +1205,14 @@ fn host_badge_tracks_host_leave_return_and_earliest_delegate() {
         assert_eq!(badged_hosts_seen_by(&sim, idx), vec![host_id]);
     }
 
-    // 2. Host leaves: earliest-joined delegate (del1) becomes acting host; del2 stays false.
+    // 2. Host leaves: nobody stands in, delegated or not.
     sim.disconnect(host);
     sim.run(1_000.0);
     for idx in [del1, del2, guest] {
-        assert_eq!(badged_hosts_seen_by(&sim, idx), vec![del1_id]);
+        assert_eq!(badged_hosts_seen_by(&sim, idx), Vec::<MemberId>::new());
     }
 
-    // 3. Real host returns: badge moves back from del1 to host on every member.
+    // 3. Real host returns: every member sees the badge on the host again.
     sim.connect(host);
     sim.run(1_500.0);
     for idx in [host, del1, del2, guest] {
@@ -1251,7 +1251,7 @@ fn reconnecting_member_drops_peers_who_left_offline_and_updates_host_badge() {
     sim.disconnect(host_c);
     sim.run(500.0);
 
-    // B reconnects: B must learn C left (not self) and see Delegate D wear the Host badge.
+    // B reconnects: B must learn C left (not self), and nobody wears the Host badge.
     sim.connect(guest_b);
     sim.run(1_500.0);
     assert!(sim.saw(
@@ -1262,7 +1262,7 @@ fn reconnecting_member_drops_peers_who_left_offline_and_updates_host_badge() {
         guest_b,
         |e| matches!(e, Event::MemberLeft(id) if *id == guest_id)
     ));
-    assert_eq!(badged_hosts_seen_by(&sim, guest_b), vec![del_id]);
+    assert_eq!(badged_hosts_seen_by(&sim, guest_b), Vec::<MemberId>::new());
 
     // If C rejoins later, B gets C's MemberInfo again and badge returns to C.
     sim.connect(host_c);
@@ -1271,7 +1271,7 @@ fn reconnecting_member_drops_peers_who_left_offline_and_updates_host_badge() {
 }
 
 #[test]
-fn host_offline_stop_load_pause_and_delegate_override_converge() {
+fn host_offline_stop_load_pause_converge_and_a_tv_cannot_override() {
     let mut sim = Sim::new();
     let host = sim.add("Host", true, true, 0.0);
     let del_keys = MemberKeys::generate();
@@ -1332,8 +1332,8 @@ fn host_offline_stop_load_pause_and_delegate_override_converge() {
     assert!(!sim.devices[guest].player.playing);
     assert!(!sim.devices[delegate].player.playing);
 
-    // 4. Host loads v_old while offline, meanwhile online Delegate advances load_rev past host
-    //    and loads v_new -> Delegate's newer change wins across all members when Host returns.
+    // 4. Host loads v_old while offline; meanwhile the TV an older host app delegated to tries
+    //    to change the video. Only the host's change lands, once it returns.
     sim.disconnect(host);
     let d_out = sim.devices[host].engine.disconnected();
     sim.dispatch(host, d_out);
@@ -1348,7 +1348,7 @@ fn host_offline_stop_load_pause_and_delegate_override_converge() {
 
     sim.connect(host);
     sim.run(1_500.0);
-    assert_eq!(sim.devices[host].player.item.as_deref(), Some("v_new"));
-    assert_eq!(sim.devices[delegate].player.item.as_deref(), Some("v_new"));
-    assert_eq!(sim.devices[guest].player.item.as_deref(), Some("v_new"));
+    assert_eq!(sim.devices[host].player.item.as_deref(), Some("v_old"));
+    assert_eq!(sim.devices[delegate].player.item.as_deref(), Some("v_old"));
+    assert_eq!(sim.devices[guest].player.item.as_deref(), Some("v_old"));
 }

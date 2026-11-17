@@ -18,6 +18,7 @@ pub mod ids;
 pub mod invite;
 pub mod messages;
 pub mod pairing;
+pub mod saved;
 pub mod sync;
 mod tls;
 
