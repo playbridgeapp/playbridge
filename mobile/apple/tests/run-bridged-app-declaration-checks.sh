@@ -11,3 +11,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$repo_root/mobile/apple/tests/BridgedAppAppearanceTests.swift" \
   "$repo_root/mobile/apple/tests/BridgedAppDeclarationTests.swift" -o "$test_dir/check"
 "$test_dir/check"
+swiftc -parse-as-library -module-cache-path "$test_dir/edge-cache" \
+  "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/UI/BridgedAppEdgeHandleLayout.swift" \
+  "$repo_root/mobile/apple/tests/BridgedAppEdgeHandleLayoutTests.swift" -o "$test_dir/edge-check"
+"$test_dir/edge-check"

@@ -76,7 +76,12 @@ final class ConnectionCoordinator: ObservableObject {
     var onWatchTogetherJoined: (([String: Any]) -> Void)?
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
-    func handle(_ text: String, sessionID: UUID? = nil, isCurrentSession: @escaping () -> Bool = { true }) {
+    func handle(
+        _ text: String,
+        sessionID: UUID? = nil,
+        isCurrentSession: @escaping () -> Bool = { true },
+        takePlaybackRequest: @escaping (String) -> Bool = { _ in false }
+    ) {
         guard let data = text.data(using: .utf8),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let type = json["type"] as? String else { return }
@@ -84,11 +89,11 @@ final class ConnectionCoordinator: ObservableObject {
         DispatchQueue.main.async {
             guard isCurrentSession() else { return }
             if let sessionID { self.beginReceiverSession(sessionID) }
-            self.dispatch(type: type, json: json)
+            self.dispatch(type: type, json: json, takePlaybackRequest: takePlaybackRequest)
         }
     }
 
-    private func dispatch(type: String, json: [String: Any]) {
+    private func dispatch(type: String, json: [String: Any], takePlaybackRequest: (String) -> Bool) {
         switch type {
         case "context":
             let active = json["active"] as? String ?? "idle"
@@ -157,10 +162,16 @@ final class ConnectionCoordinator: ObservableObject {
         case "command_result":
             guard let requestId = json["requestId"] as? String,
                   let ok = json["ok"] as? Bool else { return }
+            let error = nonEmpty(json["error"])
+            if takePlaybackRequest(requestId), !ok {
+                playbackFailure = ReceiverPlaybackFailure(
+                    message: ReceiverPlaybackFailure.rejected(code: error)
+                )
+            }
             lastCommandResult = QueueCommandResult(
                 requestId: requestId,
                 ok: ok,
-                error: nonEmpty(json["error"]),
+                error: error,
                 playbackId: nonEmpty(json["playbackId"]),
                 queueRevision: json["queueRevision"].map { uint64($0) }
             )
@@ -335,5 +346,61 @@ struct ReceiverPlaybackFailure: Equatable, Identifiable {
             .filter { !$0.isEmpty }.joined(separator: " ")
         guard !text.isEmpty else { return "Playback failed on the TV" }
         return String(String.UnicodeScalarView(text.unicodeScalars.prefix(512)))
+    }
+
+    /// Fixed user-facing explanations for `command_result` rejections of a `playlist` command;
+    /// arbitrary receiver-supplied error text is never surfaced directly.
+    static func rejected(code: String?) -> String {
+        switch code {
+        case "invalid_command":
+            return "The TV couldn't read this cast. Try casting it again."
+        case "queue_full":
+            return "The TV is busy. Try again in a moment."
+        case "unsupported":
+            return "The TV couldn't open its player. Open PlayBridge on the TV and try again."
+        default:
+            return "The TV didn't start playback. Try casting it again."
+        }
+    }
+}
+
+/// Bounded FIFO tracker of recent outbound `playlist` `requestId` values so `command_result`
+/// rejections trigger playback refusal alerts without affecting queue/subtitle commands.
+struct PlaybackRequestTracker {
+    static let maxTracked = 32
+    private(set) var ids: [String] = []
+
+    static func playlistRequestID(in text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["type"] as? String == "command",
+              json["action"] as? String == "playlist",
+              let requestId = json["requestId"] as? String,
+              !requestId.isEmpty else { return nil }
+        return requestId
+    }
+
+    mutating func recordOutbound(_ text: String) {
+        guard let id = Self.playlistRequestID(in: text) else { return }
+        record(id)
+    }
+
+    mutating func record(_ requestId: String) {
+        guard !requestId.isEmpty else { return }
+        ids.removeAll { $0 == requestId }
+        ids.append(requestId)
+        if ids.count > Self.maxTracked {
+            ids.removeFirst(ids.count - Self.maxTracked)
+        }
+    }
+
+    mutating func take(_ requestId: String) -> Bool {
+        guard let index = ids.firstIndex(of: requestId) else { return false }
+        ids.remove(at: index)
+        return true
+    }
+
+    mutating func clear() {
+        ids.removeAll()
     }
 }

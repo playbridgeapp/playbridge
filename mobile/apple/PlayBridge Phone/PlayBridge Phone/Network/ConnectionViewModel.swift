@@ -105,7 +105,7 @@ final class ConnectionViewModel: ObservableObject {
     private var pendingSubtitleConfirmations: [String: AnyCancellable] = [:]
     private var cancellables = Set<AnyCancellable>()
     /// The device we're currently bringing up, so we can persist a full record once paired.
-    private var connectingDevice: DiscoveredDevice?
+    private(set) var connectingDevice: DiscoveredDevice?
     private var savedReconnectDiscovery: AnyCancellable?
     private var savedReconnectGeneration: UUID?
     private var savedReconnectTimeout: DispatchWorkItem?
@@ -186,6 +186,8 @@ final class ConnectionViewModel: ObservableObject {
             coordinator.handle(text, sessionID: sessionID, isCurrentSession: { [weak self] in
                 self?.ws.capabilitySessionID == sessionID && self?.ws.receiverCapabilitySession.snapshot.authenticated == true &&
                     self?.isExternalReceiver == false && self?.isAirPlay == false
+            }, takePlaybackRequest: { [weak self] requestId in
+                self?.ws.takePlaybackRequest(requestId) ?? false
             })
         }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
@@ -587,8 +589,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Remove one saved TV from history (and disconnect if it's the active one).
     func forget(_ device: PairedDevice) {
         endSavedReconnectDiscovery()
-        var list = store.loadSavedDevices()
-        list.removeAll { deviceKey($0) == deviceKey(device) }
+        let list = SavedReceiverEndpoint.removingDevice(device, from: store.loadSavedDevices(), keyFor: deviceKey)
         store.saveSavedDevices(list)
         savedDevices = list
         savedReachability.recheck(savedDevices)
@@ -598,6 +599,44 @@ final class ConnectionViewModel: ObservableObject {
             pairedDevice = nil
             connectingDevice = nil
         }
+    }
+
+    /// Drop only the failing TV's stale saved entry, token, and TLS pin, then start a fresh
+    /// code-verified pairing flow with the TV currently answering at that address.
+    func pairAgain() {
+        let saved = pairedDevice
+        let fallback = connectingDevice.map {
+            PairedDevice(ip: $0.ip, port: $0.port, name: $0.name, uuid: $0.uuid, wssPort: $0.wssPort)
+        }
+        guard let source = saved ?? fallback else { return }
+        let target = SavedReceiverEndpoint.repairingTarget(from: source, discovered: browser.devices)
+        if let saved {
+            forget(saved)
+        } else {
+            endSavedReconnectDiscovery()
+            ws.disconnect()
+            connectingDevice = nil
+        }
+        pairFresh(at: target)
+    }
+
+    private func pairFresh(at target: DiscoveredDevice) {
+        destinationSelectionRevision &+= 1
+        usePlayBridge(preservingPlayback: false)
+        endSavedReconnectDiscovery()
+        connectingDevice = target
+        pairedDevice = nil
+        state = .connecting
+        ws.connect(
+            ip: target.ip,
+            port: target.port,
+            token: "",
+            serverName: target.name,
+            deviceName: store.localDeviceName,
+            deviceUUID: store.localDeviceUUID,
+            wssPort: target.wssPort,
+            certFingerprint: nil
+        )
     }
 
     /// A bounded Bonjour refresh updates saved UUIDs even in the saved-device sheet.
@@ -1612,7 +1651,7 @@ final class ConnectionViewModel: ObservableObject {
                 payload["items"] = prepared
                 if payload["startIndex"] == nil { payload["startIndex"] = 0 }
                 let data = try JSONSerialization.data(withJSONObject: [
-                    "type": "command", "action": "playlist", "payload": payload
+                    "type": "command", "action": "playlist", "payload": payload, "requestId": UUID().uuidString
                 ] as [String: Any])
                 guard ws.send(String(decoding: data, as: UTF8.self)) else { throw CancellationError() }
             }

@@ -41,6 +41,7 @@ import Foundation
         }
         let data = Data(request.playlistCommand(allowedPrivateOrigins: ["http://192.168.1.1:80"]).utf8)
         let envelope = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        precondition(!((envelope["requestId"] as? String) ?? "").isEmpty, "PageCast playlistCommand must carry requestId")
         let payload = envelope["payload"] as! [String: Any]
         let item = (payload["items"] as! [[String: Any]])[0]
         precondition(!payload.keys.contains("progressWebhook") && !item.keys.contains("progressWebhook"))

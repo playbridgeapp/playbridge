@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>PlayBridge</string>
+	<key>NSCameraUsageDescription</key>
+	<string>PlayBridge uses the camera only when a website asks you to take a photo or video to upload.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images you choose in the browser to your Photos library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

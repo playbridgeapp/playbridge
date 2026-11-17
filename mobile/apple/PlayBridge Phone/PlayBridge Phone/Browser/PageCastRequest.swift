@@ -135,7 +135,12 @@ struct PageCastRequest {
         }
         var payload: [String: Any] = ["items": wireItems, "startIndex": startIndex, "skipPreplay": skipPreplay]
         if let metadata { payload["visualMetadata"] = metadata }
-        let object: [String: Any] = ["type": "command", "action": "playlist", "payload": payload]
+        let object: [String: Any] = [
+            "type": "command",
+            "action": "playlist",
+            "payload": payload,
+            "requestId": UUID().uuidString,
+        ]
         // Every field was validated as bounded JSON at the bridge boundary.
         guard let data = try? JSONSerialization.data(withJSONObject: object), let result = String(data: data, encoding: .utf8) else { return "" }
         return result

@@ -279,6 +279,9 @@ struct DeviceConnectionSheet: View {
                     .buttonStyle(.plain)
                     .foregroundColor(nowCardAccented ? PlayOnStatusGreen.color : Theme.primary)
                 }
+                if needsRepairing {
+                    tonalCapsule("Pair again") { startRepairing() }
+                }
                 if showsFailure && !vm.isConnected {
                     ShareLink(item: diagnosticsText) {
                         Label("Share diagnostics", systemImage: "square.and.arrow.up")
@@ -733,7 +736,7 @@ struct DeviceConnectionSheet: View {
 
     private var enteringPairingCode: Bool {
         switch vm.state {
-        case .waitingForApproval, .verifyingCode, .connecting, .retrying, .pairingDenied, .authFailed:
+        case .waitingForApproval, .verifyingCode, .connecting, .retrying, .pairingDenied, .authFailed, .pinMismatch:
             return false
         default:
             return true
@@ -748,8 +751,24 @@ struct DeviceConnectionSheet: View {
             pairingStatus("Checking the code…")
         case .connecting, .retrying:
             pairingStatus("Connecting…")
-        case .pairingDenied, .authFailed:
+        case .pairingDenied:
             pairingStatus("The connection wasn’t approved. Try again.", spinning: false, tint: Theme.danger)
+        case .pinMismatch, .authFailed:
+            VStack(spacing: 14) {
+                Text("\(pairingName) was reset or reinstalled. Pair it again to keep using it.")
+                    .font(Theme.font(size: 15))
+                    .foregroundColor(Theme.onSurface)
+                    .multilineTextAlignment(.center)
+                Button { startRepairing() } label: {
+                    Text("Pair again")
+                        .font(Theme.font(size: 15, weight: .semibold))
+                        .foregroundColor(Theme.onPrimary)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Theme.primary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 4)
         default:
             pairingDigits
         }
@@ -1309,6 +1328,20 @@ struct DeviceConnectionSheet: View {
         }
     }
 
+    private var needsRepairing: Bool {
+        guard !vm.isConnected, !vm.isExternalReceiver, !vm.isAirPlay else { return false }
+        switch vm.state {
+        case .pinMismatch, .authFailed: return true
+        default: return false
+        }
+    }
+
+    private func startRepairing() {
+        userPicked = true
+        showPairingPage()
+        vm.pairAgain()
+    }
+
     private var nowName: String {
         if receiverStandingBy, let name = vm.pairedDevice?.name, !name.isEmpty { return shown(name) }
         if vm.isAirPlay { return shown(vm.airPlay.routeName) }
@@ -1323,12 +1356,13 @@ struct DeviceConnectionSheet: View {
     }
 
     private var fallbackName: String {
-        shown(vm.externalReceiver?.name ?? vm.selectedRemoteTV?.device.name ?? vm.pairedDevice?.name ?? "TV")
+        shown(vm.externalReceiver?.name ?? vm.selectedRemoteTV?.device.name ?? vm.pairedDevice?.name ?? vm.connectingDevice?.name ?? "TV")
     }
 
     private var pairingName: String {
         switch vm.state {
-        case .waitingForCodeInput(let name, _, _), .verifyingCode(let name), .waitingForApproval(let name):
+        case .waitingForCodeInput(let name, _, _), .verifyingCode(let name), .waitingForApproval(let name),
+                .pinMismatch(let name):
             return name.isEmpty ? fallbackName : shown(name)
         default:
             return fallbackName
@@ -1362,6 +1396,13 @@ struct DeviceConnectionSheet: View {
 
     private var nowStatusText: String {
         if receiverStandingBy { return "Connected · Standing by" }
+        if !vm.isConnected && !vm.isExternalReceiver && !vm.isAirPlay {
+            switch vm.state {
+            case .pinMismatch: return "Reset or reinstalled · Pair again"
+            case .authFailed: return "Needs pairing again"
+            default: break
+            }
+        }
         if vm.isConnected || vm.connectionIsConnecting || (showsFailure && !vm.isAirPlay) {
             return PlayOnCatalog.nowStatus(connecting: vm.connectionIsConnecting && !vm.isConnected,
                                             failed: showsFailure && !vm.isConnected,
@@ -1384,8 +1425,7 @@ struct DeviceConnectionSheet: View {
         guard showsFailure, !vm.isConnected else { return nil }
         switch vm.state {
         case .error(let message): return message
-        case .authFailed: return "The saved pairing was rejected. Pair again."
-        case .pinMismatch: return "This TV’s security fingerprint changed. Forget it and pair again."
+        case .authFailed, .pinMismatch: return "This TV was reset or reinstalled. Pair it again to keep using it."
         case .pairingDenied(let name): return "\(name) denied the pairing request."
         default: return nil
         }

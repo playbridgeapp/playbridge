@@ -78,7 +78,42 @@ import Foundation
         precondition(FileManager.default.fileExists(atPath: debounceFile.path))
         debounce.flushPendingSaves()
         try verifyTabStatePersistence(directory.appendingPathComponent("tab-states"))
-        print("PASS: address normalization, process recovery loop guard, coalesced background saves, flush/clear ordering and debounce")
+        verifyKeyboardVisibility()
+        print("PASS: address normalization, process recovery loop guard, coalesced background saves, flush/clear ordering, debounce, and keyboard visibility")
+    }
+
+    private static func verifyKeyboardVisibility() {
+        let portrait = CGRect(x: 0, y: 0, width: 393, height: 852)
+        // Soft keyboard in portrait (~301pt total, 34pt bottom safe area) hides the toolbar.
+        precondition(BrowserKeyboardVisibility.isSoftKeyboardVisible(
+            endFrame: CGRect(x: 0, y: 551, width: 393, height: 301),
+            screenBounds: portrait,
+            bottomSafeAreaInset: 34
+        ))
+        // Hardware keyboard shortcut bar (~78pt total including 34pt home indicator) keeps the toolbar visible.
+        precondition(!BrowserKeyboardVisibility.isSoftKeyboardVisible(
+            endFrame: CGRect(x: 0, y: 774, width: 393, height: 78),
+            screenBounds: portrait,
+            bottomSafeAreaInset: 34
+        ))
+        // Landscape soft keyboard (~200pt, 21pt safe area) hides toolbar; slim landscape shortcut bar (~55pt) does not.
+        let landscape = CGRect(x: 0, y: 0, width: 852, height: 393)
+        precondition(BrowserKeyboardVisibility.isSoftKeyboardVisible(
+            endFrame: CGRect(x: 0, y: 193, width: 852, height: 200),
+            screenBounds: landscape,
+            bottomSafeAreaInset: 21
+        ))
+        precondition(!BrowserKeyboardVisibility.isSoftKeyboardVisible(
+            endFrame: CGRect(x: 0, y: 338, width: 852, height: 55),
+            screenBounds: landscape,
+            bottomSafeAreaInset: 21
+        ))
+        // Offscreen / dismissed keyboard frame restores the toolbar.
+        precondition(!BrowserKeyboardVisibility.isSoftKeyboardVisible(
+            endFrame: CGRect(x: 0, y: 852, width: 393, height: 301),
+            screenBounds: portrait,
+            bottomSafeAreaInset: 34
+        ))
     }
 
     private static func verifyTabStatePersistence(_ directory: URL) throws {

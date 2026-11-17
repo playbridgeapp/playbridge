@@ -37,7 +37,6 @@ struct ContentView: View {
                     }
                 }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { playbackFailureBanner }
         .environmentObject(pageCasting)
         .environmentObject(atv)
         .tint(Theme.primary)
@@ -72,6 +71,14 @@ struct ContentView: View {
         )) {
             Button("OK", role: .cancel) { vm.operationError = nil }
         } message: { Text(vm.operationError ?? "") }
+        .alert(playbackFailureTitle, isPresented: Binding(
+            get: { !vm.isExternalReceiver && !vm.isAirPlay && vm.coordinator.playbackFailure != nil },
+            set: { if !$0 { vm.coordinator.dismissPlaybackFailure() } }
+        )) {
+            Button("OK", role: .cancel) { vm.coordinator.dismissPlaybackFailure() }
+        } message: {
+            Text(verbatim: vm.coordinator.playbackFailure?.message ?? "")
+        }
         .onAppear {
             vm.atvRemote = atv
             atv.reloadManagement()
@@ -144,22 +151,9 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var playbackFailureBanner: some View {
-        if !vm.isExternalReceiver, !vm.isAirPlay, let failure = vm.coordinator.playbackFailure {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.danger)
-                    .accessibilityHidden(true)
-                Text(verbatim: failure.message)
-                    .font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurface)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button { vm.coordinator.dismissPlaybackFailure() } label: {
-                    Image(systemName: "xmark")
-                }.accessibilityLabel("Dismiss playback error")
-            }
-            .padding(14).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-        }
+    private var playbackFailureTitle: String {
+        let name = PlayOnCatalog.displayName(vm.pairedDevice?.name ?? "")
+        return "Couldn’t play on \(name.isEmpty ? "the TV" : name)"
     }
 
     private func updateRemoteTVDiscovery() {

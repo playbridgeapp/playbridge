@@ -90,6 +90,45 @@ enum ReceiverPlaybackFailureTests {
         precondition(coordinator.playbackFailure != nil)
         coordinator.beginReceiverSession(UUID()) // Disconnect/reconnect/switch generation.
         precondition(coordinator.playbackFailure == nil)
-        print("PASS: receiver reason/generic fallback; bounded plain text; playback identity; idle retention; next cast/success/dismiss/session reset; retired queued callbacks")
+
+        // Cast refusal: every single-video command carries a requestId; only tracked playlist rejections alert.
+        let singleJson = try JSONSerialization.jsonObject(with: Data(WireProtocol.singleVideoCommand(url: "https://media.example/video.mp4").utf8)) as! [String: Any]
+        let singleId = singleJson["requestId"] as? String ?? ""
+        precondition(!singleId.isEmpty, "singleVideoCommand must carry requestId")
+        precondition(PlaybackRequestTracker.playlistRequestID(in: WireProtocol.singleVideoCommand(url: "https://media.example/v.mp4", requestID: "req-1")) == "req-1")
+        precondition(PlaybackRequestTracker.playlistRequestID(in: WireProtocol.queueVideoCommand(url: "https://media.example/v.mp4", requestID: "q-1")) == nil)
+
+        var tracker = PlaybackRequestTracker()
+        for i in 1...35 { tracker.record("id-\(i)") }
+        precondition(tracker.ids.count == 32 && !tracker.take("id-1") && tracker.take("id-35"))
+        precondition(!tracker.take("id-35"), "Taking consumes the tracked request id")
+        tracker.clear()
+        tracker.recordOutbound(WireProtocol.singleVideoCommand(url: "https://media.example/v.mp4", requestID: "play-1"))
+        tracker.recordOutbound(WireProtocol.queueVideoCommand(url: "https://media.example/q.mp4", requestID: "queue-1"))
+        precondition(tracker.ids == ["play-1"])
+
+        coordinator.beginNativePlayback()
+        coordinator.handle(#"{"type":"command_result","requestId":"play-1","ok":false,"error":"invalid_command"}"#, takePlaybackRequest: { tracker.take($0) })
+        try await drain()
+        precondition(coordinator.playbackFailure?.message == "The TV couldn't read this cast. Try casting it again.")
+        coordinator.dismissPlaybackFailure()
+
+        // Queue/subtitle/unknown command_results must not trigger the playback refusal alert, even on ok: false.
+        coordinator.handle(#"{"type":"command_result","requestId":"queue-1","ok":false,"error":"queue_full"}"#, takePlaybackRequest: { tracker.take($0) })
+        try await drain()
+        precondition(coordinator.playbackFailure == nil)
+        precondition(coordinator.lastCommandResult?.requestId == "queue-1" && coordinator.lastCommandResult?.ok == false)
+
+        // Rejected codes map to fixed safe copy and never echo raw receiver strings; ok: true ignores without alert.
+        precondition(ReceiverPlaybackFailure.rejected(code: "queue_full") == "The TV is busy. Try again in a moment.")
+        precondition(ReceiverPlaybackFailure.rejected(code: "unsupported") == "The TV couldn't open its player. Open PlayBridge on the TV and try again.")
+        precondition(ReceiverPlaybackFailure.rejected(code: "https://evil.invalid raw stack trace") == "The TV didn't start playback. Try casting it again.")
+        precondition(ReceiverPlaybackFailure.rejected(code: nil) == "The TV didn't start playback. Try casting it again.")
+
+        tracker.record("play-ok")
+        coordinator.handle(#"{"type":"command_result","requestId":"play-ok","ok":true}"#, takePlaybackRequest: { tracker.take($0) })
+        try await drain()
+        precondition(coordinator.playbackFailure == nil && !tracker.take("play-ok"))
+        print("PASS: receiver reason/generic fallback; bounded plain text; playback identity; idle retention; next cast/success/dismiss/session reset; retired queued callbacks; playlist requestId & command_result refusal")
     }
 }

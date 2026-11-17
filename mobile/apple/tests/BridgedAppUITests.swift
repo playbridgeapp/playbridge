@@ -106,7 +106,7 @@ final class BridgedAppUITests: XCTestCase {
         let tile = app.buttons["bridged-app-\(base)/"]
         XCTAssertTrue(tile.waitForExistence(timeout: 10), app.debugDescription)
         reorder.tap()
-        let fixtureRow = app.buttons["Position 6, Fixture"]
+        let fixtureRow = app.buttons["Position 7, Fixture"]
         for _ in 0..<4 {
             if fixtureRow.exists && fixtureRow.isHittable { break }
             app.collectionViews.firstMatch.swipeUp()

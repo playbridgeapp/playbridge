@@ -73,6 +73,8 @@ final class WebSocketClient: NSObject, ObservableObject {
     private var pairingAttemptsLeft = WebSocketClient.maxPairAttempts
 
     private var pingTimer: DispatchSourceTimer?
+    private let playbackRequestsLock = NSLock()
+    private var playbackRequests = PlaybackRequestTracker()
 
     // Continuous pointer events collapse to one packet of each kind per frame.
     private let mouseQueue = DispatchQueue(label: "com.playbridge.phone.mouse")
@@ -137,8 +139,17 @@ final class WebSocketClient: NSObject, ObservableObject {
     @discardableResult
     func send(_ text: String) -> Bool {
         guard let task else { return false }
-        task.send(.string(WireProtocol.applyingHistoryPreference(text, prevent: UserDefaults.standard.bool(forKey: "cast_prevent_receiver_history")))) { _ in }
+        let payload = WireProtocol.applyingHistoryPreference(
+            text,
+            prevent: UserDefaults.standard.bool(forKey: "cast_prevent_receiver_history")
+        )
+        playbackRequestsLock.withLock { playbackRequests.recordOutbound(payload) }
+        task.send(.string(payload)) { _ in }
         return true
+    }
+
+    func takePlaybackRequest(_ requestId: String) -> Bool {
+        playbackRequestsLock.withLock { playbackRequests.take(requestId) }
     }
 
     @discardableResult
@@ -566,6 +577,7 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     private func beginCapabilitySession() {
         authenticated = false
+        playbackRequestsLock.withLock { playbackRequests.clear() }
         let sessionID = receiverCapabilitySession.begin()
         mouseQueue.async {
             guard self.capabilitySessionID == sessionID else { return }

@@ -35,6 +35,44 @@ enum SavedReceiverEndpoint {
         saved.map { refresh($0, from: devices) }
     }
 
+    /// Discovered TV currently answering at the saved TV's IP and port (e.g. after a factory
+    /// reset or app reinstall assigned a new UUID). Never carries credentials or TLS pins.
+    static func installedReplacement(for saved: PairedDevice, in discovered: [DiscoveredDevice]) -> DiscoveredDevice? {
+        let savedIP = saved.ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !savedIP.isEmpty, (1...65535).contains(saved.port) else { return nil }
+        return discovered.first { live in
+            valid(live)
+                && live.ip.trimmingCharacters(in: .whitespacesAndNewlines) == savedIP
+                && live.port == saved.port
+        }
+    }
+
+    /// Clean un-credentialed target for re-pairing a reset/reinstalled TV. Drops any stale UUID
+    /// when no live replacement has been discovered yet so code verification re-establishes trust.
+    static func repairingTarget(from saved: PairedDevice, discovered: [DiscoveredDevice]) -> DiscoveredDevice {
+        if let replacement = installedReplacement(for: saved, in: discovered) {
+            return replacement
+        }
+        return DiscoveredDevice(
+            ip: saved.ip,
+            port: saved.port,
+            name: saved.name,
+            uuid: "",
+            wssPort: saved.wssPort
+        )
+    }
+
+    /// Drops only the specified saved TV (plus any stale entry at the same key) while leaving
+    /// every other saved receiver untouched so re-pairing cannot create a duplicate entry.
+    static func removingDevice(
+        _ device: PairedDevice,
+        from history: [PairedDevice],
+        keyFor: (PairedDevice) -> String
+    ) -> [PairedDevice] {
+        let targetKey = keyFor(device)
+        return history.filter { keyFor($0) != targetKey }
+    }
+
     /// UPnP USNs (`uuid:X::upnp:rootdevice` and `uuid:X::urn:…`) are one device.
     static func sameUUID(_ lhs: String, _ rhs: String) -> Bool {
         func head(_ id: String) -> String {
