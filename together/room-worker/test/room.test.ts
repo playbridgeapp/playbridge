@@ -1,6 +1,7 @@
 import { SELF, env as testEnv, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { appleAppSiteAssociation, assetLinks, type Env } from "../src/config";
+import { roomExpiry } from "@playbridge-together/shared";
 import { KEEPALIVE_SECS, LEGACY_SILENT_MS, SILENT_MS, isSilent } from "../src/room";
 
 const env = testEnv as unknown as Env;
@@ -8,6 +9,9 @@ const env = testEnv as unknown as Env;
 const BASE = "https://relay.test";
 const CERT = Array.from({ length: 32 }, () => "AB").join(":");
 const hex = (n: number) => n.toString(16).padStart(32, "0");
+/** A room ID that ends at `expiresAt`, as the apps make them; `n` keeps IDs apart. */
+const dated = (expiresAt: number, n: number) =>
+  "e71da7" + Math.floor(expiresAt / 60_000).toString(16).padStart(8, "0") + n.toString(16).padStart(18, "0");
 
 interface Client {
   ws: WebSocket;
@@ -355,6 +359,51 @@ describe("room worker", () => {
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     // Forgotten: a different token can claim the room id again.
     await (await member(room, hex(2), "second")).next("welcome");
+  });
+
+  it("reports its clock so apps can date a new party", async () => {
+    const before = Date.now();
+    const body = await (await SELF.fetch(`${BASE}/version`)).json<any>();
+    expect(body.now).toBeGreaterThanOrEqual(before);
+    expect(body.now).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("ends a dated room when its ID says, and never opens it again", async () => {
+    const { room_lifetime_ms: lifetime } = await (await SELF.fetch(`${BASE}/version`)).json<any>();
+    expect(roomExpiry(hex(150))).toBeNull();
+
+    // A party dated the way the apps do it: the relay's clock plus its lifetime.
+    const live = dated(Date.now() + lifetime, 1);
+    expect(roomExpiry(live)).toBeGreaterThan(Date.now());
+    const a = await member(live, hex(1));
+    expect((await a.next("welcome")).expires_at).toBe(roomExpiry(live));
+
+    // Its time has passed: refused before the room is even asked, whoever connects.
+    const old = dated(Date.now() - 60_000, 2);
+    const refused = await connect(old, hex(1));
+    expect(refused).toBeInstanceOf(Response);
+    expect((refused as Response).status).toBe(410);
+    expect(await (refused as Response).json()).toEqual({ error: "expired" });
+
+    // Dated further out than this relay lets a party run: not a way to get a longer one.
+    const far = await connect(dated(Date.now() + lifetime + 60 * 60_000, 3), hex(1));
+    expect((far as Response).status).toBe(400);
+  });
+
+  it("reopens an emptied dated room without moving its end", async () => {
+    const { room_lifetime_ms: lifetime } = await (await SELF.fetch(`${BASE}/version`)).json<any>();
+    const room = dated(Date.now() + lifetime / 2, 4);
+    const a = await member(room, hex(1), "tok");
+    await a.next("welcome");
+    const closed = new Promise((r) => a.ws.addEventListener("close", r));
+    a.ws.close(1000, "bye");
+    await withTimeout(closed);
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+    await new Promise((r) => setTimeout(r, 50));
+    await emptyFor(stub, 31 * 60_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const back = await member(room, hex(2), "tok");
+    expect((await back.next("welcome")).expires_at).toBe(roomExpiry(room));
   });
 
   it("refuses new rooms once the daily budget is spent, but keeps open ones going", async () => {

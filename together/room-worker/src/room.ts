@@ -8,6 +8,7 @@ import {
   bearer,
   errorResponse,
   parseFrame,
+  roomExpiry,
   secondsUntilUtcMidnight,
   sameText,
   sha256Hex,
@@ -33,6 +34,9 @@ export const SLOT_RELEASE_MS = 2 * 60_000;
  */
 const BURST = 60;
 const REFILL_PER_MS = 30 / 60_000;
+
+/** How far past the relay's own lifetime a dated room's expiry may sit: clock rounding. */
+const EXPIRY_SLACK_MS = 2 * 60_000;
 
 /** How many messages a member sends before the room reports them to the daily budget. */
 const REPORT_EVERY = 2_000;
@@ -108,7 +112,13 @@ export class Room extends DurableObject<Env> {
     if (!meta) {
       const ip = request.headers.get("x-pb-client-ip") ?? "unknown";
       const owner = this.env.LIMITS.idFromName(ip);
-      const expiresAt = now + limits.lifetimeMs;
+      // A dated room ends when its ID says, however often it is emptied and reopened.
+      const dated = roomExpiry(request.headers.get("x-pb-room") ?? "");
+      if (dated !== null && now >= dated) return errorResponse("expired", 410);
+      if (dated !== null && dated > now + limits.lifetimeMs + EXPIRY_SLACK_MS) {
+        return errorResponse("bad_expiry", 400);
+      }
+      const expiresAt = dated ?? now + limits.lifetimeMs;
       const slot = await this.env.LIMITS.get(owner).openRoom(
         this.key(), expiresAt, limits.openRoomsPerIp, limits.roomsPerIpPerHour, true,
       );

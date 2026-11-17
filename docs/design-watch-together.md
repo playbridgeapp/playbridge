@@ -152,6 +152,15 @@ which members use to check host-signed messages (§4). Rooms are created on the 
 (random 128-bit ID, 256-bit key); the `Room` object starts when the first member
 connects.
 
+A link stops working when its party ends, for good. The relay starts a room for any ID it
+does not know, so an expiry it merely remembered would be forgotten with the room. The
+room ID carries it instead: the host's app asks the relay for its clock and party length
+(`/version`) and makes an ID of a fixed 3-byte marker, the end time in minutes (4 bytes)
+and 9 random bytes. The relay refuses such an ID once its time has passed, and refuses to
+start one dated further out than its own party length. Emptying and reopening the room
+does not move the end. Relays that report no clock, and apps from before this, use plain
+random IDs, which a later connect can still start again.
+
 ## 6. Playback sync
 
 ### Starting

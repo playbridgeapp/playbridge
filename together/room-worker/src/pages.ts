@@ -46,9 +46,16 @@ export function invitePage(): string {
 <p>If that doesn't work, copy this link and paste it into PlayBridge → Watch together → Join.</p>
 <button id="copy" type="button">Copy invite link</button></div>
 <script>
+const id=location.pathname.split("/").pop()||"";
+if(id.startsWith("e71da7")&&Date.now()>=parseInt(id.slice(6,14),16)*60000){
+document.querySelector("h1").textContent="This invite has expired";
+document.querySelector("p").textContent="The watch party it was for has ended. Ask for a new invite.";
+document.querySelector(".card").remove();
+}else{
 const key=location.hash.slice(1);
 document.getElementById("open").href=key?"intent://"+location.host+location.pathname+"?"+key+"#Intent;scheme=https;package=com.playbridge.sender;end":"#";
 document.getElementById("copy").onclick=()=>navigator.clipboard.writeText(location.href).then(()=>{document.getElementById("copy").textContent="Copied"});
+}
 </script>`,
   );
 }
