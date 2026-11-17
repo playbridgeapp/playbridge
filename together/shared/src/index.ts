@@ -52,6 +52,19 @@ export type LobbyServerFrame =
 /** Opaque IDs: room and member IDs are 32 lowercase hex characters. */
 export const HEX_ID = /^[0-9a-f]{32}$/;
 
+/**
+ * Room IDs that start with this carry their own expiry: the next 8 hex characters are the
+ * minute (Unix time) the party ends. The relay refuses such a room from then on, so an old
+ * invite link cannot start a new room. Mirrors `RoomId::dated` in the Rust client.
+ */
+export const DATED_ROOM_PREFIX = "e71da7";
+
+/** When a dated room ends, in milliseconds; null for a room ID without an expiry. */
+export function roomExpiry(room: string): number | null {
+  if (!HEX_ID.test(room) || !room.startsWith(DATED_ROOM_PREFIX)) return null;
+  return parseInt(room.slice(6, 14), 16) * 60_000;
+}
+
 /** Base64url without padding, as produced by the Rust client. */
 export const BASE64URL = /^[A-Za-z0-9_-]+$/;
 

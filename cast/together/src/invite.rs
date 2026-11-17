@@ -84,6 +84,35 @@ impl Invite {
     }
 }
 
+/// How long [`new_room_id`] waits for the relay before settling for an undated ID.
+const RELAY_INFO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The ID for a party about to start on `relay`. A relay that reports its clock gets an
+/// ID that ends with the party, so the invite link stops working then for good. Older
+/// relays, and ones that do not answer in time, get a plain random ID as before.
+pub async fn new_room_id(relay: &Url) -> RoomId {
+    #[derive(serde::Deserialize)]
+    struct Info {
+        now: Option<f64>,
+        room_lifetime_ms: Option<f64>,
+    }
+    let mut url = relay.clone();
+    url.set_path(&format!("{}/version", relay.path().trim_end_matches('/')));
+    url.set_query(None);
+    url.set_fragment(None);
+    let info = async {
+        let response = crate::tls::http_client().get(url).send().await.ok()?;
+        response.json::<Info>().await.ok()
+    };
+    match tokio::time::timeout(RELAY_INFO_TIMEOUT, info).await {
+        Ok(Some(Info {
+            now: Some(now),
+            room_lifetime_ms: Some(lifetime),
+        })) if now > 0.0 && lifetime > 0.0 => RoomId::dated(now + lifetime),
+        _ => RoomId::undated(),
+    }
+}
+
 /// Relays must use HTTPS, except plain HTTP on loopback for local development.
 pub fn check_relay_scheme(url: &Url) -> Result<()> {
     match url.scheme() {
@@ -139,5 +168,39 @@ mod tests {
         assert!(Invite::parse(&sample("http://example.com").to_link()).is_err());
         assert!(Invite::parse(&sample("http://127.0.0.1:8787").to_link()).is_ok());
         assert!(Invite::parse("https://example.com/j/abababababababababababababababab").is_err());
+    }
+
+    /// Serves one HTTP response on loopback and returns the relay address for it.
+    async fn relay_answering(body: &'static str) -> Url {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        Url::parse(&format!("http://{addr}")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_new_room_is_dated_from_the_relays_clock_and_lifetime() {
+        let relay = relay_answering(r#"{"now":1800000000000,"room_lifetime_ms":10800000}"#).await;
+        let room = new_room_id(&relay).await;
+        assert_eq!(room.expires_at_ms(), Some(1_800_010_800_000.0));
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_reports_no_clock_gets_an_undated_room() {
+        let old = relay_answering(r#"{"room_lifetime_ms":10800000}"#).await;
+        assert_eq!(new_room_id(&old).await.expires_at_ms(), None);
+        // Nothing listening at all.
+        let gone = Url::parse("http://127.0.0.1:9").unwrap();
+        assert_eq!(new_room_id(&gone).await.expires_at_ms(), None);
     }
 }

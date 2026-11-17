@@ -68,6 +68,44 @@ macro_rules! hex_id {
 }
 
 hex_id!(RoomId);
+
+/// The first bytes of a room ID that carries its own expiry. The relay refuses such a
+/// room once the time has passed, so an old invite link cannot start a new room.
+const DATED_MARKER: [u8; 3] = [0xe7, 0x1d, 0xa7];
+const MINUTE_MS: f64 = 60_000.0;
+
+impl RoomId {
+    /// A random ID with no expiry in it, for relays that do not check one.
+    pub fn undated() -> Self {
+        loop {
+            let id = Self::generate();
+            if id.0[..3] != DATED_MARKER {
+                return id;
+            }
+        }
+    }
+
+    /// An ID for a room that ends at `expires_at_ms` (Unix time, on the relay's clock),
+    /// rounded down to the minute.
+    pub fn dated(expires_at_ms: f64) -> Self {
+        let minutes = (expires_at_ms / MINUTE_MS)
+            .floor()
+            .clamp(0.0, f64::from(u32::MAX)) as u32;
+        let mut bytes: [u8; 16] = random_bytes();
+        bytes[..3].copy_from_slice(&DATED_MARKER);
+        bytes[3..7].copy_from_slice(&minutes.to_be_bytes());
+        Self(bytes)
+    }
+
+    /// When this room ends, if its ID says so.
+    pub fn expires_at_ms(&self) -> Option<f64> {
+        if self.0[..3] != DATED_MARKER {
+            return None;
+        }
+        let minutes = u32::from_be_bytes(self.0[3..7].try_into().expect("four bytes"));
+        Some(f64::from(minutes) * MINUTE_MS)
+    }
+}
 hex_id!(MemberId);
 
 #[cfg(test)]
@@ -80,5 +118,21 @@ mod tests {
         assert_eq!(RoomId::parse(&id.to_string()).unwrap(), id);
         assert!(RoomId::parse("ABCDEF00000000000000000000000000").is_err());
         assert!(MemberId::parse("00").is_err());
+    }
+
+    #[test]
+    fn dated_room_ids_carry_their_expiry_to_the_minute() {
+        let expires = 1_800_000_000_000.0 + 59_999.0;
+        let id = RoomId::dated(expires);
+        assert_eq!(id.expires_at_ms(), Some(1_800_000_000_000.0));
+        assert_eq!(
+            RoomId::parse(&id.to_string()).unwrap().expires_at_ms(),
+            id.expires_at_ms()
+        );
+        assert_ne!(RoomId::dated(expires), id, "the rest of the ID is random");
+        assert!(id.to_string().starts_with("e71da7"));
+        for _ in 0..64 {
+            assert_eq!(RoomId::undated().expires_at_ms(), None);
+        }
     }
 }

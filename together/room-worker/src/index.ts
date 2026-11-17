@@ -1,6 +1,7 @@
 import {
   HEX_ID,
   PROTOCOL_VERSION,
+  roomExpiry,
   clientIp,
   errorResponse,
   json,
@@ -26,6 +27,8 @@ export default {
         shared: limits.shared,
         max_members: limits.maxMembers,
         room_lifetime_ms: limits.lifetimeMs,
+        // Apps date a new party's room ID from this clock, not their own.
+        now: Date.now(),
       });
     }
     if (url.pathname === "/.well-known/assetlinks.json") {
@@ -50,6 +53,9 @@ export default {
       }
       const member = url.searchParams.get("member") ?? "";
       if (!HEX_ID.test(member)) return errorResponse("bad_member", 400);
+      // A dated room is over for good once its time has passed; no need to wake it.
+      const expiry = roomExpiry(room);
+      if (expiry !== null && Date.now() >= expiry) return errorResponse("expired", 410);
 
       const ip = clientIp(request);
       if (!(await underLimit(env.CONNECTS_PER_ROOM, room)) || !(await underLimit(env.CONNECTS_PER_IP, ip))) {
@@ -57,6 +63,7 @@ export default {
       }
       const forwarded = new Request(request);
       forwarded.headers.set("x-pb-client-ip", ip);
+      forwarded.headers.set("x-pb-room", room);
       try {
         return await env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(forwarded);
       } catch (error) {

@@ -26,7 +26,7 @@ use playbridge_together::engine::{
 use playbridge_together::messages::{ChangePolicy, DeviceKind, SharedItem, Source};
 use playbridge_together::pairing::{Lobby, PairingInvite, PairingService, QrPayload};
 use playbridge_together::sync::PlayerSnapshot;
-use playbridge_together::{Invite, MemberId, MemberKeys, RoomId, RoomKey};
+use playbridge_together::{Invite, MemberId, MemberKeys, RoomKey};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc as async_mpsc, watch};
@@ -324,9 +324,10 @@ impl Worker {
                     return self.error("host", "the relay must use https", None);
                 }
                 let keys = MemberKeys::generate();
+                let room = playbridge_together::invite::new_room_id(&relay).await;
                 let invite = Invite {
                     relay,
-                    room: RoomId::generate(),
+                    room,
                     key: RoomKey::generate(),
                     host: keys.signing_public(),
                 };

@@ -10,7 +10,7 @@ use playbridge_together::engine::{Command, Engine, EngineConfig, Event, PlayerCo
 use playbridge_together::messages::{ChangePolicy, DeviceKind, SharedItem, Source};
 use playbridge_together::pairing::{PairingInvite, PairingService, QrPayload};
 use playbridge_together::sync::PlayerSnapshot;
-use playbridge_together::{Invite, MemberId, MemberKeys, RoomId, RoomKey};
+use playbridge_together::{Invite, MemberId, MemberKeys, RoomKey};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -137,9 +137,10 @@ async fn host(options: Options) -> Result<(), RunError> {
     playbridge_together::invite::check_relay_scheme(&relay)
         .map_err(|e| RunError::usage(e.to_string()))?;
     let keys = MemberKeys::generate();
+    let room_id = playbridge_together::invite::new_room_id(&relay).await;
     let invite = Invite {
         relay,
-        room: RoomId::generate(),
+        room: room_id,
         key: RoomKey::generate(),
         host: keys.signing_public(),
     };
