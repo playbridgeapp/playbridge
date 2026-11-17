@@ -21,6 +21,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/UI/SubtitleStyleSettings.swift" \
   "$source_root/Together/TogetherModels.swift" \
   "$source_root/Together/TogetherTvPartyState.swift" \
+  "$source_root/Together/TogetherStepFocusTarget.swift" \
   "$source_root/Together/TogetherClient.swift" \
   "$source_root/Models/PairedDevice.swift" \
   "$source_root/Models/PairingCredentialState.swift" \

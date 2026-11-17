@@ -1,6 +1,6 @@
 import { SELF, env as testEnv, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { assetLinks, type Env } from "../src/config";
+import { appleAppSiteAssociation, assetLinks, type Env } from "../src/config";
 import { KEEPALIVE_SECS, LEGACY_SILENT_MS, SILENT_MS, isSilent } from "../src/room";
 
 const env = testEnv as unknown as Env;
@@ -92,6 +92,27 @@ describe("room worker", () => {
     });
     expect(assetLinks({ ANDROID_APP_PACKAGE: "com.playbridge.sender" } as Env)).toBeNull();
     expect(assetLinks({ ANDROID_APP_PACKAGE: "x", ANDROID_CERT_SHA256: "nope" } as Env)).toBeNull();
+  });
+
+  it("serves Apple App Site Association only when configured", async () => {
+    const res = await SELF.fetch(`${BASE}/.well-known/apple-app-site-association`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = await res.json<any>();
+    expect(body).toEqual({
+      applinks: {
+        apps: [],
+        details: [
+          {
+            appIDs: ["4VL6AT677Y.app.playbridge.phone"],
+            paths: ["/j/*"],
+            components: [{ "/": "/j/*" }],
+          },
+        ],
+      },
+    });
+    expect(appleAppSiteAssociation({} as Env)).toBeNull();
+    expect(appleAppSiteAssociation({ APPLE_APP_IDS: "invalid-id" } as Env)).toBeNull();
   });
 
   it("welcomes members in join order and routes messages", async () => {

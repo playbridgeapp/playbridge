@@ -1205,6 +1205,8 @@ struct FullScreenVideoPlayerView: View {
     @State private var previousIdleTimerDisabled: Bool?
     @State private var openingOrientationUnavailable = false
     var playerControls: PhonePlayerControls? = nil
+    var autoPlayOnAppear = true
+    var closeSessionOnDisappear = true
 
     var body: some View {
         ZStack {
@@ -1269,10 +1271,14 @@ struct FullScreenVideoPlayerView: View {
                 previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
                 UIApplication.shared.isIdleTimerDisabled = true
             }
-            session.play()
+            if autoPlayOnAppear {
+                session.play()
+            }
         }
         .onDisappear {
-            session.close()
+            if closeSessionOnDisappear {
+                session.close()
+            }
             if let previousIdleTimerDisabled {
                 UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
                 self.previousIdleTimerDisabled = nil

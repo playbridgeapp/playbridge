@@ -73,6 +73,7 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var installedUserScripts: [String] = []
     @Published var userAgentActive = ""
     @Published var savedUserAgents: [(name: String, value: String)] = []
+    var onWatchTogetherJoined: (([String: Any]) -> Void)?
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
     func handle(_ text: String, sessionID: UUID? = nil, isCurrentSession: @escaping () -> Bool = { true }) {
@@ -222,6 +223,9 @@ final class ConnectionCoordinator: ObservableObject {
                 guard let name = entry["name"] as? String, let value = entry["value"] as? String else { return nil }
                 return (name, value)
             }
+
+        case "watch_together_joined":
+            onWatchTogetherJoined?(json)
 
         default:
             break

@@ -2934,7 +2934,7 @@ private func runPhase6PureLogicTests() {
     assert(TogetherJson.event(from: #"{"event":"ended","item":"it1"}"#) == .ended(item: "it1"))
     assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":95000}"#) == .duration(95_000))
     assert(TogetherJson.event(from: #"{"event":"duration","duration_ms":null}"#) == .duration(nil))
-    assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull))
+    assert(TogetherJson.event(from: #"{"event":"stopped","room":"r1","reason":"room_full"}"#) == .stopped(roomId: "r1", reason: .roomFull, retryAfterSecs: 0))
     let clearCmd = TogetherJson.command("clear") ?? ""
     assert(clearCmd.contains("\"command\":\"clear\""))
 

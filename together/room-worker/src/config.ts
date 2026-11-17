@@ -25,6 +25,8 @@ export interface Env {
   ANDROID_APP_PACKAGE?: string;
   /** Comma-separated SHA-256 signing certificate fingerprints for that package. */
   ANDROID_CERT_SHA256?: string;
+  /** Comma-separated `<TEAMID>.<BUNDLEID>` Apple app IDs for Universal Links. Unset: none. */
+  APPLE_APP_IDS?: string;
 }
 
 export interface RoomLimits {
@@ -71,4 +73,28 @@ export function assetLinks(env: Env): unknown[] | null {
       target: { namespace: "android_app", package_name: pkg, sha256_cert_fingerprints: certs },
     },
   ];
+}
+
+/**
+ * Apple App Site Association file for iOS Universal Links on `/j/*`, or null when the
+ * relay isn't configured with valid `<TEAMID>.<BUNDLEID>` entries.
+ */
+export function appleAppSiteAssociation(env: Env): unknown | null {
+  const appIDs = (env.APPLE_APP_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => /^[A-Z0-9]{10}\.[A-Za-z0-9.-]+$/.test(id));
+  if (appIDs.length === 0) return null;
+  return {
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appIDs,
+          paths: ["/j/*"],
+          components: [{ "/": "/j/*" }],
+        },
+      ],
+    },
+  };
 }

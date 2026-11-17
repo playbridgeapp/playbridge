@@ -9,6 +9,7 @@ struct PlayBridgePhoneApp: App {
     @StateObject private var iptv = IptvStore()
     @StateObject private var library = PhoneMediaLibrary()
     @StateObject private var collections = CollectionsStore()
+    @StateObject private var together = PhoneTogether.shared
 
     init() { Theme.configureTypography() }
 
@@ -23,7 +24,15 @@ struct PlayBridgePhoneApp: App {
                 .environmentObject(iptv)
                 .environmentObject(collections)
                 .environmentObject(library)
+                .environmentObject(together)
                 .preferredColorScheme(.dark)
+                .onOpenURL { url in
+                    _ = together.handleIncomingURL(url, connectedTvName: vm.connectedPlayBridgeTvName)
+                }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    guard let url = activity.webpageURL else { return }
+                    _ = together.handleIncomingURL(url, connectedTvName: vm.connectedPlayBridgeTvName)
+                }
         }
     }
 }

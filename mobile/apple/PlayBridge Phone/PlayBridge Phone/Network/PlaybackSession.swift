@@ -74,6 +74,9 @@ struct PlaybackFailure: Equatable {
     @Published private(set) var mpvState = PhonePlaybackState()
     private(set) var alternativeEngine: PhoneAlternativePlaybackEngine?
     var onPlaybackEnd: (() -> Void)?
+    var partyPlayInterceptor: (() -> Bool)?
+    var partyPauseInterceptor: (() -> Bool)?
+    var partySeekInterceptor: ((Double) -> Bool)?
     @Published var websiteSubtitleTracks: [(url: String, label: String)] = []
     var websiteSubtitleLanguages: [String?] = []
     var onSubtitleTimingChange: (() -> Void)?
@@ -117,7 +120,8 @@ struct PlaybackFailure: Equatable {
     var isPlaying: Bool { alternativeEngine != nil && !mpvState.paused }
 
     init(media: RoutedStream, route: StreamRoute, contentType: String? = nil,
-         initialOrientation: String? = nil, preferencesStore: UserDefaults = .standard,
+         initialOrientation: String? = nil, initialResume: Double = 0,
+         preferencesStore: UserDefaults = .standard,
          alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil, prepare: @escaping () async throws -> RoutedStream) {
         self.route = route
         self.initialOrientation = initialOrientation
@@ -135,7 +139,7 @@ struct PlaybackFailure: Equatable {
         self.contentType = contentType
         headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
         registration = media.registration
-        install(media, resume: 0, autoplay: false)
+        install(media, resume: max(0, initialResume), autoplay: false)
     }
 
     private func install(_ media: RoutedStream, resume: Double, autoplay: Bool) {
@@ -171,16 +175,65 @@ struct PlaybackFailure: Equatable {
 
     func play() {
         guard !closed else { return }
+        if partyPlayInterceptor?() == true { return }
         alternativeEngine?.play()
     }
     func pause() {
         guard !closed else { return }
+        if partyPauseInterceptor?() == true { return }
         alternativeEngine?.pause()
     }
     func seek(to seconds: Double) {
         guard !closed, seconds.isFinite else { return }
+        let clamped = max(0, durationSeconds > 0 ? min(durationSeconds, seconds) : seconds)
+        if partySeekInterceptor?(clamped) == true {
+            skipTarget = nil
+            return
+        }
         skipTarget = nil
-        alternativeEngine?.seek(to: max(0, durationSeconds > 0 ? min(durationSeconds, seconds) : seconds))
+        alternativeEngine?.seek(to: clamped)
+    }
+
+    // MARK: - Watch Together party engine control
+
+    func applyPartyPlay() {
+        guard !closed else { return }
+        alternativeEngine?.play()
+    }
+
+    func applyPartyPause() {
+        guard !closed else { return }
+        alternativeEngine?.pause()
+    }
+
+    func applyPartySeek(to seconds: Double) {
+        guard !closed, seconds.isFinite else { return }
+        skipTarget = nil
+        let clamped = max(0, durationSeconds > 0 ? min(durationSeconds, seconds) : seconds)
+        alternativeEngine?.seek(to: clamped)
+    }
+
+    func applyPartyRate(_ rate: Double) {
+        guard !closed, rate.isFinite else { return }
+        let clamped = max(0.25, min(4.0, rate))
+        alternativeEngine?.setSpeed(clamped)
+    }
+
+    func applyPartyGoLive() {
+        guard !closed else { return }
+        skipTarget = nil
+        if durationSeconds > 0 {
+            alternativeEngine?.seek(to: durationSeconds)
+        }
+        alternativeEngine?.play()
+    }
+
+    func loadPartyReplacement(media: RoutedStream, resume: Double, autoplay: Bool) {
+        guard !closed else { return }
+        sourceURL = media.sourceURL.flatMap(URL.init(string:)) ?? media.url
+        headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
+        registration = media.registration
+        install(media, resume: resume, autoplay: autoplay)
     }
 
     /// Consecutive taps accumulate even before the decoder reports its seek.

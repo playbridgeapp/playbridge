@@ -9,8 +9,9 @@ import subprocess
 import sys
 
 ATV = ["abi_version", "start", "submit_json", "next_json", "cancel", "free"]
+TOGETHER = ["abi_version", "start", "submit_json", "next_json", "cancel", "free"]
 ADBLOCK = ["pb_adblock_" + name for name in ["abi_version", "create_json", "deserialize", "call_json", "serialize", "content_blocking_json", "destroy", "string_free", "bytes_free"]]
-REQUIRED = ["pb_atv_" + name for name in ATV] + [
+REQUIRED = ["pb_atv_" + name for name in ATV] + ["pb_together_" + name for name in TOGETHER] + [
     "pb_cast_core_abi_version", "pb_session_start", "pb_session_submit_json",
     "pb_session_next_json", "pb_session_cancel", "pb_session_free", "pb_string_free",
 ]

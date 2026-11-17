@@ -206,7 +206,7 @@ final class TvTogether: ObservableObject {
         if let client { return client }
         do {
             let created = try TogetherClient { [weak self] event in
-                Task { @MainActor [weak self] in
+                DispatchQueue.main.async {
                     self?.onEvent(event)
                 }
             }
@@ -250,6 +250,13 @@ final class TvTogether: ObservableObject {
             updateParty { party in
                 party.connected = false
                 party.notice = "Reconnecting…"
+            }
+
+        case .unreachable:
+            noticeClearTask?.cancel()
+            noticeClearTask = nil
+            updateParty { party in
+                party.notice = "Can't reach \(party.relay). Still trying…"
             }
 
         case .member(let member, let name, _, let host):
@@ -306,7 +313,7 @@ final class TvTogether: ObservableObject {
                 state = .ended(message: message.isEmpty ? "Something went wrong." : message)
             }
 
-        case .stopped(let roomId, let reason):
+        case .stopped(let roomId, let reason, let retryAfterSecs):
             if !roomId.isEmpty, roomId != room { return }
             noticeClearTask?.cancel()
             noticeClearTask = nil
@@ -327,6 +334,8 @@ final class TvTogether: ObservableObject {
                     state = .ended(message: "This invite isn't valid any more.")
                 case .replaced:
                     state = .ended(message: "This TV joined the party somewhere else.")
+                case .roomLimit, .relayBusy:
+                    state = .ended(message: TogetherFormatting.limitMessage(reason, retryAfterSecs: retryAfterSecs) ?? "The watch party connection failed.")
                 case .error:
                     state = .ended(message: "The watch party connection failed.")
                 }

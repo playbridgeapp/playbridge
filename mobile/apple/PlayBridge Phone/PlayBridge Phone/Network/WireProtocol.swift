@@ -237,6 +237,10 @@ enum WireProtocol {
         encode(["type": "user_agent", "name": name, "value": value, "save": save])
     }
 
+    static func watchTogetherJoin(invite: String, from: String) -> String {
+        encode(["type": "watch_together_join", "invite": invite, "from": from])
+    }
+
     // MARK: - Helpers
 
     private static func envelope(
