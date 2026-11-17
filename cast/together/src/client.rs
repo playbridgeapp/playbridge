@@ -708,14 +708,13 @@ mod tests {
             while Instant::now() < deadline {
                 if let Ok(Some(Ok(Message::Text(txt)))) =
                     tokio::time::timeout(Duration::from_millis(200), ws2.next()).await
-                {
-                    if matches!(
+                    && matches!(
                         serde_json::from_str::<ClientFrame>(&txt),
                         Ok(ClientFrame::State { .. })
-                    ) {
-                        saw_state = true;
-                        break;
-                    }
+                    )
+                {
+                    saw_state = true;
+                    break;
                 }
             }
             let _ = republished_tx.send(saw_state);
@@ -853,14 +852,13 @@ mod tests {
             while Instant::now() < deadline {
                 if let Ok(Some(Ok(Message::Text(txt)))) =
                     tokio::time::timeout(Duration::from_millis(200), ws2.next()).await
-                {
-                    if matches!(
+                    && matches!(
                         serde_json::from_str::<ClientFrame>(&txt),
                         Ok(ClientFrame::State { .. })
-                    ) {
-                        saw_state = true;
-                        break;
-                    }
+                    )
+                {
+                    saw_state = true;
+                    break;
                 }
             }
             let _ = republished_tx.send(saw_state);
