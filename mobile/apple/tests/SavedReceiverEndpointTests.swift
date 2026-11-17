@@ -115,5 +115,34 @@ import Foundation
         replies[1](false)
         precondition(published.isEmpty, "Forgotten receivers reject late probes")
         print("PASS: debounced live-address probes, path invalidation, cancellation, stale callbacks and forgotten receivers")
+        checkRepairing(saved: saved)
+    }
+
+    private static func checkRepairing(saved: PairedDevice) {
+        let keyFor: (PairedDevice) -> String = { $0.uuid.isEmpty ? "\($0.ip):\($0.port)" : $0.uuid }
+        let other = PairedDevice(ip: "192.0.2.50", port: 8765, name: "Bedroom", uuid: "receiver-b",
+                                 wssPort: 8766, token: "other-tok", certFingerprint: "other-pin")
+        let replacement = DiscoveredDevice(ip: saved.ip, port: saved.port, name: "Living room (Reset)", uuid: "reinstalled-uuid", wssPort: 9443)
+        let neighbor = DiscoveredDevice(ip: "192.0.2.99", port: saved.port, name: "Neighbor", uuid: "neighbor-uuid", wssPort: 8766)
+
+        precondition(SavedReceiverEndpoint.installedReplacement(for: saved, in: [neighbor, replacement]) == replacement)
+        precondition(SavedReceiverEndpoint.repairingTarget(from: saved, discovered: [neighbor, replacement]) == replacement)
+
+        let fallback = SavedReceiverEndpoint.repairingTarget(from: saved, discovered: [neighbor])
+        precondition(fallback.ip == saved.ip && fallback.port == saved.port && fallback.wssPort == saved.wssPort)
+        precondition(fallback.uuid.isEmpty, "Undiscovered replacement must drop stale UUID until re-verified")
+
+        let remaining = SavedReceiverEndpoint.removingDevice(saved, from: [other, saved], keyFor: keyFor)
+        precondition(remaining == [other], "Only the failing saved TV is dropped")
+
+        var rePaired = PairedDevice(ip: replacement.ip, port: replacement.port, name: replacement.name,
+                                    uuid: replacement.uuid, wssPort: replacement.wssPort,
+                                    token: "fresh-tok", certFingerprint: "fresh-pin")
+        let cleaned = SavedReceiverEndpoint.removingDevice(rePaired, from: remaining, keyFor: keyFor)
+        let afterInsert = [rePaired] + cleaned
+        precondition(afterInsert.count == 2 && afterInsert.filter { $0.ip == saved.ip }.count == 1,
+                     "Re-pairing must not leave duplicate entries")
+        rePaired.token = nil
+        print("PASS: installed replacement matching, stale-UUID/credential stripping, isolated forgetting and duplicate prevention")
     }
 }

@@ -57,6 +57,7 @@ private struct ActiveTabView: View {
 
     @State private var address = ""
     @State private var showDetected = false
+    @State private var softKeyboardOpen = false
     @State private var showMenu = false
     @State private var pendingMenuAction: (() -> Void)?
     @FocusState private var addressFocused: Bool
@@ -166,7 +167,7 @@ private struct ActiveTabView: View {
                 .padding(10)
                 .background(Theme.surfaceContainer)
             }
-            if !chromeHidden { toolbar }
+            if !chromeHidden && !softKeyboardOpen { toolbar }
         }
         .statusBarHidden(chromeHidden)
         .overlay(alignment: .trailing) {
@@ -208,7 +209,26 @@ private struct ActiveTabView: View {
             if addressFocused { Task { await store.clipboard.refresh() } }
         }
         .onAppear { address = BrowserAddressDisplay.editable(tab) }
-        .onDisappear { tab.cancelPrompt() }
+        .onDisappear {
+            softKeyboardOpen = false
+            tab.cancelPrompt()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let endFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let scene = (UIApplication.shared.connectedScenes.first { $0.activationState == .foregroundActive } as? UIWindowScene)
+                ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            let window = scene?.windows.first { $0.isKeyWindow } ?? scene?.windows.first
+            let screenBounds = window?.screen.bounds ?? UIScreen.main.bounds
+            let bottomSafeArea = window?.safeAreaInsets.bottom ?? 0
+            softKeyboardOpen = BrowserKeyboardVisibility.isSoftKeyboardVisible(
+                endFrame: endFrame,
+                screenBounds: screenBounds,
+                bottomSafeAreaInset: bottomSafeArea
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            softKeyboardOpen = false
+        }
         .onChange(of: tab.urlString) { _ in
             if !addressFocused { address = BrowserAddressDisplay.editable(tab) }
         }

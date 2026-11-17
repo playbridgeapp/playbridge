@@ -88,7 +88,8 @@ enum WireProtocol {
         playerMode: String? = nil,
         displayDurationMs: Int? = nil,
         itemId: String? = nil,
-        visualMetadata: [String: Any]? = nil
+        visualMetadata: [String: Any]? = nil,
+        requestID: String? = nil
     ) -> String {
         var item: [String: Any] = ["url": url]
         if let displayDurationMs { item["displayDurationMs"] = displayDurationMs }
@@ -103,7 +104,7 @@ enum WireProtocol {
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
         let payload: [String: Any] = ["items": [item], "startIndex": 0]
-        return envelope(action: "playlist", payload: payload)
+        return envelope(action: "playlist", payload: payload, requestID: requestID ?? UUID().uuidString)
     }
 
     static func queueVideoCommand(
