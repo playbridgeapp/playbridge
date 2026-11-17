@@ -202,6 +202,14 @@ final class TogetherClient {
         return submit(TogetherJson.command("join", fields: fields))
     }
 
+    /// Comes back to a party as the same member, from the `saved` text of its room event.
+    @discardableResult
+    func rejoin(saved: String, device: TogetherDevice) -> Bool {
+        var fields = TogetherJson.deviceFields(device)
+        fields["saved"] = saved
+        return submit(TogetherJson.command("rejoin", fields: fields))
+    }
+
     @discardableResult
     func pairRegister(pairing: String) -> Bool {
         submit(TogetherJson.command("pair_register", fields: ["pairing": pairing]))
@@ -291,11 +299,6 @@ final class TogetherClient {
             "allowed": allowed,
             "always": always,
         ]))
-    }
-
-    @discardableResult
-    func delegate(member: String, signKey: String) -> Bool {
-        submit(TogetherJson.command("delegate", fields: ["member": member, "sign_pk": signKey]))
     }
 
     @discardableResult

@@ -67,7 +67,7 @@ final class FakeTogetherSession: TogetherSessionProtocol {
     var locks: [Bool] = []
     var policies: [TogetherPolicy] = []
     var replies: [(request: String, allowed: Bool, always: Bool)] = []
-    var delegates: [(member: String, signKey: String)] = []
+    var rejoins: [(saved: String, device: TogetherDevice)] = []
     var addOwns: [(member: String, boxKey: String)] = []
     var continueWithouts: [String] = []
     var shareCredentialCalls: [String] = []
@@ -77,6 +77,7 @@ final class FakeTogetherSession: TogetherSessionProtocol {
 
     func host(relay: String, device: TogetherDevice) -> Bool { hosted.append((relay, device)); return true }
     func join(invite: String, device: TogetherDevice) -> Bool { joined.append((invite, device)); return true }
+    func rejoin(saved: String, device: TogetherDevice) -> Bool { rejoins.append((saved, device)); return true }
     func pairRegister(pairing: String) -> Bool { pairRegisters.append(pairing); return true }
     func pairAccept(device: TogetherDevice, guest: Bool) -> Bool { pairAccepts.append((device, guest)); return true }
     func pairCancel() -> Bool { pairCancels += 1; return true }
@@ -96,7 +97,6 @@ final class FakeTogetherSession: TogetherSessionProtocol {
     func reply(request: String, allowed: Bool, always: Bool) -> Bool {
         replies.append((request, allowed, always)); return true
     }
-    func delegate(member: String, signKey: String) -> Bool { delegates.append((member, signKey)); return true }
     func addOwn(member: String, boxKey: String) -> Bool { addOwns.append((member, boxKey)); return true }
     func continueWithout(member: String) -> Bool { continueWithouts.append(member); return true }
     func shareCredentials(member: String) -> Bool { shareCredentialCalls.append(member); return true }
@@ -137,6 +137,8 @@ private func parseJSON(_ raw: String?) -> [String: Any] {
 struct WatchTogetherTests {
     @MainActor
     static func main() async throws {
+        // Never touch the real Keychain from tests.
+        PhoneTogether.makeSavedBackend = { MemorySavedWatchPartyBackend() }
         testWatchTogetherLinks()
         testProtocolAndGuestJson()
         testMediaURLChecks()
@@ -146,6 +148,8 @@ struct WatchTogetherTests {
         testMPVSeekStateTracking()
         testReconnectAndNoPersistence()
         testOpeningInviteLinksWhileInAParty()
+        testSavedPartyRules()
+        testSavedPartiesRejoinAsTheSameMember()
         print("PASS: Phone Watch Together checks")
     }
 
@@ -265,7 +269,7 @@ struct WatchTogetherTests {
         together.acceptInvite()
         precondition(session.pairAccepts.count == 1 && session.pairAccepts[0].guest)
 
-        // Enter room as host with connected TV -> addOwn + delegate.
+        // Enter room as host with connected TV -> addOwn, and no host duties handed over.
         together.handleEventForTesting(.room(
             roomId: "room-1", invite: "https://party.playbridge.app/j/0123456789abcdef0123456789abcdef#k=1&h=2",
             relay: "https://party.playbridge.app", member: "me-1", boxKey: "b", signKey: "s", host: true
@@ -277,7 +281,6 @@ struct WatchTogetherTests {
         together.addConnectedTv(using: tvBridge)
         try await Task.sleep(nanoseconds: 50_000_000)
         precondition(session.addOwns.contains { $0.member == "tv-1" && $0.boxKey == "box-pub" })
-        precondition(session.delegates.contains { $0.member == "tv-1" && $0.signKey == "sign-pub" })
         precondition(together.currentParty?.own.contains("tv-1") == true)
 
         // Play item with sign-in headers: offered ONLY to non-own peer, NOT to own TV.
@@ -653,6 +656,115 @@ struct WatchTogetherTests {
         precondition(together.switchRequest == nil)
         precondition(session.joined.map(\.0) == [other])
         precondition(together.state == .starting)
+    }
+}
+
+extension WatchTogetherTests {
+    static func testSavedPartyRules() {
+        let now: Int64 = 1_800_000_000_000
+        var clock = now
+        let backend = MemorySavedWatchPartyBackend()
+        let store = SavedWatchPartyStore(backend: backend, nowMs: { clock })
+        func party(_ room: String, joinedAt: Int64 = now, endsAt: Int64? = now + 3_600_000) -> SavedWatchParty {
+            SavedWatchParty(
+                roomId: room, relay: "party.playbridge.app", host: false, saved: "secret-\(room)",
+                joinedAtMs: joinedAt,
+                endsAtMs: SavedWatchParties.endsAt(roomEndsAtMs: endsAt, joinedAtMs: joinedAt)
+            )
+        }
+
+        // Kept and read back after a restart; never described with its secret.
+        store.put(party("a"))
+        precondition(SavedWatchPartyStore(backend: backend, nowMs: { clock }).get("a")?.saved == "secret-a")
+        precondition(!party("a").description.contains("secret"))
+
+        // Ended and undated parties drop out.
+        store.put(party("soon", endsAt: now + 60_000))
+        store.put(party("undated", endsAt: nil))
+        clock = now + 2 * 60_000
+        store.prune()
+        precondition(store.get("soon") == nil && backend.items["soon"] == nil)
+        precondition(store.get("undated") != nil)
+        clock = now + SavedWatchParties.undatedLifetimeMs + 1
+        store.prune()
+        precondition(store.parties.isEmpty)
+
+        // Newest twenty, newest first.
+        clock = now
+        for index in 0..<(SavedWatchParties.maxSaved + 2) { store.put(party("r\(index)", joinedAt: now + Int64(index))) }
+        precondition(store.parties.count == SavedWatchParties.maxSaved)
+        precondition(store.parties.first?.roomId == "r21" && store.get("r0") == nil)
+
+        // Damaged items are dropped on load.
+        backend.set(Data("nope".utf8), room: "broken")
+        precondition(SavedWatchPartyStore(backend: backend, nowMs: { clock }).get("broken") == nil)
+        precondition(backend.items["broken"] == nil)
+
+        var p = party("w")
+        precondition(SavedWatchParties.endsIn(SavedWatchParty(
+            roomId: "w", relay: "", host: false, saved: "", joinedAtMs: now, endsAtMs: now + 130 * 60_000
+        ), nowMs: now) == "Ends in 2 h 10 min")
+        precondition(SavedWatchParties.endsIn(p, nowMs: now) == "Ends in 1 h")
+        precondition(SavedWatchParties.endsIn(p, nowMs: now + 3_599_000) == "Ends in less than a minute")
+        precondition(p.title == "Watch party")
+        p.hostName = "Sam"
+        precondition(p.title == "Sam's party")
+    }
+
+    @MainActor
+    static func testSavedPartiesRejoinAsTheSameMember() {
+        let suite = "PhoneTogetherSaved.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let backend = MemorySavedWatchPartyBackend()
+        PhoneTogether.makeSavedBackend = { backend }
+        defer { PhoneTogether.makeSavedBackend = { MemorySavedWatchPartyBackend() } }
+
+        let room = "0123456789abcdef0123456789abcdef"
+        let link = "https://party.playbridge.app/j/\(room)#k=abc&h=def"
+        let endsAt = SavedWatchParties.nowMs() + 3_600_000
+        let session = FakeTogetherSession()
+        let together = PhoneTogether(defaults: defaults, sessionFactory: { _ in session })
+        together.startHosting(watchHere: false)
+        together.handleEventForTesting(.room(
+            roomId: room, invite: link, relay: "party.playbridge.app", member: "me",
+            boxKey: "b", signKey: "s", host: true, endsAtMs: endsAt, saved: "SAVED-HOST"
+        ))
+        precondition(together.savedParties.first?.roomId == room)
+        precondition(together.savedParties.first?.host == true)
+        precondition(together.savedParties.first?.endsAtMs == endsAt)
+
+        // After a kill: a new instance lists it, and opening the link rejoins with the saved keys.
+        let relaunchedSession = FakeTogetherSession()
+        let relaunched = PhoneTogether(defaults: defaults, sessionFactory: { _ in relaunchedSession })
+        precondition(relaunched.state == .idle)
+        relaunched.loadSavedParties()
+        precondition(relaunched.savedParties.map(\.roomId) == [room])
+        relaunched.openInvite(link, watchHere: false)
+        precondition(relaunchedSession.joined.isEmpty)
+        precondition(relaunchedSession.rejoins.map(\.saved) == ["SAVED-HOST"])
+        precondition(relaunched.state == .starting)
+
+        // Back in it: rejoining again does nothing.
+        relaunched.handleEventForTesting(.room(
+            roomId: room, invite: link, relay: "party.playbridge.app", member: "me",
+            boxKey: "b", signKey: "s", host: true, endsAtMs: endsAt, saved: "SAVED-HOST"
+        ))
+        relaunched.rejoin(relaunched.savedParties[0], watchHere: false)
+        precondition(relaunchedSession.rejoins.count == 1)
+
+        // A party that ended is forgotten; so is one the user removes.
+        relaunched.handleEventForTesting(.stopped(roomId: room, reason: .expired))
+        precondition(relaunched.savedParties.isEmpty && backend.items.isEmpty)
+        backend.set(try! JSONEncoder().encode(SavedWatchParty(
+            roomId: "r2", relay: "", host: false, saved: "S2",
+            joinedAtMs: SavedWatchParties.nowMs(), endsAtMs: endsAt
+        )), room: "r2")
+        let third = PhoneTogether(defaults: defaults, sessionFactory: { _ in FakeTogetherSession() })
+        third.loadSavedParties()
+        precondition(third.savedParties.map(\.roomId) == ["r2"])
+        third.forgetSaved("r2")
+        precondition(third.savedParties.isEmpty && backend.items.isEmpty)
     }
 }
 
