@@ -196,5 +196,41 @@ class PartyTargetTest {
         )
         assertTrue(isOwnTvMemberMatch(pairedTv, pairingParty, emptyMap()))
         assertFalse(isOwnTvMemberMatch(pairedTv.copy(name = "Other TV"), pairingParty, emptyMap()))
+
+        // Desktop PlayBridge receivers (.Desktop) match via LAN identity AND strict pairing fallback,
+        // while Phone / Cli members in party.own never match by display name.
+        val desktopDevice = TvDevice(
+            ip = "192.168.1.40",
+            port = 8765,
+            token = "tok4",
+            name = "Atuls-MacBook-Air.local",
+            uuid = "uuid-desk-1",
+        )
+        val desktopParty = party.copy(
+            own = setOf("m-desk-1"),
+            members = mapOf(
+                "m-desk-1" to PhoneTogether.Member(name = "Atuls-MacBook-Air.local", kind = TogetherDeviceKind.Desktop, host = false),
+            ),
+        )
+        val desktopIdentities = mapOf(
+            "m-desk-1" to PhoneTogether.OwnTvIdentity(
+                name = "Atuls-MacBook-Air.local",
+                uuid = "uuid-desk-1",
+                endpointKey = desktopDevice.endpointKey.toString(),
+            ),
+        )
+        assertTrue(isOwnTvMemberMatch(desktopDevice, desktopParty, desktopIdentities))
+        assertTrue(isOwnTvMemberMatch(desktopDevice.copy(uuid = ""), desktopParty, emptyMap()))
+        assertFalse(isOwnTvMemberMatch(desktopDevice.copy(name = "Other Mac", uuid = "other"), desktopParty, desktopIdentities))
+
+        val nonReceiverParty = party.copy(
+            own = setOf("m-phone", "m-cli"),
+            members = mapOf(
+                "m-phone" to PhoneTogether.Member(name = "Atuls-MacBook-Air.local", kind = TogetherDeviceKind.Phone, host = false),
+                "m-cli" to PhoneTogether.Member(name = "CLI screen", kind = TogetherDeviceKind.Cli, host = false),
+            ),
+        )
+        assertFalse(isOwnTvMemberMatch(desktopDevice.copy(uuid = ""), nonReceiverParty, emptyMap()))
+        assertFalse(isOwnTvMemberMatch(TvDevice(ip = "192.168.1.41", port = 8765, token = "", name = "CLI screen"), nonReceiverParty, emptyMap()))
     }
 }

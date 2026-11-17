@@ -4,12 +4,17 @@
 
 export const PROTOCOL_VERSION = 1;
 
+/** Plain-text keep-alive handled by the room Durable Object without waking it from hibernation. */
+export const KEEPALIVE_PING = "ping";
+export const KEEPALIVE_PONG = "pong";
+
 /** WebSocket close codes sent by the Workers. */
 export const Close = {
   Unauthorized: 4001,
   RoomFull: 4003,
   Replaced: 4004,
   Expired: 4008,
+  Silent: 4009,
   RateLimited: 4029,
   BadMessage: 4400,
 } as const;
@@ -30,6 +35,7 @@ export type RoomServerFrame =
       expires_at: number;
       max_members: number;
       state?: { from: string; seq: number; ct: string };
+      keepalive_secs?: number;
     }
   | { t: "pong"; id: number; t0: number; room_time: number }
   | { t: "msg"; from: string; seq: number; ct: string }

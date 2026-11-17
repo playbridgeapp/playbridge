@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Computer
@@ -104,6 +105,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.playbridge.sender.cast.isOwnReceiverMemberMatch
+import com.playbridge.sender.cast.isReceiverKind
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.shared.together.TogetherDeviceKind
 import com.playbridge.shared.together.TogetherPolicy
@@ -182,7 +185,7 @@ private fun StartView(coordinator: ConnectionCoordinator) {
             textAlign = TextAlign.Center,
         )
         Text(
-            "Friends and your TVs each play their own copy. Only play, pause and seek are " +
+            "Friends and your other devices each play their own copy. Only play, pause and seek are " +
                 "shared, end-to-end encrypted.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -453,7 +456,7 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
         UpNextPanel(party, queue, queueNotice)
     }
     Panel(title = "In the party") { Members(party) }
-    Panel(title = "Add a device") { AddDevice(coordinator) }
+    Panel(title = "Add a device") { AddDevice(party, coordinator) }
     Panel { WatchHereRow(party.watching, PhoneTogether::setWatchHere) }
     if (party.host) Panel(title = "Host controls") { HostControls(party) }
 
@@ -897,13 +900,22 @@ private fun UpNextPanel(
     }
 }
 
+internal fun orderedPartyMembers(party: PhoneTogether.Party): List<Pair<String, PhoneTogether.Member>> =
+    party.members.entries
+        .sortedWith(
+            compareByDescending<Map.Entry<String, PhoneTogether.Member>> { it.value.host }
+                .thenByDescending { it.key == party.me }
+                .thenBy { it.value.name.lowercase() },
+        )
+        .map { it.key to it.value }
+
 @Composable
 private fun Members(party: PhoneTogether.Party) {
     if (party.members.isEmpty()) {
         Text("Nobody yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     val sharedByMe = party.item?.sharedBy == party.me
-    party.members.forEach { (id, member) ->
+    orderedPartyMembers(party).forEach { (id, member) ->
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -922,14 +934,14 @@ private fun Members(party: PhoneTogether.Party) {
                 Text(member.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val role = listOfNotNull(
                     "Host".takeIf { member.host },
-                    "This phone".takeIf { id == party.me },
-                    "Yours".takeIf { id in party.own },
+                    "You".takeIf { id == party.me },
+                    "Yours".takeIf { id != party.me && id in party.own },
                 ).joinToString(" · ")
                 if (role.isNotEmpty()) {
                     Text(role, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
-            if (sharedByMe && id !in party.own && member.kind == TogetherDeviceKind.Tv) {
+            if (sharedByMe && id != party.me && id !in party.own && member.kind.isReceiverKind()) {
                 TextButton(onClick = { PhoneTogether.shareSignIn(id) }) { Text("Share my sign-in") }
             }
         }
@@ -937,19 +949,28 @@ private fun Members(party: PhoneTogether.Party) {
 }
 
 @Composable
-private fun AddDevice(coordinator: ConnectionCoordinator) {
+private fun AddDevice(party: PhoneTogether.Party, coordinator: ConnectionCoordinator) {
     val context = LocalContext.current
     var code by rememberSaveable { mutableStateOf("") }
+    val ownIdentities by PhoneTogether.ownTvIdentities.collectAsState()
+    val connectedIdentity = coordinator.connectedTvIdentity
+    val alreadyInParty = connectedIdentity != null && isOwnReceiverMemberMatch(
+        name = connectedIdentity.name,
+        uuid = connectedIdentity.uuid,
+        endpointKey = connectedIdentity.endpointKey,
+        party = party,
+        ownTvIdentities = ownIdentities,
+    )
 
     val tvName = coordinator.connectedTvName
-    if (tvName != null && coordinator.tvSupportsWatchTogether) {
+    if (tvName != null && coordinator.tvSupportsWatchTogether && !alreadyInParty) {
         FilledTonalButton(onClick = { PhoneTogether.addConnectedTv(coordinator) }, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.Tv, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Default.AddCircle, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text("Add $tvName", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         HorizontalDivider()
-    } else if (tvName != null) {
+    } else if (tvName != null && !alreadyInParty) {
         Text(
             "$tvName needs a PlayBridge update to join.",
             style = MaterialTheme.typography.bodySmall,

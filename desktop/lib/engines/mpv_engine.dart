@@ -18,6 +18,7 @@ import 'playlist_materializer.dart';
 /// phone's `VideoDetector.PLAYER_SKIP_HEADERS`.
 const _playerSkipHeaders = <String>{
   'range',
+  'if-range',
   'accept-encoding',
   'host',
   'connection',

@@ -685,12 +685,7 @@ object VideoDetector {
      * reject segment requests. `sec-ch-ua-*` are client-hint fingerprinting headers that
      * media players should never send.
      */
-    val PLAYER_SKIP_HEADERS: Set<String> = setOf(
-        "Range", "Accept-Encoding", "Host", "Connection", "Content-Length",
-        "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-Fetch-Storage-Access",
-        "Sec-GPC", "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform",
-        "Priority", "Upgrade-Insecure-Requests", "TE", "Pragma"
-    )
+    val PLAYER_SKIP_HEADERS: Set<String> = com.playbridge.shared.player.PLAYER_SKIP_HEADERS
 
     /** Returns the cached thumbnail for [url], or null if not yet fetched. */
     fun getCachedThumbnail(url: String): Bitmap? = synchronized(thumbnailCache) { thumbnailCache[url] }

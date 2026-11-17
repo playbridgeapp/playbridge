@@ -439,4 +439,75 @@ void main() {
     expect(f.together.party!.watching, isTrue);
     expect(f.player.inParty, isFalse);
   });
+
+  test('shareVideo strips browser-only headers and preserves auth headers',
+      () async {
+    final f = await fixture();
+    f.together.start(watchHere: false);
+    deliver(f.client, f.room, room(host: true));
+
+    expect(
+      f.together.shareVideo(
+        url: 'https://media.example/video.mp4',
+        headers: {
+          'Range': 'bytes=0-',
+          'If-Range': '"abc"',
+          'Sec-Fetch-Site': 'same-origin',
+          'Host': 'media.example',
+          'Referer': 'https://site.example/',
+          'Cookie': 'sid=secret',
+          'Authorization': 'Bearer tok',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      ),
+      'Playing in the watch party',
+    );
+    final item = f.room.last('load')['item']! as Map;
+    expect(item['headers'], {
+      'Referer': 'https://site.example/',
+      'Cookie': 'sid=secret',
+      'Authorization': 'Bearer tok',
+      'User-Agent': 'Mozilla/5.0',
+    });
+  });
+
+  test(
+      'party includes this computer in member count and updates its host badge from MemberInfo',
+      () async {
+    final f = await fixture();
+    f.together.join(invite, watchHere: true);
+    deliver(f.client, f.room, room(host: false));
+
+    // Count includes this computer immediately on room entry.
+    expect(f.together.party!.members.length, 1);
+    expect(f.together.party!.members['me']?.name, 'Office Mac');
+    expect(f.together.party!.members['me']?.host, isFalse);
+
+    // Remote host joins -> 2 devices.
+    deliver(f.client, f.room, {
+      'event': 'member',
+      'member': 'phone1',
+      'name': 'Phone',
+      'kind': 'phone',
+      'host': true,
+    });
+    expect(f.together.party!.members.length, 2);
+
+    // Engine promotes this computer as acting host when remote host leaves.
+    deliver(f.client, f.room, {'event': 'member_left', 'member': 'phone1'});
+    deliver(f.client, f.room, {
+      'event': 'member',
+      'member': 'me',
+      'name': 'Office Mac',
+      'kind': 'desktop',
+      'host': true,
+    });
+    expect(f.together.party!.members.length, 1);
+    expect(f.together.party!.members['me']?.host, isTrue);
+
+    // Stray member_left for self cannot strip this computer from its own count.
+    deliver(f.client, f.room, {'event': 'member_left', 'member': 'me'});
+    expect(f.together.party!.members.length, 1);
+    expect(f.together.party!.members['me'], isNotNull);
+  });
 }

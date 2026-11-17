@@ -28,8 +28,14 @@ const INITIAL_PINGS: usize = 8;
 const INITIAL_PING_SPACING_MS: f64 = 150.0;
 /// Steady-state clock pings. Clocks drift slowly; the burst on each connect does the work.
 const PING_INTERVAL_MS: f64 = 120_000.0;
+/// Members repeat their hello this often, so a member that missed one (it was
+/// reconnecting, or the relay did not announce a rejoin) still learns who is here.
+pub const HELLO_REPEAT_MS: f64 = 60_000.0;
 /// After a seek or play, give the player this long before correcting again.
 const SETTLE_MS: f64 = 1_000.0;
+/// Any local change issued after `last_relay_rx_ms - CONFIRM_MARGIN_MS` is
+/// treated as unconfirmed when the socket disconnects and re-synced on Welcome.
+const CONFIRM_MARGIN_MS: f64 = 5_000.0;
 
 pub struct EngineConfig {
     pub invite: Invite,
@@ -178,12 +184,64 @@ struct PendingRequest {
     deadline: f64,
 }
 
+#[derive(Clone, Default)]
+struct PendingSync {
+    delegates: Vec<(Signed, f64)>,
+    lock_rev: Option<(u64, f64)>,
+    policy_rev: Option<(u64, f64)>,
+    load_rev: Option<(u64, f64)>,
+    timeline: Option<(String, u64, f64)>,
+}
+
+impl PendingSync {
+    fn is_empty(&self) -> bool {
+        self.delegates.is_empty()
+            && self.lock_rev.is_none()
+            && self.policy_rev.is_none()
+            && self.load_rev.is_none()
+            && self.timeline.is_none()
+    }
+
+    fn promote_since(&mut self, unconfirmed: &mut Self, cutoff: f64) {
+        let taken = std::mem::take(unconfirmed);
+        for (signed, ts) in taken.delegates {
+            if ts >= cutoff {
+                self.delegates.push((signed, ts));
+            }
+        }
+        if let Some((rev, ts)) = taken.lock_rev
+            && ts >= cutoff
+        {
+            self.lock_rev = Some((rev, ts));
+        }
+        if let Some((rev, ts)) = taken.policy_rev
+            && ts >= cutoff
+        {
+            self.policy_rev = Some((rev, ts));
+        }
+        if let Some((rev, ts)) = taken.load_rev
+            && ts >= cutoff
+        {
+            self.load_rev = Some((rev, ts));
+            self.timeline = None;
+        }
+        if let Some((item, rev, ts)) = taken.timeline
+            && ts >= cutoff
+        {
+            self.timeline = Some((item, rev, ts));
+        }
+    }
+}
+
 pub struct Engine {
     cfg: EngineConfig,
     seq: u64,
     clock: ClockEstimator,
     corrector: Corrector,
     connected: bool,
+    last_relay_rx_ms: f64,
+    pending_sync: PendingSync,
+    unconfirmed_sync: PendingSync,
 
     members: Vec<MemberId>,
     peers: HashMap<MemberId, Peer>,
@@ -192,6 +250,7 @@ pub struct Engine {
     // Host-signed state and the signed messages that established it.
     snapshot: Snapshot,
     delegates: HashMap<MemberId, [u8; 32]>,
+    badged_host: Option<MemberId>,
     locked: bool,
     lock_rev: u64,
     policy: ChangePolicy,
@@ -235,6 +294,7 @@ pub struct Engine {
     next_ping: u64,
     pings: HashMap<u64, f64>,
     last_ping: f64,
+    last_hello: f64,
     pings_this_connection: usize,
 }
 
@@ -247,11 +307,15 @@ impl Engine {
             clock: ClockEstimator::default(),
             corrector: Corrector::default(),
             connected: false,
+            last_relay_rx_ms: f64::NEG_INFINITY,
+            pending_sync: PendingSync::default(),
+            unconfirmed_sync: PendingSync::default(),
             members: Vec::new(),
             peers: HashMap::new(),
             last_seq: HashMap::new(),
             snapshot: Snapshot::default(),
             delegates: HashMap::new(),
+            badged_host: None,
             locked: false,
             lock_rev: 0,
             policy: ChangePolicy::default(),
@@ -284,6 +348,7 @@ impl Engine {
             next_ping: 1,
             pings: HashMap::new(),
             last_ping: f64::NEG_INFINITY,
+            last_hello: f64::NEG_INFINITY,
             pings_this_connection: 0,
         }
     }
@@ -347,6 +412,15 @@ impl Engine {
         self.is_host() || self.delegates.get(&self.cfg.me) == Some(&self.cfg.keys.signing_public())
     }
 
+    fn is_real_host(&self, member: &MemberId) -> bool {
+        if *member == self.cfg.me {
+            return self.is_host();
+        }
+        self.peers
+            .get(member)
+            .is_some_and(|p| p.sign_pk == self.cfg.invite.host)
+    }
+
     fn is_hostish(&self, member: &MemberId) -> bool {
         if *member == self.cfg.me {
             return self.can_sign_as_host();
@@ -367,6 +441,58 @@ impl Engine {
             .copied()
     }
 
+    /// The member wearing the party's Host badge: the real host while present,
+    /// otherwise the acting host chosen by the engine (`leader()` when a host or
+    /// delegated device is present), else `None`.
+    pub fn acting_host(&self) -> Option<MemberId> {
+        if let Some(&host_id) = self.members.iter().find(|m| self.is_real_host(m)) {
+            return Some(host_id);
+        }
+        self.leader().filter(|m| self.is_hostish(m))
+    }
+
+    fn clear_member_state(&mut self, member: &MemberId) {
+        self.buffering.remove(member);
+        self.ready.remove(member);
+    }
+
+    fn emit_member_info(&self, member: MemberId, host: bool, out: &mut Vec<Output>) {
+        if member == self.cfg.me {
+            out.push(Output::Event(Event::MemberInfo {
+                member: self.cfg.me,
+                name: self.cfg.name.clone(),
+                kind: self.cfg.kind,
+                host,
+            }));
+        } else if let Some(peer) = self.peers.get(&member) {
+            out.push(Output::Event(Event::MemberInfo {
+                member,
+                name: peer.name.clone(),
+                kind: peer.kind,
+                host,
+            }));
+        }
+    }
+
+    fn sync_badged_host(&mut self, skip_emit: Option<MemberId>, out: &mut Vec<Output>) {
+        let prev = self.badged_host;
+        let next = self.acting_host();
+        self.badged_host = next;
+        if prev != next {
+            if let Some(old) = prev
+                && Some(old) != skip_emit
+                && self.members.contains(&old)
+            {
+                self.emit_member_info(old, false, out);
+            }
+            if let Some(new) = next
+                && Some(new) != skip_emit
+            {
+                self.emit_member_info(new, true, out);
+            }
+        }
+    }
+
     /// Members are screens until their hello says otherwise.
     fn is_screen(&self, member: &MemberId) -> bool {
         if *member == self.cfg.me {
@@ -382,6 +508,7 @@ impl Engine {
     // ---------------------------------------------------------------- input
 
     pub fn handle(&mut self, frame: ServerFrame, local_ms: f64) -> Vec<Output> {
+        self.last_relay_rx_ms = self.last_relay_rx_ms.max(local_ms);
         let mut out = Vec::new();
         match frame {
             ServerFrame::Welcome {
@@ -399,14 +526,33 @@ impl Engine {
                 self.connected = true;
                 self.pings_this_connection = 0;
                 self.pings.clear();
+                let gone: Vec<MemberId> = self
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|m| *m != self.cfg.me && !members.contains(m))
+                    .collect();
                 self.members = members;
                 out.push(Output::Event(Event::Connected {
                     members: self.members.clone(),
                 }));
+                for member in &gone {
+                    self.clear_member_state(member);
+                }
+                self.sync_badged_host(Some(self.cfg.me), &mut out);
+                self.emit_member_info(self.cfg.me, self.badged_host == Some(self.cfg.me), &mut out);
+                if !gone.is_empty() {
+                    self.sync_duration(&mut out);
+                    for member in gone {
+                        out.push(Output::Event(Event::MemberLeft(member)));
+                    }
+                }
+                self.last_hello = local_ms;
                 self.send_hello(None, &mut out);
                 if let Some(state) = state {
                     self.receive_state(state, local_ms, &mut out);
                 }
+                self.flush_pending_sync(&mut out, local_ms);
             }
             ServerFrame::Pong { id, room_time, .. } => {
                 if let Some(t0) = self.pings.remove(&id) {
@@ -423,6 +569,7 @@ impl Engine {
                 if !self.members.contains(&member) {
                     self.members.push(member);
                 }
+                self.sync_badged_host(None, &mut out);
                 out.push(Output::Event(Event::MemberJoined(member)));
                 self.send_hello(Some(member), &mut out);
                 // Our own devices get the sign-in for a video we are sharing.
@@ -435,8 +582,8 @@ impl Engine {
             }
             ServerFrame::Left { member } => {
                 self.members.retain(|m| *m != member);
-                self.buffering.remove(&member);
-                self.ready.remove(&member);
+                self.clear_member_state(&member);
+                self.sync_badged_host(None, &mut out);
                 self.sync_duration(&mut out);
                 out.push(Output::Event(Event::MemberLeft(member)));
             }
@@ -449,6 +596,9 @@ impl Engine {
 
     pub fn disconnected(&mut self) -> Vec<Output> {
         self.connected = false;
+        let cutoff = self.last_relay_rx_ms - CONFIRM_MARGIN_MS;
+        self.pending_sync
+            .promote_since(&mut self.unconfirmed_sync, cutoff);
         vec![Output::Event(Event::Disconnected)]
     }
 
@@ -493,6 +643,10 @@ impl Engine {
     pub fn tick(&mut self, local_ms: f64, player: Option<PlayerSnapshot>) -> Vec<Output> {
         let mut out = Vec::new();
         self.maybe_ping(local_ms, &mut out);
+        if self.connected && local_ms - self.last_hello >= HELLO_REPEAT_MS {
+            self.last_hello = local_ms;
+            self.send_hello(None, &mut out);
+        }
         let Some(room_now) = self.clock.room_time(local_ms) else {
             return out;
         };
@@ -502,7 +656,7 @@ impl Engine {
             self.correct(player, local_ms, room_now, &mut out);
         }
         if self.connected {
-            self.lead(room_now, &mut out);
+            self.lead(room_now, local_ms, &mut out);
         }
         let live = self.video_live();
         if live != self.live {
@@ -533,7 +687,7 @@ impl Engine {
                 for member in self.own_online() {
                     self.send_credentials(&item.id, member, &mut out);
                 }
-                self.issue_load(item, room_now, &mut out);
+                self.issue_load(item, room_now, local_ms, &mut out);
             }
             Command::Clear => {
                 let allowed = self.can_sign_as_host()
@@ -547,7 +701,7 @@ impl Engine {
                 if self.item.is_none() && self.snapshot.load.is_none() {
                     return out;
                 }
-                self.issue_clear(&mut out);
+                self.issue_clear(local_ms, &mut out);
             }
             Command::Play | Command::Pause | Command::Seek(_) => {
                 if self.locked && !self.can_sign_as_host() {
@@ -582,15 +736,16 @@ impl Engine {
                     room_now
                 };
                 self.paused_for_buffering = false;
-                self.write_timeline(playing, position, at, false, &mut out);
+                self.write_timeline(playing, position, at, false, local_ms, &mut out);
             }
             Command::Lock(locked) => {
                 if !self.can_sign_as_host() {
                     return out;
                 }
-                let rev = self.next_seq();
+                let rev = self.next_seq().max(self.lock_rev + 1);
                 let signed = self.signed(&Body::Lock { locked }, true, rev);
                 self.apply_lock(locked, rev, signed.clone(), &mut out);
+                self.record_lock(rev, local_ms);
                 self.send_signed(signed, None, &mut out);
                 self.write_state(&mut out);
             }
@@ -598,9 +753,10 @@ impl Engine {
                 if !self.can_sign_as_host() {
                     return out;
                 }
-                let rev = self.next_seq();
+                let rev = self.next_seq().max(self.policy_rev + 1);
                 let signed = self.signed(&Body::Policy { change }, true, rev);
                 self.apply_policy(change, rev, signed.clone(), &mut out);
+                self.record_policy(rev, local_ms);
                 self.send_signed(signed, None, &mut out);
                 self.write_state(&mut out);
             }
@@ -632,7 +788,7 @@ impl Engine {
                 if always && allowed {
                     self.always_allow.insert(pending.from);
                 }
-                self.answer(request, pending, allowed, room_now, &mut out);
+                self.answer(request, pending, allowed, room_now, local_ms, &mut out);
             }
             Command::Delegate { member, sign_pk } => {
                 if !self.is_host() {
@@ -643,8 +799,10 @@ impl Engine {
                     sign_pk: b64::encode(sign_pk),
                 };
                 let signed = self.signed(&body, true, 0);
-                self.delegates.insert(member, sign_pk);
-                self.snapshot.delegates.push(signed.clone());
+                if self.delegates.insert(member, sign_pk) != Some(sign_pk) {
+                    self.snapshot.delegates.push(signed.clone());
+                }
+                self.record_delegate(signed.clone(), local_ms);
                 self.send_signed(signed, None, &mut out);
                 self.write_state(&mut out);
             }
@@ -836,6 +994,16 @@ impl Engine {
                     return out.push(Output::Event(Event::Rejected("unproven hello")));
                 }
                 let known = self.peers.contains_key(&from);
+                let present = self.members.contains(&from);
+                // A repeated hello from a member apps already know says nothing new.
+                let repeated = present
+                    && self.peers.get(&from).is_some_and(|p| {
+                        p.name == name
+                            && p.kind == kind
+                            && p.screen == screen
+                            && p.box_pk == box_pk
+                            && p.sign_pk == sign_pk
+                    });
                 self.peers.insert(
                     from,
                     Peer {
@@ -846,16 +1014,19 @@ impl Engine {
                         sign_pk,
                     },
                 );
-                let host =
-                    sign_pk == self.cfg.invite.host || self.delegates.get(&from) == Some(&sign_pk);
-                out.push(Output::Event(Event::MemberInfo {
-                    member: from,
-                    name,
-                    kind,
-                    host,
-                }));
-                if !known && !self.members.contains(&from) {
+                if !present {
                     self.members.push(from);
+                }
+                let badge_before = self.badged_host;
+                self.sync_badged_host(Some(from), out);
+                let host = self.badged_host == Some(from);
+                if !repeated || badge_before != self.badged_host {
+                    out.push(Output::Event(Event::MemberInfo {
+                        member: from,
+                        name,
+                        kind,
+                        host,
+                    }));
                 }
                 if self.own_keys.contains(&box_pk) && !self.own.contains_key(&from) {
                     self.add_own(from, box_pk, out);
@@ -891,6 +1062,7 @@ impl Engine {
                 if self.delegates.insert(member, pk) != Some(pk) {
                     self.snapshot.delegates.push(signed.clone());
                 }
+                self.sync_badged_host(None, out);
             }
             Body::Lock { locked } => {
                 if !self.host_signed(signed) {
@@ -975,7 +1147,14 @@ impl Engine {
                         deadline: 0.0,
                     };
                     let allowed = self.policy == ChangePolicy::Anyone && !self.locked;
-                    return self.answer(request, pending, allowed, room_now, out);
+                    return self.answer(
+                        request,
+                        pending,
+                        allowed,
+                        room_now,
+                        self.last_relay_rx_ms,
+                        out,
+                    );
                 }
                 let pending = PendingRequest {
                     from,
@@ -983,7 +1162,14 @@ impl Engine {
                     deadline: room_now + REQUEST_TIMEOUT_MS,
                 };
                 if self.always_allow.contains(&from) && !self.locked {
-                    return self.answer(request, pending, true, room_now, out);
+                    return self.answer(
+                        request,
+                        pending,
+                        true,
+                        room_now,
+                        self.last_relay_rx_ms,
+                        out,
+                    );
                 }
                 self.pending.insert(request.clone(), pending);
                 out.push(Output::Event(Event::PlayRequested {
@@ -1284,7 +1470,7 @@ impl Engine {
     }
 
     /// Leader duties: schedule starts and pause for buffering.
-    fn lead(&mut self, room_now: f64, out: &mut Vec<Output>) {
+    fn lead(&mut self, room_now: f64, local_ms: f64, out: &mut Vec<Output>) {
         // Waiting list is computed by everyone, for the UI.
         let waiting: Vec<MemberId> = {
             let mut list: Vec<_> = self
@@ -1345,7 +1531,7 @@ impl Engine {
                 .all(|m| self.ready.contains_key(m) || self.ignored.contains(m));
             if everyone || room_now - self.load_seen_room >= START_TIMEOUT_MS {
                 let at = room_now + self.start_lead();
-                self.write_timeline(true, item.start_ms as f64, at, false, out);
+                self.write_timeline(true, item.start_ms as f64, at, false, local_ms, out);
             }
             return;
         }
@@ -1358,7 +1544,7 @@ impl Engine {
         if timeline.playing && !any_screen {
             self.paused_for_buffering = false;
             let position = timeline.expected_ms(room_now);
-            self.write_timeline(false, position, room_now, false, out);
+            self.write_timeline(false, position, room_now, false, local_ms, out);
             return;
         }
         // The video is over: everyone stops at the end, together.
@@ -1367,14 +1553,14 @@ impl Engine {
             && timeline.expected_ms(room_now) >= end
         {
             self.paused_for_buffering = false;
-            self.write_timeline(false, end, room_now, true, out);
+            self.write_timeline(false, end, room_now, true, local_ms, out);
             if self.can_sign_as_host() {
-                self.issue_clear(out);
+                self.issue_clear(local_ms, out);
             }
             return;
         }
         if timeline.ended && self.can_sign_as_host() {
-            self.issue_clear(out);
+            self.issue_clear(local_ms, out);
             return;
         }
         // A live stream doesn't wait for a buffering device: pausing would put
@@ -1382,14 +1568,14 @@ impl Engine {
         if timeline.playing && !waiting.is_empty() && !self.video_live() {
             self.paused_for_buffering = true;
             let position = timeline.expected_ms(room_now);
-            self.write_timeline(false, position, room_now, false, out);
+            self.write_timeline(false, position, room_now, false, local_ms, out);
         } else if self.paused_for_buffering
             && !timeline.playing
             && self.buffering.keys().all(|m| self.ignored.contains(m))
         {
             self.paused_for_buffering = false;
             let at = room_now + self.start_lead();
-            self.write_timeline(true, timeline.position_ms, at, false, out);
+            self.write_timeline(true, timeline.position_ms, at, false, local_ms, out);
         }
     }
 
@@ -1550,24 +1736,32 @@ impl Engine {
         }
     }
 
-    fn issue_load(&mut self, item: SharedItem, room_now: f64, out: &mut Vec<Output>) {
+    fn issue_load(
+        &mut self,
+        item: SharedItem,
+        room_now: f64,
+        local_ms: f64,
+        out: &mut Vec<Output>,
+    ) {
         let rev = self.next_seq().max(self.load_rev + 1);
         let signed = self.signed(&Body::Load { item: item.clone() }, true, rev);
         self.load_rev = rev;
         self.snapshot.load = Some(signed.clone());
         self.snapshot.clear = None;
+        self.record_load(rev, local_ms);
         self.send_signed(signed, None, out);
         self.start_item(item, room_now, out);
         self.write_state(out);
     }
 
-    fn issue_clear(&mut self, out: &mut Vec<Output>) {
+    fn issue_clear(&mut self, local_ms: f64, out: &mut Vec<Output>) {
         let rev = self.next_seq().max(self.load_rev + 1);
         let signed = self.signed(&Body::Clear, true, rev);
         self.load_rev = rev;
         self.snapshot.load = None;
         self.snapshot.timeline = None;
         self.snapshot.clear = Some(signed.clone());
+        self.record_load(rev, local_ms);
         self.send_signed(signed, None, out);
         self.clear_item(out);
         self.write_state(out);
@@ -1579,6 +1773,7 @@ impl Engine {
         pending: PendingRequest,
         allowed: bool,
         room_now: f64,
+        local_ms: f64,
         out: &mut Vec<Output>,
     ) {
         let reply = Body::RequestReply {
@@ -1589,7 +1784,7 @@ impl Engine {
         let signed = self.signed(&reply, true, 0);
         self.send_signed(signed, Some(pending.from), out);
         if allowed {
-            self.issue_load(pending.item, room_now, out);
+            self.issue_load(pending.item, room_now, local_ms, out);
         }
     }
 
@@ -1649,14 +1844,16 @@ impl Engine {
         position_ms: f64,
         at_room_ms: f64,
         ended: bool,
+        local_ms: f64,
         out: &mut Vec<Output>,
     ) {
         let Some(item) = self.item.as_ref() else {
             return;
         };
+        let item_id = item.id.clone();
         let rev = self.timeline.as_ref().map_or(1, |t| t.rev + 1);
         let timeline = Timeline {
-            item: item.id.clone(),
+            item: item_id.clone(),
             playing,
             position_ms,
             at_room_ms,
@@ -1665,7 +1862,122 @@ impl Engine {
             ended,
         };
         self.accept_timeline(timeline, out);
+        self.record_timeline(item_id, rev, local_ms);
         self.write_state(out);
+    }
+
+    fn sync_slot(&mut self) -> &mut PendingSync {
+        if self.connected {
+            &mut self.unconfirmed_sync
+        } else {
+            &mut self.pending_sync
+        }
+    }
+
+    fn record_delegate(&mut self, signed: Signed, local_ms: f64) {
+        self.sync_slot().delegates.push((signed, local_ms));
+    }
+
+    fn record_lock(&mut self, rev: u64, local_ms: f64) {
+        self.sync_slot().lock_rev = Some((rev, local_ms));
+    }
+
+    fn record_policy(&mut self, rev: u64, local_ms: f64) {
+        self.sync_slot().policy_rev = Some((rev, local_ms));
+    }
+
+    fn record_load(&mut self, rev: u64, local_ms: f64) {
+        let slot = self.sync_slot();
+        slot.load_rev = Some((rev, local_ms));
+        slot.timeline = None;
+    }
+
+    fn record_timeline(&mut self, item: String, rev: u64, local_ms: f64) {
+        self.sync_slot().timeline = Some((item, rev, local_ms));
+    }
+
+    fn flush_pending_sync(&mut self, out: &mut Vec<Output>, local_ms: f64) {
+        let pending = std::mem::take(&mut self.pending_sync);
+        if pending.is_empty() {
+            return;
+        }
+        let mut need_state = false;
+
+        if self.can_sign_as_host() {
+            for (signed, _) in pending.delegates {
+                if let Ok(Body::Delegate { member, sign_pk }) =
+                    serde_json::from_str::<Body>(&signed.b)
+                    && let Ok(pk) = b64::decode_32(&sign_pk)
+                    && self.delegates.get(&member) == Some(&pk)
+                {
+                    self.send_signed(signed.clone(), None, out);
+                    self.unconfirmed_sync.delegates.push((signed, local_ms));
+                    need_state = true;
+                }
+            }
+            if pending
+                .lock_rev
+                .is_some_and(|(rev, _)| rev == self.lock_rev)
+                && let Some(signed) = self.snapshot.lock.clone()
+            {
+                self.send_signed(signed, None, out);
+                self.unconfirmed_sync.lock_rev = Some((self.lock_rev, local_ms));
+                need_state = true;
+            }
+            if pending
+                .policy_rev
+                .is_some_and(|(rev, _)| rev == self.policy_rev)
+                && let Some(signed) = self.snapshot.policy.clone()
+            {
+                self.send_signed(signed, None, out);
+                self.unconfirmed_sync.policy_rev = Some((self.policy_rev, local_ms));
+                need_state = true;
+            }
+        }
+
+        let can_change_video =
+            self.can_sign_as_host() || (self.policy == ChangePolicy::Anyone && !self.locked);
+        if pending
+            .load_rev
+            .is_some_and(|(rev, _)| rev == self.load_rev)
+            && can_change_video
+        {
+            if self.item.is_none()
+                && let Some(signed) = self.snapshot.clear.clone()
+            {
+                self.send_signed(signed, None, out);
+                self.unconfirmed_sync.load_rev = Some((self.load_rev, local_ms));
+                need_state = true;
+            } else if let Some(signed) = self.snapshot.load.clone() {
+                if let Some(item) = self.item.clone()
+                    && item.shared_by == self.cfg.me
+                {
+                    for member in self.own_online() {
+                        self.send_credentials(&item.id, member, out);
+                    }
+                }
+                self.send_signed(signed, None, out);
+                self.unconfirmed_sync.load_rev = Some((self.load_rev, local_ms));
+                need_state = true;
+            }
+        }
+
+        let can_control = !self.locked || self.can_sign_as_host();
+        if can_control
+            && let Some((item_id, rev, _)) = pending.timeline
+            && self.item.as_ref().is_some_and(|i| i.id == item_id)
+            && self
+                .timeline
+                .as_ref()
+                .is_some_and(|t| t.by == self.cfg.me && t.rev == rev && t.item == item_id)
+        {
+            self.unconfirmed_sync.timeline = Some((item_id, rev, local_ms));
+            need_state = true;
+        }
+
+        if need_state {
+            self.write_state(out);
+        }
     }
 
     fn write_state(&mut self, out: &mut Vec<Output>) {
@@ -1725,13 +2037,24 @@ mod tests {
         screen: bool,
         members: Vec<MemberId>,
     ) -> Engine {
+        connected_engine_with_kind(invite, keys, name, DeviceKind::Phone, screen, members)
+    }
+
+    fn connected_engine_with_kind(
+        invite: &Invite,
+        keys: MemberKeys,
+        name: &str,
+        kind: DeviceKind,
+        screen: bool,
+        members: Vec<MemberId>,
+    ) -> Engine {
         let me = MemberId::from_bytes(keys.box_public()[..16].try_into().unwrap());
         let mut engine = Engine::new(EngineConfig {
             invite: invite.clone(),
             me,
             keys,
             name: name.into(),
-            kind: DeviceKind::Phone,
+            kind,
             screen,
             seq_start: 1,
         });
@@ -2079,5 +2402,943 @@ mod tests {
                 .any(|o| matches!(o, Output::Event(Event::VideoCleared)))
         );
         assert!(host.item.is_some());
+    }
+
+    #[test]
+    fn delegated_member_is_hostish_without_member_info_host_flag() {
+        let host_keys = MemberKeys::generate();
+        let tv_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let tv_id = MemberId::from_bytes(tv_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+
+        let tv_sign_pk = tv_keys.signing_public();
+        let members = vec![host_id, tv_id];
+        let mut host = connected_engine(&invite, host_keys, "Host phone", false, members.clone());
+        let mut desktop = connected_engine_with_kind(
+            &invite,
+            tv_keys,
+            "Desktop",
+            DeviceKind::Desktop,
+            true,
+            members,
+        );
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, vec![]);
+
+        let del_out = host.command(
+            Command::Delegate {
+                member: tv_id,
+                sign_pk: tv_sign_pk,
+            },
+            100.0,
+        );
+        deliver(&host, del_out, &mut guest, 100.0);
+
+        // Host receives Desktop's Hello AFTER Command::Delegate: must see host=false.
+        let desktop_hello_to_host = desktop.handle(ServerFrame::Joined { member: host_id }, 150.0);
+        let host_sees = deliver(&desktop, desktop_hello_to_host, &mut host, 150.0);
+        assert_eq!(
+            host_sees.iter().find_map(|o| match o {
+                Output::Event(Event::MemberInfo {
+                    member, kind, host, ..
+                }) if *member == tv_id => {
+                    Some((*kind, *host))
+                }
+                _ => None,
+            }),
+            Some((DeviceKind::Desktop, false))
+        );
+
+        // Guest receives Host's Hello so Host is a present known member.
+        let host_hello = host.handle(ServerFrame::Joined { member: guest_id }, 120.0);
+        deliver(&host, host_hello, &mut guest, 120.0);
+
+        let desktop_hello = desktop.handle(ServerFrame::Joined { member: guest_id }, 200.0);
+        let from_desktop = deliver(&desktop, desktop_hello, &mut guest, 200.0);
+        let info = from_desktop
+            .iter()
+            .find_map(|o| match o {
+                Output::Event(Event::MemberInfo {
+                    member, kind, host, ..
+                }) if *member == tv_id => Some((*kind, *host)),
+                _ => None,
+            })
+            .expect("guest should observe delegate's MemberInfo");
+        assert_eq!(info, (DeviceKind::Desktop, false));
+        assert!(guest.is_hostish(&tv_id));
+    }
+
+    #[test]
+    fn acting_host_transitions_on_host_leave_return_and_late_delegate() {
+        let host_keys = MemberKeys::generate();
+        let del1_keys = MemberKeys::generate();
+        let del2_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let del1_id = MemberId::from_bytes(del1_keys.box_public()[..16].try_into().unwrap());
+        let del2_id = MemberId::from_bytes(del2_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+
+        let del1_pk = del1_keys.signing_public();
+        let del2_pk = del2_keys.signing_public();
+        let order = vec![host_id, del1_id, del2_id, guest_id];
+
+        let mut host = connected_engine(&invite, host_keys, "Host", false, order.clone());
+        let mut del1 = connected_engine_with_kind(
+            &invite,
+            del1_keys,
+            "Desktop",
+            DeviceKind::Desktop,
+            true,
+            order.clone(),
+        );
+        let mut del2 = connected_engine_with_kind(
+            &invite,
+            del2_keys,
+            "TV",
+            DeviceKind::Tv,
+            true,
+            order.clone(),
+        );
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, order);
+
+        // Exchange Hellos so guest and del1 know everyone.
+        for peer in [&mut host, &mut del1, &mut del2] {
+            let hello = peer.handle(ServerFrame::Joined { member: guest_id }, 50.0);
+            deliver(peer, hello, &mut guest, 50.0);
+        }
+        let host_hello = host.handle(ServerFrame::Joined { member: del1_id }, 50.0);
+        deliver(&host, host_hello, &mut del1, 50.0);
+        let del2_hello = del2.handle(ServerFrame::Joined { member: del1_id }, 50.0);
+        deliver(&del2, del2_hello, &mut del1, 50.0);
+
+        // Delegate del2 first (later member), then del1 AFTER host leaves (late delegation test on guest).
+        let out2 = host.command(
+            Command::Delegate {
+                member: del2_id,
+                sign_pk: del2_pk,
+            },
+            100.0,
+        );
+        deliver(&host, out2.clone(), &mut del1, 100.0);
+        deliver(&host, out2, &mut guest, 100.0);
+
+        // Real host is still present: badged host is still host_id.
+        assert_eq!(guest.acting_host(), Some(host_id));
+        assert_eq!(del1.acting_host(), Some(host_id));
+
+        // Real host leaves: del2 becomes badged acting host.
+        let g_left = guest.handle(ServerFrame::Left { member: host_id }, 200.0);
+        assert!(g_left.contains(&Output::Event(Event::MemberInfo {
+            member: del2_id,
+            name: "TV".into(),
+            kind: DeviceKind::Tv,
+            host: true,
+        })));
+        let _ = del1.handle(ServerFrame::Left { member: host_id }, 200.0);
+
+        // Now delegation for earliest-joined member `del1` arrives AFTER del1's Hello while host is absent:
+        // del2 loses the badge and del1 takes it cleanly.
+        let out1 = host.command(
+            Command::Delegate {
+                member: del1_id,
+                sign_pk: del1_pk,
+            },
+            250.0,
+        );
+        let g_del1 = deliver(&host, out1.clone(), &mut guest, 250.0);
+        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
+            member: del2_id,
+            name: "TV".into(),
+            kind: DeviceKind::Tv,
+            host: false,
+        })));
+        assert!(g_del1.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: true,
+        })));
+        let d1_self = deliver(&host, out1, &mut del1, 250.0);
+        assert!(d1_self.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: true,
+        })));
+
+        // Real host returns (`Joined` + `Hello`): del1 loses badge, host_id regains it even at end of `members`.
+        let g_ret = guest.handle(ServerFrame::Joined { member: host_id }, 300.0);
+        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: false,
+        })));
+        assert!(g_ret.contains(&Output::Event(Event::MemberInfo {
+            member: host_id,
+            name: "Host".into(),
+            kind: DeviceKind::Phone,
+            host: true,
+        })));
+        let d1_ret = del1.handle(ServerFrame::Joined { member: host_id }, 300.0);
+        assert!(d1_ret.contains(&Output::Event(Event::MemberInfo {
+            member: del1_id,
+            name: "Desktop".into(),
+            kind: DeviceKind::Desktop,
+            host: false,
+        })));
+        assert_eq!(guest.acting_host(), Some(host_id));
+        assert_eq!(del1.acting_host(), Some(host_id));
+
+        // Guests never get the host badge when neither host nor delegates remain.
+        let _ = guest.handle(ServerFrame::Left { member: host_id }, 400.0);
+        let _ = guest.handle(ServerFrame::Left { member: del1_id }, 401.0);
+        let g_no_host = guest.handle(ServerFrame::Left { member: del2_id }, 402.0);
+        assert_eq!(guest.acting_host(), None);
+        assert!(
+            !g_no_host
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::MemberInfo { host: true, .. })))
+        );
+    }
+
+    #[test]
+    fn a_missed_hello_is_repaired_by_the_repeat_and_repeats_stay_quiet() {
+        let host_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let order = vec![host_id, guest_id];
+        let mut host = connected_engine(&invite, host_keys, "Host", false, order.clone());
+        // The guest connected, but the host's hello to it was lost.
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", false, order);
+        let info = |out: &[Output]| {
+            out.iter()
+                .filter(|o| {
+                    matches!(o, Output::Event(Event::MemberInfo { member, .. }) if *member == host_id)
+                })
+                .count()
+        };
+
+        // Nothing is repeated before the interval is up.
+        let early = host.tick(HELLO_REPEAT_MS - 1_000.0, None);
+        assert_eq!(info(&deliver(&host, early, &mut guest, 100.0)), 0);
+
+        // The repeat tells the guest who the host is.
+        let repeat = host.tick(HELLO_REPEAT_MS + 1_000.0, None);
+        assert_eq!(info(&deliver(&host, repeat, &mut guest, 200.0)), 1);
+
+        // Later repeats carry nothing new, so apps hear nothing.
+        let again = host.tick(2.0 * HELLO_REPEAT_MS + 2_000.0, None);
+        assert!(
+            again
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::Msg { to: None, .. })))
+        );
+        assert_eq!(info(&deliver(&host, again, &mut guest, 300.0)), 0);
+    }
+
+    #[test]
+    fn welcome_drops_members_missing_since_previous_connection() {
+        let host_keys = MemberKeys::generate();
+        let del_keys = MemberKeys::generate();
+        let me_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let del_id = MemberId::from_bytes(del_keys.box_public()[..16].try_into().unwrap());
+        let me_id = MemberId::from_bytes(me_keys.box_public()[..16].try_into().unwrap());
+        let del_pk = del_keys.signing_public();
+
+        let order = vec![host_id, del_id, me_id];
+        let mut me = Engine::new(EngineConfig {
+            invite: invite.clone(),
+            me: me_id,
+            keys: me_keys,
+            name: "Guest".into(),
+            kind: DeviceKind::Phone,
+            screen: true,
+            seq_start: 1,
+        });
+        let first_welcome = me.handle(
+            ServerFrame::Welcome {
+                member: me_id,
+                members: order.clone(),
+                room_time: 1_000.0,
+                expires_at: 60_000.0,
+                max_members: 8,
+                state: None,
+            },
+            10.0,
+        );
+        // First Welcome has no prior known members: no MemberLeft emitted.
+        assert!(
+            !first_welcome
+                .iter()
+                .any(|o| matches!(o, Output::Event(Event::MemberLeft(_))))
+        );
+
+        let mut host = connected_engine(&invite, host_keys, "Host", false, order.clone());
+        let mut del = connected_engine_with_kind(
+            &invite,
+            del_keys,
+            "Delegate TV",
+            DeviceKind::Tv,
+            true,
+            order,
+        );
+        let h_hello = host.handle(ServerFrame::Joined { member: me_id }, 20.0);
+        deliver(&host, h_hello, &mut me, 20.0);
+        let d_hello = del.handle(ServerFrame::Joined { member: me_id }, 20.0);
+        deliver(&del, d_hello, &mut me, 20.0);
+        let delegate_out = host.command(
+            Command::Delegate {
+                member: del_id,
+                sign_pk: del_pk,
+            },
+            30.0,
+        );
+        deliver(&host, delegate_out, &mut me, 30.0);
+
+        // Track duration/buffering state from `host_id` so we verify cleanup on Welcome.
+        let load = host.command(Command::Load(item("v1", host_id)), 40.0);
+        deliver(&host, load, &mut me, 40.0);
+        let h_ready = host.player_loaded("v1", Some(120_000), 50.0);
+        deliver(&host, h_ready, &mut me, 50.0);
+        assert_eq!(me.acting_host(), Some(host_id));
+
+        // Simulate offline drop while `host_id` leaves, then reconnect with only `[del_id, me_id]`.
+        let _ = me.disconnected();
+        let reconnect = me.handle(
+            ServerFrame::Welcome {
+                member: me_id,
+                members: vec![del_id, me_id],
+                room_time: 2_000.0,
+                expires_at: 60_000.0,
+                max_members: 8,
+                state: None,
+            },
+            100.0,
+        );
+        assert!(reconnect.contains(&Output::Event(Event::MemberLeft(host_id))));
+        assert!(!reconnect.contains(&Output::Event(Event::MemberLeft(me_id))));
+        assert!(reconnect.contains(&Output::Event(Event::MemberInfo {
+            member: del_id,
+            name: "Delegate TV".into(),
+            kind: DeviceKind::Tv,
+            host: true,
+        })));
+        assert_eq!(me.acting_host(), Some(del_id));
+        assert!(!me.ready.contains_key(&host_id));
+
+        // If `host_id` rejoins later, Hello still emits MemberInfo and moves badge back.
+        let mut rejoined = me.handle(ServerFrame::Joined { member: host_id }, 150.0);
+        let h_rehello = host.handle(ServerFrame::Joined { member: me_id }, 150.0);
+        rejoined.extend(deliver(&host, h_rehello, &mut me, 150.0));
+        assert!(rejoined.contains(&Output::Event(Event::MemberInfo {
+            member: host_id,
+            name: "Host".into(),
+            kind: DeviceKind::Phone,
+            host: true,
+        })));
+        assert!(rejoined.contains(&Output::Event(Event::MemberInfo {
+            member: del_id,
+            name: "Delegate TV".into(),
+            kind: DeviceKind::Tv,
+            host: false,
+        })));
+    }
+
+    #[test]
+    fn offline_clear_replays_on_welcome_and_stays_idempotent() {
+        let host_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, guest_id];
+
+        let mut host = connected_engine(&invite, host_keys, "Host", true, members.clone());
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members.clone());
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 10.0);
+        let stale_state = load_out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, load_out, &mut guest, 10.0);
+        assert_eq!(guest.item.as_ref().map(|i| i.id.as_str()), Some("v1"));
+
+        // Host goes offline, clears, then reconnects with the relay's stale v1 state.
+        let _ = host.disconnected();
+        let _ = host.command(Command::Clear, 20.0);
+        assert!(host.item.is_none());
+
+        let reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members,
+                room_time: 1_050.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(stale_state),
+            },
+            1_050.0,
+        );
+        assert!(host.item.is_none(), "returning host must stay cleared");
+        assert!(
+            reconnect
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::State { .. }))),
+            "reconnecting host must publish its offline Clear state"
+        );
+
+        let delivered = deliver(&host, reconnect, &mut guest, 1_060.0);
+        assert!(
+            guest.item.is_none(),
+            "guest must clear v1 once host reconnects"
+        );
+        assert_eq!(
+            delivered
+                .iter()
+                .filter(|o| matches!(o, Output::Event(Event::VideoCleared)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            delivered
+                .iter()
+                .filter(|o| matches!(o, Output::Player(PlayerCommand::Clear)))
+                .count(),
+            1
+        );
+
+        // A second identical Clear piece (re-sent on another reconnect with higher frame seq)
+        // must not double-clear.
+        let repeat = host.snapshot.clear.clone().unwrap();
+        let seq2 = host.seq + 100;
+        let plain = serde_json::to_vec(&repeat).unwrap();
+        let ct = invite
+            .key
+            .seal(&invite.room, Channel::Message, &host_id, seq2, &plain);
+        let dup = guest.handle(
+            ServerFrame::Msg {
+                from: host_id,
+                seq: seq2,
+                ct,
+            },
+            1_100.0,
+        );
+        assert!(
+            !dup.iter()
+                .any(|o| matches!(o, Output::Event(Event::VideoCleared)))
+        );
+    }
+
+    #[test]
+    fn offline_load_pause_seek_lock_policy_and_conflict_resolution() {
+        let host_keys = MemberKeys::generate();
+        let del_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let del_id = MemberId::from_bytes(del_keys.box_public()[..16].try_into().unwrap());
+        let del_pk = del_keys.signing_public();
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, del_id, guest_id];
+
+        let mut host = connected_engine(&invite, host_keys, "Host", true, members.clone());
+        let mut del = Engine::new(EngineConfig {
+            invite: invite.clone(),
+            me: del_id,
+            keys: del_keys,
+            name: "Delegate".into(),
+            kind: DeviceKind::Phone,
+            screen: true,
+            seq_start: 1_000,
+        });
+        let _ = del.handle(
+            ServerFrame::Welcome {
+                member: del_id,
+                members: members.clone(),
+                room_time: 1_000.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: None,
+            },
+            1_000.0,
+        );
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members.clone());
+
+        let del_out = host.command(
+            Command::Delegate {
+                member: del_id,
+                sign_pk: del_pk,
+            },
+            5.0,
+        );
+        deliver(&host, del_out.clone(), &mut del, 5.0);
+        deliver(&host, del_out, &mut guest, 5.0);
+
+        let load_v1 = host.command(Command::Load(item("v1", host_id)), 10.0);
+        let stale_v1_state = load_v1
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, load_v1.clone(), &mut del, 10.0);
+        deliver(&host, load_v1, &mut guest, 10.0);
+
+        // 1. Offline Load(v2), Lock(true), SetPolicy(Anyone) -> reconnects over stale v1.
+        let _ = host.disconnected();
+        let _ = host.command(Command::Lock(true), 20.0);
+        let _ = host.command(Command::SetPolicy(ChangePolicy::Anyone), 21.0);
+        let _ = host.command(Command::Load(item("v2", host_id)), 22.0);
+
+        let reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 1_050.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(stale_v1_state),
+            },
+            1_050.0,
+        );
+        deliver(&host, reconnect.clone(), &mut del, 1_060.0);
+        let g_out = deliver(&host, reconnect, &mut guest, 1_060.0);
+        assert!(guest.locked);
+        assert_eq!(guest.policy, ChangePolicy::Anyone);
+        assert_eq!(guest.item.as_ref().map(|i| i.id.as_str()), Some("v2"));
+        assert_eq!(
+            g_out
+                .iter()
+                .filter(|o| matches!(o, Output::Event(Event::VideoChanged(_))))
+                .count(),
+            1
+        );
+
+        // Start v2 playback so it has an active timeline, then test offline Pause + Seek(42_000).
+        let snap = Some(PlayerSnapshot {
+            position_ms: 0.0,
+            playing: false,
+            buffering: false,
+        });
+        let d_ready = del.player_loaded("v2", Some(300_000), 1_080.0);
+        deliver(&del, d_ready, &mut host, 1_080.0);
+        let g_ready = guest.player_loaded("v2", Some(300_000), 1_080.0);
+        deliver(&guest, g_ready, &mut host, 1_080.0);
+        let h_ready = host.player_loaded("v2", Some(300_000), 1_080.0);
+        deliver(&host, h_ready.clone(), &mut del, 1_080.0);
+        deliver(&host, h_ready, &mut guest, 1_080.0);
+        let start_out = host.tick(2_200.0, snap);
+        let playing_v2_state = start_out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, start_out, &mut guest, 2_200.0);
+        assert_eq!(guest.timeline.as_ref().map(|t| t.playing), Some(true));
+
+        let _ = host.disconnected();
+        let _ = host.command(Command::Pause, 2_210.0);
+        let _ = host.command(Command::Seek(42_000.0), 2_212.0);
+        let tl_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 2_220.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(playing_v2_state),
+            },
+            2_220.0,
+        );
+        deliver(&host, tl_reconnect, &mut guest, 2_225.0);
+        assert_eq!(
+            guest.timeline.as_ref().map(|t| t.position_ms),
+            Some(42_000.0)
+        );
+        assert_eq!(guest.timeline.as_ref().map(|t| t.playing), Some(false));
+
+        // Re-sending the same Load(v2) piece at a higher Msg seq must not restart playback.
+        let load_piece = host.snapshot.load.clone().unwrap();
+        let seq_dup = host.seq + 200;
+        let plain = serde_json::to_vec(&load_piece).unwrap();
+        let ct = invite
+            .key
+            .seal(&invite.room, Channel::Message, &host_id, seq_dup, &plain);
+        let g_dup = guest.handle(
+            ServerFrame::Msg {
+                from: host_id,
+                seq: seq_dup,
+                ct,
+            },
+            1_100.0,
+        );
+        assert!(!g_dup.iter().any(|o| matches!(
+            o,
+            Output::Event(Event::VideoChanged(_)) | Output::Player(PlayerCommand::Load { .. })
+        )));
+
+        // 2. Newer change from Delegate wins when Host returns with an older offline change.
+        let _ = host.disconnected();
+        let _ = host.command(Command::Load(item("v_old_host", host_id)), 1_120.0);
+        // Ensure Delegate creates a strictly higher rev.
+        let _ = del.command(Command::Load(item("v_tmp", del_id)), 1_130.0);
+        let d_new = del.command(Command::Load(item("v_new_del", del_id)), 1_140.0);
+        let newer_del_state = d_new
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: del_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&del, d_new, &mut guest, 1_140.0);
+
+        let host_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 1_150.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(newer_del_state.clone()),
+            },
+            1_150.0,
+        );
+        deliver(&host, host_reconnect, &mut del, 1_160.0);
+        assert_eq!(host.item.as_ref().map(|i| i.id.as_str()), Some("v_new_del"));
+        assert_eq!(del.item.as_ref().map(|i| i.id.as_str()), Some("v_new_del"));
+
+        // 3. Guest offline pause in unlocked party converges; if Host locked meanwhile, guest does not publish.
+        let unlock = host.command(Command::Lock(false), 1_200.0);
+        deliver(&host, unlock.clone(), &mut del, 1_200.0);
+        let unlock_state = unlock
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, unlock, &mut guest, 1_200.0);
+        let snap = Some(PlayerSnapshot {
+            position_ms: 0.0,
+            playing: false,
+            buffering: false,
+        });
+        let d_r = del.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        deliver(&del, d_r, &mut host, 1_205.0);
+        let g_r = guest.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        deliver(&guest, g_r, &mut host, 1_205.0);
+        let h_r = host.player_loaded("v_new_del", Some(300_000), 1_205.0);
+        deliver(&host, h_r.clone(), &mut del, 1_205.0);
+        deliver(&host, h_r, &mut guest, 1_205.0);
+        let play = host.tick(2_500.0, snap);
+        let play_state = play
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, play, &mut guest, 2_500.0);
+
+        let _ = guest.disconnected();
+        let _ = guest.command(Command::Pause, 2_510.0);
+        let guest_reconnect = guest.handle(
+            ServerFrame::Welcome {
+                member: guest_id,
+                members: members.clone(),
+                room_time: 2_520.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(play_state),
+            },
+            2_520.0,
+        );
+        deliver(&guest, guest_reconnect, &mut host, 2_530.0);
+        assert_eq!(host.timeline.as_ref().map(|t| t.playing), Some(false));
+
+        // Test guest pausing offline while host locks -> guest loses permission.
+        let h_play = host.command(Command::Play, 2_540.0);
+        deliver(&host, h_play, &mut guest, 2_540.0);
+        let _ = guest.disconnected();
+        let _ = guest.command(Command::Pause, 2_550.0);
+        let lock_out = host.command(Command::Lock(true), 2_560.0);
+        let locked_state = lock_out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        let g_locked_reconnect = guest.handle(
+            ServerFrame::Welcome {
+                member: guest_id,
+                members,
+                room_time: 1_280.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(locked_state.clone()),
+            },
+            1_280.0,
+        );
+        assert!(guest.locked);
+        assert!(
+            !g_locked_reconnect
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::State { .. })))
+        );
+        let _ = unlock_state;
+    }
+
+    #[test]
+    fn send_error_preserves_last_batch_and_retries_across_reconnects() {
+        let host_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, guest_id];
+
+        let mut host = connected_engine(&invite, host_keys, "Host", true, members.clone());
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members.clone());
+
+        let load_out = host.command(Command::Load(item("v1", host_id)), 10.0);
+        let stale_state = load_out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, load_out, &mut guest, 10.0);
+
+        // Host issues Clear while `connected == true`, then writing to WS fails (`disconnected()`).
+        let _ = host.command(Command::Clear, 20.0);
+        let _ = host.disconnected();
+
+        // First reconnect attempts to flush Clear, and its send ALSO fails.
+        let reconnect1 = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 1_050.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(stale_state.clone()),
+            },
+            1_050.0,
+        );
+        assert!(
+            reconnect1
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::State { .. })))
+        );
+        let _ = host.disconnected();
+
+        // Second reconnect succeeds and delivers Clear + State to guest.
+        let reconnect2 = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members,
+                room_time: 1_100.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(stale_state),
+            },
+            1_100.0,
+        );
+        deliver(&host, reconnect2, &mut guest, 1_110.0);
+        assert!(guest.item.is_none());
+    }
+
+    #[test]
+    fn half_open_send_followed_by_plain_disconnect_replays_recent_and_skips_old_confirmed() {
+        let host_keys = MemberKeys::generate();
+        let guest_keys = MemberKeys::generate();
+        let invite = test_invite(&host_keys);
+        let host_id = MemberId::from_bytes(host_keys.box_public()[..16].try_into().unwrap());
+        let guest_id = MemberId::from_bytes(guest_keys.box_public()[..16].try_into().unwrap());
+        let members = vec![host_id, guest_id];
+
+        let mut host = connected_engine(&invite, host_keys, "Host", true, members.clone());
+        let mut guest = connected_engine(&invite, guest_keys, "Guest", true, members.clone());
+
+        // 1. Load v1 at t=1_010; relay proves alive much later via Pong at t=15_000 (>5s margin).
+        let load_v1 = host.command(Command::Load(item("v1", host_id)), 1_010.0);
+        let v1_state = load_v1
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, load_v1, &mut guest, 1_010.0);
+
+        let _ = host.handle(
+            ServerFrame::Pong {
+                id: 0,
+                t0: 14_990.0,
+                room_time: 14_995.0,
+            },
+            15_000.0,
+        );
+
+        // Plain disconnect with no recent changes: old confirmed v1 must NOT be re-sent on Welcome.
+        let _ = host.disconnected();
+        let clean_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 15_100.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(v1_state.clone()),
+            },
+            15_100.0,
+        );
+        assert!(
+            !clean_reconnect
+                .iter()
+                .any(|o| matches!(o, Output::Send(ClientFrame::State { .. })))
+        );
+
+        // 2. Host stops (Clear) while `connected == true` at t=20_000, send "succeeds" locally
+        //    (dropped on wire), then read side drops with plain `disconnected()`.
+        let _ = host.command(Command::Clear, 20_000.0);
+        let _ = host.disconnected();
+        let clear_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 21_000.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(v1_state),
+            },
+            21_000.0,
+        );
+        let clear_state = clear_reconnect
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .expect("host must re-publish Clear after half-open send + plain disconnect");
+        deliver(&host, clear_reconnect, &mut guest, 21_010.0);
+        assert!(guest.item.is_none());
+
+        // 3. Host loads v2 while `connected == true` at t=22_000, dropped on wire + plain `disconnected()`.
+        let _ = host.command(Command::Load(item("v2", host_id)), 22_000.0);
+        let _ = host.disconnected();
+        let load_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members: members.clone(),
+                room_time: 22_500.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(clear_state),
+            },
+            22_500.0,
+        );
+        deliver(&host, load_reconnect, &mut guest, 22_510.0);
+        assert_eq!(guest.item.as_ref().map(|i| i.id.as_str()), Some("v2"));
+
+        // 4. Start playback on v2, then Host pauses while `connected == true`, dropped on wire + plain `disconnected()`.
+        let snap = Some(PlayerSnapshot {
+            position_ms: 0.0,
+            playing: false,
+            buffering: false,
+        });
+        let g_r = guest.player_loaded("v2", Some(300_000), 22_520.0);
+        deliver(&guest, g_r, &mut host, 22_520.0);
+        let h_r = host.player_loaded("v2", Some(300_000), 22_520.0);
+        deliver(&host, h_r, &mut guest, 22_520.0);
+        let start_out = host.tick(24_000.0, snap);
+        let playing_state = start_out
+            .iter()
+            .find_map(|o| match o {
+                Output::Send(ClientFrame::State { seq, ct }) => Some(StateFrame {
+                    from: host_id,
+                    seq: *seq,
+                    ct: ct.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap();
+        deliver(&host, start_out, &mut guest, 24_000.0);
+        assert_eq!(guest.timeline.as_ref().map(|t| t.playing), Some(true));
+
+        let _ = host.command(Command::Pause, 24_500.0);
+        let _ = host.disconnected();
+        let pause_reconnect = host.handle(
+            ServerFrame::Welcome {
+                member: host_id,
+                members,
+                room_time: 25_000.0,
+                expires_at: 0.0,
+                max_members: 16,
+                state: Some(playing_state),
+            },
+            25_000.0,
+        );
+        deliver(&host, pause_reconnect, &mut guest, 25_010.0);
+        assert_eq!(guest.timeline.as_ref().map(|t| t.playing), Some(false));
     }
 }

@@ -4,8 +4,12 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import com.playbridge.player.ui.withMember
+import com.playbridge.player.ui.withWaiting
+import com.playbridge.player.ui.withoutMember
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
+import com.playbridge.shared.player.sanitizePlayerHeaders
 import com.playbridge.shared.together.RustTogetherBoundary
 import com.playbridge.shared.together.TogetherClient
 import com.playbridge.shared.together.TogetherDevice
@@ -51,6 +55,7 @@ object TvTogether {
             val connected: Boolean = false,
             val members: Map<String, String> = emptyMap(),
             val hostName: String? = null,
+            val hostMemberId: String? = null,
             val title: String? = null,
             val waitingFor: List<String> = emptyList(),
             val notice: String? = null,
@@ -226,20 +231,13 @@ object TvTogether {
             is TogetherEvent.Connected -> updateParty { it.copy(connected = true, notice = null) }
             TogetherEvent.Disconnected -> updateParty { it.copy(connected = false, notice = "Reconnecting…") }
             TogetherEvent.Unreachable -> updateParty { it.copy(notice = "Can't reach ${it.relay}. Still trying…") }
-            is TogetherEvent.Member -> updateParty {
-                it.copy(
-                    members = it.members + (event.member to event.name),
-                    hostName = if (event.host && it.hostName == null) event.name else it.hostName,
-                )
-            }
-            is TogetherEvent.MemberLeft -> updateParty { it.copy(members = it.members - event.member) }
+            is TogetherEvent.Member -> updateParty { it.withMember(event, me) }
+            is TogetherEvent.MemberLeft -> updateParty { it.withoutMember(event.member) }
             is TogetherEvent.Video -> updateParty { it.copy(title = event.item.title, waitingFor = emptyList(), notice = null) }
             TogetherEvent.VideoCleared -> clearActiveItem()
             is TogetherEvent.Ended ->
                 if (loadingItem == event.item || playerItem == event.item) clearActiveItem()
-            is TogetherEvent.Waiting -> updateParty { party ->
-                party.copy(waitingFor = event.members.filter { it != me }.map { party.members[it] ?: "a device" })
-            }
+            is TogetherEvent.Waiting -> updateParty { it.withWaiting(event.members, me) }
             is TogetherEvent.Warning -> updateParty { it.copy(notice = event.message) }
             is TogetherEvent.Player -> onPlayerCommand(event.command)
             is TogetherEvent.Error -> {
@@ -314,7 +312,7 @@ object TvTogether {
                 PlayPayload(
                     url = url,
                     title = item.title,
-                    headers = command.headers,
+                    headers = sanitizePlayerHeaders(command.headers),
                     subtitles = item.subtitles,
                     start_position_ms = command.startMs,
                     skip_history = true,

@@ -4,11 +4,13 @@ import android.content.Context
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import com.playbridge.sender.cast.isOwnReceiverMemberMatch
 import com.playbridge.sender.cast.isOwnTvMemberMatch
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.player.PlayerLauncher
 import com.playbridge.sender.player.SubtitleTrack
+import com.playbridge.shared.player.sanitizePlayerHeaders
 import com.playbridge.shared.together.RustTogetherBoundary
 import com.playbridge.shared.together.TogetherClient
 import com.playbridge.shared.together.TogetherDevice
@@ -193,6 +195,17 @@ object PhoneTogether {
         return isOwnTvMemberMatch(device, party, mutableOwnTvIdentities.value)
     }
 
+    fun isConnectedTvInParty(identity: OwnTvIdentity?, party: Party? = party()): Boolean {
+        if (identity == null || party == null) return false
+        return isOwnReceiverMemberMatch(
+            name = identity.name,
+            uuid = identity.uuid,
+            endpointKey = identity.endpointKey,
+            party = party,
+            ownTvIdentities = mutableOwnTvIdentities.value,
+        )
+    }
+
     fun consumeToast() {
         mutableToasts.value = null
     }
@@ -331,7 +344,7 @@ object PhoneTogether {
             context = context,
             url = url,
             title = item.title,
-            headers = command.headers,
+            headers = sanitizePlayerHeaders(command.headers),
             subtitles = item.subtitles.map { SubtitleTrack(url = it) },
             startPositionMs = command.startMs,
             watchTogetherItem = item.id,
@@ -342,14 +355,15 @@ object PhoneTogether {
         if (state.value is State.Ended) mutableState.value = State.Idle
     }
 
-    /** Adds the TV this phone is connected to. It joins without asking and counts as this phone's own. */
+    /** Adds the receiver this phone is connected to. It joins without asking and counts as this phone's own. */
     fun addConnectedTv(coordinator: ConnectionCoordinator) {
         val party = party() ?: return
+        val deviceLabel = coordinator.connectedTvName ?: "That device"
         scope.launch {
             coordinator.addTvToWatchTogether(party.invite, phoneName())
                 .onSuccess { tv ->
                     client?.addOwn(tv.member, tv.boxKey)
-                    // The host's own TV can carry on as host if this phone leaves.
+                    // The host's own receiver can carry on as host if this phone leaves.
                     if (party.host) client?.delegate(tv.member, tv.signKey)
                     mutableOwnTvIdentities.update { current ->
                         current + (tv.member to OwnTvIdentity(tv.name, tv.uuid, tv.endpointKey))
@@ -357,7 +371,7 @@ object PhoneTogether {
                     updateParty { it.copy(own = it.own + tv.member) }
                     toast("${tv.name} joined the party")
                 }
-                .onFailure { toast("The TV couldn't join (${it.message})") }
+                .onFailure { toast("$deviceLabel couldn't join (${it.message})") }
         }
     }
 
@@ -716,14 +730,53 @@ object PhoneTogether {
         }
     }
 
+    /**
+     * One debug line per party event that changes what people see, so a report like "it
+     * paused everywhere but here" can be read back from the log. Ids are shortened; no
+     * names, links or headers.
+     */
+    private fun logEvent(event: TogetherEvent) {
+        val line = when (event) {
+            is TogetherEvent.Connected -> "connected, ${event.members.size} in room"
+            TogetherEvent.Disconnected -> "disconnected"
+            TogetherEvent.Unreachable -> "relay unreachable"
+            is TogetherEvent.MemberJoined -> "joined ${event.member.take(6)}"
+            is TogetherEvent.MemberLeft -> "left ${event.member.take(6)}"
+            is TogetherEvent.Member -> "member ${event.member.take(6)} ${event.kind} host=${event.host}"
+            is TogetherEvent.Video -> "video ${event.item.id.take(6)}"
+            TogetherEvent.VideoCleared -> "video cleared"
+            is TogetherEvent.Timeline ->
+                "timeline ${event.item.take(6)} playing=${event.playing} at=${event.positionMs} rev=${event.rev}"
+            is TogetherEvent.Player -> {
+                val command = when (val c = event.command) {
+                    is TogetherPlayerCommand.Load -> "Load(${c.item.id.take(6)}, startMs=${c.startMs})"
+                    else -> c.toString()
+                }
+                "player $command watching=${party()?.watching} attached=${player != null}"
+            }
+            else -> return
+        }
+        Log.d(TAG, "party: $line")
+    }
+
     private fun onEvent(event: TogetherEvent) {
+        logEvent(event)
         val currentParty = party()
         when (event) {
             is TogetherEvent.Room -> {
                 if (room != event.roomId) clearQueueAndTarget()
                 room = event.roomId
+                val selfMember = Member(phoneName(), TogetherDeviceKind.Phone, event.host)
                 mutableState.value = State.InParty(
-                    Party(event.roomId, event.invite, event.relay, event.member, event.host, watching = watchOnJoin),
+                    Party(
+                        roomId = event.roomId,
+                        invite = event.invite,
+                        relay = event.relay,
+                        me = event.member,
+                        host = event.host,
+                        watching = watchOnJoin,
+                        members = mapOf(event.member to selfMember),
+                    ),
                 )
                 mutablePartyTargetSelected.value = true
             }
@@ -916,7 +969,8 @@ internal fun reducePartyEvent(
     is TogetherEvent.Member -> party.copy(
         members = party.members + (event.member to PhoneTogether.Member(event.name, event.kind, event.host)),
     )
-    is TogetherEvent.MemberLeft -> party.copy(members = party.members - event.member)
+    is TogetherEvent.MemberLeft ->
+        if (event.member == party.me) party else party.copy(members = party.members - event.member)
     is TogetherEvent.Video -> party.copy(
         item = event.item,
         playing = false,
