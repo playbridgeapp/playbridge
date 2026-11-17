@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'bridge_paths.dart';
+import 'engines/mpv_engine.dart';
 import 'extension_request_debug_log.dart';
 import 'desktop_linked_playback.dart';
 import 'linked_playback.dart';
@@ -234,7 +235,9 @@ class ExtensionBridge {
         // exists on this computer, so it can't be shared.
         final hasBody = playlistBody != null && playlistBody.isNotEmpty;
         final partyResult = party?.call(
-            url: hasBody ? '' : url, title: title, headers: headers);
+            url: hasBody ? '' : url,
+            title: title,
+            headers: sanitizePlayerHeaders(headers));
         if (partyResult != null) {
           final shared = !hasBody;
           _send(socket, {

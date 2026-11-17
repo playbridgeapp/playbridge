@@ -6,6 +6,7 @@ import com.playbridge.sender.R
 import com.playbridge.sender.cast.VideoDetector
 import android.content.Context
 import com.playbridge.shared.logging.redactUrlForLog
+import com.playbridge.shared.player.sanitizePlayerHeaders
 import androidx.core.net.toUri
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -450,11 +451,12 @@ open class PlayerActivity : ComponentActivity() {
         val contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
 
         @Suppress("UNCHECKED_CAST")
-        val headers: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
+        val rawHeaders: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
             intent,
             EXTRA_HEADERS,
             HashMap::class.java
         ) as? HashMap<String, String> ?: emptyMap()
+        val headers: Map<String, String> = sanitizePlayerHeaders(rawHeaders)
 
         val subUrls = intent.getStringArrayListExtra(EXTRA_SUB_URLS).orEmpty()
         val subLabels = intent.getStringArrayListExtra(EXTRA_SUB_LABELS).orEmpty()
@@ -976,12 +978,16 @@ open class PlayerActivity : ComponentActivity() {
             mediaItem: MediaItem,
             headers: Map<String, String>
         ): MediaSource {
+            val safeHeaders = sanitizePlayerHeaders(headers)
+            val userAgent = safeHeaders.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value ?: DEFAULT_UA
             val httpFactory = DefaultHttpDataSource.Factory()
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(30_000)
                 .setReadTimeoutMs(30_000)
-                .setUserAgent(headers["User-Agent"] ?: DEFAULT_UA)
-            httpFactory.setDefaultRequestProperties(headers)
+                .setUserAgent(userAgent)
+            if (safeHeaders.isNotEmpty()) {
+                httpFactory.setDefaultRequestProperties(safeHeaders)
+            }
             val dataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
             return DefaultMediaSourceFactory(dataSourceFactory)
                 .setSubtitleParserFactory(SniffingSubtitleParserFactory())

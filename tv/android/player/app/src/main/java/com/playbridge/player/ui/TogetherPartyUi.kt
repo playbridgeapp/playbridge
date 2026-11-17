@@ -1,6 +1,7 @@
 package com.playbridge.player.ui
 
 import com.playbridge.player.together.TvTogether
+import com.playbridge.shared.together.TogetherEvent
 
 /** One person or TV in a watch party, as the screens show it. */
 internal data class PartyMemberUi(val name: String, val isHost: Boolean, val isWaiting: Boolean)
@@ -23,6 +24,7 @@ internal sealed interface PartyStatus {
 /** Waiting names are matched to members by name, which is all the party state carries. */
 internal fun TvTogether.State.InParty.toPartyUi(): TogetherPartyUi {
     val host = hostName?.takeIf { it.isNotBlank() }
+    val hostId = hostMemberId?.takeIf { it.isNotBlank() }
     return TogetherPartyUi(
         partyName = host?.let { "$it’s watch party" } ?: "Watch party",
         status = when {
@@ -30,11 +32,54 @@ internal fun TvTogether.State.InParty.toPartyUi(): TogetherPartyUi {
             title != null -> PartyStatus.NowPlaying(title)
             else -> PartyStatus.WaitingForHost
         },
-        members = members.values.map { PartyMemberUi(it, isHost = host != null && it == host, isWaiting = it in waitingFor) },
+        members = members.entries.map { (id, name) ->
+            PartyMemberUi(
+                name = name,
+                isHost = if (hostId != null) id == hostId else (host != null && name == host),
+                isWaiting = name in waitingFor,
+            )
+        },
         waitingFor = waitingFor,
         notice = notice,
     )
 }
+
+internal fun TvTogether.State.InParty.withMember(
+    event: TogetherEvent.Member,
+    selfMemberId: String?,
+): TvTogether.State.InParty {
+    val nextMembers = if (event.member == selfMemberId) {
+        members
+    } else {
+        members + (event.member to event.name)
+    }
+    val (nextHostId, nextHostName) = when {
+        event.host -> event.member to event.name.takeIf { it.isNotBlank() }
+        hostMemberId == event.member -> null to null
+        else -> hostMemberId to hostName
+    }
+    return copy(
+        members = nextMembers,
+        hostName = nextHostName,
+        hostMemberId = nextHostId,
+    )
+}
+
+internal fun TvTogether.State.InParty.withoutMember(memberId: String): TvTogether.State.InParty {
+    val clearedHost = hostMemberId == memberId
+    return copy(
+        members = members - memberId,
+        hostName = if (clearedHost) null else hostName,
+        hostMemberId = if (clearedHost) null else hostMemberId,
+    )
+}
+
+internal fun TvTogether.State.InParty.withWaiting(
+    waitingMemberIds: List<String>,
+    selfMemberId: String?,
+): TvTogether.State.InParty = copy(
+    waitingFor = waitingMemberIds.filter { it != selfMemberId }.map { members[it] ?: "a device" },
+)
 
 /** "Waiting for Sam's TV…", "Waiting for Sam and Alex…", "Waiting for 3 devices…". */
 internal fun waitingLabel(names: List<String>): String = when (names.size) {

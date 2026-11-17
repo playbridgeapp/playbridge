@@ -554,7 +554,7 @@ class _CodeView extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           const Text(
-            'In PlayBridge on the phone, open Watch Together, choose Add a TV, then scan or type this.',
+            'In PlayBridge on your phone or computer, open Watch Together, choose Add a device, then scan or type this.',
             textAlign: TextAlign.center,
             style: TextStyle(height: 1.5, color: PbColors.textSecondary),
           ),
@@ -700,9 +700,10 @@ class _PartyViewState extends State<_PartyView> {
     final count = party.members.length;
     final status = party.notice ??
         (party.connected ? null : 'Connecting to ${party.relay}…');
+    final selfHost = party.members[party.me]?.host ?? party.host;
     final subtitle = status ??
         '$count ${count == 1 ? 'device' : 'devices'}'
-            '${party.host ? ' · you are the host' : ''} · ${party.relay}';
+            '${selfHost ? ' · you are the host' : ''} · ${party.relay}';
 
     final main = <Widget>[
       _VideoCard(
@@ -785,7 +786,7 @@ class _PartyViewState extends State<_PartyView> {
       _DeviceRow(
         name: '${party.members[party.me]?.name ?? 'This computer'} (you)',
         kind: TogetherDeviceKind.desktop,
-        host: party.host,
+        host: party.members[party.me]?.host ?? party.host,
       ),
       for (final entry in party.members.entries.where((e) => e.key != party.me))
         Padding(
@@ -1300,8 +1301,11 @@ class _InviteDialogState extends State<_InviteDialog> {
     _code.clear();
   }
 
-  bool _hasOwnTv(Party party) => party.own
-      .any((member) => party.members[member]?.kind == TogetherDeviceKind.tv);
+  bool _hasOwnTv(Party party) => party.own.any((member) {
+        final kind = party.members[member]?.kind;
+        return kind == TogetherDeviceKind.tv ||
+            kind == TogetherDeviceKind.desktop;
+      });
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -1390,7 +1394,7 @@ class _InviteDialogState extends State<_InviteDialog> {
                         ),
                         const SizedBox(height: 20),
                       ],
-                      const Text('A TV that is showing a code',
+                      const Text('Another device showing a code',
                           style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
@@ -1401,8 +1405,8 @@ class _InviteDialogState extends State<_InviteDialog> {
                           width: 240,
                           child: _PillField(
                             controller: _code,
-                            hint: 'Code on the TV',
-                            label: 'Code on the TV',
+                            hint: 'Code on that device',
+                            label: 'Code on that device',
                             radius: 12,
                             keyboardType: TextInputType.number,
                             onSubmitted: (_) => _addByCode(),
@@ -1416,7 +1420,7 @@ class _InviteDialogState extends State<_InviteDialog> {
                       ]),
                       const SizedBox(height: 8),
                       const Text(
-                        'On that TV, open PlayBridge and choose Watch Together to see its code.',
+                        'On that device, open PlayBridge and choose Watch Together to see its code.',
                         style: _small,
                       ),
                     ],

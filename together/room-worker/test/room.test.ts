@@ -1,6 +1,7 @@
 import { SELF, env as testEnv, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { assetLinks, type Env } from "../src/config";
+import { KEEPALIVE_SECS, LEGACY_SILENT_MS, SILENT_MS, isSilent } from "../src/room";
 
 const env = testEnv as unknown as Env;
 
@@ -11,6 +12,8 @@ const hex = (n: number) => n.toString(16).padStart(32, "0");
 interface Client {
   ws: WebSocket;
   frames: any[];
+  /** Keep-alive answers received; they are plain text, not frames. */
+  pongs: number;
   next(type?: string): Promise<any>;
   send(frame: unknown): void;
 }
@@ -24,7 +27,12 @@ async function connect(room: string, member: string, token = "tok", ip = `198.51
   ws.accept();
   const frames: any[] = [];
   const waiters: ((frame: any) => void)[] = [];
+  const client = { pongs: 0 };
   ws.addEventListener("message", (event) => {
+    if (event.data === "pong") {
+      client.pongs++;
+      return;
+    }
     const frame = JSON.parse(event.data as string);
     const waiter = waiters.shift();
     if (waiter) waiter(frame);
@@ -33,6 +41,9 @@ async function connect(room: string, member: string, token = "tok", ip = `198.51
   return {
     ws,
     frames,
+    get pongs() {
+      return client.pongs;
+    },
     next(type) {
       const take = (): Promise<any> => {
         const queued = frames.shift();
@@ -233,6 +244,98 @@ describe("room worker", () => {
     expect(await withTimeout(closed)).toBe(4029);
   });
 
+  it("tells members how often to send keep-alives and answers them", async () => {
+    const a = await member(hex(140), hex(1));
+    expect((await a.next("welcome")).keepalive_secs).toBe(KEEPALIVE_SECS);
+    a.ws.send("ping");
+    a.send({ t: "ping", id: 7, t0: 1 });
+    expect(await a.next("pong")).toMatchObject({ id: 7 });
+    expect(a.pongs).toBe(1);
+  });
+
+  it("knows a silent member from a quiet one", () => {
+    const now = 10_000_000;
+    // Sends keep-alives: gone soon after they stop, whatever its last frame was.
+    expect(isSilent(now, now - 10 * 60_000, now - 30_000)).toBe(false);
+    expect(isSilent(now, now - 10 * 60_000, now - SILENT_MS - 1)).toBe(true);
+    expect(isSilent(now, now - 1_000, now - SILENT_MS - 1)).toBe(false);
+    // An older app: only its two-minute clock pings to go by.
+    expect(isSilent(now, now - 3 * 60_000, null)).toBe(false);
+    expect(isSilent(now, now - LEGACY_SILENT_MS - 1, null)).toBe(true);
+  });
+
+  it("drops a member that went silent when its alarm fires, and tells the others", async () => {
+    const room = hex(141);
+    const a = await member(room, hex(1));
+    await a.next("welcome");
+    const b = await member(room, hex(2));
+    await b.next("welcome");
+    await a.next("joined");
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+    const closed = new Promise<number>((r) => b.ws.addEventListener("close", (e) => r(e.code)));
+
+    // Quiet, but within what an older app's clock pings allow: both stay.
+    await quietFor(stub, hex(2), 3 * 60_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    a.send({ t: "ping", id: 1, t0: 1 });
+    expect(await a.next()).toMatchObject({ t: "pong", id: 1 });
+
+    await quietFor(stub, hex(2), LEGACY_SILENT_MS + 1_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await a.next()).toEqual({ t: "left", member: hex(2) });
+    expect(await withTimeout(closed)).toBe(4009);
+
+    // The room still has a member, so it keeps checking; the dropped one may come back.
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const again = await member(room, hex(2));
+    expect((await again.next("welcome")).members).toEqual([hex(1), hex(2)]);
+    expect(await a.next()).toEqual({ t: "joined", member: hex(2) });
+  });
+
+  it("keeps a member whose only sign of life is its keep-alives", async () => {
+    const room = hex(142);
+    const a = await member(room, hex(1));
+    await a.next("welcome");
+    const b = await member(room, hex(2));
+    await b.next("welcome");
+    await a.next("joined");
+    b.ws.send("ping");
+    b.send({ t: "ping", id: 1, t0: 1 });
+    await b.next("pong");
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+    await quietFor(stub, hex(2), LEGACY_SILENT_MS + 60_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    a.send({ t: "ping", id: 2, t0: 1 });
+    expect(await a.next()).toMatchObject({ t: "pong", id: 2 });
+  });
+
+  it("notices a silent member as soon as anyone else says something", async () => {
+    const room = hex(143);
+    const a = await member(room, hex(1));
+    await a.next("welcome");
+    const b = await member(room, hex(2));
+    await b.next("welcome");
+    await a.next("joined");
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+    await quietFor(stub, hex(2), LEGACY_SILENT_MS + 1_000);
+    a.send({ t: "ping", id: 1, t0: 1 });
+    expect(await a.next()).toEqual({ t: "left", member: hex(2) });
+    expect(await a.next()).toMatchObject({ t: "pong", id: 1 });
+  });
+
+  it("marks the room empty when the last member is dropped for silence", async () => {
+    const room = hex(144);
+    const a = await member(room, hex(1), "first");
+    await a.next("welcome");
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(room));
+    await quietFor(stub, hex(1), LEGACY_SILENT_MS + 1_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await emptyFor(stub, 31 * 60_000);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    // Forgotten: a different token can claim the room id again.
+    await (await member(room, hex(2), "second")).next("welcome");
+  });
+
   it("refuses new rooms once the daily budget is spent, but keeps open ones going", async () => {
     const open = await member(hex(130), hex(1));
     await open.next("welcome");
@@ -253,6 +356,16 @@ describe("room worker", () => {
     await (await member(hex(130), hex(2))).next("welcome");
   });
 });
+
+/** Pretends `memberId` last sent a frame `ms` ago. */
+async function quietFor(stub: DurableObjectStub, memberId: string, ms: number): Promise<void> {
+  await runInDurableObject(stub, async (_instance, state) => {
+    for (const ws of state.getWebSockets(memberId)) {
+      const attachment = ws.deserializeAttachment() as any;
+      ws.serializeAttachment({ ...attachment, at: Date.now() - ms });
+    }
+  });
+}
 
 /** Pretends the room has been empty for `ms`, so its next alarm acts on it. */
 async function emptyFor(stub: DurableObjectStub, ms: number): Promise<void> {

@@ -3,6 +3,8 @@ import {
   BASE64URL,
   Close,
   HEX_ID,
+  KEEPALIVE_PING,
+  KEEPALIVE_PONG,
   bearer,
   errorResponse,
   parseFrame,
@@ -35,6 +37,27 @@ const REFILL_PER_MS = 30 / 60_000;
 /** How many messages a member sends before the room reports them to the daily budget. */
 const REPORT_EVERY = 2_000;
 
+/**
+ * Members send a keep-alive text this often. Cloudflare answers it without waking the
+ * room, and remembers when; that is how the room knows a member is still there.
+ */
+export const KEEPALIVE_SECS = 25;
+/** A member that sends keep-alives is gone after three were missed, plus some slack. */
+export const SILENT_MS = 80_000;
+/** Older apps send no keep-alives, only a clock ping every two minutes. */
+export const LEGACY_SILENT_MS = 5 * 60_000;
+/** While it has members the room wakes this often, in case nobody left can say a word. */
+export const SILENCE_CHECK_MS = 5 * 60_000;
+
+/**
+ * Whether a member's connection has gone silent. `lastKeepalive` is when it last sent a
+ * keep-alive (null: never, an older app); `lastMessage` is its last frame or its connect.
+ */
+export function isSilent(now: number, lastMessage: number, lastKeepalive: number | null): boolean {
+  const seen = Math.max(lastMessage, lastKeepalive ?? 0);
+  return now - seen > (lastKeepalive === null ? LEGACY_SILENT_MS : SILENT_MS);
+}
+
 interface Meta {
   tokenHash: string;
   createdAt: number;
@@ -65,6 +88,11 @@ interface Attachment {
 }
 
 export class Room extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(KEEPALIVE_PING, KEEPALIVE_PONG));
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const member = url.searchParams.get("member") ?? "";
@@ -148,12 +176,14 @@ export class Room extends DurableObject<Env> {
       room_time: Date.now(),
       expires_at: meta.expiresAt,
       max_members: meta.maxMembers,
+      keepalive_secs: KEEPALIVE_SECS,
       ...(state ? { state } : {}),
     });
     if (!rejoined) this.broadcast({ t: "joined", member }, server);
 
-    // A room's alarm only moves when it empties; one set earlier than expiry just re-arms.
-    if (created) await this.ctx.storage.setAlarm(meta.expiresAt);
+    // The alarm re-arms itself while the room has members; one set for an empty room
+    // fires early, finds members and does the same.
+    if (created) await this.ctx.storage.setAlarm(this.occupiedAlarm(meta, now));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -165,6 +195,8 @@ export class Room extends DurableObject<Env> {
       console.log("closed a member sending too fast");
       return closeQuietly(ws, Close.RateLimited, "too many messages");
     }
+    // The room is awake anyway: see whether anyone else went silent.
+    await this.dropSilent(ws);
 
     switch (frame.t) {
       case "ping":
@@ -214,7 +246,12 @@ export class Room extends DurableObject<Env> {
       return;
     }
     if (open.length > 0) {
-      await this.ctx.storage.setAlarm(meta.expiresAt);
+      await this.report(1);
+      await this.dropSilent();
+      if (this.openSockets().length > 0) {
+        await this.ctx.storage.setAlarm(this.occupiedAlarm(meta, now));
+      }
+      // Otherwise the last departure marked the room empty and set its alarm.
       return;
     }
     const limits = roomLimits(this.env);
@@ -233,15 +270,33 @@ export class Room extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(this.emptyAlarm(meta, emptySince, limits));
   }
 
+  /** Closes members that went silent and tells the others they left. */
+  private async dropSilent(except?: WebSocket): Promise<void> {
+    const now = Date.now();
+    for (const [ws, attachment] of this.openSockets()) {
+      if (ws === except) continue;
+      const keepalive = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? null;
+      if (!isSilent(now, attachment.at ?? attachment.joinedAt, keepalive)) continue;
+      console.log("dropped a silent member");
+      closeQuietly(ws, Close.Silent, "silent");
+      await this.memberGone(ws);
+    }
+  }
+
+  private occupiedAlarm(meta: Meta, now: number): number {
+    return Math.min(meta.expiresAt, now + SILENCE_CHECK_MS);
+  }
+
   private async memberGone(ws: WebSocket): Promise<void> {
     const attachment = ws.deserializeAttachment() as Attachment | null;
+    // A socket can be dropped here and still get a close or an error later; -1 marks it done.
+    if (attachment?.used === -1) return;
     const open = this.openSockets().filter(([socket]) => socket !== ws);
     if (attachment && !open.some(([, a]) => a.member === attachment.member)) {
       this.broadcast({ t: "left", member: attachment.member }, ws);
     }
-    // The connect and this close, plus the messages not reported yet. A socket can get both
-    // a close and an error; -1 marks it as counted.
-    if (attachment && attachment.used !== -1) {
+    // The connect and this close, plus the messages not reported yet.
+    if (attachment) {
       try {
         ws.serializeAttachment({ ...attachment, used: -1 } satisfies Attachment);
       } catch {

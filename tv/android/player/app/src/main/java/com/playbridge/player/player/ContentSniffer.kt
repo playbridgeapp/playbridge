@@ -3,6 +3,7 @@ package com.playbridge.player.player
 import android.net.Uri
 import android.util.Log
 import com.playbridge.player.logging.DebugNetworkLogger
+import com.playbridge.shared.player.sanitizePlayerHeaders
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
@@ -99,9 +100,10 @@ class ContentSniffer {
                        .hostnameVerifier(LocalHostnameVerifier(::isLocalHost))
             }
 
+            val safeHeaders = headers?.let(::sanitizePlayerHeaders).orEmpty()
             builder.addInterceptor { chain ->
                 val requestBuilder = chain.request().newBuilder()
-                headers.orEmpty().forEach { (key, value) ->
+                safeHeaders.forEach { (key, value) ->
                         // Use .header() instead of .addHeader() to overwrite any existing
                         // duplicate headers that ExoPlayer might have set (like double User-Agent)
                     requestBuilder.header(key, value)
