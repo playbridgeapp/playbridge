@@ -223,9 +223,12 @@ object PhoneTogether {
         }
     }
 
-    /** An invite to another party that arrived while this phone is in one. */
-    data class SwitchRequest(val link: String, val watchHere: Boolean) {
-        override fun toString(): String = "SwitchRequest(watchHere=$watchHere)"
+    /**
+     * Another party to go to, picked while this phone is in one: an invite [link], or a
+     * [saved] party to rejoin.
+     */
+    data class SwitchRequest(val link: String?, val watchHere: Boolean, val saved: SavedParty? = null) {
+        override fun toString(): String = "SwitchRequest(room=${saved?.roomId}, watchHere=$watchHere)"
     }
 
     private val mutableSwitchRequest = MutableStateFlow<SwitchRequest?>(null)
@@ -239,10 +242,14 @@ object PhoneTogether {
      */
     fun openInvite(context: Context, link: String, watchHere: Boolean) {
         val current = party()
+        val roomId = WatchTogetherLinks.roomId(link)
+        // A party this phone was in comes back as the same member, so a host stays host.
+        val saved = roomId?.let { savedStore(context)?.get(it) }
         when {
-            current == null -> join(context, link, watchHere)
-            current.roomId == WatchTogetherLinks.roomId(link) -> Unit
-            else -> mutableSwitchRequest.value = SwitchRequest(link, watchHere)
+            current?.roomId == roomId && roomId != null -> Unit
+            current != null -> mutableSwitchRequest.value = SwitchRequest(link, watchHere, saved)
+            saved != null -> enterSaved(context, saved, watchHere)
+            else -> join(context, link, watchHere)
         }
     }
 
@@ -251,7 +258,86 @@ object PhoneTogether {
         val request = mutableSwitchRequest.value ?: return
         mutableSwitchRequest.value = null
         leave()
-        join(context, request.link, request.watchHere)
+        when {
+            request.saved != null -> enterSaved(context, request.saved, request.watchHere)
+            request.link != null -> join(context, request.link, request.watchHere)
+        }
+    }
+
+    // -- Saved parties
+
+    private var savedPartyStore: SavedPartyStore? = null
+    private val mutableSavedParties = MutableStateFlow<List<SavedParty>>(emptyList())
+    /** Parties this phone can rejoin, newest first. Starts filling once [loadSavedParties] ran. */
+    val savedParties: StateFlow<List<SavedParty>> = mutableSavedParties.asStateFlow()
+
+    /** Reads the saved parties and drops the ones that ended. */
+    fun loadSavedParties(context: Context) {
+        savedStore(context)?.prune()
+    }
+
+    private fun savedStore(context: Context): SavedPartyStore? {
+        savedPartyStore?.let { return it }
+        return runCatching { SavedPartyStore.create(context) }
+            .onFailure { Log.w(TAG, "Saved parties unavailable: ${it.javaClass.simpleName}") }
+            .getOrNull()
+            ?.also { store ->
+                savedPartyStore = store
+                scope.launch { store.parties.collect { mutableSavedParties.value = it } }
+            }
+    }
+
+    /**
+     * Comes back to [saved] as the same member: as host if this phone started it. In another
+     * party, asks first through [switchRequest].
+     */
+    fun rejoin(context: Context, saved: SavedParty, watchHere: Boolean) {
+        val current = party()
+        when {
+            current?.roomId == saved.roomId -> Unit
+            current != null -> mutableSwitchRequest.value = SwitchRequest(null, watchHere, saved)
+            else -> enterSaved(context, saved, watchHere)
+        }
+    }
+
+    /** Forgets a saved party; this phone can't rejoin it as the same member after that. */
+    fun forgetSaved(context: Context, roomId: String) {
+        savedStore(context)?.remove(roomId)
+    }
+
+    private fun enterSaved(context: Context, saved: SavedParty, watchHere: Boolean) {
+        val session = ensureClient(context) ?: return
+        if (isJoiningByCode()) session.pairCancel()
+        mutableState.value = State.Starting
+        watchOnJoin = watchHere
+        if (!session.rejoin(saved.saved, device(watchHere))) {
+            mutableState.value = State.Ended("Couldn't rejoin that party.")
+        }
+    }
+
+    /** Keeps the party this phone just entered, so it can come back after the app is closed. */
+    private fun rememberParty(event: TogetherEvent.Room) {
+        val saved = event.saved ?: return
+        val store = appContext?.let(::savedStore) ?: return
+        val previous = store.get(event.roomId)
+        val joinedAt = previous?.joinedAtMs ?: System.currentTimeMillis()
+        store.put(
+            SavedParty(
+                roomId = event.roomId,
+                relay = event.relay,
+                host = event.host,
+                saved = saved,
+                joinedAtMs = joinedAt,
+                endsAtMs = SavedParties.endsAt(event.endsAtMs, joinedAt),
+                hostName = previous?.hostName,
+                own = previous?.own.orEmpty(),
+            ),
+        )
+        // Back as the same member: the devices this phone added are still its own.
+        previous?.own?.forEach { client?.addOwn(it.member, it.boxKey) }
+        previous?.own?.takeIf { it.isNotEmpty() }?.let { own ->
+            updateParty { party -> party.copy(own = party.own + own.map(SavedOwnDevice::member)) }
+        }
     }
 
     fun cancelSwitch() {
@@ -398,8 +484,9 @@ object PhoneTogether {
             coordinator.addTvToWatchTogether(party.invite, phoneName())
                 .onSuccess { tv ->
                     client?.addOwn(tv.member, tv.boxKey)
-                    // The host's own receiver can carry on as host if this phone leaves.
-                    if (party.host) client?.delegate(tv.member, tv.signKey)
+                    savedPartyStore?.update(party.roomId) { saved ->
+                        saved.copy(own = saved.own.filterNot { it.member == tv.member } + SavedOwnDevice(tv.member, tv.boxKey))
+                    }
                     mutableOwnTvIdentities.update { current ->
                         current + (tv.member to OwnTvIdentity(tv.name, tv.uuid, tv.endpointKey))
                     }
@@ -814,12 +901,19 @@ object PhoneTogether {
                     ),
                 )
                 mutablePartyTargetSelected.value = true
+                rememberParty(event)
             }
             is TogetherEvent.Player -> onPlayerCommand(event.command)
             is TogetherEvent.Connected -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             TogetherEvent.Disconnected -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
             TogetherEvent.Unreachable -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
-            is TogetherEvent.Member -> updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+            is TogetherEvent.Member -> {
+                updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
+                val party = party()
+                if (event.host && party != null && event.member != party.me) {
+                    savedPartyStore?.update(party.roomId) { it.copy(hostName = event.name) }
+                }
+            }
             is TogetherEvent.MemberLeft -> {
                 mutableOwnTvIdentities.update { it - event.member }
                 updateParty { reducePartyEvent(it, event, SystemClock.elapsedRealtime()) }
@@ -903,6 +997,10 @@ object PhoneTogether {
             }
             is TogetherEvent.Stopped -> {
                 if (event.roomId.isNotEmpty() && event.roomId != room) return
+                // A party that ended, or whose link stopped working, can't be rejoined.
+                if (event.reason == TogetherStop.Expired || event.reason == TogetherStop.Unauthorized) {
+                    room?.let { savedPartyStore?.remove(it) }
+                }
                 room = null
                 clearQueueAndTarget()
                 closePlayer()

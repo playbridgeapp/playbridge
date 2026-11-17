@@ -30,6 +30,14 @@ class TogetherJsonTest {
         ) as TogetherEvent.Room
         assertTrue(room.host)
         assertFalse(room.toString().contains("#k="), "invite links hold the room key")
+        assertNull(room.endsAtMs)
+        assertNull(room.saved)
+        val dated = TogetherJson.event(
+            """{"event":"room","invite":"https://r.test/j/x#k=a&h=b","relay":"r.test","member":"m","box_pk":"bk","sign_pk":"sk","host":false,"ends_at":1800000000000.0,"saved":"c2VjcmV0"}""",
+        ) as TogetherEvent.Room
+        assertEquals(1_800_000_000_000L, dated.endsAtMs)
+        assertEquals("c2VjcmV0", dated.saved)
+        assertFalse(dated.toString().contains("c2VjcmV0"), "saved parties hold the member's keys")
         assertEquals(
             TogetherEvent.Stopped("r1", TogetherStop.RoomFull),
             TogetherJson.event("""{"event":"stopped","room":"r1","reason":"room_full"}"""),

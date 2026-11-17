@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -64,6 +65,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -122,6 +124,8 @@ fun WatchTogetherScreen(
     val context = LocalContext.current
     val state by PhoneTogether.state.collectAsState()
     val toast by PhoneTogether.toasts.collectAsState()
+    var showSaved by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { PhoneTogether.loadSavedParties(context) }
     LaunchedEffect(toast) {
         toast?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
@@ -136,6 +140,11 @@ fun WatchTogetherScreen(
                 navigationIcon = {
                     IconButton(onClick = onMenuClick) {
                         com.playbridge.sender.ui.DashboardBlocksIcon(modifier = Modifier.size(22.dp))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showSaved = true }) {
+                        Icon(Icons.Default.History, contentDescription = "Recent parties")
                     }
                 },
             )
@@ -160,6 +169,14 @@ fun WatchTogetherScreen(
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+
+    if (showSaved) {
+        SavedPartiesSheet(
+            current = (state as? PhoneTogether.State.InParty)?.party?.roomId,
+            watchHere = PhoneTogether.watchHereByDefault(coordinator),
+            onDismiss = { showSaved = false },
+        )
     }
 
     val switchRequest by PhoneTogether.switchRequest.collectAsState()
@@ -464,6 +481,7 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
     val queueNotice by PhoneTogether.queueNotice.collectAsState()
 
     PartyHeader(party)
+    HostAwayNote(party)
     NowPlaying(party, canControl, hasQueueNext = queue.isNotEmpty())
     if (party.canChangeVideo || queue.isNotEmpty() || queueNotice != null) {
         UpNextPanel(party, queue, queueNotice)
@@ -497,15 +515,112 @@ private fun PartyView(party: PhoneTogether.Party, coordinator: ConnectionCoordin
     }
 }
 
+/**
+ * Only the host can act as host, so while the host is away nobody stands in. Waits a few
+ * seconds after joining, while the host's hello is still on its way.
+ */
+@Composable
+private fun HostAwayNote(party: PhoneTogether.Party) {
+    val away = !party.host && party.connected && party.members.values.none { it.host }
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(away) {
+        shown = false
+        if (away) {
+            delay(HOST_AWAY_GRACE_MS)
+            shown = true
+        }
+    }
+    if (!away || !shown) return
+    Panel {
+        Text("The host is away", style = MaterialTheme.typography.titleMedium)
+        Text(
+            hostAwayMessage(party),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private const val HOST_AWAY_GRACE_MS = 4_000L
+
+internal fun hostAwayMessage(party: PhoneTogether.Party): String = when {
+    party.locked -> "The video keeps playing. Controls stay locked until they're back."
+    party.policy == TogetherPolicy.Anyone -> "The video keeps playing, and anyone can still change it."
+    else -> "The video keeps playing. Nobody can change it until they're back."
+}
+
+/** Parties this phone joined recently and can go back to, as the same member. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SavedPartiesSheet(current: String?, watchHere: Boolean, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val parties by PhoneTogether.savedParties.collectAsState()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            now = System.currentTimeMillis()
+            PhoneTogether.loadSavedParties(context)
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Recent parties", style = MaterialTheme.typography.titleLarge)
+            if (parties.isEmpty()) {
+                Text(
+                    "Parties you start or join show up here until they end, so you can go back to them.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            parties.forEach { saved ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(saved.title(), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(SavedParties.endsIn(saved, now), saved.relay).joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (saved.roomId == current) {
+                        Text("You're in it", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    } else {
+                        FilledTonalButton(onClick = {
+                            PhoneTogether.rejoin(context, saved, watchHere)
+                            onDismiss()
+                        }) { Text(if (saved.host) "Rejoin as host" else "Rejoin") }
+                        IconButton(onClick = { PhoneTogether.forgetSaved(context, saved.roomId) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove ${saved.title()}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun PartyHeader(party: PhoneTogether.Party) {
     val context = LocalContext.current
+    val saved by PhoneTogether.savedParties.collectAsState()
+    // While the host is away, the name this phone saw before.
+    val savedHost = saved.firstOrNull { it.roomId == party.roomId }?.hostName?.let { "$it's" }
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             Badge(Icons.Default.Groups, size = 48.dp)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    if (party.host) "Your watch party" else "${hostName(party) ?: "A"} watch party",
+                    if (party.host) "Your watch party" else "${hostName(party) ?: savedHost ?: "A"} watch party",
                     style = MaterialTheme.typography.titleLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
