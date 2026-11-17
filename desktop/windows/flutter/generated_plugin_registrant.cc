@@ -10,6 +10,7 @@
 #include <desktop_drop/desktop_drop_plugin.h>
 #include <file_selector_windows/file_selector_windows.h>
 #include <flutter_media_session/flutter_media_session_plugin_c_api.h>
+#include <flutter_secure_storage_windows/flutter_secure_storage_windows_plugin.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
 #include <local_notifier/local_notifier_plugin.h>
 #include <media_kit_libs_windows_video/media_kit_libs_windows_video_plugin_c_api.h>
@@ -28,6 +29,8 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FileSelectorWindows"));
   FlutterMediaSessionPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FlutterMediaSessionPluginCApi"));
+  FlutterSecureStorageWindowsPluginRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("FlutterSecureStorageWindowsPlugin"));
   FlutterWebRTCPluginRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FlutterWebRTCPlugin"));
   LocalNotifierPluginRegisterWithRegistrar(

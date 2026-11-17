@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   file_selector_windows
   flutter_media_session
+  flutter_secure_storage_windows
   flutter_webrtc
   local_notifier
   media_kit_libs_windows_video

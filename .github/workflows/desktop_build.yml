@@ -179,7 +179,9 @@ jobs:
           libmpv-dev \
           liblzma-dev \
           libayatana-appindicator3-dev \
-          libnotify-dev
+          libnotify-dev \
+          libsecret-1-dev \
+          libjsoncpp-dev
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'
