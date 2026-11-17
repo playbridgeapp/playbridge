@@ -117,6 +117,13 @@ sealed interface TogetherEvent {
         val boxKey: String,
         val signKey: String,
         val host: Boolean,
+        /** When the room ends (Unix ms), from its ID; null for rooms made before dated IDs. */
+        val endsAtMs: Long? = null,
+        /**
+         * What [TogetherClient.rejoin] needs to come back as this same member after the app
+         * was closed. Secret like [invite]: keep it encrypted and never log it.
+         */
+        val saved: String? = null,
     ) : TogetherEvent {
         override fun toString(): String = "Room(room=$roomId, relay=$relay, member=$member, host=$host)"
     }
@@ -212,6 +219,8 @@ object TogetherJson {
             boxKey = o.string("box_pk") ?: return null,
             signKey = o.string("sign_pk") ?: return null,
             host = o.bool("host"),
+            endsAtMs = o.nullableLong("ends_at"),
+            saved = o.string("saved"),
         )
         "connected" -> TogetherEvent.Connected(o.strings("members"))
         "disconnected" -> TogetherEvent.Disconnected

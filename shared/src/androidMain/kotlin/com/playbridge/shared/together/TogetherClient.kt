@@ -89,6 +89,12 @@ class TogetherClient(
         TogetherJson.device(this, device)
     })
 
+    /** Comes back to a party as the same member, from [TogetherEvent.Room.saved]. */
+    fun rejoin(saved: String, device: TogetherDevice) = submit(TogetherJson.command("rejoin") {
+        put("saved", saved)
+        TogetherJson.device(this, device)
+    })
+
     /** Receiver: show a code and wait for an invite. */
     fun pairRegister(pairing: String) = submit(TogetherJson.command("pair_register") { put("pairing", pairing) })
 
@@ -136,12 +142,6 @@ class TogetherClient(
         put("request", request)
         put("allowed", allowed)
         put("always", always)
-    })
-
-    /** Hand host duties to one of this phone's own devices. */
-    fun delegate(member: String, signKey: String) = submit(TogetherJson.command("delegate") {
-        put("member", member)
-        put("sign_pk", signKey)
     })
 
     /** A device this phone added over its paired LAN connection. */

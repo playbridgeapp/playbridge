@@ -2,4 +2,6 @@
 <full-backup-content>
     <exclude domain="file" path="atv/credentials.bin"/>
     <exclude domain="file" path="atv/credentials.bin.tmp"/>
+    <!-- Watch Together saved parties: their key stays in Android Keystore. -->
+    <exclude domain="sharedpref" path="watch_together_saved.xml"/>
 </full-backup-content>
