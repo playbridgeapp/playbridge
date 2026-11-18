@@ -119,8 +119,11 @@ private final class MPVPhoneCore: @unchecked Sendable {
                 "tls-ca-file": roots.path,
                 "demuxer-max-bytes": "64MiB", "demuxer-max-back-bytes": "16MiB",
                 "demuxer-readahead-secs": "30",
-                "stream-lavf-o": "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3",
-                "demuxer-lavf-o": "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3",
+                // No reconnect_streamed: with it FFmpeg treats the normal end of a response of
+                // unknown length (gzip playlists) as a dropped connection, re-requests past the
+                // end and fails to parse the playlist, leaving audio-only or no playback.
+                "stream-lavf-o": "reconnect=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3",
+                "demuxer-lavf-o": "reconnect=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3",
                 "subs-fallback": "no", "sid": "no"]
             var windowID = Int64(Int(bitPattern: Unmanaged.passUnretained(layer).toOpaque()))
             var status = mpv_set_option(context, "wid", MPV_FORMAT_INT64, &windowID)
