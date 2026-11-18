@@ -369,6 +369,9 @@ final class PhoneTogether: ObservableObject {
     @Published private(set) var queue: [PartyQueueItem] = []
     /// Why Up next isn't moving on, when it paused.
     @Published private(set) var queueNotice: String?
+    /// Every change to Up next, sent right after it happens. A website's linked session
+    /// follows it to know which of its videos are still waiting.
+    let queueUpdates = PassthroughSubject<PartyQueueChange, Never>()
 
     /// How long to wait after a video ends for the party's own clear before loading the next.
     static let endClearGraceNs: UInt64 = 1_500_000_000
@@ -810,6 +813,7 @@ final class PhoneTogether: ObservableObject {
                 showToast("Couldn't send video to the watch party")
                 return false
             }
+            emitQueue(.manualPlay)
             queueNotice = nil
             let checked = queueItems.map { ($0, PartyMediaURL.evaluate($0.url)) }.filter { $0.1.rejection == nil }
             let anyPrivate = check.isPrivateNetwork || checked.contains { $0.1.isPrivateNetwork }
@@ -818,6 +822,7 @@ final class PhoneTogether: ObservableObject {
             } else {
                 partyQueue.append(checked.map(\.0))
                 syncQueue()
+                emitQueue(.enqueued(checked.map(\.0.id)))
                 showToast(anyPrivate ? PartyMediaURL.privateNetworkNotice
                           : "Playing in the watch party · \(checked.count) up next")
             }
@@ -838,6 +843,7 @@ final class PhoneTogether: ObservableObject {
                 showToast("Couldn't ask the host to play this video")
                 return false
             }
+            emitQueue(.manualPlay)
             showToast(check.isPrivateNetwork ? PartyMediaURL.privateNetworkNotice : "Asked the host to play it")
             return true
         }
@@ -891,6 +897,7 @@ final class PhoneTogether: ObservableObject {
         partyQueue.append(valid.map(\.0))
         queueNotice = nil
         syncQueue()
+        emitQueue(.enqueued(valid.map(\.0.id)))
         if valid.contains(where: { $0.1.isPrivateNetwork }) {
             showToast(PartyMediaURL.privateNetworkNotice)
         } else if valid.count < items.count {
@@ -902,17 +909,22 @@ final class PhoneTogether: ObservableObject {
     }
 
     func removeFromQueue(_ id: String) {
-        if partyQueue.remove(id) != nil { syncQueue() }
+        guard partyQueue.remove(id) != nil else { return }
+        syncQueue()
+        emitQueue(.removed(id))
     }
 
     func moveQueueItem(from: Int, to: Int) {
-        if partyQueue.move(from: from, to: to) { syncQueue() }
+        guard partyQueue.move(from: from, to: to) else { return }
+        syncQueue()
+        emitQueue(.reordered)
     }
 
     func clearQueue() {
         partyQueue.clear()
         queueNotice = nil
         syncQueue()
+        emitQueue(.cleared)
     }
 
     @discardableResult
@@ -939,6 +951,7 @@ final class PhoneTogether: ObservableObject {
         partyQueue.remove(id)
         queueNotice = nil
         syncQueue()
+        emitQueue(.loadedFromQueue(target))
         if PartyMediaURL.evaluate(target.url).isPrivateNetwork { showToast(PartyMediaURL.privateNetworkNotice) }
         return true
     }
@@ -983,6 +996,7 @@ final class PhoneTogether: ObservableObject {
             syncQueue()
             if sendLoad(item.togetherItem) {
                 queueNotice = nil
+                emitQueue(.loadedFromQueue(item))
             } else {
                 closeHeldPlayer()
                 if case .paused(let reason) = advanceTracker.queuedLoadFailed() {
@@ -1000,6 +1014,141 @@ final class PhoneTogether: ObservableObject {
 
     private func syncQueue() {
         if queue != partyQueue.items { queue = partyQueue.items }
+    }
+
+    private func emitQueue(_ update: PartyQueueUpdate) {
+        queueUpdates.send(PartyQueueChange(update: update, snapshot: partyQueue.items))
+    }
+
+    // MARK: - Website linked sessions
+
+    /// Plays a website's video in the party and puts the rest of its list in Up next,
+    /// replacing the videos in `replaceQueueIds` that the website queued before. A member
+    /// who may only ask the host sends a request for the first video and queues nothing.
+    func playLinkedInParty(
+        _ item: PartyQueueItem,
+        queueItems: [PartyQueueItem] = [],
+        replaceQueueIds: Set<String> = []
+    ) -> PartyLinkedPlayResult {
+        guard let party = currentParty else { return .error("receiver_stopped") }
+        guard isPartySelected else { return .error("receiver_changed") }
+        let check = PartyMediaURL.evaluate(item.url)
+        if let rejection = check.rejection {
+            showToast(rejection)
+            return .error("unsupported_target")
+        }
+        if let refusal = linkedRefusal(party) { return .error(refusal) }
+        if !party.canChangeVideo {
+            guard askHost(item) else { return .error("connect_failed") }
+            let removed = partyQueue.removeAll(replaceQueueIds)
+            if !removed.isEmpty {
+                syncQueue()
+                emitQueue(.replacedSessionQueue(removed))
+            }
+            showToast(check.isPrivateNetwork ? PartyMediaURL.privateNetworkNotice : "Asked the host to play it")
+            return .ok(askOnly: true, queuedIds: [])
+        }
+        advanceTracker.explicitLoadSent(fromQueue: false)
+        guard sendLoad(item.togetherItem) else {
+            showToast("Couldn't send video to the watch party")
+            return .error("connect_failed")
+        }
+        let removed = partyQueue.removeAll(replaceQueueIds)
+        queueNotice = nil
+        let checked = queueItems.map { ($0, PartyMediaURL.evaluate($0.url)) }.filter { $0.1.rejection == nil }
+        partyQueue.append(checked.map(\.0))
+        syncQueue()
+        if !removed.isEmpty {
+            emitQueue(.replacedSessionQueue(removed))
+        } else if !checked.isEmpty {
+            emitQueue(.enqueued(checked.map(\.0.id)))
+        }
+        let anyPrivate = check.isPrivateNetwork || checked.contains { $0.1.isPrivateNetwork }
+        if anyPrivate {
+            showToast(PartyMediaURL.privateNetworkNotice)
+        } else {
+            showToast(checked.isEmpty ? "Playing in the watch party" : "Playing in the watch party · \(checked.count) up next")
+        }
+        return .ok(askOnly: false, queuedIds: checked.map(\.0.id))
+    }
+
+    /// Adds a website's next videos to Up next, skipping links other members can't open.
+    func enqueueLinkedItems(_ items: [PartyQueueItem]) -> PartyLinkedEnqueueResult {
+        guard let party = currentParty else { return .error("receiver_stopped") }
+        guard isPartySelected else { return .error("receiver_changed") }
+        if let refusal = linkedRefusal(party) { return .error(refusal) }
+        guard party.canChangeVideo else {
+            showToast("Only people who can change the video can add to the party queue.")
+            return .error("unsupported_queue")
+        }
+        guard !items.isEmpty else { return .error("invalid_request") }
+        let checked = items.map { ($0, PartyMediaURL.evaluate($0.url)) }
+        let valid = checked.filter { $0.1.rejection == nil }
+        guard !valid.isEmpty else {
+            showToast(checked.first?.1.rejection ?? "This video can't be added to a watch party.")
+            return .error("unsupported_target")
+        }
+        partyQueue.append(valid.map(\.0))
+        queueNotice = nil
+        syncQueue()
+        emitQueue(.enqueued(valid.map(\.0.id)))
+        if valid.contains(where: { $0.1.isPrivateNetwork }) {
+            showToast(PartyMediaURL.privateNetworkNotice)
+        } else if valid.count < items.count {
+            showToast("Added \(valid.count) to the party queue (skipped \(items.count - valid.count) that only work on this phone)")
+        } else {
+            showToast(valid.count == 1 ? "Added to the party queue" : "Added \(valid.count) videos to the party queue")
+        }
+        return .ok(valid.map(\.0))
+    }
+
+    /// Plays a website's video again, or one it already played, without touching Up next.
+    func replayLinkedItem(_ item: PartyQueueItem) -> PartyLinkedPlayResult {
+        guard let party = currentParty else { return .error("receiver_stopped") }
+        guard isPartySelected else { return .error("receiver_changed") }
+        let check = PartyMediaURL.evaluate(item.url)
+        if let rejection = check.rejection {
+            showToast(rejection)
+            return .error("unsupported_target")
+        }
+        if let refusal = linkedRefusal(party) { return .error(refusal) }
+        if !party.canChangeVideo {
+            guard askHost(item) else { return .error("connect_failed") }
+            showToast(check.isPrivateNetwork ? PartyMediaURL.privateNetworkNotice : "Asked the host to play it")
+            return .ok(askOnly: true, queuedIds: [])
+        }
+        advanceTracker.explicitLoadSent(fromQueue: false)
+        guard sendLoad(item.togetherItem) else {
+            showToast("Couldn't send video to the watch party")
+            return .error("connect_failed")
+        }
+        queueNotice = nil
+        if check.isPrivateNetwork { showToast(PartyMediaURL.privateNetworkNotice) }
+        return .ok(askOnly: false, queuedIds: [])
+    }
+
+    /// Same rule as Android: a locked party, or one only the host controls, refuses websites.
+    private func linkedRefusal(_ party: TogetherPartyState) -> String? {
+        if party.locked {
+            showToast("The host locked the controls")
+            return "not_allowed"
+        }
+        if party.policy == .onlyHost && !party.host {
+            showToast("Only the host can change the video")
+            return "not_allowed"
+        }
+        return nil
+    }
+
+    private func askHost(_ item: PartyQueueItem) -> Bool {
+        let together = item.togetherItem
+        if !together.headers.isEmpty { localSecretsPendingItemTitle = together.title }
+        guard client?.requestPlay(item: together) == true else {
+            localSecretsPendingItemTitle = nil
+            showToast("Couldn't ask the host to play this video")
+            return false
+        }
+        return true
     }
 
     private func clearQueueAndTarget() {
@@ -1596,4 +1745,12 @@ final class PhoneTogether: ObservableObject {
     private func showToast(_ message: String) {
         toastMessage = message
     }
+}
+
+extension PhoneTogether: PartyLinkedGateway {
+    var partyStates: AnyPublisher<PhoneTogetherState, Never> { $state.eraseToAnyPublisher() }
+    var partyTargetChanges: AnyPublisher<Bool, Never> { $partyTargetSelected.eraseToAnyPublisher() }
+    var queueChanges: AnyPublisher<PartyQueueChange, Never> { queueUpdates.eraseToAnyPublisher() }
+    func evaluateLink(_ url: String) -> PartyMediaURLCheck { PartyMediaURL.evaluate(url) }
+    func partyNowMs() -> Int64 { clockMs() }
 }

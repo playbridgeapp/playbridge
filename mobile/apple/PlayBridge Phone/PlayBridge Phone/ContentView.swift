@@ -144,6 +144,10 @@ struct ContentView: View {
             vm.partyNotice = { [weak party] message in
                 MainActor.assumeIsolated { party?.notify(message) }
             }
+            vm.partyLinkStarter = { [weak party] request in
+                guard let party else { throw PageCastError(code: "receiver_stopped") }
+                return try PartyLinkedSession.start(request, gateway: party)
+            }
             reconnectOnActivation()
             updateAtv()
             if together.pendingOpenScreen {

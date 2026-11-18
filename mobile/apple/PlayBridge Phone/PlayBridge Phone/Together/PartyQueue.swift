@@ -91,6 +91,33 @@ struct PartyQueue: Equatable {
     mutating func takeNext() -> PartyQueueItem? { items.isEmpty ? nil : items.removeFirst() }
 
     mutating func clear() { items.removeAll() }
+
+    /// Removes every item whose ID is in `ids` and returns the IDs it removed.
+    @discardableResult
+    mutating func removeAll(_ ids: Set<String>) -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+        let removed = Set(items.lazy.map(\.id).filter { ids.contains($0) })
+        items.removeAll { ids.contains($0.id) }
+        return removed
+    }
+}
+
+/// A change to Up next, with the list as it is right after the change.
+enum PartyQueueUpdate: Equatable {
+    case enqueued([String])
+    case loadedFromQueue(PartyQueueItem)
+    case removed(String)
+    case reordered
+    case cleared
+    /// A website replaced its videos in Up next with new ones.
+    case replacedSessionQueue(Set<String>)
+    /// Someone on this phone played a video by hand.
+    case manualPlay
+}
+
+struct PartyQueueChange: Equatable {
+    let update: PartyQueueUpdate
+    let snapshot: [PartyQueueItem]
 }
 
 enum PartyAdvanceDecision: Equatable {

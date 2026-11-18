@@ -94,17 +94,17 @@ final class ConnectionViewModel: ObservableObject {
 
     /// A website's videos for the party, from its start index.
     @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool {
-        let items = request.items.dropFirst(request.startIndex).compactMap { item -> PartyQueueItem? in
-            guard let url = item["url"] as? String else { return nil }
-            let subtitles = (item["subtitles"] as? [String] ?? [])
-                + (item["subtitleResources"] as? [[String: Any]] ?? []).compactMap { $0["url"] as? String }
-            return PartyQueueItem.of(url: url, title: item["title"] as? String,
-                                     headers: item["headers"] as? [String: String] ?? [:],
-                                     subtitles: subtitles.filter { PartyMediaURL.evaluate($0).rejection == nil },
-                                     startMs: (item["start_position_ms"] as? NSNumber)?.int64Value ?? 0)
-        }
+        let items = request.items.dropFirst(request.startIndex).compactMap(PartyQueueItem.fromPageItem)
         // No onUserMediaAction: this is the website's own request, already in progress.
         return sendToParty(items, false)
+    }
+
+    /// Starts a website's linked session in the party (set by ContentView from PhoneTogether).
+    var partyLinkStarter: (@MainActor (PageCastRequest) throws -> PageCastPartyLink)?
+
+    @MainActor func startWebsitePartyLink(_ request: PageCastRequest) throws -> PageCastPartyLink {
+        guard let partyLinkStarter else { throw PageCastError(code: "receiver_stopped") }
+        return try partyLinkStarter(request)
     }
 
     /// With the party selected, sends a link there and returns true. Links only this phone
