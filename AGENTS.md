@@ -44,7 +44,7 @@ If `AGENTS.local.md` exists at the repository root, read and follow it for optio
 | Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
 | Android TV | `tv/android/` | Kotlin, TV UI, ExoPlayer/MPV; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
 | Shared Kotlin | `shared/` | Kotlin Multiplatform module currently targeting Android only; protocol and playback/domain logic included by both Android builds |
-| Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, MPVKit-only local playback; optional Cast Core external transports |
+| Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, MPVKit local playback (AVPlayer as a per-session choice); optional Cast Core external transports |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
 | Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption. The old standalone Dart proxy has been removed. |

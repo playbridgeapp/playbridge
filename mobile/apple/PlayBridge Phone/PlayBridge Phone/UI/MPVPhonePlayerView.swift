@@ -1,7 +1,8 @@
 import SwiftUI
 import Metal
+import AVFoundation
 
-/// Touch controls for the mpv-only phone player, operating through PlaybackSession.
+/// Touch controls for the phone player (mpv or AVPlayer), operating through PlaybackSession.
 struct MPVPhonePlayerView: View {
     @ObservedObject var session: PlaybackSession
     @ObservedObject private var subtitleStyle = SubtitleStyleStore.shared
@@ -30,6 +31,10 @@ struct MPVPhonePlayerView: View {
                 MPVPhoneSurface(engine: engine)
                     .id(ObjectIdentifier(engine))
                     .ignoresSafeArea()
+            } else if let engine = session.alternativeEngine as? AVPlayerPhonePlayback {
+                AVPlayerPhoneSurface(engine: engine)
+                    .id(ObjectIdentifier(engine))
+                    .ignoresSafeArea()
             }
             PhonePlayerSurfaceGestures(
                 duration: session.durationSeconds,
@@ -55,10 +60,10 @@ struct MPVPhonePlayerView: View {
             if session.mpvState.buffering {
                 ProgressView().tint(.white).allowsHitTesting(false)
             }
-            if !session.websiteCaption.isEmpty {
+            if !overlayCaption.isEmpty {
                 VStack {
                     Spacer()
-                    SubtitleCaptionText(text: session.websiteCaption, style: subtitleStyle.style)
+                    SubtitleCaptionText(text: overlayCaption, style: subtitleStyle.style)
                         .padding(.horizontal, 20)
                         .padding(.bottom, controls.visible && !controls.locked ? 124 : 24)
                 }.allowsHitTesting(false)
@@ -127,6 +132,11 @@ struct MPVPhonePlayerView: View {
             PhonePlayerSettingsView(session: session)
         }
         .sheet(isPresented: $showQueue, onDismiss: { controls.reveal() }) { queue }
+    }
+
+    /// Website subtitles, or ticked subtitle files the engine doesn't render itself (AVPlayer).
+    private var overlayCaption: String {
+        session.websiteCaption.isEmpty ? session.mpvState.overlayCaption : session.websiteCaption
     }
 
     private var toolbar: some View {
@@ -392,6 +402,28 @@ private final class PhonePlayerScrubPan: UIPanGestureRecognizer {
         guard let dragStart, let view, !PhonePlayerScrub.ignoredStart(dragStart, in: view.bounds.size), PhonePlayerScrub.isEnabled(gate()) else { return nil }
         return PhonePlayerScrub.preview(translationX: location(in: view).x - dragStart.x, viewWidth: view.bounds.width, position: origin, duration: duration)
     }
+}
+
+private struct AVPlayerPhoneSurface: UIViewRepresentable {
+    let engine: AVPlayerPhonePlayback
+    func makeUIView(context: Context) -> AVPlayerPhoneSurfaceView {
+        let view = AVPlayerPhoneSurfaceView()
+        engine.attach(view.playerLayer)
+        return view
+    }
+    func updateUIView(_ view: AVPlayerPhoneSurfaceView, context: Context) {
+        if view.playerLayer.player !== engine.player { engine.attach(view.playerLayer) }
+    }
+}
+
+private final class AVPlayerPhoneSurfaceView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 }
 
 private struct MPVPhoneSurface: UIViewRepresentable {

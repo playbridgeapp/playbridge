@@ -23,7 +23,8 @@ repo, root = map(Path, sys.argv[1:])
 phone = repo / 'mobile/apple/PlayBridge Phone'
 source = root / 'PlayBridge Phone'
 source.mkdir()
-for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift', 'Network/PhonePlaybackLog.swift', 'Subtitles/PhoneSubtitleDownload.swift', 'Subtitles/SubtitleContentCheck.swift',
+for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift',
+             'Network/AVPlayerPhonePlayback.swift', 'Network/AVPlayerPhoneSupport.swift', 'Network/WebsiteCaptionParser.swift', 'Network/PhonePlaybackLog.swift', 'Subtitles/PhoneSubtitleDownload.swift', 'Subtitles/SubtitleContentCheck.swift',
              'Network/StreamRouteService.swift', 'Network/PhonePlayerPreferences.swift',
              'UI/PhonePlayerControls.swift', 'UI/PhonePlayerScrub.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift',
              'UI/PhonePlayerOpeningOrientationView.swift', 'UI/Theme.swift', 'UI/SubtitleStyleEditor.swift',

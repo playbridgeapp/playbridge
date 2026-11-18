@@ -13,6 +13,7 @@ final class PhoneSenderServices {
     }
 }
 typealias MPVPhonePlayback = TestAlternativeEngine
+typealias AVPlayerPhonePlayback = TestAlternativeEngine
 struct MPVPhonePlayerView: View {
     @ObservedObject var session: PlaybackSession
     var body: some View { Text("Fixture mpv surface") }

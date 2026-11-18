@@ -292,6 +292,8 @@ private struct PhoneMediaMPVPreview: View {
             if let failure = session.failure {
                 Text(failure.message).multilineTextAlignment(.center)
                 Button("Try Again") { session.retry() }.disabled(session.retrying)
+                Button("Try with \(session.engineKind.other.label)") { session.switchEngine(to: session.engineKind.other) }
+                    .disabled(session.retrying)
             }
         }
         .onChange(of: session.isPlaying) { onPlaybackChange($0) }

@@ -4,6 +4,8 @@ import Combine
 struct PlaybackFailure: Equatable {
     let message: String
 
+    static let avPlayerMatroska = PlaybackFailure(message: "AVPlayer can’t play MKV files. Switch back to mpv to play this video.")
+
     static func describeMPV(_ code: Int32, networkIssue: PhonePlaybackNetworkIssue?) -> PlaybackFailure {
         if let networkIssue {
             switch networkIssue {
@@ -67,10 +69,12 @@ struct PlaybackFailure: Equatable {
     }
 }
 
-/// Owns mpv playback attempts and their registrations. Retry re-prepares the
-/// selected route; a missing decoder fails explicitly rather than using AVPlayer.
+/// Owns playback attempts and their registrations. Every session starts on mpv; the
+/// user can switch this session to AVPlayer (and back), which re-prepares the selected
+/// route at the current position like a retry. Nothing switches engines silently, and
+/// a missing decoder fails explicitly.
 @MainActor final class PlaybackSession: ObservableObject {
-    let engineKind = PhonePlaybackEngineKind.mpv
+    @Published private(set) var engineKind = PhonePlaybackEngineKind.mpv
     @Published private(set) var mpvState = PhonePlaybackState()
     private(set) var alternativeEngine: PhoneAlternativePlaybackEngine?
     var onPlaybackEnd: (() -> Void)?
@@ -117,6 +121,7 @@ struct PlaybackFailure: Equatable {
     private var contentType: String?
     private var headerCount: Int
     private let alternativeFactory: () -> PhoneAlternativePlaybackEngine?
+    private let avPlayerFactory: () -> PhoneAlternativePlaybackEngine?
     private var lastMPVError: Int32?
 
     var positionSeconds: Double { mpvState.position }
@@ -127,7 +132,9 @@ struct PlaybackFailure: Equatable {
          initialOrientation: String? = nil, initialResume: Double = 0,
          preferencesStore: UserDefaults = .standard,
          externalSubtitles: [PhoneExternalSubtitle] = [], subtitleFiles: [URL] = [],
-         alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil, prepare: @escaping () async throws -> RoutedStream) {
+         alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil,
+         avPlayerFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil,
+         prepare: @escaping () async throws -> RoutedStream) {
         self.route = route
         self.externalSubtitles = externalSubtitles
         self.subtitleFiles = subtitleFiles
@@ -138,6 +145,13 @@ struct PlaybackFailure: Equatable {
         self.alternativeFactory = alternativeFactory ?? {
 #if os(iOS)
             return MPVPhonePlayback()
+#else
+            return nil
+#endif
+        }
+        self.avPlayerFactory = avPlayerFactory ?? {
+#if os(iOS)
+            return AVPlayerPhonePlayback()
 #else
             return nil
 #endif
@@ -156,8 +170,8 @@ struct PlaybackFailure: Equatable {
         failure = nil; lastMPVError = nil
         mpvState = PhonePlaybackState(position: resume)
         manualAudio = false; manualSubtitle = false; appliedAudio = nil; appliedSubtitle = nil; skipTarget = nil
-        guard let engine = alternativeFactory() else {
-            failure = .init(message: "The mpv playback engine is unavailable. Reopen the player or update PlayBridge.")
+        guard let engine = (engineKind == .mpv ? alternativeFactory : avPlayerFactory)() else {
+            failure = .init(message: "The \(engineKind.label) playback engine is unavailable. Reopen the player or update PlayBridge.")
             return
         }
         alternativeEngine = engine
@@ -173,14 +187,23 @@ struct PlaybackFailure: Equatable {
         engine.onFailure = { [weak self, weak engine] code in
             guard let self, let engine, !self.closed, self.alternativeEngine === engine else { return }
             self.lastMPVError = code
-            self.failure = PlaybackFailure.describeMPV(code, networkIssue: engine.networkIssue)
+            self.failure = engine.failureMessage.map { PlaybackFailure(message: $0) }
+                ?? PlaybackFailure.describeMPV(code, networkIssue: engine.networkIssue)
             self.alternativeEngine?.pause()
         }
-        PhonePlaybackLog.log("session install: route=\(route.rawValue) type=\(contentType ?? "none") \(PhonePlaybackLog.describe(media.url)) "
+        PhonePlaybackLog.log("session install: engine=\(engineKind.rawValue) route=\(route.rawValue) type=\(contentType ?? "none") \(PhonePlaybackLog.describe(media.url)) "
             + "headers=\(PhonePlaybackLog.headerNames(media.headers)) resume=\(resume) external-subtitles=\(externalSubtitles.count) "
             + "preferred audio=\(preferences.audioLanguage ?? "default") subtitles=\(preferences.subtitlesEnabled ? preferences.subtitleLanguage ?? "first" : "off")")
         engine.configure(PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay))
         if !externalSubtitles.isEmpty { engine.addExternalSubtitles(externalSubtitles) }
+        if engineKind == .avPlayer && isMatroska {
+            // AVPlayer has no Matroska demuxer; say so rather than waiting for a generic error.
+            mpvState.paused = true
+            failure = .avPlayerMatroska
+            PhonePlaybackLog.log("session install: AVPlayer refused MKV source")
+            return
+        }
+        engine.setSourceContentType(contentType)
         engine.load(url: media.url, headers: media.headers, resume: resume, autoplay: autoplay)
     }
 
@@ -373,13 +396,13 @@ struct PlaybackFailure: Equatable {
         let fileExtension = sourceURL.pathExtension.lowercased()
         var lines = ["PlayBridge native playback diagnostics", "Engine: \(engineKind.rawValue)", "Route: \(route.label)",
                      "Source host: \(sourceURL.host ?? "unknown")", "Source format: \(isMatroska ? "Matroska (MKV)" : knownExtensions.contains(fileExtension) ? fileExtension : "unknown")",
-                     "Request header count: \(headerCount)", "MPVKit: 1.0.0",
+                     "Request header count: \(headerCount)", engineKind == .mpv ? "MPVKit: 1.0.0" : "AVFoundation: system",
                      "Position: \(mpvState.position)", "Duration: \(mpvState.duration)",
                      "Paused: \(mpvState.paused)", "Buffering: \(mpvState.buffering)"]
         if let failure { lines.append("Failure: \(failure.message)") }
         if let lastMPVError {
-            lines.append("mpv error code: \(lastMPVError)")
-            lines.append("mpv stage: \(alternativeEngine?.failureContext ?? "playback")")
+            lines.append("\(engineKind.label) error code: \(lastMPVError)")
+            lines.append("\(engineKind.label) stage: \(alternativeEngine?.failureContext ?? "playback")")
         }
         if let issue = alternativeEngine?.networkIssue { lines.append("Network: " + issue.summary) }
         return lines.joined(separator: "\n")
@@ -387,6 +410,26 @@ struct PlaybackFailure: Equatable {
 
     func retry() {
         guard !closed, !retrying else { return }
+        reprepare(autoplay: true)
+    }
+
+    /// Switches this session to another engine at the current position. The route is prepared
+    /// again, as on retry, so an expired registration doesn't carry over. Episode changes in a
+    /// website queue and watch-party replacements keep the chosen engine; new sessions use mpv.
+    func switchEngine(to kind: PhonePlaybackEngineKind) {
+        guard !closed, kind != engineKind else { return }
+        let autoplay = isPlaying || failure != nil
+        PhonePlaybackLog.log("engine switch: \(engineKind.rawValue) -> \(kind.rawValue) at \(positionSeconds)")
+        engineKind = kind
+        // Stop the old engine now; it would otherwise keep playing while the route is prepared.
+        alternativeEngine?.pause()
+        failure = nil; lastMPVError = nil
+        mpvState.buffering = true
+        reprepare(autoplay: autoplay)
+    }
+
+    private func reprepare(autoplay: Bool) {
+        retryTask?.cancel()
         retrying = true
         generation += 1
         let attempt = generation
@@ -401,7 +444,7 @@ struct PlaybackFailure: Equatable {
                 sourceURL = media.sourceURL.flatMap(URL.init(string:)) ?? media.url
                 headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
                 registration = media.registration
-                install(media, resume: position.isFinite ? max(0, position) : 0, autoplay: true)
+                install(media, resume: position.isFinite ? max(0, position) : 0, autoplay: autoplay)
             } catch {
                 guard !closed, !Task.isCancelled, generation == attempt else { return }
                 if let error = error as? StreamRoutingError {

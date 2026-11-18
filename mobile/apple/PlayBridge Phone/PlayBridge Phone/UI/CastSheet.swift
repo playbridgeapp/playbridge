@@ -1349,6 +1349,9 @@ struct FullScreenVideoPlayerView: View {
                             } else {
                                 Button("Try again") { session.retry() }
                                     .buttonStyle(.borderedProminent)
+                                Button("Try with \(session.engineKind.other.label)") { session.switchEngine(to: session.engineKind.other) }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("phone-player-switch-engine")
                             }
 #if DEBUG
                             Button(copiedDiagnostics ? "Diagnostics copied" : "Copy diagnostics") {
