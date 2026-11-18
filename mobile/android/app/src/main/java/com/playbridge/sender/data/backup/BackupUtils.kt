@@ -112,6 +112,7 @@ object BackupUtils {
             phoneLandscapeOpen = settingsRepository.phoneLandscapeOpen.first().id,
             phoneBackgroundPlay = settingsRepository.phoneLeaveAction.first() == com.playbridge.sender.player.PhoneLeaveAction.KEEP_PLAYING,
             phoneLeaveAction = settingsRepository.phoneLeaveAction.first().id,
+            phoneAmbient = settingsRepository.phoneAmbient.first(),
             phoneSubtitleStyle = com.playbridge.shared.protocol.createSubtitleStyleJson(settingsRepository.phoneSubtitleStyle.first()),
         ).withCastHistory(settingsRepository.castHistory.first())
 
@@ -208,6 +209,7 @@ object BackupUtils {
                         com.playbridge.sender.player.PhoneLeaveAction.of(s.phoneLeaveAction, s.phoneBackgroundPlay),
                     )
                 }
+                s.phoneAmbient?.let { settingsRepository.setPhoneAmbient(it) }
                 settingsRepository.setCastHistory(s.castHistoryOver(settingsRepository.castHistory.first()))
                 s.phoneSubtitleStyle?.let { json ->
                     runCatching {

@@ -66,6 +66,23 @@ landscape shows the whole video as usual. The chosen Fit/Zoom/Stretch mode is ke
 changes what is shown while upright. Pan & zoom keeps its own pinch, so the fill pinch is off
 while it is on.
 
+## Ambient mode
+
+**Settings → Phone player → Ambient mode** (on by default, `phone_player_ambient`, in backups)
+draws a soft glow of the video's colours behind the portrait layout, fading into the panel below,
+and in the bars around a full-screen video shown with Fit. For the bars, the video view takes the
+picture's exact shape (`PlayerScreenState.ambientFitted`), since mpv would otherwise draw black
+bars itself. Full screen with Zoom, Stretch or pan & zoom, portrait fill and picture-in-picture
+have no glow.
+
+Once a second while the player is on screen and playing, `PlayerAmbient.kt` reads a 48-pixel-wide
+copy of the frame from the TextureView both decoders draw into (`TextureView.getBitmap`), so
+ExoPlayer and mpv share one path and the full-size picture is never copied. Paused keeps the last
+glow. The glow steps a third of the way toward each frame, so colour changes never dim it; a
+single black grab is ignored while the glow has colour. Each new glow fades in over the previous
+one, which stays drawn underneath. It is box-blurred while tiny and blurred again when drawn
+(Android 12+). Protected (DRM) video reads back black, so it has no glow.
+
 ## Leaving the player
 
 **Settings → Phone player → When you leave the player** (`PhoneLeaveAction`) decides what a

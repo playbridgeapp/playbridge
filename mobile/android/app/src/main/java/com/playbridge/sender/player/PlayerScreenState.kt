@@ -80,6 +80,13 @@ internal class PlayerScreenState(
     var fillingPortrait by mutableStateOf(false)
     /** The resize mode on screen: cropped to fill while [fillingPortrait], else the chosen one. */
     val shownResizeMode: Int get() = if (fillingPortrait) AspectRatioFrameLayout.RESIZE_MODE_ZOOM else resizeMode
+    /**
+     * Ambient mode in the bars: the video view takes exactly the picture's shape so the glow
+     * behind it shows around it (mpv would otherwise draw black bars itself). Set by PlayerScreen.
+     */
+    var ambientFitted by mutableStateOf(false)
+    /** The PlayerView's TextureView, which ambient mode reads its tiny frames from. */
+    var textureView: android.view.TextureView? = null
     var speed by mutableFloatStateOf(1f)
     var locked by mutableStateOf(false)
     var showUnlock by mutableStateOf(false)

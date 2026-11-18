@@ -39,6 +39,8 @@ class SettingsRepository(
         /** The switch [PHONE_LEAVE_ACTION] replaced; still written so an older version keeps the meaning. */
         val PHONE_BACKGROUND_PLAY = booleanPreferencesKey("phone_background_play")
         val PHONE_LEAVE_ACTION = stringPreferencesKey("phone_leave_action")
+        /** Ambient mode: a blurred glow of the video's colours around the picture (on by default). */
+        val PHONE_AMBIENT = booleanPreferencesKey("phone_player_ambient")
         val PHONE_SUBTITLE_STYLE = stringPreferencesKey("phone_subtitle_style")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
@@ -84,6 +86,7 @@ class SettingsRepository(
     /** What a playing video does when you leave the player; background play on before this existed means Keep playing. */
     val phoneLeaveAction: Flow<com.playbridge.sender.player.PhoneLeaveAction> = dataStore.data.catch { handleException(it) }
         .map { com.playbridge.sender.player.PhoneLeaveAction.of(it[Keys.PHONE_LEAVE_ACTION], it[Keys.PHONE_BACKGROUND_PLAY]) }
+    val phoneAmbient: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.PHONE_AMBIENT] ?: true }
     /** How the phone player draws plain subtitles; a TV keeps its own (see `subtitle_style`). */
     val phoneSubtitleStyle: Flow<SubtitleStyle> = dataStore.data.catch { handleException(it) }.map { prefs ->
         prefs[Keys.PHONE_SUBTITLE_STYLE]?.let { json ->
@@ -163,6 +166,7 @@ class SettingsRepository(
         it[Keys.PHONE_LEAVE_ACTION] = value.id
         it[Keys.PHONE_BACKGROUND_PLAY] = value == com.playbridge.sender.player.PhoneLeaveAction.KEEP_PLAYING
     }
+    suspend fun setPhoneAmbient(value: Boolean) = write { it[Keys.PHONE_AMBIENT] = value }
     suspend fun setPhoneSubtitleStyle(value: SubtitleStyle) = write {
         it[Keys.PHONE_SUBTITLE_STYLE] = com.playbridge.shared.protocol.createSubtitleStyleJson(value)
     }
