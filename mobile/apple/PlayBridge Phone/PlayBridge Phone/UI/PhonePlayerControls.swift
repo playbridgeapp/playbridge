@@ -15,6 +15,11 @@ import Combine
     private var sheetPresented = false
     private var hideTask: Task<Void, Never>?
     private let delay: UInt64
+    private let now: () -> Date
+    /// A double-tap or swipe seek makes the engine buffer briefly. Until this time that
+    /// buffering must not bring the bars up, or every gesture seek would reveal them.
+    private var gestureSeekUntil: Date?
+    static let gestureSeekGrace: TimeInterval = 3
     /// Increments only when a reveal/schedule is requested. Surface gestures must not touch it.
     private(set) var hideGeneration = 0
 
@@ -22,12 +27,15 @@ import Combine
         var revealsChrome: Bool { self != .surfaceGesture }
     }
 
-    init(hideDelayNanoseconds: UInt64 = 3_000_000_000) { delay = hideDelayNanoseconds }
+    init(hideDelayNanoseconds: UInt64 = 3_000_000_000, now: @escaping () -> Date = Date.init) {
+        delay = hideDelayNanoseconds; self.now = now
+    }
     func update(playing: Bool, buffering: Bool, voiceOver: Bool) {
         let changed = self.playing != playing || self.buffering != buffering || self.voiceOver != voiceOver
         self.playing = playing; self.buffering = buffering; self.voiceOver = voiceOver
         guard changed else { return }
-        if !locked && (!playing || buffering || voiceOver) { visible = true }
+        let seekBuffering = buffering && gestureSeekUntil.map { now() < $0 } == true
+        if !locked && (!playing || (buffering && !seekBuffering) || voiceOver) { visible = true }
         schedule()
     }
     func reveal() {
@@ -36,7 +44,9 @@ import Combine
     }
     /// Transport buttons and the bottom slider keep the bars alive. A swipe-scrub or
     /// double-tap seek must not reveal, hide, or extend them.
-    func touchChrome(from source: ChromeSource) { if source.revealsChrome { reveal() } }
+    func touchChrome(from source: ChromeSource) {
+        if source.revealsChrome { reveal() } else { noteGestureSeek() }
+    }
     func tap() {
         if locked { reveal() }
         else if voiceOver { reveal() }
@@ -51,7 +61,7 @@ import Combine
         schedule()
     }
     func setScrubbing(_ value: Bool, source: ChromeSource = .slider) {
-        guard source.revealsChrome else { return }
+        guard source.revealsChrome else { if !value { noteGestureSeek() }; return }
         scrubbing = value; if value { reveal() }; schedule()
     }
     func setSheetPresented(_ value: Bool) { sheetPresented = value; if value { reveal() }; schedule() }
@@ -60,6 +70,7 @@ import Combine
         hideTask?.cancel(); hideTask = nil
         suspended = true; scrubbing = false; sheetPresented = false
     }
+    private func noteGestureSeek() { gestureSeekUntil = now().addingTimeInterval(Self.gestureSeekGrace) }
     private func schedule() {
         hideGeneration += 1
         hideTask?.cancel(); hideTask = nil

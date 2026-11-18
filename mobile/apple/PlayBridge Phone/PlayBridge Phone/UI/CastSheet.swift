@@ -872,6 +872,7 @@ struct CastSheet: View {
                 try Task.checkCancellation()
                 guard playbackPreparationID == attempt, tab.allowsCasting(url) else { return }
                 let session = PlaybackSession(media: media, route: route, contentType: video.contentType,
+                                              title: video.withCastTitle(pageTitle: tab.title).displayTitle,
                                               externalSubtitles: externalSubtitles, subtitleFiles: subtitleFiles,
                                               prepare: prepare)
                 var presentation = PlayerItem(session: session)

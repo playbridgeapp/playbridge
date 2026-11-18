@@ -26,8 +26,9 @@ source.mkdir()
 for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift',
              'Network/AVPlayerPhonePlayback.swift', 'Network/AVPlayerPhoneSupport.swift', 'Network/WebsiteCaptionParser.swift', 'Network/PhonePlaybackLog.swift', 'Subtitles/PhoneSubtitleDownload.swift', 'Subtitles/SubtitleContentCheck.swift',
              'Network/StreamRouteService.swift', 'Network/PhonePlayerPreferences.swift',
-             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerScrub.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift',
-             'UI/PhonePlayerOpeningOrientationView.swift', 'UI/Theme.swift', 'UI/SubtitleStyleEditor.swift',
+             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerScrub.swift', 'UI/PhonePlayerSheets.swift', 'UI/MPVPhonePlayerView.swift',
+             'UI/PhonePlayerChrome.swift', 'UI/PhonePlayerTimeline.swift', 'UI/RemoteTimelineTrack.swift', 'UI/RemoteSeekTimeline.swift', 'Models/Models.swift',
+             'UI/PhonePlayerOpeningOrientationView.swift', 'UI/PhonePlayerOrientationLock.swift', 'UI/Theme.swift', 'UI/SubtitleStyleEditor.swift',
              'Subtitles/SubtitleStyleSettings.swift', 'Subtitles/SubtitleFontLibrary.swift', 'Subtitles/PickedSubtitleFont.swift']:
     shutil.copy2(phone / 'PlayBridge Phone' / name, source / Path(name).name)
 shutil.copy2(repo / 'mobile/apple/tests/MPVPhonePlaybackProbe.swift', source / 'Probe.swift')
@@ -41,6 +42,8 @@ if os.environ.get('MPV_PHONE_PROXY_PROBE') == '1':
     config = (framework / 'PlayBridgeCastCore.xcconfig').read_text().replace('$(SRCROOT)/../Native/PlayBridgeCastCore.xcframework', str(framework))
     (root / 'CastCoreOptional.xcconfig').write_text(config)
 shutil.copy2(phone / 'PlayBridge Phone/Resources/MozillaRootCertificates.pem', source / 'MozillaRootCertificates.pem')
+# The app target runs this build phase script on every build.
+shutil.copy2(phone / 'fix-embedded-framework-min-os.sh', root / 'fix-embedded-framework-min-os.sh')
 (source / 'Info.plist').write_text('<?xml version="1.0"?><plist version="1.0"><dict><key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict><key>NSLocalNetworkUsageDescription</key><string>Verify the explicitly granted local media fixture.</string></dict></plist>')
 project = root / 'PlayBridge Phone.xcodeproj'
 project.mkdir()
