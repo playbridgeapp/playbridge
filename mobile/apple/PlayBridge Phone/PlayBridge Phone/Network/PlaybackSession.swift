@@ -1,5 +1,8 @@
 import AVFoundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct PlaybackFailure: Equatable {
     let message: String
@@ -71,8 +74,9 @@ struct PlaybackFailure: Equatable {
 
 /// Owns playback attempts and their registrations. Every session starts on mpv; the
 /// user can switch this session to AVPlayer (and back), which re-prepares the selected
-/// route at the current position like a retry. Nothing switches engines silently, and
-/// a missing decoder fails explicitly.
+/// route at the current position like a retry. Settings › Phone player › Player picks the
+/// player a video starts on, and a video that player can't play moves to the other once, with
+/// a notice that says so (`PhoneEngineMode`, `PhoneEngineFallback`). A missing decoder fails explicitly.
 @MainActor final class PlaybackSession: ObservableObject {
     @Published private(set) var engineKind = PhonePlaybackEngineKind.mpv
     @Published private(set) var mpvState = PhonePlaybackState()
@@ -127,6 +131,22 @@ struct PlaybackFailure: Equatable {
     private let alternativeFactory: () -> PhoneAlternativePlaybackEngine?
     private let avPlayerFactory: () -> PhoneAlternativePlaybackEngine?
     private var lastMPVError: Int32?
+    private let engineMode: PhoneEngineMode
+    /// The user picked the engine for this player: it keeps it, and nothing switches by itself.
+    private var userChoseEngine = false
+    /// The fallback already ran for this video.
+    private var fallbackTried = false
+    private var noPicture = PhoneEngineFallback.NoPictureWatch()
+    /// Whether the app is on screen; a video opened in the background has no picture yet.
+    var appIsActive: () -> Bool = {
+#if canImport(UIKit)
+        UIApplication.shared.applicationState == .active
+#else
+        true
+#endif
+    }
+    /// Why this video moved to the other player by itself, shown with Switch back until dismissed.
+    @Published private(set) var engineNotice: PhoneEngineNotice?
 
     var positionSeconds: Double { mpvState.position }
     var durationSeconds: Double { mpvState.duration }
@@ -147,6 +167,7 @@ struct PlaybackFailure: Equatable {
         self.preferencesStore = preferencesStore
         preferences = PhonePlayerPreferences.load(from: preferencesStore)
         keepPlayingInBackground = PhoneLeaveChoice.load(from: preferencesStore) == .keepPlaying
+        engineMode = PhoneEngineMode.load(from: preferencesStore)
         self.prepare = prepare
         self.alternativeFactory = alternativeFactory ?? {
 #if os(iOS)
@@ -166,6 +187,7 @@ struct PlaybackFailure: Equatable {
         self.contentType = contentType
         headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
         registration = media.registration
+        engineKind = engineMode.startingEngine(url: sourceURL, contentType: contentType)
         install(media, resume: max(0, initialResume), autoplay: false)
     }
 
@@ -175,6 +197,7 @@ struct PlaybackFailure: Equatable {
         previous?.close()
         failure = nil; lastMPVError = nil
         mpvState = PhonePlaybackState(position: resume)
+        noPicture.reset()
         manualAudio = false; manualSubtitle = false; appliedAudio = nil; appliedSubtitle = nil; skipTarget = nil
         guard let engine = (engineKind == .mpv ? alternativeFactory : avPlayerFactory)() else {
             failure = .init(message: "The \(engineKind.label) playback engine is unavailable. Reopen the player or update PlayBridge.")
@@ -185,6 +208,9 @@ struct PlaybackFailure: Equatable {
             guard let self, let engine, !self.closed, self.alternativeEngine === engine else { return }
             self.mpvState = state
             self.applyPreferredTracks()
+            if self.noPicture.sample(state, isAudio: self.isAudio, active: self.appIsActive()) {
+                self.fallBack(reason: "no picture")
+            }
         }
         engine.onEnd = { [weak self, weak engine] in
             guard let self, let engine, !self.closed, self.alternativeEngine === engine else { return }
@@ -193,6 +219,9 @@ struct PlaybackFailure: Equatable {
         engine.onFailure = { [weak self, weak engine] code in
             guard let self, let engine, !self.closed, self.alternativeEngine === engine else { return }
             self.lastMPVError = code
+            if PhoneEngineFallback.allowsSwitch(from: self.engineKind, code: code, networkIssue: engine.networkIssue,
+                                                engineMessage: engine.failureMessage),
+               self.fallBack(reason: "error \(code)") { return }
             self.failure = engine.failureMessage.map { PlaybackFailure(message: $0) }
                 ?? PlaybackFailure.describeMPV(code, networkIssue: engine.networkIssue)
             self.alternativeEngine?.pause()
@@ -273,6 +302,7 @@ struct PlaybackFailure: Equatable {
         sourceURL = media.sourceURL.flatMap(URL.init(string:)) ?? media.url
         headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
         registration = media.registration
+        startNewVideo()
         install(media, resume: resume, autoplay: autoplay)
     }
 
@@ -408,6 +438,7 @@ struct PlaybackFailure: Equatable {
         self.contentType = contentType
         headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
         registration = media.registration
+        startNewVideo()
         install(media, resume: Double(resumeMs) / 1000, autoplay: autoplay)
     }
 
@@ -450,9 +481,12 @@ struct PlaybackFailure: Equatable {
 
     /// Switches this session to another engine at the current position. The route is prepared
     /// again, as on retry, so an expired registration doesn't carry over. Episode changes in a
-    /// website queue and watch-party replacements keep the chosen engine; new sessions use mpv.
+    /// website queue and watch-party replacements keep the engine the user chose; new sessions
+    /// start on the Player setting's choice.
     func switchEngine(to kind: PhonePlaybackEngineKind) {
         guard !closed, kind != engineKind else { return }
+        // The user's choice stands for this player: no automatic switch after it.
+        userChoseEngine = true; engineNotice = nil
         let autoplay = isPlaying || failure != nil
         PhonePlaybackLog.log("engine switch: \(engineKind.rawValue) -> \(kind.rawValue) at \(positionSeconds)")
         engineKind = kind
@@ -462,6 +496,36 @@ struct PlaybackFailure: Equatable {
         mpvState.buffering = true
         reprepare(autoplay: autoplay)
     }
+
+    /// A new video (episode or party replacement) starts on the setting's player again, unless
+    /// the user picked one, and the fallback may run again.
+    private func startNewVideo() {
+        fallbackTried = false; engineNotice = nil
+        if !userChoseEngine { engineKind = engineMode.startingEngine(url: sourceURL, contentType: contentType) }
+    }
+
+    /// Moves this video to the other player once, at the current position, when that player
+    /// plays its format. Returns false when the failure should be shown instead.
+    @discardableResult private func fallBack(reason: String) -> Bool {
+        let from = engineKind, to = engineKind.other
+        guard !closed, engineMode != .mpvOnly, !userChoseEngine, !fallbackTried,
+              to == .mpv || PhoneEngineFallback.avPlayerPlays(url: sourceURL, contentType: contentType) else { return false }
+        fallbackTried = true
+        PhonePlaybackLog.log("engine fallback: \(from.rawValue) -> \(to.rawValue) (\(reason)) at \(positionSeconds)")
+        var message = "\(from.label) couldn’t play this video, so it switched to \(to.label)."
+        if to == .avPlayer, externalSubtitles.contains(where: { ["ass", "ssa"].contains($0.url.pathExtension.lowercased()) }) {
+            message += " Styled (ASS) subtitles aren’t available in AVPlayer."
+        }
+        engineNotice = PhoneEngineNotice(message: message, back: from)
+        engineKind = to
+        alternativeEngine?.pause()
+        failure = nil; lastMPVError = nil
+        mpvState.buffering = true
+        reprepare(autoplay: true)
+        return true
+    }
+
+    func dismissEngineNotice() { engineNotice = nil }
 
     private func reprepare(autoplay: Bool) {
         retryTask?.cancel()

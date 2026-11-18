@@ -1,8 +1,9 @@
 import Foundation
 import CoreGraphics
 
-/// The phone player's decoder. mpv is the default for every session; AVPlayer is a
-/// per-session choice for streams mpv handles badly (the player's More sheet or the failure screen).
+/// The phone player's decoder. Which one a video starts on, and whether it may move to the
+/// other once, follows `PhoneEngineMode`; the player's More sheet or the failure screen switch
+/// it by hand.
 enum PhonePlaybackEngineKind: String, CaseIterable, Identifiable {
     case mpv = "mpv"
     case avPlayer = "avplayer"
@@ -10,6 +11,96 @@ enum PhonePlaybackEngineKind: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String { self == .mpv ? "mpv" : "AVPlayer" }
     var other: Self { self == .mpv ? .avPlayer : .mpv }
+}
+
+/// Settings › Phone player › Player. The second player takes a video over once, and only one
+/// that it can play (`PhoneEngineFallback`).
+enum PhoneEngineMode: String, CaseIterable, Identifiable {
+    /// Everything starts on mpv; AVPlayer takes over HLS, MP4, MOV and audio mpv can't play.
+    case mpvFirst = "mpv_first"
+    /// HLS, MP4, MOV and audio start on AVPlayer, everything else on mpv; mpv takes over any
+    /// video AVPlayer can't play.
+    case avPlayerFirst = "avplayer_first"
+    /// mpv, never switching by itself.
+    case mpvOnly = "mpv_only"
+
+    static let key = "phone_player_engine_mode"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .mpvFirst: return "mpv first"
+        case .avPlayerFirst: return "AVPlayer first"
+        case .mpvOnly: return "mpv only"
+        }
+    }
+
+    static func load(from store: UserDefaults = .standard) -> Self {
+        store.string(forKey: key).flatMap(Self.init(rawValue:)) ?? .mpvFirst
+    }
+
+    /// The player a new video starts on.
+    func startingEngine(url: URL, contentType: String?) -> PhonePlaybackEngineKind {
+        self == .avPlayerFirst && PhoneEngineFallback.avPlayerPlays(url: url, contentType: contentType) ? .avPlayer : .mpv
+    }
+}
+
+/// When a video moves to the other player: only to one that plays its format (mpv plays all
+/// of AVPlayer's), and only for a failure that player could get past. Network, HTTP, TLS and
+/// certificate failures would fail there too, so they never switch. Once per video.
+enum PhoneEngineFallback {
+    /// HLS, MP4/MOV and plain audio. MKV, WebM, DASH, raw TS and unknown types never switch.
+    static func avPlayerPlays(url: URL, contentType: String?) -> Bool {
+        let mime = contentType?.split(separator: ";").first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let refused = ["video/x-matroska", "video/matroska", "audio/x-matroska", "video/webm", "audio/webm",
+                       "application/dash+xml", "video/mp2t"]
+        if refused.contains(mime) { return false }
+        let playable = ["application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl", "audio/x-mpegurl",
+                        "video/mp4", "video/quicktime", "video/x-m4v", "audio/mp4", "audio/mpeg", "audio/aac", "audio/x-m4a"]
+        if playable.contains(mime) { return true }
+        return ["m3u8", "mp4", "m4v", "mov", "mp3", "m4a", "aac"].contains(url.pathExtension.lowercased())
+    }
+
+    /// The failed player's error is one the other could get past. From mpv: it couldn't open or
+    /// decode the file (loading error -13 only without a network, HTTP or TLS cause; mpv's own
+    /// messages never switch). From AVPlayer: a format or decoder failure (AVFoundation and
+    /// Core Media codes), or the phone proxy being unavailable, since mpv reads more formats and
+    /// needs no proxy. URL loading errors (-2...-3100, such as -1102 when the server refuses the
+    /// file) are the source's problem and would fail on mpv too.
+    static func allowsSwitch(from engine: PhonePlaybackEngineKind, code: Int32,
+                             networkIssue: PhonePlaybackNetworkIssue?, engineMessage: String?) -> Bool {
+        guard networkIssue == nil else { return false }
+        switch engine {
+        case .mpv: return engineMessage == nil && [-13, -17, -18].contains(code)
+        case .avPlayer: return !(-3100 ... -2).contains(code)
+        }
+    }
+
+    /// Sound with no picture for this many seconds of playback.
+    static let noPictureSeconds = 5.0
+
+    /// Watches for a video that plays with no picture (audio only, or a black surface).
+    struct NoPictureWatch: Equatable {
+        private var since: Double?
+
+        /// True once playback has run for `noPictureSeconds` without a frame.
+        mutating func sample(_ state: PhonePlaybackState, isAudio: Bool, active: Bool) -> Bool {
+            guard !isAudio, active, state.loaded, !state.paused, !state.buffering, state.videoWidth == 0 else {
+                if state.videoWidth > 0 || !state.loaded { since = nil }
+                return false
+            }
+            guard let since else { self.since = state.position; return false }
+            if state.position < since { self.since = state.position; return false }
+            return state.position - since >= PhoneEngineFallback.noPictureSeconds
+        }
+
+        mutating func reset() { since = nil }
+    }
+}
+
+/// A video moved to the other player by itself: what to say, and which player Switch back returns to.
+struct PhoneEngineNotice: Equatable {
+    let message: String
+    let back: PhonePlaybackEngineKind
 }
 
 struct PhonePlaybackTrack: Equatable, Identifiable {

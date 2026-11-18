@@ -41,7 +41,7 @@ struct PhonePlayerMoreSheet: View {
                 } header: {
                     Text("Player")
                 } footer: {
-                    Text("Switching reopens the video at the current position. Try AVPlayer when a stream won’t seek or shows no picture in mpv. AVPlayer can’t play MKV files or styled (ASS) subtitles. The choice lasts until you close the player; the next video you open starts with mpv.")
+                    Text("Switching reopens the video at the current position. Try AVPlayer when a stream won’t seek or shows no picture in mpv. AVPlayer can’t play MKV files or styled (ASS) subtitles. The choice lasts until you close the player. Settings › Phone player › Player picks the player new videos start on and whether they switch by themselves.")
                 }
             }
             .navigationTitle("More")
