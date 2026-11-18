@@ -51,6 +51,55 @@ private struct SubtitleEdge: ViewModifier {
     }
 }
 
+/// Names for the style's choices, in the editor and in Settings summaries.
+enum SubtitleStyleLabels {
+    static func short(_ size: SubtitleSizeOption) -> String {
+        switch size {
+        case .small: return "S"
+        case .medium: return "M"
+        case .large: return "L"
+        case .extraLarge: return "XL"
+        }
+    }
+
+    static func name(_ size: SubtitleSizeOption) -> String {
+        switch size {
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .large: return "Large"
+        case .extraLarge: return "Extra large"
+        }
+    }
+
+    static func name(_ background: SubtitleBackgroundOption) -> String {
+        switch background {
+        case .none: return "None"
+        case .dim: return "See-through"
+        case .box: return "Solid"
+        }
+    }
+
+    static func name(_ edge: SubtitleEdgeOption) -> String {
+        switch edge {
+        case .outline: return "Outline"
+        case .dropShadow: return "Shadow"
+        case .none: return "None"
+        }
+    }
+
+    /// "Medium · Outline · Poppins": size, then the box or (without one) the edge, then a custom font.
+    static func summary(_ style: SubtitleStylePreferences) -> String {
+        var parts = [name(style.size)]
+        switch style.background {
+        case .none: parts.append(style.edge == .none ? "No edge" : name(style.edge))
+        case .dim: parts.append("See-through box")
+        case .box: parts.append("Solid box")
+        }
+        if style.font == .custom, let family = style.customFont { parts.append(family) }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// The custom font part of the editor, for the phone player or a TV.
 struct SubtitleFontChoices {
     /// Installed custom font families, selected or not.
@@ -83,28 +132,9 @@ struct SubtitleStyleEditor: View {
         }
         if let fonts { fontSection(fonts) }
         Section {
-            choice("Size", selection: style.size, options: SubtitleSizeOption.allCases) { option in
-                switch option {
-                case .small: return "S"
-                case .medium: return "M"
-                case .large: return "L"
-                case .extraLarge: return "XL"
-                }
-            } set: { var next = style; next.size = $0; onChange(next) }
-            choice("Background", selection: style.background, options: SubtitleBackgroundOption.allCases) { option in
-                switch option {
-                case .none: return "None"
-                case .dim: return "See-through"
-                case .box: return "Solid"
-                }
-            } set: { var next = style; next.background = $0; onChange(next) }
-            choice("Edge", selection: style.edge, options: SubtitleEdgeOption.allCases) { option in
-                switch option {
-                case .outline: return "Outline"
-                case .dropShadow: return "Shadow"
-                case .none: return "None"
-                }
-            } set: { var next = style; next.edge = $0; onChange(next) }
+            choice("Size", selection: style.size, options: SubtitleSizeOption.allCases, label: SubtitleStyleLabels.short) { var next = style; next.size = $0; onChange(next) }
+            choice("Background", selection: style.background, options: SubtitleBackgroundOption.allCases, label: SubtitleStyleLabels.name) { var next = style; next.background = $0; onChange(next) }
+            choice("Edge", selection: style.edge, options: SubtitleEdgeOption.allCases, label: SubtitleStyleLabels.name) { var next = style; next.edge = $0; onChange(next) }
         }
         .disabled(!enabled)
         Section {

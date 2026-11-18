@@ -12,7 +12,7 @@ The Apple TV app has its own checklist: [`tvos-app-store-readiness-audit.md`](tv
 
 - `PrivacyInfo.xcprivacy` now declares the app's UserDefaults, file-timestamp, and system-boot-time reasons. It was verified inside an unsigned Release archive; confirm it again in the distribution-signed archive.
 - The iOS marketing version is now `0.3.3`, and the dashboard's `exit(0)` action has been removed.
-- Browser settings now links to the privacy policy. The website policy source now describes browser, search, filter-list, receiver, and proxy traffic; deploy and review the live page before submission. The App Store Connect privacy-policy URL and disclosures still require account access.
+- Settings → About now links to the privacy policy. The website policy source now describes browser, search, filter-list, receiver, and proxy traffic; deploy and review the live page before submission. The App Store Connect privacy-policy URL and disclosures still require account access.
 - Release builds now check the linked app binary for Cast Core symbols. A clean build without Cast Core fails with an actionable error, while a build with the generated framework succeeds. The symbols were also confirmed in the unsigned archive's dSYM; archive stripping removes them from the distributed executable's symbol table. The release pipeline still needs to generate the framework before archiving.
 - The multicast entitlement, Content Rights answers, signed archive, account metadata, and physical-device tests remain open.
 
@@ -87,7 +87,7 @@ Remove the action or replace it with normal navigation that leaves the app runni
 
 ### 4. Add and correct the privacy policy
 
-At audit time, the app did not provide an easily accessible in-app privacy policy link. Browser settings now includes one; App Store Connect still needs the policy URL in its metadata.
+At audit time, the app did not provide an easily accessible in-app privacy policy link. Settings → About now includes one; App Store Connect still needs the policy URL in its metadata.
 
 Add a privacy policy entry in Settings or another persistent, discoverable location. App Store Connect also requires the policy URL in the app metadata.
 

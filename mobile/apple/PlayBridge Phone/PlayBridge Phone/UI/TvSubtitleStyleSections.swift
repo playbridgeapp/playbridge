@@ -58,31 +58,3 @@ struct TvSubtitleStyleSections: View {
         Text(text).font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
     }
 }
-
-/// Settings → Subtitles: how subtitles look in the phone player and on the connected TV.
-struct SubtitleStyleSettingsSheet: View {
-    @EnvironmentObject private var vm: ConnectionViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text("Phone player").font(Theme.font(size: 17, weight: .semibold))
-                } footer: {
-                    Text("How subtitles look when videos play on this phone.")
-                }
-                PhoneSubtitleStyleSections()
-                Section {
-                    Text(vm.pairedDevice.map { "TV · \($0.name)" } ?? "TV").font(Theme.font(size: 17, weight: .semibold))
-                } footer: {
-                    Text("Your TV keeps its own style and applies changes right away.")
-                }
-                TvSubtitleStyleSections(controller: vm.tvSubtitles)
-            }
-            .navigationTitle("Subtitles")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-    }
-}

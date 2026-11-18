@@ -16,7 +16,7 @@ casting from the detected-media sheet retains its existing destination types.
   with each item for receiver-side enforcement of subsequent network requests.
 - Missing/unsupported destinations open a picker with saved and discovered
   PlayBridge receivers, manual address entry, and pairing code/approval UI.
-- Browser settings → Website casting permissions lists allowed websites.
+- Settings → Casting → Website casting permissions lists allowed websites.
   Swipe to revoke a website, reset all permissions, or reset just local-server
   access. The same screen sets the queue-ahead count (default 3; range 1–10).
 - Revocation, explicit Unlink, page reload/close, receiver changes, a new manual

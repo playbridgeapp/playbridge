@@ -1,0 +1,353 @@
+import SwiftUI
+
+/// A Settings topic. Each page covers one topic; the hub shows a live summary of each.
+enum SettingsPage: Hashable, CaseIterable {
+    case tv, subtitles, casting, browser, remote, about
+
+    var title: String {
+        switch self {
+        case .tv: return "TV"
+        case .subtitles: return "Audio & subtitles"
+        case .casting: return "Casting"
+        case .browser: return "Browser"
+        case .remote: return "Remote"
+        case .about: return "About"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .tv: return "tv"
+        case .subtitles: return "captions.bubble"
+        case .casting: return "airplayvideo"
+        case .browser: return "globe"
+        case .remote: return "av.remote"
+        case .about: return "info.circle"
+        }
+    }
+}
+
+/// Where the subtitle style is being edited from Audio & subtitles.
+enum SubtitleSettingsTarget: Hashable { case phone, tv }
+
+/// Settings, grouped by topic. Opens from the Dashboard and the browser menu; Back returns there.
+struct SettingsScreen: View {
+    @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var store: BrowserStore
+    @ObservedObject private var subtitleStyle = SubtitleStyleStore.shared
+    @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
+    @AppStorage("cast_save_history") private var saveHistory = true
+    @AppStorage("stream_route_default") private var route = StreamRoute.direct.rawValue
+    @AppStorage(RemoteHapticPreferences.enabledKey) private var hapticsEnabled = true
+    @AppStorage(RemoteHapticPreferences.levelKey) private var hapticsLevel: RemoteHapticLevel = .light
+    @State private var engine = SearchEngine.current
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(SettingsPage.allCases, id: \.self) { page in
+                    NavigationLink(value: page) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(page.title).foregroundColor(Theme.onSurface)
+                                Text(summary(page))
+                                    .font(Theme.font(.caption))
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                                    .lineLimit(1)
+                            }
+                        } icon: {
+                            Image(systemName: page.icon).foregroundColor(Theme.primary)
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.surface.ignoresSafeArea())
+            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    // Settings opens from the Dashboard's top bar too; Back returns there.
+                    if nav.settingsOrigin == .dashboard {
+                        ScreenBackButton(destination: .dashboard, accessibilityLabel: "Back to Dashboard")
+                    } else {
+                        ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    }
+                }
+            }
+            .navigationDestination(for: SettingsPage.self) { page in
+                Group {
+                    switch page {
+                    case .tv: TvSettingsPage()
+                    case .subtitles: AudioSubtitleSettingsPage(tv: vm.tvSubtitles)
+                    case .casting: CastingSettingsPage()
+                    case .browser: BrowserSettingsPage(engine: $engine)
+                    case .remote: RemoteSettingsPage()
+                    case .about: AboutSettingsPage()
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(Theme.surface.ignoresSafeArea())
+                .navigationTitle(page.title)
+                .navigationBarTitleDisplayMode(.inline)
+            }
+            .navigationDestination(for: SubtitleSettingsTarget.self) { target in
+                Form {
+                    switch target {
+                    case .phone: PhoneSubtitleStyleSections()
+                    case .tv: TvSubtitleStyleSections(controller: vm.tvSubtitles)
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(Theme.surface.ignoresSafeArea())
+                .navigationTitle(target == .phone ? "Phone player subtitles" : "TV subtitles")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    private func summary(_ page: SettingsPage) -> String {
+        switch page {
+        case .tv:
+            return [autoConnect ? "Auto-connect" : "Auto-connect off",
+                    saveHistory ? "Cast history saved" : "Cast history off"].joined(separator: " · ")
+        case .subtitles:
+            return "Subtitles: " + SubtitleStyleLabels.summary(subtitleStyle.style)
+        case .casting:
+            return "Videos play " + (StreamRoute(rawValue: route) ?? .direct).label.lowercased()
+        case .browser:
+            return [engine.label, store.adBlockEnabled ? "Ad blocking on" : "Ad blocking off"].joined(separator: " · ")
+        case .remote:
+            return hapticsEnabled ? "Haptics: \(hapticsLevel.title.lowercased())" : "Haptics off"
+        case .about:
+            return "Privacy policy, open source licences"
+        }
+    }
+}
+
+// MARK: - Pages
+
+/// Connecting to TVs, their pairings and what is remembered about casts.
+private struct TvSettingsPage: View {
+    @EnvironmentObject private var atv: AtvRemoteCoordinator
+    @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
+    @AppStorage("cast_save_history") private var saveHistory = true
+    @AppStorage("cast_prevent_receiver_history") private var preventReceiverHistory = false
+    @State private var showPairedTVs = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Auto-connect to this TV", isOn: $autoConnect).tint(Theme.primary)
+            } footer: {
+                Text("Reconnect to the last TV when PlayBridge opens.")
+            }
+            Section {
+                Button("Paired TVs") { showPairedTVs = true }
+            } footer: {
+                Text("Android TVs this phone controls with full remote access.")
+            }
+            Section {
+                Toggle("Save cast history on this phone", isOn: $saveHistory).tint(Theme.primary)
+                Toggle("Prevent receiver history", isOn: $preventReceiverHistory).tint(Theme.primary)
+            } header: {
+                Text("Cast history")
+            } footer: {
+                Text("Receiver preference applies to future casts on supporting PlayBridge receivers. Other receivers may ignore it. Existing history is unchanged.")
+            }
+        }
+        .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
+    }
+}
+
+/// How subtitles look on this phone and on the connected TV.
+private struct AudioSubtitleSettingsPage: View {
+    @EnvironmentObject private var vm: ConnectionViewModel
+    @ObservedObject var tv: TvSubtitleStyleController
+    @ObservedObject private var phone = SubtitleStyleStore.shared
+
+    var body: some View {
+        Form {
+            Section {
+                row("Phone player", SubtitleStyleLabels.summary(phone.style), .phone)
+                row(vm.pairedDevice.map { "TV · \($0.name)" } ?? "TV", tvSummary, .tv)
+            } header: {
+                Text("Subtitle style")
+            } footer: {
+                Text("The phone player and your TV each keep their own style. The TV applies changes right away.")
+            }
+        }
+    }
+
+    private var tvSummary: String {
+        guard vm.isConnected, vm.playBridgeLinkConnected else { return "Not connected" }
+        guard vm.tvSupportsSubtitleStyle else { return "Needs a newer PlayBridge on the TV" }
+        return tv.style(for: vm.subtitleStyleSession).map(SubtitleStyleLabels.summary) ?? "Change how the TV shows subtitles"
+    }
+
+    private func row(_ title: String, _ detail: String, _ target: SubtitleSettingsTarget) -> some View {
+        NavigationLink(value: target) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).lineLimit(1)
+                Text(detail).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+            }
+        }
+    }
+}
+
+/// How videos reach the TV, and what websites may do when they cast.
+private struct CastingSettingsPage: View {
+    @AppStorage("stream_route_default") private var route = StreamRoute.direct.rawValue
+    @State private var proxy = StreamProxySettingsStore.load()
+    @State private var showProxy = false
+    @State private var selectProxyAfterSave = false
+    @State private var showPermissions = false
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Send videos", selection: Binding(get: { StreamRoute(rawValue: route) ?? .direct }, set: choose)) {
+                    ForEach(StreamRoute.allCases) { Text($0.label).tag($0) }
+                }
+                Button { selectProxyAfterSave = false; showProxy = true } label: {
+                    HStack {
+                        Text("Stream proxy").foregroundColor(Theme.onSurface)
+                        Spacer()
+                        Text(proxyHost ?? "Not set").foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+                    }
+                }
+            } header: {
+                Text("Route")
+            } footer: {
+                Text("Direct sends the video link to the TV. Via phone streams it through this phone, and Via proxy through your stream proxy, for links the TV can't open itself. The cast sheet can change it for a cast.")
+            }
+            Section {
+                Button("Website casting permissions") { showPermissions = true }
+            } footer: {
+                Text("Websites allowed to cast, local media server access and how far ahead linked playlists are queued.")
+            }
+        }
+        .sheet(isPresented: $showProxy) {
+            StreamProxySettingsView(configuration: proxy) { configuration in
+                proxy = configuration
+                if selectProxyAfterSave { route = StreamRoute.proxy.rawValue }
+            }
+        }
+        .sheet(isPresented: $showPermissions) { PageCastPermissionsView() }
+    }
+
+    /// Only the host is shown; the proxy URL and password stay out of the page.
+    private var proxyHost: String? { (try? proxy.validatedURL())?.host }
+
+    private func choose(_ next: StreamRoute) {
+        if next == .proxy, proxyHost == nil {
+            selectProxyAfterSave = true
+            showProxy = true
+        } else {
+            route = next.rawValue
+        }
+    }
+}
+
+/// Search, ad blocking and what the browser detects, sends and keeps.
+private struct BrowserSettingsPage: View {
+    @EnvironmentObject private var store: BrowserStore
+    @Binding var engine: SearchEngine
+    @State private var showAdblock = false
+    @State private var showMediaDetection = false
+    @State private var showUserAgent = false
+    @State private var showNetworkLogs = false
+    @State private var showClearData = false
+#if PB_DEVELOPER_TOOLS
+    @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
+#endif
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Search engine", selection: $engine) {
+                    ForEach(SearchEngine.allCases) { Text($0.label).tag($0) }
+                }
+                .onChange(of: engine) { SearchEngine.current = $0 }
+                detailButton("Ad blocking & pop-ups", store.adBlockEnabled ? "On" : "Off") { showAdblock = true }
+                Button("Media detection") { showMediaDetection = true }
+            }
+            Section {
+                detailButton("User agent", store.activeTab?.userAgentPreset.label ?? "Automatic") { showUserAgent = true }
+                    .disabled(store.activeTab == nil)
+                Button("Network logs") { showNetworkLogs = true }
+                    .disabled(store.activeTab == nil)
+#if PB_DEVELOPER_TOOLS
+                Toggle("Developer tools", isOn: $developerTools)
+                    .tint(Theme.primary)
+                    .accessibilityIdentifier("browserDeveloperTools")
+#endif
+            } header: {
+                Text("Current tab")
+            } footer: {
+#if PB_DEVELOPER_TOOLS
+                Text("Developer tools add JSON and Copy as cURL for detected media, and a full, unredacted copy of network logs. These can include cookies and tokens.")
+#else
+                Text("These apply to the tab that is open in the browser.")
+#endif
+            }
+            Section {
+                Button("Clear browsing data") { showClearData = true }
+                    .foregroundColor(Theme.danger)
+            }
+        }
+        .sheet(isPresented: $showAdblock) { AdblockSettingsSheet(store: store) }
+        .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
+        .sheet(isPresented: $showClearData) { BrowserClearDataSheet(store: store) }
+        .sheet(isPresented: $showUserAgent) {
+            if let tab = store.activeTab { BrowserUserAgentSheet(tab: tab) }
+        }
+        .sheet(isPresented: $showNetworkLogs) {
+            if let tab = store.activeTab { BrowserNetworkLogView(tab: tab, store: store) }
+        }
+    }
+
+    private func detailButton(_ title: String, _ detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).foregroundColor(Theme.onSurface)
+                Spacer()
+                Text(detail).foregroundColor(Theme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/// How the remote feels.
+private struct RemoteSettingsPage: View {
+    @AppStorage(RemoteHapticPreferences.enabledKey) private var hapticsEnabled = true
+    @AppStorage(RemoteHapticPreferences.levelKey) private var hapticsLevel: RemoteHapticLevel = .light
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Haptic feedback", isOn: $hapticsEnabled).tint(Theme.primary)
+                Picker("Haptic level", selection: $hapticsLevel) {
+                    ForEach(RemoteHapticLevel.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .disabled(!hapticsEnabled)
+            } footer: {
+                Text("A tap you can feel when you press the remote's buttons.")
+            }
+        }
+    }
+}
+
+private struct AboutSettingsPage: View {
+    @State private var showLicences = false
+
+    var body: some View {
+        Form {
+            Section {
+                Link("Privacy policy", destination: URL(string: "https://playbridge.app/privacy")!)
+                Button("Open source licences") { showLicences = true }
+            }
+        }
+        .sheet(isPresented: $showLicences) { OpenSourceLicencesScreen() }
+    }
+}
