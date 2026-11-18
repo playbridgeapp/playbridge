@@ -3720,7 +3720,7 @@ private func runDevice8MPVRecoveryAndFontValidationTests() {
     // 1. Lavf reconnect options cover stream + demuxer and exclude reconnect_at_eof
     let opts = MPVLavfReconnectOptions.value
     assert(opts.contains("reconnect=1"))
-    assert(opts.contains("reconnect_streamed=1"))
+    assert(!opts.contains("reconnect_streamed"), "gzip playlists of unknown length must end normally")
     assert(opts.contains("reconnect_on_network_error=1"))
     assert(opts.contains("reconnect_on_http_error"))
     assert(opts.contains("reconnect_max_retries=3"))

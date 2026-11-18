@@ -30,9 +30,12 @@ struct PlaybackStallDetector {
 /// and child HTTP contexts inside DASH/HLS demuxers (`demuxer-lavf-o`).
 enum MPVLavfReconnectOptions {
     /// Deliberately omits `reconnect_at_eof` so clean EOF at the end of finite VOD streams ends normally.
+    /// Also omits `reconnect_streamed`: with it FFmpeg treats the normal end of a response of unknown
+    /// length (a gzip-compressed HLS playlist) as a dropped connection, re-requests past the end and
+    /// fails to parse the playlist, so only the audio rendition plays or nothing does.
     /// `reconnect_delay_max=5` + `reconnect_max_retries=3` caps each FFmpeg outage to 3 retries
     /// (`0 s + 1 s + 3 s = 4 s` total backoff sleep before failing, since `1 + 2*3 = 7 > 5`).
-    static let value = "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3"
+    static let value = "reconnect=1,reconnect_on_network_error=1,reconnect_on_http_error=\"429,5xx\",reconnect_delay_max=5,reconnect_max_retries=3"
 }
 
 /// Detects silent mpv hangs (including frozen `time-pos` when `paused-for-cache` and `core-idle`
