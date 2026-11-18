@@ -6,6 +6,9 @@ import Foundation
     var onEnd: (() -> Void)?
     var onFailure: ((Int32) -> Void)?
     var networkIssue: PhonePlaybackNetworkIssue?
+    var failureMessage: String?
+    var contentTypes: [String?] = []
+    func setSourceContentType(_ contentType: String?) { contentTypes.append(contentType) }
     var loads: [(URL, [String: String], Double, Bool)] = []
     var plays = 0
     var pauses = 0

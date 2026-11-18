@@ -16,6 +16,16 @@ struct PhonePlayerSettingsView: View {
                         Text("Fill — crop to fill the screen").tag(PhoneVideoSizing.fill)
                     }
                 }
+                Section {
+                    Picker("Player engine", selection: Binding(get: { session.engineKind }, set: { session.switchEngine(to: $0) })) {
+                        Text("mpv").tag(PhonePlaybackEngineKind.mpv)
+                        Text("AVPlayer").tag(PhonePlaybackEngineKind.avPlayer)
+                    }
+                    .disabled(session.retrying)
+                    .accessibilityIdentifier("phone-player-engine")
+                } footer: {
+                    Text("Switching reopens the video at the current position. Try AVPlayer when a stream won’t seek or shows no picture in mpv. AVPlayer can’t play MKV files or styled (ASS) subtitles. The choice lasts until you close the player; the next video you open starts with mpv.")
+                }
                 Section("Audio") {
                     if !session.mpvState.audioTracks.isEmpty {
                         Picker("Current track", selection: Binding(get: { session.mpvState.selectedAudio ?? session.mpvState.audioTracks.first?.id ?? -1 }, set: { session.selectAudio($0) })) {

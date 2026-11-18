@@ -1,7 +1,14 @@
 import Foundation
 
-enum PhonePlaybackEngineKind: String {
+/// The phone player's decoder. mpv is the default for every session; AVPlayer is a
+/// per-session choice for streams mpv handles badly (Player settings or the failure screen).
+enum PhonePlaybackEngineKind: String, CaseIterable, Identifiable {
     case mpv = "mpv"
+    case avPlayer = "avplayer"
+
+    var id: String { rawValue }
+    var label: String { self == .mpv ? "mpv" : "AVPlayer" }
+    var other: Self { self == .mpv ? .avPlayer : .mpv }
 }
 
 struct PhonePlaybackTrack: Equatable, Identifiable {
@@ -23,7 +30,7 @@ struct PhoneExternalSubtitle: Equatable {
     var mpvPath: String { url.isFileURL ? url.path : url.absoluteString }
 }
 
-struct PhonePlaybackState {
+struct PhonePlaybackState: Equatable {
     var position: Double = 0
     var duration: Double = 0
     var paused = true
@@ -34,6 +41,9 @@ struct PhonePlaybackState {
     var selectedAudio: Int?
     var selectedSubtitle: Int?
     var speed = 1.0
+    /// Subtitle text the engine wants drawn over the video (AVPlayer's sidecar subtitles);
+    /// empty when the engine renders subtitles itself.
+    var overlayCaption = ""
 }
 
 /// Keep only fixed categories from decoder logs. Raw FFmpeg messages can include
@@ -72,6 +82,8 @@ enum PhonePlaybackNetworkIssue: Equatable {
 @MainActor protocol PhoneAlternativePlaybackEngine: AnyObject {
     var failureContext: String { get }
     var networkIssue: PhonePlaybackNetworkIssue? { get }
+    /// A ready-made failure message; nil lets the session describe the numeric code as an mpv error.
+    var failureMessage: String? { get }
     var onState: ((PhonePlaybackState) -> Void)? { get set }
     var onEnd: (() -> Void)? { get set }
     var onFailure: ((Int32) -> Void)? { get set }
@@ -85,12 +97,16 @@ enum PhonePlaybackNetworkIssue: Equatable {
     func selectSubtitle(_ id: Int?)
     /// Subtitle files to add whenever a file loads, including after a retry.
     func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle])
+    /// The source's MIME type, for an engine that registers the stream with the loopback proxy itself.
+    func setSourceContentType(_ contentType: String?)
     func close()
 }
 
 extension PhoneAlternativePlaybackEngine {
     var failureContext: String { "playback" }
     var networkIssue: PhonePlaybackNetworkIssue? { nil }
+    var failureMessage: String? { nil }
+    func setSourceContentType(_ contentType: String?) {}
     func setSpeed(_ speed: Double) {}
     func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) {}
 }

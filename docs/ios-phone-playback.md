@@ -1,11 +1,56 @@
 # iOS local playback
 
-The phone uses standard MPVKit 1.0.0 for all local video/audio playback: website
-sessions, browser-detected streams, imported files and completed downloads.
-MP4, MKV, HLS, DASH, audio and opaque URLs all use the same decoder; there is no
-AVPlayer fallback or **Try with mpv** action. A missing mpv engine fails explicitly.
-Retries preserve the selected route, headers and current position. Original URL
-and MIME information remain available for diagnostics, not engine selection.
+The phone uses standard MPVKit 1.0.0 for local video/audio playback by default:
+website sessions, browser-detected streams, imported files and completed downloads.
+MP4, MKV, HLS, DASH, audio and opaque URLs all start on mpv. Apple's AVPlayer is a
+second engine the user can switch to (see [Player engine](#player-engine)); PlayBridge
+never picks it by format and never falls back to it on its own. A missing engine fails
+explicitly. Retries preserve the selected route, headers, engine and current position.
+Original URL and MIME information remain available for diagnostics.
+
+## Player engine
+
+**Player settings → Player engine** switches the open player between **mpv** and
+**AVPlayer**. When playback fails, the failure screen also offers **Try with AVPlayer**
+(or **Try with mpv** on AVPlayer). Switching prepares the selected route again, as
+**Try again** does, and reopens the video at the current position; a playing video
+keeps playing and a paused one stays paused.
+
+The choice lasts for the open player: a website queue's next episode and a watch-party
+replacement keep it, and the next video opened starts on mpv again. It is not saved
+as a preference, because AVPlayer suits particular streams (for example an HLS video
+that mpv opens as live and can't seek, or a stream mpv shows without a picture) and
+would be the weaker choice for most others.
+
+With AVPlayer:
+
+- Streams that need request headers (cookies, referer, user agent) and plain-HTTP
+  streams play through the phone's loopback proxy (`StreamRouteService.localPlayback`),
+  which sends the headers on every request, including HLS segments. AVPlayer itself
+  gets only a `127.0.0.1` address. Streams already routed **Via phone** or website
+  media are already on loopback. If the proxy isn't available, playback fails with a
+  message suggesting mpv.
+- The stream's own audio and subtitle tracks come from AVFoundation's media
+  selection, with their languages, so the remembered audio/subtitle languages apply
+  as with mpv. Embedded subtitles use the phone's subtitle style where AVFoundation
+  allows it (size, generic font family, background, edge; custom fonts don't apply).
+- Subtitles ticked in the cast sheet (SRT/WebVTT files) and website subtitles are
+  drawn over the video with the same caption view, style and timing offset as on
+  mpv. The timing offset applies only to these overlay captions, not to subtitles
+  inside the stream.
+- Fit/Fill, speed, seeking, the queue, website progress and watch-party controls work
+  as on mpv. AVPlayer pauses in the background and on audio interruptions, keeping the
+  user's pause choice, and does not offer AirPlay or Picture in Picture from the
+  phone player.
+- Not supported: MKV files (refused at once, with a message suggesting mpv), styled
+  ASS/SSA subtitle files (left out of the subtitle list), bitmap subtitles, DASH,
+  and codecs Apple doesn't decode. These fail with a message suggesting mpv.
+- AVFoundation is part of iOS; it adds no third-party code or licence notice.
+
+Debug-build `[PhonePlayback]` lines for AVPlayer show the host and file extension,
+header names, whether loopback was used, track counts and languages, and error domains
+and codes. AVPlayer's error-log comments and URIs are never printed; they are only
+classified into the fixed TLS/HTTP/network categories used in diagnostics.
 
 MPVKit is pinned with Swift Package Manager in the phone project. The Apple TV
 pins the same version in its own project. Both link the standard product,
