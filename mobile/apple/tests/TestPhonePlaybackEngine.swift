@@ -14,6 +14,8 @@ import Foundation
     var selectedSubtitle: Int?
     var selectedAudio: Int?
     var configurations: [PhonePlayerOptions] = []
+    var externalSubtitles: [PhoneExternalSubtitle] = []
+    func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) { externalSubtitles = subtitles }
     func configure(_ options: PhonePlayerOptions) { configurations.append(options) }
     func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool) {
         loads.append((url, headers, resume, autoplay))

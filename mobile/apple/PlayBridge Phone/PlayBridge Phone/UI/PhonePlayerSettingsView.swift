@@ -43,7 +43,7 @@ struct PhonePlayerSettingsView: View {
                             }
                         }
                     }
-                    Picker("Remembered language", selection: Binding(get: {
+                    Picker("Preferred language", selection: Binding(get: {
                         session.preferences.subtitlesEnabled ? (session.preferences.subtitleLanguage ?? "auto") : "off"
                     }, set: { value in
                         session.setPreferredSubtitleLanguage(value == "off" || value == "auto" ? nil : value, enabled: value != "off")
@@ -87,10 +87,10 @@ struct PhonePlayerSettingsView: View {
     private var languages: [String] {
         let tags = session.mpvState.audioTracks.map(\.language) + session.mpvState.subtitleTracks.map(\.language)
             + session.websiteSubtitleLanguages + [session.preferences.audioLanguage, session.preferences.subtitleLanguage]
-        return Array(Set(tags.compactMap(PhonePlayerPreferences.languageCode) + ["en", "hi", "es", "fr", "de", "pt", "it", "ja", "ko", "zh", "ar", "ru"]))
+        return Array(Set(tags.compactMap(PhonePlayerPreferences.languageCode) + PhoneLanguageChoices.common))
             .sorted { languageName($0) < languageName($1) }
     }
-    private func languageName(_ code: String) -> String { Locale.current.localizedString(forIdentifier: code) ?? code }
+    private func languageName(_ code: String) -> String { PhoneLanguageChoices.name(code) }
     private var languageChoices: some View {
         ForEach(languages, id: \.self) { code in Text(languageName(code)).tag(code) }
     }

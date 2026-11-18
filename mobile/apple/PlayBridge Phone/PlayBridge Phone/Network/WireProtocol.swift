@@ -74,6 +74,19 @@ enum WireProtocol {
 
     // MARK: - Commands
 
+    /// The phone's preferred audio and subtitle languages, sent with each cast so the TV opens
+    /// the matching tracks (`PlayPayload.preferred_*_language`). Two-letter codes; nil sends nothing.
+    struct CastLanguages: Equatable {
+        var audio: String?
+        var subtitles: String?
+        static let none = CastLanguages()
+
+        func apply(to item: inout [String: Any]) {
+            if let audio, !audio.isEmpty { item["preferredAudioLanguage"] = audio }
+            if let subtitles, !subtitles.isEmpty { item["preferredSubtitleLanguage"] = subtitles }
+        }
+    }
+
     /// A single video is just a one-item playlist — there is no standalone `play` command
     /// (see the note in `IncomingMessage.kt::createSingleVideoCommandJson`).
     static func singleVideoCommand(
@@ -86,6 +99,7 @@ enum WireProtocol {
         headers: [String: String] = [:],
         detectedBy: String? = nil,
         playerMode: String? = nil,
+        languages: CastLanguages = .none,
         displayDurationMs: Int? = nil,
         itemId: String? = nil,
         visualMetadata: [String: Any]? = nil,
@@ -103,6 +117,7 @@ enum WireProtocol {
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
+        languages.apply(to: &item)
         let payload: [String: Any] = ["items": [item], "startIndex": 0]
         return envelope(action: "playlist", payload: payload, requestID: requestID ?? UUID().uuidString)
     }
@@ -117,6 +132,7 @@ enum WireProtocol {
         headers: [String: String] = [:],
         detectedBy: String? = nil,
         playerMode: String? = nil,
+        languages: CastLanguages = .none,
         playbackId: String? = nil,
         useQueueV1: Bool = false,
         displayDurationMs: Int? = nil,
@@ -136,6 +152,7 @@ enum WireProtocol {
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
+        languages.apply(to: &item)
         var payload: [String: Any] = useQueueV1 ? ["items": [item]] : ["item": item]
         if let playbackId { payload["ifPlaybackId"] = playbackId }
         return envelope(

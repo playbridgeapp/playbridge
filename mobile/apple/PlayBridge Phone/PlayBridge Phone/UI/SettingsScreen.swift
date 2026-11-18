@@ -35,7 +35,8 @@ struct SettingsScreen: View {
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var store: BrowserStore
-    @ObservedObject private var subtitleStyle = SubtitleStyleStore.shared
+    /// Observed so the Audio & subtitles summary follows language changes.
+    @AppStorage(PhonePlayerPreferences.key) private var playerPreferences: Data?
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
     @AppStorage("cast_save_history") private var saveHistory = true
     @AppStorage("stream_route_default") private var route = StreamRoute.direct.rawValue
@@ -112,7 +113,8 @@ struct SettingsScreen: View {
             return [autoConnect ? "Auto-connect" : "Auto-connect off",
                     saveHistory ? "Cast history saved" : "Cast history off"].joined(separator: " · ")
         case .subtitles:
-            return "Subtitles: " + SubtitleStyleLabels.summary(subtitleStyle.style)
+            _ = playerPreferences
+            return PhoneLanguageChoices.summary(PhonePlayerPreferences.load(from: .standard))
         case .casting:
             return "Videos play " + (StreamRoute(rawValue: route) ?? .direct).label.lowercased()
         case .browser:
@@ -165,9 +167,31 @@ private struct AudioSubtitleSettingsPage: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @ObservedObject var tv: TvSubtitleStyleController
     @ObservedObject private var phone = SubtitleStyleStore.shared
+    @State private var languages = PhonePlayerPreferences.load(from: .standard)
 
     var body: some View {
         Form {
+            Section {
+                Picker("Preferred audio language", selection: Binding(get: { languages.audioLanguage ?? "" }, set: { code in
+                    updateLanguages { $0.audioLanguage = code.isEmpty ? nil : code }
+                })) {
+                    Text("Source default").tag("")
+                    languageChoices(including: languages.audioLanguage)
+                }
+                Picker("Preferred subtitle language", selection: Binding(get: {
+                    languages.subtitlesEnabled ? (languages.subtitleLanguage ?? "first") : ""
+                }, set: { value in
+                    updateLanguages { $0.subtitlesEnabled = !value.isEmpty; $0.subtitleLanguage = value.isEmpty || value == "first" ? nil : value }
+                })) {
+                    Text("Off").tag("")
+                    Text("First available").tag("first")
+                    languageChoices(including: languages.subtitleLanguage)
+                }
+            } header: {
+                Text("Languages")
+            } footer: {
+                Text("Used by the phone player, to tick subtitles in the cast sheet and when casting to a TV. Choosing a track in the player changes them too.")
+            }
             Section {
                 row("Phone player", SubtitleStyleLabels.summary(phone.style), .phone)
                 row(vm.pairedDevice.map { "TV · \($0.name)" } ?? "TV", tvSummary, .tv)
@@ -176,6 +200,20 @@ private struct AudioSubtitleSettingsPage: View {
             } footer: {
                 Text("The phone player and your TV each keep their own style. The TV applies changes right away.")
             }
+        }
+    }
+
+    private func updateLanguages(_ change: (inout PhonePlayerPreferences) -> Void) {
+        var next = PhonePlayerPreferences.load(from: .standard)
+        change(&next)
+        next.save(to: .standard)
+        languages = PhonePlayerPreferences.load(from: .standard)
+    }
+
+    private func languageChoices(including current: String?) -> some View {
+        let codes = Set(PhoneLanguageChoices.common + [current].compactMap { $0 })
+        return ForEach(codes.sorted { PhoneLanguageChoices.name($0) < PhoneLanguageChoices.name($1) }, id: \.self) { code in
+            Text(PhoneLanguageChoices.name(code)).tag(code)
         }
     }
 

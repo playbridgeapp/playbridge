@@ -31,7 +31,7 @@ xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.
  "$source_dir/UI/PhoneMediaThumbnail.swift" "$source_dir/UI/PhoneFilesModel.swift" "$source_dir/UI/PhoneQueueWindow.swift" "$source_dir/UI/PhoneFilesScreen.swift" "$source_dir/UI/PhoneMediaDetail.swift" \
  "$source_dir/UI/CollectionDetailScreen.swift" "$source_dir/UI/Theme.swift" \
  "$source_dir/Network/LocalFileServer.swift" "$source_dir/Network/LocalAudioMetadata.swift" "$source_dir/Network/PhoneQueueCoordinator.swift" "$source_dir/Network/StreamRouteService.swift" \
- "$source_dir/Network/PhonePlayerPreferences.swift" "$source_dir/Network/PhonePlaybackEngine.swift" "$source_dir/Network/PlaybackSession.swift" \
+ "$source_dir/Network/PhonePlayerPreferences.swift" "$source_dir/Network/PhonePlaybackEngine.swift" "$source_dir/Network/PlaybackSession.swift" "$source_dir/Subtitles/PhoneSubtitleDownload.swift" "$source_dir/Subtitles/SubtitleContentCheck.swift" "$source_dir/Network/PhonePlaybackLog.swift" \
  "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
  "$repo_root/mobile/apple/tests/PhoneMediaLibraryTests.swift" -o "$app/LibraryChecks"
 if [[ "${1:-}" == --build-only ]]; then

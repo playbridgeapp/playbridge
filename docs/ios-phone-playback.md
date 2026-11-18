@@ -41,6 +41,28 @@ registration lifetimes are unchanged; no route silently becomes Direct.
 - Configure TV (Play on) and Settings → Audio & subtitles edit a connected TV's style
   (`subtitle_style_v1`) and send it fonts in acknowledged chunks
   (`subtitle_font_v1`, see `protocol/docs/WSS_FLOW.md`). Font bytes are never logged.
+- The preferred audio and subtitle languages are also in Settings → Audio & subtitles,
+  and choosing a track in the player updates them. Video casts send them to the TV
+  (`preferredAudioLanguage` / `preferredSubtitleLanguage`, two-letter codes); the
+  Android TV honours them, the Apple TV ignores them for now.
+- Subtitles ticked in the cast sheet reach the phone player too: the phone downloads each
+  with its own headers (8 MB cap, content checked, HLS subtitle playlists left out), stores
+  it as a temporary UTF-8 file removed when the player closes, and mpv adds it with an
+  asynchronous `sub-add` once the file loads, again after a retry. The first ticked one is on unless the user
+  picks another track; one that can't be prepared is left out.
+- Debug builds print a play-on-phone trace (`[PhonePlayback]`, `Network/PhonePlaybackLog.swift`):
+  the cast sheet's stream candidates and choice, routing, ticked subtitles, mpv's container,
+  timeline, video output and tracks every few seconds, and mpv's info/warning messages.
+  Addresses become host and file extension, headers only names, and any message mentioning
+  a cookie, token, key or password is dropped. Release builds print nothing. Read it with
+  `xcrun devicectl device process launch --console … | grep '^\[PhonePlayback\]'`.
+- Detected subtitles are checked as soon as they're detected, from their first 8 KB:
+  error pages, JSON and WebVTT thumbnail sprites are hidden, UTF-16 files are decoded,
+  and the dialogue's language is identified on the phone. The cast sheet lists the
+  preferred language first, then the phone's, and ticks the preferred one (the plain
+  version over forced or SDH) until the user changes the ticks. A language named in a
+  subtitle's title or file name (`English`, `movie.en.vtt`) is used when the dialogue
+  doesn't settle it. Checked with `run-subtitle-language-checks.sh`.
 - Only display choices and normalized language codes are persisted, never URLs,
   track labels or credentials. Selected languages are restored after track discovery
   on retries/episode changes, with website sidecar fallback when available. Missing
@@ -74,6 +96,7 @@ From the repository root:
 
 ```sh
 bash mobile/apple/tests/run-phone-player-features-checks.sh
+bash mobile/apple/tests/run-subtitle-language-checks.sh
 bash mobile/apple/tests/run-phone-engine-checks.sh
 bash mobile/apple/tests/run-website-playback-checks.sh
 bash mobile/apple/tests/run-playback-error-checks.sh

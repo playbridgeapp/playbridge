@@ -759,7 +759,7 @@ struct RemoteControlView: View {
             canAdd: !vm.isExternalReceiver && !isAudio && !isImage && canAddSubtitle,
             offset: vm.coordinator.subtitleOffsetMs, airPlay: vm.isAirPlay, preparing: vm.isAirPlay && vm.airPlay.preparing,
             detector: detector, detected: detector?.videos.filter {
-                $0.isSubtitle && (policy.isLegacy || policy.tracks.contains("subtitle_resource_add") || VideoDetector.subtitleHeaders(for: $0).isEmpty)
+                detector?.isUsableSubtitle($0) == true && (policy.isLegacy || policy.tracks.contains("subtitle_resource_add") || VideoDetector.subtitleHeaders(for: $0).isEmpty)
             } ?? [], destinationID: vm.destinationID,
             select: { id in
                 guard destination == vm.destinationID, session == vm.ws.capabilitySessionID else { return }
