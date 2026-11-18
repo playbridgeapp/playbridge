@@ -105,6 +105,9 @@ jobs:
       - name: Subtitle style and fonts
         run: bash mobile/apple/tests/run-subtitle-style-checks.sh
 
+      - name: Subtitle checks and languages
+        run: bash mobile/apple/tests/run-subtitle-language-checks.sh
+
       - name: Apple proxy upstream shim
         run: bash mobile/apple/tests/run-apple-upstream-checks.sh
 

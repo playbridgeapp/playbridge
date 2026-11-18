@@ -56,3 +56,17 @@ struct PhonePlayerOptions: Equatable {
     var preferences = PhonePlayerPreferences()
     var subtitleDelay = 0.0
 }
+
+/// Languages offered for the preferred audio and subtitle language, in the player and in Settings.
+enum PhoneLanguageChoices {
+    static let common = ["en", "hi", "es", "fr", "de", "pt", "it", "ja", "ko", "zh", "ar", "ru"]
+
+    static func name(_ code: String) -> String { Locale.current.localizedString(forIdentifier: code) ?? code }
+
+    /// "Audio: Source default · Subtitles: English", for the Settings list.
+    static func summary(_ preferences: PhonePlayerPreferences) -> String {
+        let audio = preferences.audioLanguage.map(name) ?? "Source default"
+        let subtitles = preferences.subtitlesEnabled ? (preferences.subtitleLanguage.map(name) ?? "First available") : "Off"
+        return "Audio: \(audio) · Subtitles: \(subtitles)"
+    }
+}

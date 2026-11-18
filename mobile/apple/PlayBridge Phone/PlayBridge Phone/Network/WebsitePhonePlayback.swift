@@ -60,6 +60,10 @@ import Foundation
 
     private static func prepare(_ item: [String: Any]) async throws -> RoutedStream {
         guard (item["mediaKind"] as? String ?? "video") != "image" else { throw PageCastError(code: "unsupported_target") }
+        PhonePlaybackLog.log("website item: \(PhonePlaybackLog.describe(item["url"] as? String ?? "")) "
+            + "type=\(item["contentType"] as? String ?? "none") kind=\(item["mediaKind"] as? String ?? "video") "
+            + "headers=\(PhonePlaybackLog.headerNames(item["headers"] as? [String: String] ?? [:])) "
+            + "subtitles=\((item["subtitles"] as? [String] ?? []).count)+\((item["subtitleResources"] as? [[String: Any]] ?? []).count)")
         return try await StreamRouteService.website(allowedPrivateOrigins: allowedPrivateOrigins(item), local: true)
             .prepareWebsite(url: item["url"] as! String, headers: item["headers"] as? [String: String] ?? [:],
                             contentType: item["contentType"] as? String)
@@ -151,12 +155,14 @@ import Foundation
             let resource = resources.first { $0["url"] as? String == url }
             return (url, resource?["label"] as? String ?? resource?["language"] as? String ?? "Subtitle \(offset + 1)")
         }
+        PhonePlaybackLog.log("website subtitles: \(session.websiteSubtitleTracks.count) track(s) languages=\(session.websiteSubtitleLanguages.map { $0 ?? "?" })")
         session.applyPreferredTracks()
     }
     private func selectSubtitle(_ selected: Int?) {
         if selected != nil { session.alternativeEngine?.selectSubtitle(nil) }
         subtitleTask?.cancel(); cues = []; session.websiteCaption = ""; session.websiteSubtitleError = nil
         session.websiteSubtitleIndex = selected
+        PhonePlaybackLog.log("website subtitle selected: \(selected.map(String.init) ?? "off")")
         guard let selected, session.websiteSubtitleTracks.indices.contains(selected) else { return }
         let raw = session.websiteSubtitleTracks[selected].url
         let resource = (items[index]["subtitleResources"] as? [[String: Any]] ?? []).first { $0["url"] as? String == raw }
@@ -181,10 +187,13 @@ import Foundation
                 }
                 try Task.checkCancellation()
                 let parsed = WebsiteCaptionParser.parse(String(data: data, encoding: .utf8) ?? "")
+                PhonePlaybackLog.log("website subtitle fetched: \(PhonePlaybackLog.describe(raw)) HTTP \(response.statusCode) "
+                    + "bytes=\(data.count) cues=\(parsed.count) starts=\(String(data: data.prefix(12), encoding: .utf8).map { PhonePlaybackLog.redact($0) ?? "?" } ?? "binary")")
                 guard !parsed.isEmpty else { throw PageCastError(code: "invalid_request") }
                 guard !closed else { return }
                 cues = parsed; tick()
             } catch {
+                PhonePlaybackLog.log("website subtitle failed: \(PhonePlaybackLog.describe(raw)) \(type(of: error))")
                 if !Task.isCancelled { session.websiteSubtitleError = "Couldn’t load this subtitle. Choose another track." }
             }
         }

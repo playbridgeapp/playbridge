@@ -59,6 +59,8 @@ final class VideoDetector: ObservableObject {
     private var seen = Set<String>()
     private var subtitlePage = UUID()
     private var subtitleTasks: [String: Task<Void, Never>] = [:]
+    /// Content and language checks of detected subtitles, by subtitle id.
+    private var subtitleChecks: [String: Task<Void, Never>] = [:]
     private var subtitleMessages: [String: [String: Any]] = [:]
     private var localSubtitles: [String: (url: URL, stop: () -> Void)] = [:]
     private let publishSubtitle: (String, String) async throws -> (url: URL, stop: () -> Void)
@@ -74,6 +76,7 @@ final class VideoDetector: ObservableObject {
     private var revisions: [String: UUID] = [:]
     private let loadQualities: (DetectedVideo) async -> StreamManifestInfo
     private let loadThumbnail: (DetectedVideo) async -> UIImage?
+    private let fetchSubtitle: (DetectedVideo) async -> SubtitleFetchResult
 
     init(
         loadQualities: @escaping (DetectedVideo) async -> StreamManifestInfo = { video in
@@ -90,9 +93,13 @@ final class VideoDetector: ObservableObject {
         now: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) },
         publishSubtitle: @escaping (String, String) async throws -> (url: URL, stop: () -> Void) = {
             try await AirPlaySubtitleService.publishDetected(text: $0, format: $1)
+        },
+        fetchSubtitle: @escaping (DetectedVideo) async -> SubtitleFetchResult = { video in
+            await SubtitlePreview.fetch(url: video.url, headers: VideoDetector.mediaHeaders(for: video))
         }
     ) {
         self.now = now
+        self.fetchSubtitle = fetchSubtitle
         self.publishSubtitle = publishSubtitle
         self.loadQualities = loadQualities
         self.loadThumbnail = loadThumbnail
@@ -100,6 +107,7 @@ final class VideoDetector: ObservableObject {
 
     deinit {
         for task in subtitleTasks.values { task.cancel() }
+        for task in subtitleChecks.values { task.cancel() }
         for publication in localSubtitles.values { publication.stop() }
         for task in running.values { task.cancel() }
     }
@@ -118,6 +126,15 @@ final class VideoDetector: ObservableObject {
         thumbnailStates[video.id] = nil
         if video.isSubtitle || video.isAudio || video.isImage {
             subtitlePreviews[video.id] = nil
+            // Check subtitles straight away, so ones that aren't subtitles never show up and the
+            // cast sheet already knows their languages (#512).
+            if video.isSubtitle {
+                subtitleChecks[video.id]?.cancel()
+                subtitleChecks[video.id] = Task { [weak self] in
+                    await self?.loadSubtitlePreview(for: video)
+                    await MainActor.run { _ = self?.subtitleChecks.removeValue(forKey: video.id) }
+                }
+            }
             return
         }
         if video.kind == .hls || video.kind == .dash {
@@ -128,25 +145,41 @@ final class VideoDetector: ObservableObject {
         startPendingWork()
     }
 
+    /// Subtitles that are still candidates: not found to be something else once checked.
+    func isUsableSubtitle(_ video: DetectedVideo) -> Bool {
+        guard video.isSubtitle else { return false }
+        if case .invalid = subtitlePreviews[video.id] { return false }
+        return true
+    }
+
+    /// The subtitle's language: detected from its dialogue, else named in its title or file name.
+    func subtitleLanguage(_ video: DetectedVideo) -> String? {
+        SubtitleLanguages.hint(for: video, detected: subtitlePreviews[video.id]?.languageCode)
+    }
+
     @MainActor
     func loadSubtitlePreview(for video: DetectedVideo) async {
         guard video.isSubtitle, subtitlePreviews[video.id] == nil else { return }
         let revision = revisions[video.id]
         subtitlePreviews[video.id] = .loading
-        let sample = await SubtitlePreview.fetch(url: video.url, headers: Self.mediaHeaders(for: video))
-        let language = if let sample {
-            await Task.detached(priority: .utility) {
-                SubtitleLanguageDetector.detect(sample.languageText)
+        let result = await fetchSubtitle(video)
+        var language: (code: String, name: String)?
+        if case .sample(let sample) = result {
+            language = await Task.detached(priority: .utility) {
+                SubtitleLanguageDetector.detectLanguage(sample.languageText)
             }.value
-        } else {
-            nil as String?
         }
         guard revisions[video.id] == revision else { return }
         if Task.isCancelled {
             subtitlePreviews[video.id] = nil
-        } else if let sample {
-            subtitlePreviews[video.id] = .ready(preview: sample.preview, language: language)
-        } else {
+            return
+        }
+        switch result {
+        case .sample(let sample):
+            subtitlePreviews[video.id] = .ready(preview: sample.preview, language: language?.name, code: language?.code)
+        case .invalid:
+            subtitlePreviews[video.id] = .invalid
+        case .failed:
             subtitlePreviews[video.id] = .unavailable
         }
     }
@@ -371,6 +404,8 @@ final class VideoDetector: ObservableObject {
         subtitlePage = UUID()
         for task in subtitleTasks.values { task.cancel() }
         subtitleTasks = [:]
+        for task in subtitleChecks.values { task.cancel() }
+        subtitleChecks = [:]
         subtitleMessages = [:]
         for publication in localSubtitles.values { publication.stop() }
         localSubtitles = [:]

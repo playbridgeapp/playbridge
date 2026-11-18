@@ -78,6 +78,9 @@ struct CastSheet: View {
     @State private var selectedVideo: DetectedVideo?
     @State private var selectedQuality: VideoQuality?
     @State private var attachedSubtitles = Set<String>()
+    /// The user ticked or unticked a subtitle; the preferred one is no longer ticked for them.
+    @State private var subtitlesTouched = false
+    @State private var playerPreferences = PhonePlayerPreferences.load(from: .standard)
     @State private var castAction = "play"
     @State private var browseUrl = ""
     @State private var selectedTab: CastMediaTab = .video
@@ -105,7 +108,24 @@ struct CastSheet: View {
     private var streams: [DetectedVideo] { videos.filter(\.isVideo) }
     private var audio: [DetectedVideo] { videos.filter(\.isAudio).sorted { $0.timestamp > $1.timestamp } }
     private var images: [DetectedVideo] { videos.filter(\.isImage).sorted { $0.timestamp > $1.timestamp } }
-    private var subtitles: [DetectedVideo] { SubtitleOrdering.newestFirst(videos + extraSubtitles) }
+    /// Checked subtitles: the preferred language first, then the phone's language, newest first in each.
+    private var subtitles: [DetectedVideo] {
+        let newest = SubtitleOrdering.newestFirst(videos + extraSubtitles).filter(detector.isUsableSubtitle)
+        return SubtitleLanguages.rank(newest, preferred: preferredSubtitleLanguage,
+                                      device: Locale.current.language.languageCode?.identifier,
+                                      language: detector.subtitleLanguage)
+    }
+    private var preferredSubtitleLanguage: String? {
+        playerPreferences.subtitlesEnabled ? playerPreferences.subtitleLanguage : nil
+    }
+    /// Ticked for the user when a preferred subtitle language is set, until they change the ticks.
+    private var preferredSubtitle: DetectedVideo? {
+        SubtitleLanguages.preferredPick(subtitles, preferred: preferredSubtitleLanguage, language: detector.subtitleLanguage)
+    }
+    private func tickPreferredSubtitle() {
+        guard !subtitlesTouched, !vm.isExternalReceiver else { return }
+        attachedSubtitles = preferredSubtitle.map { [$0.url] } ?? []
+    }
     private var media: [DetectedVideo] { streams + audio + images }
     private var preferredMedia: DetectedVideo? { sortedStreams(streams).first ?? audio.first ?? images.first }
 
@@ -293,7 +313,10 @@ struct CastSheet: View {
                 if !partySelected && (media.isEmpty || tab.isCastingBlocked) && vm.supportsBrowser {
                     castAction = "browse"
                 }
+                playerPreferences = PhonePlayerPreferences.load(from: .standard)
+                tickPreferredSubtitle()
             }
+            .onChange(of: preferredSubtitle?.url) { _ in tickPreferredSubtitle() }
             .onChange(of: videos) { current in
                 if let selectedVideo, !current.contains(where: { $0.id == selectedVideo.id }) {
                     self.selectedVideo = nil
@@ -701,6 +724,7 @@ struct CastSheet: View {
             } else {
                 ForEach(subtitles) { sub in
                     Button {
+                        subtitlesTouched = true
                         if attachedSubtitles.contains(sub.url) {
                             attachedSubtitles.remove(sub.url)
                         } else {
@@ -718,7 +742,7 @@ struct CastSheet: View {
                                         .foregroundColor(Theme.onSurface)
                                         .lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    if case .ready(_, let language) = detector.subtitlePreviews[sub.id] {
+                                    if case .ready(_, let language, _) = detector.subtitlePreviews[sub.id] {
                                         Text(language.map { "Likely \($0)" } ?? "Language unknown")
                                             .font(Theme.font(.caption))
                                             .foregroundColor(language == nil ? Theme.onSurfaceVariant : Theme.primary)
@@ -739,13 +763,13 @@ struct CastSheet: View {
                                         .font(Theme.font(.caption))
                                         .foregroundColor(Theme.onSurfaceVariant)
                                         .italic()
-                                case .ready(let preview, _):
+                                case .ready(let preview, _, _):
                                     Text(preview)
                                         .font(Theme.font(.caption))
                                         .foregroundColor(Theme.primary)
                                         .lineLimit(2)
                                         .italic()
-                                case .unavailable, .none:
+                                case .unavailable, .invalid, .none:
                                     EmptyView()
                                 }
                             }
@@ -807,6 +831,7 @@ struct CastSheet: View {
     }
 
     private func addSubtitleSelection(url: String, title: String? = nil, type: String?, local: Bool = false) {
+        subtitlesTouched = true
         guard !subtitles.contains(where: { $0.url == url }) else {
             attachedSubtitles.insert(url)
             return
@@ -826,9 +851,18 @@ struct CastSheet: View {
         playbackPreparationID = attempt
         let route = streamRoute
         let configuration = proxyConfiguration
+        let ticked = video.isVideo ? subtitles.filter { attachedSubtitles.contains($0.url) } : []
+        for (index, candidate) in sortedStreams(streams).enumerated() {
+            PhonePlaybackLog.log("candidate \(index): kind=\(candidate.kind) type=\(candidate.contentType ?? "none") detectedBy=\(candidate.detectedBy) "
+                + "\(PhonePlaybackLog.describe(candidate.url)) qualities=\(detector.qualities[candidate.id]?.count ?? 0) role=\(detector.manifests[candidate.id].map { String(describing: $0.hlsRole) } ?? "unchecked") chosen=\(candidate.id == video.id)")
+        }
+        PhonePlaybackLog.log("play on phone: kind=\(video.kind) type=\(video.contentType ?? "none") detectedBy=\(video.detectedBy) "
+            + "\(PhonePlaybackLog.describe(url)) quality=\(selectedVideo?.id == video.id ? selectedQuality?.label ?? "auto" : "auto") "
+            + "route=\(route.rawValue) headers=\(PhonePlaybackLog.headerNames(VideoDetector.mediaHeaders(for: video))) ticked-subtitles=\(ticked.count)")
         playbackPreparation = Task { @MainActor in
             defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
             do {
+                let (externalSubtitles, subtitleFiles) = await prepareSubtitlesForPhone(ticked)
                 let prepare: () async throws -> RoutedStream = {
                     try await StreamRouteService.localPlayback.prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
                         contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType,
@@ -837,7 +871,9 @@ struct CastSheet: View {
                 let media = try await prepare()
                 try Task.checkCancellation()
                 guard playbackPreparationID == attempt, tab.allowsCasting(url) else { return }
-                let session = PlaybackSession(media: media, route: route, contentType: video.contentType, prepare: prepare)
+                let session = PlaybackSession(media: media, route: route, contentType: video.contentType,
+                                              externalSubtitles: externalSubtitles, subtitleFiles: subtitleFiles,
+                                              prepare: prepare)
                 var presentation = PlayerItem(session: session)
 #if DEBUG
                 presentation.report = { [weak session] in session?.diagnosticsReport() ?? "PlayBridge native playback diagnostics\nSession closed" }
@@ -848,6 +884,36 @@ struct CastSheet: View {
                 playbackError = error.localizedDescription
             }
         }
+    }
+
+    /// Ticked subtitles for the phone player, downloaded by the phone with their own headers.
+    /// One that can't be downloaded or isn't subtitles is left out rather than stopping playback.
+    private func prepareSubtitlesForPhone(_ ticked: [DetectedVideo]) async -> ([PhoneExternalSubtitle], [URL]) {
+        var subtitles: [PhoneExternalSubtitle] = []
+        var files: [URL] = []
+        for subtitle in ticked {
+            PhonePlaybackLog.log("ticked subtitle: \(PhonePlaybackLog.describe(subtitle.url)) type=\(subtitle.contentType ?? "none") "
+                + "detectedBy=\(subtitle.detectedBy) language=\(detector.subtitleLanguage(subtitle) ?? "?") playlist=\(Self.isPlaylistSubtitle(subtitle))")
+            guard !Self.isPlaylistSubtitle(subtitle) else { continue }
+            switch await PhoneSubtitleDownload.download(url: subtitle.url, headers: VideoDetector.subtitleHeaders(for: subtitle)) {
+            case .success(let file):
+                PhonePlaybackLog.log("ticked subtitle: downloaded as .\(file.pathExtension)")
+                files.append(file)
+                subtitles.append(PhoneExternalSubtitle(url: file, title: subtitle.displayTitle,
+                                                       language: detector.subtitleLanguage(subtitle)))
+            case .failure(let reason):
+                PhonePlaybackLog.log("ticked subtitle: left out (\(reason.rawValue))")
+            }
+        }
+        return (subtitles, files)
+    }
+
+    /// An HLS subtitle playlist: mpv would download every segment before playing, so the phone
+    /// player leaves it out. TVs still receive it.
+    static func isPlaylistSubtitle(_ subtitle: DetectedVideo) -> Bool {
+        let path = URL(string: subtitle.url)?.path.lowercased() ?? ""
+        let type = subtitle.contentType?.lowercased() ?? ""
+        return path.hasSuffix(".m3u8") || path.hasSuffix(".m3u") || type.contains("mpegurl")
     }
 
     private func sendAction() {
@@ -1024,7 +1090,7 @@ struct DetectedSubtitlePreview: View {
 
     var body: some View {
         Group {
-            if case .ready(let preview, let language) = detector.subtitlePreviews[subtitle.id] {
+            if case .ready(let preview, let language, _) = detector.subtitlePreviews[subtitle.id] {
                 if let language { Text("Likely \(language)").foregroundColor(Theme.primary) }
                 Text(preview).lineLimit(2).foregroundColor(Theme.onSurfaceVariant)
             }

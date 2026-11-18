@@ -6,7 +6,7 @@ work="$(mktemp -d /tmp/playbridge-phone-player-features.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 swiftc -parse-as-library \
   "$phone/Network/PhonePlayerPreferences.swift" "$phone/Network/PhonePlaybackEngine.swift" \
-  "$phone/Network/StreamRouteService.swift" "$phone/Network/PlaybackSession.swift" \
+  "$phone/Network/StreamRouteService.swift" "$phone/Network/PlaybackSession.swift" "$phone/Subtitles/PhoneSubtitleDownload.swift" "$phone/Subtitles/SubtitleContentCheck.swift" "$phone/Network/PhonePlaybackLog.swift" \
   "$phone/UI/PhonePlayerControls.swift" "$phone/UI/PhonePlayerScrub.swift" \
   "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
   "$repo_root/mobile/apple/tests/PhonePlayerFeaturesTests.swift" -o "$work/check"

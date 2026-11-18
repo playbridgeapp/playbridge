@@ -105,6 +105,10 @@ struct PlaybackFailure: Equatable {
     @Published private(set) var failure: PlaybackFailure?
     @Published private(set) var retrying = false
     private(set) var registration: PhoneProxyRegistration?
+    /// Subtitles ticked in the cast sheet; the first one is on unless the user picks another track.
+    private let externalSubtitles: [PhoneExternalSubtitle]
+    /// The ticked subtitles' downloaded files, removed when the session closes.
+    private let subtitleFiles: [URL]
     private var prepare: () async throws -> RoutedStream
     private var retryTask: Task<Void, Never>?
     private var closed = false
@@ -122,8 +126,11 @@ struct PlaybackFailure: Equatable {
     init(media: RoutedStream, route: StreamRoute, contentType: String? = nil,
          initialOrientation: String? = nil, initialResume: Double = 0,
          preferencesStore: UserDefaults = .standard,
+         externalSubtitles: [PhoneExternalSubtitle] = [], subtitleFiles: [URL] = [],
          alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil, prepare: @escaping () async throws -> RoutedStream) {
         self.route = route
+        self.externalSubtitles = externalSubtitles
+        self.subtitleFiles = subtitleFiles
         self.initialOrientation = initialOrientation
         self.preferencesStore = preferencesStore
         preferences = PhonePlayerPreferences.load(from: preferencesStore)
@@ -169,7 +176,11 @@ struct PlaybackFailure: Equatable {
             self.failure = PlaybackFailure.describeMPV(code, networkIssue: engine.networkIssue)
             self.alternativeEngine?.pause()
         }
+        PhonePlaybackLog.log("session install: route=\(route.rawValue) type=\(contentType ?? "none") \(PhonePlaybackLog.describe(media.url)) "
+            + "headers=\(PhonePlaybackLog.headerNames(media.headers)) resume=\(resume) external-subtitles=\(externalSubtitles.count) "
+            + "preferred audio=\(preferences.audioLanguage ?? "default") subtitles=\(preferences.subtitlesEnabled ? preferences.subtitleLanguage ?? "first" : "off")")
         engine.configure(PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay))
+        if !externalSubtitles.isEmpty { engine.addExternalSubtitles(externalSubtitles) }
         engine.load(url: media.url, headers: media.headers, resume: resume, autoplay: autoplay)
     }
 
@@ -302,19 +313,37 @@ struct PlaybackFailure: Equatable {
             } else if appliedAudio != -1 { appliedAudio = -1; engine.selectAudio(nil) }
         }
         guard !manualSubtitle else { return }
+        if let ticked = externalSubtitles.first {
+            // Subtitles ticked in the cast sheet win over the remembered language.
+            if let track = mpvState.subtitleTracks.first(where: { $0.externalURL == ticked.mpvPath }) {
+                let key = "embedded:\(track.id)"
+                if appliedSubtitle != key {
+                    PhonePlaybackLog.log("subtitle: ticked external track \(track.id) on")
+                    appliedSubtitle = key; onWebsiteSubtitleSelection?(nil); engine.selectSubtitle(track.id)
+                }
+            }
+            return
+        }
         if !preferences.subtitlesEnabled {
             if appliedSubtitle != "off" {
                 appliedSubtitle = "off"; engine.selectSubtitle(nil); onWebsiteSubtitleSelection?(nil)
             }
         } else if let track = PhonePlayerPreferences.preferredTrack(mpvState.subtitleTracks, language: preferences.subtitleLanguage) {
             let key = "embedded:\(track.id)"
-            if appliedSubtitle != key { appliedSubtitle = key; onWebsiteSubtitleSelection?(nil); engine.selectSubtitle(track.id) }
+            if appliedSubtitle != key {
+                PhonePlaybackLog.log("subtitle: preferred embedded track \(track.id) on")
+                appliedSubtitle = key; onWebsiteSubtitleSelection?(nil); engine.selectSubtitle(track.id)
+            }
         } else if let track = PhonePlayerPreferences.preferredTrack(websiteSubtitleTracks.indices.map { index in
             PhonePlaybackTrack(id: index, label: "", language: websiteSubtitleLanguages.indices.contains(index) ? websiteSubtitleLanguages[index] : nil)
         }, language: preferences.subtitleLanguage), onWebsiteSubtitleSelection != nil {
             let key = "website:\(track.id)"
-            if appliedSubtitle != key { appliedSubtitle = key; engine.selectSubtitle(nil); onWebsiteSubtitleSelection?(track.id) }
+            if appliedSubtitle != key {
+                PhonePlaybackLog.log("subtitle: preferred website track \(track.id) on")
+                appliedSubtitle = key; engine.selectSubtitle(nil); onWebsiteSubtitleSelection?(track.id)
+            }
         } else if appliedSubtitle != "unavailable" {
+            PhonePlaybackLog.log("subtitle: none in the preferred language (\(mpvState.subtitleTracks.count) embedded, \(websiteSubtitleTracks.count) website)")
             appliedSubtitle = "unavailable"; engine.selectSubtitle(nil); onWebsiteSubtitleSelection?(nil)
         }
     }
@@ -396,6 +425,7 @@ struct PlaybackFailure: Equatable {
         alternativeEngine = nil
         engine?.close()
         registration = nil
+        PhoneSubtitleDownload.remove(subtitleFiles)
     }
 
     deinit { retryTask?.cancel() }

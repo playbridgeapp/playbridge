@@ -865,7 +865,15 @@ final class ConnectionViewModel: ObservableObject {
         if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: [:], contentType: nil); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: nil, headers: [:]); return }
         SenderDebugNetwork.request("Cast output", url: trimmed)
-        sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title))
+        sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title, languages: castLanguages))
+    }
+
+    /// The phone's preferred audio and subtitle languages (Settings → Audio & subtitles), sent
+    /// with video casts so a TV that supports them opens the matching tracks.
+    var castLanguages: WireProtocol.CastLanguages {
+        let preferences = PhonePlayerPreferences.load(from: .standard)
+        return .init(audio: preferences.audioLanguage,
+                     subtitles: preferences.subtitlesEnabled ? preferences.subtitleLanguage : nil)
     }
 
     /// A PlayBridge receiver is connected, so a list of phone files can be started on it
@@ -893,7 +901,7 @@ final class ConnectionViewModel: ObservableObject {
         let requestID = UUID().uuidString
         let command = WireProtocol.queueVideoCommand(
             url: url, title: title, contentType: contentType, mediaKind: kind,
-            playbackId: playbackId, useQueueV1: true, displayDurationMs: displayDurationMs,
+            languages: kind == "video" ? castLanguages : .none, playbackId: playbackId, useQueueV1: true, displayDurationMs: displayDurationMs,
             itemId: itemId, visualMetadata: visualMetadata, requestID: requestID
         )
         return await sendConfirmedQueueCommand(command, requestID: requestID)
@@ -944,7 +952,8 @@ final class ConnectionViewModel: ObservableObject {
         }
         guard playBridgeOutputSelected else { return false }
         return ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, subtitles: subtitles,
-                                                       mediaKind: kind, displayDurationMs: displayDurationMs, itemId: itemId,
+                                                       mediaKind: kind, languages: kind == "video" ? castLanguages : .none,
+                                                       displayDurationMs: displayDurationMs, itemId: itemId,
                                                        visualMetadata: visualMetadata))
     }
 
@@ -964,7 +973,8 @@ final class ConnectionViewModel: ObservableObject {
             contentType: contentType,
             subtitles: [],
             headers: headers,
-            detectedBy: "iptv"
+            detectedBy: "iptv",
+            languages: castLanguages
         ))
     }
 
@@ -996,7 +1006,8 @@ final class ConnectionViewModel: ObservableObject {
             mediaKind: kind,
             headers: headers,
             detectedBy: video.detectedBy,
-            playerMode: playerMode
+            playerMode: playerMode,
+            languages: kind == "video" ? castLanguages : .none
         ))
     }
 
@@ -1070,13 +1081,14 @@ final class ConnectionViewModel: ObservableObject {
             if !subtitle.headers.isEmpty { resource["headers"] = subtitle.headers }
             return resource
         }
+        let languages = kind == "video" ? castLanguages : .none
         let message = queue
             ? WireProtocol.queueVideoCommand(url: media.url.absoluteString, title: video.displayTitle,
                 contentType: contentType, subtitles: urls, subtitleResources: resources,
-                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy)
+                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy, languages: languages)
             : WireProtocol.singleVideoCommand(url: media.url.absoluteString, title: video.displayTitle,
                 contentType: contentType, subtitles: urls, subtitleResources: resources,
-                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy)
+                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy, languages: languages)
         if ws.send(message) { recordCast(historyCommand) }
     }
 
@@ -1105,6 +1117,7 @@ final class ConnectionViewModel: ObservableObject {
             headers: headers,
             detectedBy: video.detectedBy,
             playerMode: playerMode,
+            languages: kind == "video" ? castLanguages : .none,
             playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
             useQueueV1: supportsQueueV1
         ))

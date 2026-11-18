@@ -69,6 +69,7 @@ import Libmpv
     func setSpeed(_ speed: Double) { core.setProperty("speed", value: String(speed)) }
     func selectAudio(_ id: Int?) { core.setProperty("aid", value: id.map(String.init) ?? "auto") }
     func selectSubtitle(_ id: Int?) { core.setProperty("sid", value: id.map(String.init) ?? "no") }
+    func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) { guard !closed else { return }; core.setExternalSubtitles(subtitles) }
     func close() {
         guard !closed else { return }
         closed = true
@@ -103,6 +104,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private var pendingOutputResize = false
     private var options = PhonePlayerOptions()
     private var subtitleStyle: [(String, String)] = []
+    private var externalSubtitles: [PhoneExternalSubtitle] = []
     private var pendingSeek: Double?
     private var seekState = PhoneMPVSeekState()
     private var closed = false
@@ -159,7 +161,13 @@ private final class MPVPhoneCore: @unchecked Sendable {
             }
             // Receive warnings as events, classify in memory, and discard the
             // original text. Terminal/file logging remains disabled.
+#if DEBUG
+            // Debug builds also print a redacted trace (PhonePlaybackLog); info adds the
+            // demuxer and track lines that explain a blank or "live" stream.
+            mpv_request_log_messages(context, "info")
+#else
             mpv_request_log_messages(context, "warn")
+#endif
             let ticker = DispatchSource.makeTimerSource(queue: queue)
             ticker.schedule(deadline: .now(), repeating: .milliseconds(250))
             ticker.setEventHandler { [weak self] in self?.poll() }
@@ -192,6 +200,13 @@ private final class MPVPhoneCore: @unchecked Sendable {
             guard let handle else { return }
             // A style mpv can't take only changes how subtitles look, so it never stops playback.
             for (name, value) in properties { _ = mpv_set_property_string(handle, name, value) }
+        }
+    }
+
+    func setExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) {
+        queue.async { [self] in
+            guard !closed else { return }
+            externalSubtitles = subtitles
         }
     }
 
@@ -241,6 +256,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
         mpv_set_property_string(handle, "sid", "no")
         // mpv 0.38+ places per-file options AFTER the insertion index. Supply
         // resume as a file option rather than a best-effort global property.
+        PhonePlaybackLog.log("loadfile \(PhonePlaybackLog.describe(request.url)) headers=\(PhonePlaybackLog.headerNames(request.headers)) resume=\(request.resume) paused=\(desiredPaused || background)")
         let status = command(["loadfile", request.url.absoluteString, "replace", "-1", "start=\(request.resume)"])
         if status < 0 { emit(.failed(status, "loadfile")) }
     }
@@ -325,13 +341,24 @@ private final class MPVPhoneCore: @unchecked Sendable {
         while let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE {
             switch event.pointee.event_id {
             case MPV_EVENT_LOG_MESSAGE:
-                if let data = event.pointee.data,
-                   let message = data.assumingMemoryBound(to: mpv_event_log_message.self).pointee.text,
-                   let issue = PhonePlaybackNetworkIssue.classify(String(cString: message)) {
-                    // A later generic TLS error must not hide certificate evidence.
-                    if networkIssue != .certificate { networkIssue = issue }
+                if let data = event.pointee.data {
+                    let log = data.assumingMemoryBound(to: mpv_event_log_message.self).pointee
+#if DEBUG
+                    if let text = log.text, let line = PhonePlaybackLog.redact(String(cString: text)) {
+                        let prefix = log.prefix.map { String(cString: $0) } ?? "?"
+                        let level = log.level.map { String(cString: $0) } ?? "?"
+                        PhonePlaybackLog.log("mpv[\(prefix)/\(level)] \(line)")
+                    }
+#endif
+                    if let message = log.text, let issue = PhonePlaybackNetworkIssue.classify(String(cString: message)) {
+                        // A later generic TLS error must not hide certificate evidence.
+                        if networkIssue != .certificate { networkIssue = issue }
+                    }
                 }
+            case MPV_EVENT_COMMAND_REPLY:
+                PhonePlaybackLog.log("async command reply: \(event.pointee.error >= 0 ? "ok" : String(cString: mpv_error_string(event.pointee.error)))")
             case MPV_EVENT_START_FILE:
+                PhonePlaybackLog.log("start file")
                 loaded = false
                 state.loaded = false
                 seekState.reset()
@@ -339,6 +366,15 @@ private final class MPVPhoneCore: @unchecked Sendable {
             case MPV_EVENT_FILE_LOADED:
                 loaded = true
                 state.loaded = true
+                traceStarted = ProcessInfo.processInfo.systemUptime; lastTrace = 0
+                PhonePlaybackLog.log("file loaded; adding \(externalSubtitles.count) external subtitle(s)")
+                traceSnapshot("loaded")
+                // Added without selecting; the session turns the ticked one on once it's listed.
+                // Asynchronous: a subtitle download must never hold up this queue, which also
+                // reports duration and position and restores the video output.
+                for subtitle in externalSubtitles {
+                    _ = commandAsync(["sub-add", subtitle.mpvPath, "auto", subtitle.title] + [subtitle.language].compactMap { $0 })
+                }
                 if let pendingSeek {
                     if command(["seek", String(pendingSeek), "absolute"]) >= 0 {
                         seekState.beginSeek(to: pendingSeek, now: ProcessInfo.processInfo.systemUptime)
@@ -355,6 +391,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
                 guard let data = event.pointee.data else { continue }
                 let end = data.assumingMemoryBound(to: mpv_event_end_file.self).pointee
                 guard end.playlist_entry_id == entryID else { continue }
+                PhonePlaybackLog.log("end file: reason=\(end.reason.rawValue) error=\(end.error < 0 ? String(cString: mpv_error_string(end.error)) : "none")")
                 if end.reason == MPV_END_FILE_REASON_EOF {
                     seekState.reset()
                     updateState(); emit(.state(state)); loaded = false; state.loaded = false; emit(.ended)
@@ -369,6 +406,42 @@ private final class MPVPhoneCore: @unchecked Sendable {
         // publishing the failure so copied diagnostics retain the actual cause.
         if let streamFailure { emit(.failed(streamFailure, "stream", networkIssue)) }
         if loaded { updateState(); emit(.state(state)) }
+#if DEBUG
+        // A snapshot every 3 s for the first minute, then every 15 s.
+        if loaded {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastTrace >= (now - traceStarted < 60 ? 3 : 15) { lastTrace = now; traceSnapshot("tick") }
+        }
+#endif
+    }
+
+    private var traceStarted: TimeInterval = 0
+    private var lastTrace: TimeInterval = 0
+
+    /// What mpv reports about the open file: container, timeline, video output and tracks.
+    /// Only properties without addresses; never `path`, `stream-open-filename` or `filename`.
+    private func traceSnapshot(_ reason: String) {
+#if DEBUG
+        func value(_ name: String) -> String { propertyString(name) ?? "-" }
+        PhonePlaybackLog.log("\(reason): format=\(value("file-format")) demuxer=\(value("current-demuxer")) "
+            + "duration=\(value("duration")) pos=\(value("time-pos")) seekable=\(value("seekable")) "
+            + "partly-seekable=\(value("partially-seekable")) cache-time=\(value("demuxer-cache-time")) "
+            + "cache-pause=\(value("paused-for-cache")) pause=\(value("pause")) core-idle=\(value("core-idle"))")
+        PhonePlaybackLog.log("\(reason): vo=\(value("current-vo")) vo-configured=\(value("vo-configured")) "
+            + "vid=\(value("vid")) codec=\(value("video-codec")) size=\(value("width"))x\(value("height")) "
+            + "out=\(value("video-out-params/w"))x\(value("video-out-params/h")) hwdec=\(value("hwdec-current")) "
+            + "fps=\(value("estimated-vf-fps")) dropped=\(value("frame-drop-count"))/\(value("decoder-frame-drop-count")) "
+            + "aid=\(value("aid")) sid=\(value("sid")) sub-visible=\(value("sub-visibility"))")
+        guard reason != "tick" || lastTrace - traceStarted < 10,
+              let json = propertyString("track-list"), let data = json.data(using: .utf8),
+              let tracks = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        for track in tracks {
+            let fields = ["type", "id", "codec", "lang", "default", "forced", "external", "selected", "image",
+                          "demux-w", "demux-h", "albumart"]
+                .compactMap { key in track[key].map { "\(key)=\($0)" } }
+            PhonePlaybackLog.log("\(reason): track " + fields.joined(separator: " "))
+        }
+#endif
     }
     private func updateState() {
         guard let handle else { return }
@@ -399,7 +472,8 @@ private final class MPVPhoneCore: @unchecked Sendable {
                     guard track["type"] as? String == type, let id = track["id"] as? Int else { return nil }
                     let label = [track["title"] as? String, track["lang"] as? String, track["codec"] as? String]
                         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-                    return PhonePlaybackTrack(id: id, label: label.isEmpty ? "Track \(id)" : label, language: track["lang"] as? String)
+                    return PhonePlaybackTrack(id: id, label: label.isEmpty ? "Track \(id)" : label, language: track["lang"] as? String,
+                                              externalURL: track["external"] as? Bool == true ? track["external-filename"] as? String : nil)
                 }
             }
             state.audioTracks = matching("audio"); state.subtitleTracks = matching("sub")
@@ -408,6 +482,14 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private func propertyString(_ name: String) -> String? {
         guard let handle, let value = mpv_get_property_string(handle, name) else { return nil }
         defer { mpv_free(value) }; return String(cString: value)
+    }
+    /// mpv parses the arguments before returning; the reply event is ignored.
+    private func commandAsync(_ arguments: [String]) -> Int32 {
+        guard let handle else { return MPV_ERROR_UNINITIALIZED.rawValue }
+        let strings = arguments.map { strdup($0)! }
+        defer { strings.forEach { free($0) } }
+        var pointers: [UnsafePointer<CChar>?] = strings.map { UnsafePointer($0) } + [nil]
+        return mpv_command_async(handle, 0, &pointers)
     }
     private func command(_ arguments: [String]) -> Int32 {
         guard let handle else { return MPV_ERROR_UNINITIALIZED.rawValue }

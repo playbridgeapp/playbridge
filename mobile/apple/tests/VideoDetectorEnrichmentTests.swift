@@ -51,7 +51,15 @@ final class Probe {
         }, loadThumbnail: { video in
             _ = await self.wait("thumbnail:\(video.id)", headers: VideoDetector.mediaHeaders(for: video))
             return UIImage()
-        }, now: now)
+        }, now: now, fetchSubtitle: { video in
+            await self.subtitleResult(video)
+        })
+    }
+
+    /// Detected subtitles are checked straight away; these answer for them without a network.
+    var subtitleResults: [String: SubtitleFetchResult] = [:]
+    func subtitleResult(_ video: DetectedVideo) async -> SubtitleFetchResult {
+        subtitleResults[video.url] ?? .failed
     }
 }
 
@@ -189,6 +197,27 @@ struct VideoDetectorEnrichmentTests {
         precondition(VideoDetector.subtitleHeaders(for: subtitleDetector.videos[0])["User-Agent"] == nil,
                      "Subtitle resources must not inherit an invented media user agent")
         precondition(subtitleProbe.started.isEmpty, "Body-confirmed subtitles must not start preview work")
+
+        // Subtitles are checked as soon as they're detected; ones that aren't subtitles are hidden.
+        let checkProbe = Probe()
+        checkProbe.subtitleResults["https://subs.example/error.vtt"] = .invalid
+        checkProbe.subtitleResults["https://subs.example/movie.vtt"] = .sample(SubtitleSample(
+            preview: "Bonjour", languageText: String(repeating: "Bonjour, comment allez-vous aujourd'hui ? ", count: 4)))
+        let checkDetector = checkProbe.detector()
+        for url in ["https://subs.example/error.vtt", "https://subs.example/movie.vtt"] {
+            checkDetector.ingest(["url": url, "contentType": "text/vtt", "detectedBy": "network", "mediaKind": "subtitle"])
+        }
+        await until {
+            checkDetector.videos.allSatisfy { video in
+                if case .loading = checkDetector.subtitlePreviews[video.id] { return false }
+                return checkDetector.subtitlePreviews[video.id] != nil
+            }
+        }
+        let checked = checkDetector.videos
+        precondition(!checkDetector.isUsableSubtitle(checked.first { $0.url.hasSuffix("error.vtt") }!), "Error pages are hidden")
+        let movie = checked.first { $0.url.hasSuffix("movie.vtt") }!
+        precondition(checkDetector.isUsableSubtitle(movie))
+        precondition(checkDetector.subtitleLanguage(movie) == "fr", "The dialogue's language is known before any sheet opens")
 
         let dispositionSubtitle = "https://subs.example/resource/43"
         subtitleDetector.ingest([

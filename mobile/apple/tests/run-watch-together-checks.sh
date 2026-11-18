@@ -39,7 +39,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$phone/Network/StreamRouteService.swift" \
   "$phone/Network/PhonePlayerPreferences.swift" \
   "$phone/Network/PhonePlaybackEngine.swift" \
-  "$phone/Network/PlaybackSession.swift" \
+  "$phone/Network/PlaybackSession.swift" "$phone/Subtitles/PhoneSubtitleDownload.swift" "$phone/Subtitles/SubtitleContentCheck.swift" "$phone/Network/PhonePlaybackLog.swift" \
   "$phone/Network/WebsitePhonePlayback.swift" \
   "$phone/Network/WebsiteCaptionParser.swift" \
   "$repo_root/mobile/apple/tests/WatchTogetherTests.swift" \

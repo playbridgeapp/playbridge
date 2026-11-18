@@ -8,6 +8,19 @@ struct PhonePlaybackTrack: Equatable, Identifiable {
     let id: Int
     let label: String
     var language: String? = nil
+    /// The address an external subtitle was added from; nil for tracks in the file.
+    var externalURL: String? = nil
+}
+
+/// A subtitle ticked in the cast sheet, added to the player beside the video's own tracks.
+/// Normally a local file the phone downloaded (`PhoneSubtitleDownload`).
+struct PhoneExternalSubtitle: Equatable {
+    let url: URL
+    let title: String
+    var language: String? = nil
+
+    /// What mpv is given, and reports back as the track's `external-filename`.
+    var mpvPath: String { url.isFileURL ? url.path : url.absoluteString }
 }
 
 struct PhonePlaybackState {
@@ -70,6 +83,8 @@ enum PhonePlaybackNetworkIssue: Equatable {
     func setSpeed(_ speed: Double)
     func selectAudio(_ id: Int?)
     func selectSubtitle(_ id: Int?)
+    /// Subtitle files to add whenever a file loads, including after a retry.
+    func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle])
     func close()
 }
 
@@ -77,6 +92,7 @@ extension PhoneAlternativePlaybackEngine {
     var failureContext: String { "playback" }
     var networkIssue: PhonePlaybackNetworkIssue? { nil }
     func setSpeed(_ speed: Double) {}
+    func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) {}
 }
 
 /// Filters captured browser transport artifacts out of `mpv`'s `http-header-fields`
