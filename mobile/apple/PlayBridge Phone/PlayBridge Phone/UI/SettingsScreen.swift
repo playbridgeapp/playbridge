@@ -2,13 +2,14 @@ import SwiftUI
 
 /// A Settings topic. Each page covers one topic; the hub shows a live summary of each.
 enum SettingsPage: Hashable, CaseIterable {
-    case tv, subtitles, casting, browser, remote, about
+    case tv, subtitles, casting, history, browser, remote, about
 
     var title: String {
         switch self {
         case .tv: return "TV"
         case .subtitles: return "Audio & subtitles"
         case .casting: return "Casting"
+        case .history: return "Cast history"
         case .browser: return "Browser"
         case .remote: return "Remote"
         case .about: return "About"
@@ -20,6 +21,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .tv: return "tv"
         case .subtitles: return "captions.bubble"
         case .casting: return "airplayvideo"
+        case .history: return "clock.arrow.circlepath"
         case .browser: return "globe"
         case .remote: return "av.remote"
         case .about: return "info.circle"
@@ -38,7 +40,9 @@ struct SettingsScreen: View {
     /// Observed so the Audio & subtitles summary follows language changes.
     @AppStorage(PhonePlayerPreferences.key) private var playerPreferences: Data?
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
-    @AppStorage("cast_save_history") private var saveHistory = true
+    @AppStorage(CastHistorySettings.enabledKey) private var saveHistory = true
+    /// Observed so the Cast history summary follows the limit.
+    @AppStorage(CastHistorySettings.limitKey) private var historyLimit = CastHistorySettings.defaultLimit
     @AppStorage("stream_route_default") private var route = StreamRoute.direct.rawValue
     @AppStorage(RemoteHapticPreferences.enabledKey) private var hapticsEnabled = true
     @AppStorage(RemoteHapticPreferences.levelKey) private var hapticsLevel: RemoteHapticLevel = .light
@@ -80,6 +84,7 @@ struct SettingsScreen: View {
                 Group {
                     switch page {
                     case .tv: TvSettingsPage()
+                    case .history: CastHistorySettingsForm(store: vm.castHistory)
                     case .subtitles: AudioSubtitleSettingsPage(tv: vm.tvSubtitles)
                     case .casting: CastingSettingsPage()
                     case .browser: BrowserSettingsPage(engine: $engine)
@@ -110,11 +115,14 @@ struct SettingsScreen: View {
     private func summary(_ page: SettingsPage) -> String {
         switch page {
         case .tv:
-            return [autoConnect ? "Auto-connect" : "Auto-connect off",
-                    saveHistory ? "Cast history saved" : "Cast history off"].joined(separator: " · ")
+            return autoConnect ? "Auto-connect to the last TV" : "Auto-connect off"
         case .subtitles:
             _ = playerPreferences
             return PhoneLanguageChoices.summary(PhonePlayerPreferences.load(from: .standard))
+        case .history:
+            _ = (historyLimit, saveHistory)
+            let settings = CastHistorySettings.load()
+            return settings.enabled ? "Keeps the newest \(settings.limit) casts" : "Off"
         case .casting:
             return "Videos play " + (StreamRoute(rawValue: route) ?? .direct).label.lowercased()
         case .browser:
@@ -133,8 +141,6 @@ struct SettingsScreen: View {
 private struct TvSettingsPage: View {
     @EnvironmentObject private var atv: AtvRemoteCoordinator
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
-    @AppStorage("cast_save_history") private var saveHistory = true
-    @AppStorage("cast_prevent_receiver_history") private var preventReceiverHistory = false
     @State private var showPairedTVs = false
 
     var body: some View {
@@ -148,14 +154,6 @@ private struct TvSettingsPage: View {
                 Button("Paired TVs") { showPairedTVs = true }
             } footer: {
                 Text("Android TVs this phone controls with full remote access.")
-            }
-            Section {
-                Toggle("Save cast history on this phone", isOn: $saveHistory).tint(Theme.primary)
-                Toggle("Prevent receiver history", isOn: $preventReceiverHistory).tint(Theme.primary)
-            } header: {
-                Text("Cast history")
-            } footer: {
-                Text("Receiver preference applies to future casts on supporting PlayBridge receivers. Other receivers may ignore it. Existing history is unchanged.")
             }
         }
         .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }

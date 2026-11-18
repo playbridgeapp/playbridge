@@ -7,4 +7,13 @@ protocol PageCastSource: AnyObject {
     var pageCastTitle: String { get }
     var pageCastCanRequest: Bool { get }
     func deliverPageCast(_ message: [String: Any], documentID: UUID)
+    /// The page's own address, for cast history; native-owned, never website-supplied.
+    var pageCastPageURL: String? { get }
+    /// The page is a bridged app; its casts are left out of history by default.
+    var pageCastIsBridgedApp: Bool { get }
+}
+
+extension PageCastSource {
+    var pageCastPageURL: String? { nil }
+    var pageCastIsBridgedApp: Bool { false }
 }

@@ -7,6 +7,8 @@ private final class FakePage: PageCastSource {
     var pageCastOrigin: String? = "https://site.example"
     var pageCastTitle = "Website title"
     var pageCastCanRequest = true
+    var pageCastPageURL: String? = "https://site.example/watch/7"
+    var pageCastIsBridgedApp = true
     var messages: [[String: Any]] = []
     func deliverPageCast(_ message: [String: Any], documentID: UUID) {
         precondition(documentID == pageCastDocumentID, "Must never deliver into another document")
@@ -67,6 +69,8 @@ private final class FakeTransport: PageCastTransport {
     var reconnectCount = 0
     var acceptCommands = true
     func reconnectWebsiteReceiver() { reconnectCount += 1; isConnected = true }
+    var castOrigins: [CastOrigin] = []
+    func noteCastOrigin(_ origin: CastOrigin) { castOrigins.append(origin) }
     func sendWebsitePlaylist(_ request: PageCastRequest, allowedPrivateOrigins: Set<String>) async throws {
         sends.append((request, allowedPrivateOrigins))
         websitePlaylist = PlaylistUiState(currentIndex: request.startIndex, totalCount: request.items.count,
@@ -256,6 +260,9 @@ private final class FakeTransport: PageCastTransport {
         precondition(f.permissions.isApproved("https://site.example"))
         precondition(f.transport.sends.count == 1)
         precondition(f.transport.sends[0].request.items[0]["title"] as? String == "Website title")
+        precondition(f.transport.castOrigins.count == 1 && f.transport.castOrigins[0].pageInitiated
+                     && f.transport.castOrigins[0].pageURL == "https://site.example/watch/7" && f.transport.castOrigins[0].bridgedApp,
+                     "History learns the tab's own page and that it's a bridged app before the cast is sent")
         let second = f.send("cast", payload: ["url": "https://media.example/next.mp4"])
         _ = await f.response(second)
         precondition(f.coordinator.presentation == nil && f.transport.sends.count == 2, "Remembered approval should not prompt again")

@@ -316,6 +316,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     var pageCastDocumentID: UUID { documentID }
     var pageCastOrigin: String? { BrowserSitePolicy.origin(loadedWebView?.url) }
     var pageCastTitle: String { title }
+    var pageCastPageURL: String? { loadedWebView?.url?.absoluteString }
+    var pageCastIsBridgedApp: Bool { isBridgedApp }
     var pageCastCanRequest: Bool { isActive() }
 
     func deliverPageCast(_ message: [String: Any], documentID: UUID) {

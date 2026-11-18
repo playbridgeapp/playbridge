@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Network
+import UIKit
 
 /// Top-level glue the UI observes: owns discovery, the socket, the inbound coordinator, and
 /// credential persistence. Mirrors the role of `ConnectionViewModel` on Android.
@@ -182,6 +183,14 @@ final class ConnectionViewModel: ObservableObject {
         CastSystemPlayback.shared.onLocalPlaybackBegan = { [weak self] in self?.airPlay.suspendForLocalPlayback() }
         airPlay.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         airPlay.$error.compactMap { $0 }.receive(on: RunLoop.main).sink { [weak self] in self?.operationError = $0 }.store(in: &cancellables)
+        // Every receiver's reports end up in the coordinator; cast history follows them.
+        Publishers.CombineLatest3(coordinator.$playback, coordinator.$playlist, coordinator.$playerIsLive)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] playback, playlist, live in self?.trackPlayback(playback, playlist: playlist, live: live) }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+            .sink { [weak self] _ in self?.flushCastProgress() }
+            .store(in: &cancellables)
         castPlaybackSession.onCommand = { [weak self] command in
             guard let self, self.isConnected else { return false }
             guard self.isAirPlay || self.isExternalReceiver || self.nativeRemotePolicy.allowsControl(command) else { return false }
@@ -1648,18 +1657,114 @@ final class ConnectionViewModel: ObservableObject {
                 routedStreamRegistrations.removeAll()
             }
             recordCast(command)
+        } else {
+            // It never reached the TV: remembered as failed, so it can be tried again.
+            recordCast(command, failure: CastPositionTracker.failNotSent)
         }
     }
 
-    private func recordCast(_ command: String) {
-        guard UserDefaults.standard.object(forKey: "cast_save_history") as? Bool ?? true else { return }
-        // Explicit private payloads are never saved. The receiver preference is applied
-        // separately at transport time and does not disable sender-side tracking.
-        castHistory.record(command, receiver: receiverName)
+    // MARK: - Cast history positions
+
+    private var positionTracker = CastPositionTracker()
+    /// The cast playing on a receiver now, for history's "Playing on…" row.
+    @Published private(set) var castNowPlaying: NowPlaying?
+
+    private static var nowMs: Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+
+    private func saveProgress(_ write: CastPositionTracker.Write?) {
+        guard let write else { return }
+        let p = write.progress
+        PhonePlaybackLog.log("history: save \(write.id.uuidString.prefix(8)) pos=\(p.positionMs) dur=\(p.durationMs) reported=\(p.positionReported) "
+            + "finished=\(p.finished) live=\(p.live) failed=\(p.failureReason ?? "no") item=\(p.playlistIndex.map(String.init) ?? "-")")
+        castHistory.update(write.id, progress: write.progress)
     }
 
+    private var lastLoggedSample: String?
+
+    private func trackPlayback(_ playback: TvPlaybackStatus?, playlist: PlaylistUiState?, live: Bool) {
+        let sample = playback.map {
+            PlaybackSample(state: PlaybackSample.state($0.state), positionMs: $0.positionMs, durationMs: $0.durationMs,
+                           isLive: live, title: $0.title, playlistIndex: playlist?.currentIndex,
+                           playlistCount: playlist.map(\.totalCount))
+        }
+#if DEBUG
+        let summary = sample.map { "\($0.state) pos=\($0.positionMs / 1000)s dur=\($0.durationMs / 1000)s live=\($0.isLive) "
+            + "title=\($0.title == nil ? "none" : "set") item=\($0.playlistIndex.map(String.init) ?? "-")" } ?? "cleared"
+        let coarse = summary.replacingOccurrences(of: #"pos=\d+s"#, with: "", options: .regularExpression)
+        if coarse != lastLoggedSample {
+            lastLoggedSample = coarse
+            PhonePlaybackLog.log("history: report \(summary) receiver=\(receiverKind) tracking=\(positionTracker.activeID.map { String($0.uuidString.prefix(8)) } ?? "none") "
+                + "titleMatches=\(positionTracker.titleMatches(sample?.title).map(String.init) ?? "n/a")")
+        }
+#endif
+        saveProgress(positionTracker.onSample(sample, at: Self.nowMs))
+        let now = positionTracker.nowPlaying
+        if castNowPlaying != now { castNowPlaying = now }
+    }
+
+    /// Saves where the tracked cast got to, before the app is suspended.
+    func flushCastProgress() { saveProgress(positionTracker.flush()) }
+
+    /// The saved progress a replay resumes from, for the cast of that same message only.
+    private var pendingResume: (command: String, progress: CastProgress)?
+
+    private func beginTracking(_ id: UUID, command: String) {
+        let resumed = pendingResume.flatMap { $0.command == command ? $0.progress : nil }
+        pendingResume = nil
+        guard castHistory.settings.rememberPosition, let items = CastHistoryStore.items(in: command) else {
+            saveProgress(positionTracker.detach())
+            return
+        }
+        let start = CastHistoryStore.startItem(in: command, items: items)
+        let index = items.count > 1 ? items.firstIndex { ($0["url"] as? String) == (start["url"] as? String) } : nil
+        PhonePlaybackLog.log("history: track \(id.uuidString.prefix(8)) receiver=\(receiverKind) items=\(items.count) title=\(start["title"] == nil ? "none" : "set")")
+        saveProgress(positionTracker.begin(id, at: Self.nowMs, title: start["title"] as? String,
+                                           playlistIndex: resumed?.playlistIndex ?? index,
+                                           playlistCount: items.count > 1 ? items.count : nil, resumeFrom: resumed))
+    }
+
+    /// Where the next cast comes from: set by the cast sheet or a website just before it casts,
+    /// used by the cast it starts within a few seconds, then forgotten.
+    private var pendingCastOrigin: (origin: CastOrigin, at: Date)?
+
+    func noteCastOrigin(_ origin: CastOrigin) { pendingCastOrigin = (origin, Date()) }
+
+    /// The kind of device a cast goes to, for its history row.
+    var receiverKind: String {
+        if isAirPlay { return "airplay" }
+        if let id = externalReceiver?.protocolID { return id }
+        return "playbridge"
+    }
+
+    private func recordCast(_ command: String, origin explicit: CastOrigin? = nil, failure: String? = nil) {
+        let pending = pendingCastOrigin.flatMap { Date().timeIntervalSince($0.at) < 15 ? $0.origin : nil }
+        pendingCastOrigin = nil
+        // Settings, bridged apps and private payloads are checked by the store, which saves
+        // nothing for a skipped cast. The receiver preference is applied separately at transport
+        // time and does not disable sender-side tracking.
+        let id = castHistory.record(command, receiver: receiverName, receiverKind: receiverKind,
+                                    origin: explicit ?? pending ?? CastOrigin(), failure: failure)
+        // Queued items aren't what's playing; a skipped or failed cast has nothing to follow.
+        if failure == nil, let id, Self.isPlaylistCommand(command) { beginTracking(id, command: command) }
+    }
+
+    private static func isPlaylistCommand(_ command: String) -> Bool {
+        (try? JSONSerialization.jsonObject(with: Data(command.utf8)) as? [String: Any])?["action"] as? String == "playlist"
+    }
+
+    /// Whether the selected target can start a resumed cast part-way. The watch party and Roku
+    /// play it from the start.
+    @MainActor var resumeStartsPartWay: Bool { !partyTargetActive && receiverKind != "roku" }
+
+    /// Casts a history entry again; `resume` starts at its saved item and position.
     @MainActor
-    func replayCast(_ entry: CastHistoryStore.Entry) async {
+    func replayCast(_ entry: CastHistoryStore.Entry, resume: Bool = false) async {
+        let resumeIndex = resume ? entry.progress?.playlistIndex : nil
+        let partWay = resumeStartsPartWay
+        let resumeMs = resume && partWay ? max(0, entry.progress?.positionMs ?? 0) : 0
+        pendingResume = resumeMs > 0 ? entry.progress.map { (entry.command, $0) } : nil
+        PhonePlaybackLog.log("history: replay \(entry.id.uuidString.prefix(8)) resume=\(resume) at=\(resumeMs) item=\(resumeIndex.map(String.init) ?? "-") "
+            + "receiver=\(receiverKind) party=\(partyTargetActive) airplay=\(isAirPlay) external=\(isExternalReceiver) saved=\(entry.progress?.positionMs ?? -1)")
         if partyTargetActive, let items = CastHistoryStore.items(in: entry.command) {
             onUserMediaAction?()
             let partyItems = items.compactMap { item -> PartyQueueItem? in
@@ -1682,7 +1787,8 @@ final class ConnectionViewModel: ObservableObject {
         do {
             if isAirPlay {
                 let request = airPlay.beginRequest(queue: false)
-                for (index, item) in items.enumerated() {
+                let first = min(resumeIndex ?? 0, items.count - 1)
+                for (index, item) in items.enumerated() where index >= first {
                     let media = try await StreamRouteService().prepare(url: item["url"] as! String,
                         headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
                         route: route, configuration: configuration)
@@ -1695,9 +1801,10 @@ final class ConnectionViewModel: ObservableObject {
                     }
                     guard isAirPlay, destinationID == target else { throw CancellationError() }
                     try await airPlay.send(media: routed, title: item["title"] as? String ?? "AirPlay media",
-                        kind: item["mediaKind"] as? String ?? "video", subtitles: sources, queue: index > 0, request: request)
+                        kind: item["mediaKind"] as? String ?? "video", subtitles: sources, queue: index > first, request: request,
+                        resumeAt: index == first ? Double(resumeMs) / 1000 : 0)
                 }
-                recordCast(entry.command)
+                recordCast(entry.command, origin: CastOrigin(pageURL: entry.pageURL))
                 return
             }
             if isExternalReceiver && (items.count != 1 || !(items[0]["subtitles"] as? [String] ?? []).isEmpty) {
@@ -1732,15 +1839,20 @@ final class ConnectionViewModel: ObservableObject {
                 let item = prepared[0]
                 let extra = try await externalLoad(url: URL(string: item["url"] as! String)!,
                     title: item["title"] as? String, contentType: item["contentType"] as? String,
-                    headers: item["headers"] as? [String: String] ?? [:])
+                    headers: item["headers"] as? [String: String] ?? [:], startPositionMs: resumeMs > 0 ? Int(resumeMs) : nil)
                 if let extra { registrations.append(extra) }
             } else {
                 guard playBridgeOutputSelected else { throw StreamRoutingError.message("This phone is the selected output.") }
                 let saved = try JSONSerialization.jsonObject(with: Data(entry.command.utf8)) as? [String: Any]
                 var payload = saved?["action"] as? String == "playlist"
                     ? saved?["payload"] as? [String: Any] ?? [:] : [:]
-                payload["items"] = prepared
                 if payload["startIndex"] == nil { payload["startIndex"] = 0 }
+                if let resumeIndex, prepared.indices.contains(resumeIndex) { payload["startIndex"] = resumeIndex }
+                if resumeMs > 0, let start = payload["startIndex"] as? Int, prepared.indices.contains(start) {
+                    prepared[start]["startPositionMs"] = resumeMs
+                }
+                PhonePlaybackLog.log("history: replay playlist startIndex=\(payload["startIndex"] as? Int ?? -1) startPositionMs=\(prepared.compactMap { $0["startPositionMs"] as? Int64 })")
+                payload["items"] = prepared
                 let data = try JSONSerialization.data(withJSONObject: [
                     "type": "command", "action": "playlist", "payload": payload, "requestId": UUID().uuidString
                 ] as [String: Any])
@@ -1748,7 +1860,7 @@ final class ConnectionViewModel: ObservableObject {
             }
             guard destinationID == target, isConnected else { throw CancellationError() }
             routedStreamRegistrations = registrations
-            recordCast(entry.command)
+            recordCast(entry.command, origin: CastOrigin(pageURL: entry.pageURL))
         } catch is CancellationError {
             operationError = "The receiver connection changed. Try replaying again."
         } catch { operationError = error.localizedDescription }
