@@ -39,9 +39,10 @@ With AVPlayer:
   mpv. The timing offset applies only to these overlay captions, not to subtitles
   inside the stream.
 - Fit/Fill, speed, seeking, the queue, website progress and watch-party controls work
-  as on mpv. AVPlayer pauses in the background and on audio interruptions, keeping the
-  user's pause choice, and does not offer AirPlay or Picture in Picture from the
-  phone player.
+  as on mpv. AVPlayer follows the same "When you leave the player" choice (below),
+  pauses on audio interruptions, keeps the user's pause choice, and does not offer
+  AirPlay or Picture in Picture from the phone player. With Keep playing it detaches
+  its layer in the background so the sound continues, and reattaches it on return.
 - Not supported: MKV files (refused at once, with a message suggesting mpv), styled
   ASS/SSA subtitle files (left out of the subtitle list), bitmap subtitles, DASH,
   and codecs Apple doesn't decode. These fail with a message suggesting mpv.
@@ -155,8 +156,19 @@ registration lifetimes are unchanged; no route silently becomes Direct.
   Drawable-size changes explicitly rebuild the embedded video output while
   preserving the decoder, clock and pause choice. Resizing the Metal layer alone
   leaves mpv drawing into its old portrait viewport.
-- mpv pauses video rendering in the background, preserves the user's pause choice
-  on return, and pauses on audio interruptions. Its video surface does not offer
+- mpv stops video rendering in the background (`vid=no`), preserves the user's pause
+  choice on return, and pauses on audio interruptions.
+- Leaving the player: Settings › Phone player › "When you leave the player" sets
+  Pause (default) or Keep playing; the player's ⋮ More sheet changes it for the
+  current video. Watch parties always pause. With Keep playing, going home or
+  locking the phone keeps the sound going with lock-screen and Control Center
+  controls (play/pause, ±10 s, scrubbing, previous/next episode), and Back docks a
+  playing video in a "Playing on this phone" bar at the bottom of every screen; the
+  bar reopens it, pauses it or stops it. Opening another video replaces the docked
+  one. Dashboard › ⋯ › Phone player reopens the docked video, or opens a file or a
+  direct link. There is no Picture in Picture.
+- Pinch out on a landscape video in the portrait layout fills the screen; pinch in
+  returns to the layout. This doesn't change the saved Fit/Fill preference. Its video surface does not offer
   Picture in Picture or video AirPlay. The dedicated external AirPlay casting
   path retains its system player; it is not a local playback fallback.
 - libmpv calls and destruction run on a serial queue. The Metal layer outlives

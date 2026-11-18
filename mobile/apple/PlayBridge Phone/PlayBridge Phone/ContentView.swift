@@ -11,6 +11,7 @@ struct ContentView: View {
     @StateObject private var remoteTVBrowser = AtvBonjourBrowser()
     @State private var remoteTVScan: Task<Void, Never>?
     @State private var attemptedReconnectInForeground = false
+    @ObservedObject private var dock = PhonePlayerDock.shared
 
     private var showsMiniBar: Bool {
         switch nav.currentScreen {
@@ -32,9 +33,16 @@ struct ContentView: View {
                 .id(nav.currentScreen)
                 .transition(.opacity)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if showsMiniBar {
-                        NowPlayingMiniBar()
+                    VStack(spacing: 0) {
+                        if let docked = dock.docked, dock.presented == nil {
+                            PhonePlayerDockBar(dock: dock, session: docked.session)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                        if showsMiniBar {
+                            NowPlayingMiniBar()
+                        }
                     }
+                    .animation(.easeOut(duration: 0.2), value: dock.docked?.id)
                 }
         }
         .environmentObject(pageCasting)
@@ -71,7 +79,25 @@ struct ContentView: View {
 #else
                 ""
 #endif
-            }, onDismiss: { vm.websitePlayerItem = nil })
+            }, onDismiss: { vm.websitePlayerItem = nil },
+               onPresented: PhonePlayerDock.shared.playerDidAppear,
+               onKeepPlayingChanged: PhonePlayerDock.shared.keepPlayingChanged,
+               onLeave: { _ in PhonePlayerDock.shared.leave(item) })
+        }
+        .fullScreenCover(item: $dock.presented) { item in
+            // The docked video opened again (its bar, or Dashboard › ⋯ › Phone player).
+            FullScreenVideoPlayerView(session: item.session, diagnosticsReport: {
+#if DEBUG
+                item.report()
+#else
+                ""
+#endif
+            }, onDismiss: { dock.presented = nil },
+               // A reopened docked video keeps its play/pause state; a newly played link starts.
+               autoPlayOnAppear: dock.docked?.session !== item.session, poster: item.poster,
+               onPresented: PhonePlayerDock.shared.playerDidAppear,
+               onKeepPlayingChanged: PhonePlayerDock.shared.keepPlayingChanged,
+               onLeave: { _ in PhonePlayerDock.shared.leave(item) })
         }
         .fullScreenCover(item: $together.activePlayerItem, onDismiss: {
             together.userClosedPlayer()

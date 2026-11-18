@@ -14,6 +14,16 @@ struct PhonePlayerMoreSheet: View {
                     }
                     .accessibilityIdentifier("phone-player-speed-picker")
                 }
+                Section {
+                    Picker("When you leave", selection: Binding(
+                        get: { session.keepPlayingInBackground ? PhoneLeaveChoice.keepPlaying : .pause },
+                        set: { session.setKeepPlayingInBackground($0 == .keepPlaying) })) {
+                        ForEach(PhoneLeaveChoice.allCases) { Text($0.label).tag($0) }
+                    }
+                    .accessibilityIdentifier("phone-player-leave")
+                } footer: {
+                    Text("For this video. Keep playing goes on when you go back, go home or lock the phone; Settings › Phone player sets the default.")
+                }
                 Section("Picture") {
                     Picker("Video sizing", selection: preference(\.sizing)) {
                         Text("Fit — show the entire picture").tag(PhoneVideoSizing.fit)

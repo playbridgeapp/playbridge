@@ -1514,6 +1514,8 @@ final class PhoneTogether: ObservableObject {
             existing.session.loadPartyReplacement(media: routed, resume: resumeSeconds, autoplay: false)
         } else {
             let session = playerSessionFactory(routed, item.title, resumeSeconds)
+            // A party reconnects when the app returns rather than playing on in the background.
+            session.setKeepPlayingInBackground(false)
             session.partyPlayInterceptor = { [weak self] in
                 _ = self?.play()
                 return true

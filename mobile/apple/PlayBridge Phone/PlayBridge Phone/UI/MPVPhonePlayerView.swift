@@ -88,6 +88,7 @@ struct MPVPhonePlayerView: View {
         .onChange(of: session.failure) { if $0 != nil { controls.unlock() } }
         .onChange(of: sheetShown) { controls.setSheetPresented($0) }
         .onChange(of: portraitLayout) { if $0 { controls.unlock() }; controls.reveal() }
+        .onChange(of: landscapeVideoUpright) { if !$0 && session.displayFill { session.setDisplayFill(false) } }
         .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in
             timelineTarget = nil; controls.setScrubbing(false)
             feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
@@ -135,7 +136,7 @@ struct MPVPhonePlayerView: View {
     private var ambientActive: Bool { (portraitLayout || barsAmbient) && ambientEnabled && scenePhase == .active }
     /// Full screen with Fit: the surface takes the picture's size and the glow fills the bars.
     private var barsAmbient: Bool {
-        allowsPortraitLayout && ambientEnabled && !portraitLayout && session.preferences.sizing == .fit
+        allowsPortraitLayout && ambientEnabled && !portraitLayout && session.preferences.sizing == .fit && !session.displayFill
             && session.mpvState.videoWidth > 0 && session.mpvState.videoHeight > 0
     }
 
@@ -154,9 +155,22 @@ struct MPVPhonePlayerView: View {
             .accessibilityHidden(true)
     }
 
-    private var portraitLayout: Bool {
+    /// A landscape video on an upright screen: shown in the portrait layout, or filling the
+    /// upright screen after pinch to fill.
+    private var landscapeVideoUpright: Bool {
         allowsPortraitLayout && PhonePlayerOpening.usesPortraitLayout(
             width: session.mpvState.videoWidth, height: session.mpvState.videoHeight, screenIsLandscape: landscape)
+    }
+    private var portraitLayout: Bool { landscapeVideoUpright && !session.displayFill }
+
+    /// Pinch to fill: open fills the upright screen (cropped at the sides), closed goes back.
+    /// Display only; the saved Fit/Fill choice is kept.
+    private func pinched(_ scale: Double) {
+        guard landscapeVideoUpright, !controls.locked else { return }
+        let next = PhonePinchFill.next(filling: session.displayFill, scale: scale)
+        guard next != session.displayFill else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { session.setDisplayFill(next) }
     }
     /// The blurred poster covers the black screen until the first frame (and stays for audio).
     private var showsPoster: Bool {
@@ -217,7 +231,8 @@ struct MPVPhonePlayerView: View {
                     controls.setScrubbing(false, source: .surfaceGesture)
                     guard !controls.locked, !voiceOver, session.durationSeconds > 0 else { return }
                     session.seek(to: preview.target)
-                }
+                },
+                onPinch: landscapeVideoUpright ? { pinched($0) } : nil
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea(edges: edges)
@@ -622,6 +637,8 @@ private struct PhonePlayerSurfaceGestures: UIViewRepresentable {
     var onDoubleTap: (Double) -> Void
     var onScrub: (PhonePlayerScrub.Preview?) -> Void
     var onCommit: (PhonePlayerScrub.Preview) -> Void
+    /// The final scale of a two-finger pinch; nil turns pinching off.
+    var onPinch: ((Double) -> Void)? = nil
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -643,6 +660,8 @@ private struct PhonePlayerSurfaceGestures: UIViewRepresentable {
         view.addGestureRecognizer(double)
         view.addGestureRecognizer(single)
         view.addGestureRecognizer(pan)
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinch(_:)))
+        view.addGestureRecognizer(pinch)
         return view
     }
     func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
@@ -660,6 +679,10 @@ private struct PhonePlayerSurfaceGestures: UIViewRepresentable {
         init(_ parent: PhonePlayerSurfaceGestures) { self.parent = parent }
 
         @objc func singleTap() { parent.onTap() }
+        @objc func pinch(_ recognizer: UIPinchGestureRecognizer) {
+            guard recognizer.state == .ended, let onPinch = parent.onPinch else { return }
+            onPinch(Double(recognizer.scale))
+        }
         @objc func doubleTap(_ recognizer: UITapGestureRecognizer) {
             guard !parent.locked else { parent.onTap(); return }
             guard let view = recognizer.view else { return }

@@ -11,6 +11,7 @@ struct DashboardScreen: View {
     @EnvironmentObject private var together: PhoneTogether
     @State private var appToInspect: BridgedApp?
     @State private var showCustomize = false
+    @State private var showPhonePlayer = false
     @AppStorage("dashboard_tile_order") private var savedOrder = "[]"
     @AppStorage("dashboard_hidden_tiles") private var savedHidden = "[]"
     @ScaledMetric(relativeTo: .body) private var largeTileHeight = 140.0
@@ -97,6 +98,9 @@ struct DashboardScreen: View {
         .background(Theme.surface.ignoresSafeArea())
         .onAppear { normalizeOrder() }
         .onChange(of: availableTiles.map(\.id)) { _ in normalizeOrder() }
+        .sheet(isPresented: $showPhonePlayer) {
+            PhonePlayerLauncherSheet(onOpenFiles: { nav.navigate(to: .phoneFiles) }, onPlay: playLink)
+        }
         .sheet(item: $appToInspect) { app in
             BridgedAppInfoView(app: app)
         }
@@ -112,6 +116,24 @@ struct DashboardScreen: View {
                 }
             )
         }
+    }
+
+    /// Back to a video playing in the background, or a sheet to open a file or play a link.
+    private func openPhonePlayer() {
+        if PhonePlayerDock.shared.docked != nil { PhonePlayerDock.shared.reopen() }
+        else { showPhonePlayer = true }
+    }
+
+    private func playLink(_ url: URL) {
+        let media = RoutedStream(url: url, headers: [:], sourceURL: url.absoluteString)
+        let session = PlaybackSession(media: media, route: .direct, title: PhonePlayerLauncher.title(for: url)) { media }
+        var item = PlayerItem(session: session)
+#if DEBUG
+        item.report = { [weak session] in session?.diagnosticsReport() ?? "PlayBridge native playback diagnostics\nSession closed" }
+#endif
+        // Opened from the root like a docked player, so Back can dock it too.
+        PhonePlayerDock.shared.close()
+        PhonePlayerDock.shared.open(item)
     }
 
     // MARK: - Components
@@ -131,7 +153,18 @@ struct DashboardScreen: View {
             // Always shown: the Remote picks its own TV, even when videos play on this phone.
             topBarButton("av.remote", label: "Open remote") { nav.navigate(to: .remote) }
                 .accessibilityIdentifier("dashboard-remote")
-            topBarButton("gearshape", label: "Settings") { nav.navigate(to: .browserSettings) }
+            Menu {
+                Button { openPhonePlayer() } label: { Label("Phone player", systemImage: "play.rectangle") }
+                Button { nav.navigate(to: .browserSettings) } label: { Label("Settings", systemImage: "gearshape") }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(Theme.onSurface)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("dashboard-more")
         }
         .frame(height: 52)
     }
