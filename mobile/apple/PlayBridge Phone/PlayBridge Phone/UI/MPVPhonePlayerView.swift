@@ -4,6 +4,7 @@ import Metal
 /// Touch controls for the mpv-only phone player, operating through PlaybackSession.
 struct MPVPhonePlayerView: View {
     @ObservedObject var session: PlaybackSession
+    @ObservedObject private var subtitleStyle = SubtitleStyleStore.shared
     @StateObject private var controls: PhonePlayerControls
     let onDismiss: (() -> Void)?
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -57,12 +58,7 @@ struct MPVPhonePlayerView: View {
             if !session.websiteCaption.isEmpty {
                 VStack {
                     Spacer()
-                    Text(session.websiteCaption)
-                        .font(.system(size: 20 * session.preferences.subtitleScale))
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(session.preferences.subtitleColor == .yellow ? .yellow : .white)
-                        .padding(8)
-                        .background(session.preferences.subtitleBackground ? Color.black.opacity(0.75) : .clear)
+                    SubtitleCaptionText(text: session.websiteCaption, style: subtitleStyle.style)
                         .padding(.horizontal, 20)
                         .padding(.bottom, controls.visible && !controls.locked ? 124 : 24)
                 }.allowsHitTesting(false)

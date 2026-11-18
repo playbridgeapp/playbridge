@@ -14,6 +14,7 @@ struct BrowserSettingsScreen: View {
     @State private var engine = SearchEngine.current
     @State private var showCastPermissions = false
     @State private var showLicences = false
+    @State private var showSubtitles = false
 #if PB_DEVELOPER_TOOLS
     @AppStorage(BrowserDeveloperTools.key) private var developerTools = false
 #endif
@@ -47,6 +48,9 @@ struct BrowserSettingsScreen: View {
                             .onChange(of: autoConnect) { enabled in
                                 UserDefaults.standard.set(enabled, forKey: PlayOnPreferences.autoConnectKey)
                             }
+                    }
+                    Section("Subtitles") {
+                        Button("Subtitle style") { showSubtitles = true }
                     }
                     Section("Search engine") {
                         Picker("Search engine", selection: $engine) {
@@ -90,6 +94,7 @@ struct BrowserSettingsScreen: View {
         }
         .sheet(isPresented: $showCastPermissions) { PageCastPermissionsView() }
         .sheet(isPresented: $showLicences) { OpenSourceLicencesScreen() }
+        .sheet(isPresented: $showSubtitles) { SubtitleStyleSettingsSheet() }
         .sheet(isPresented: $showClearData) { BrowserClearDataSheet(store: store) }
         .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
         .sheet(isPresented: $showUserAgent) {

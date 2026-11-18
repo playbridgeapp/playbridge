@@ -242,6 +242,35 @@ enum WireProtocol {
         encode(["type": "watch_together_join", "invite": invite, "from": from])
     }
 
+    // MARK: - TV subtitle style (subtitle_style_v1, subtitle_font_v1)
+
+    static func subtitleStyleQuery() -> String { encode(["type": "subtitle_style_query"]) }
+
+    /// The complete style (`SubtitleStylePreferences.wireDictionary`); the TV replaces its own with it.
+    static func subtitleStyle(_ wire: [String: Any]) -> String {
+        var frame = wire
+        frame["type"] = "subtitle_style"
+        frame["installedFonts"] = nil
+        return encode(frame)
+    }
+
+    static func subtitleFontBegin(transferId: String, size: Int, sha256: String) -> String {
+        encode(["type": "subtitle_font_begin", "transferId": transferId, "size": size, "sha256": sha256])
+    }
+
+    static func subtitleFontChunk(transferId: String, offset: Int, data: Data) -> String {
+        encode(["type": "subtitle_font_chunk", "transferId": transferId, "offset": offset,
+                "data": data.base64EncodedString()])
+    }
+
+    static func subtitleFontEnd(transferId: String) -> String {
+        encode(["type": "subtitle_font_end", "transferId": transferId])
+    }
+
+    static func subtitleFontRemove(family: String) -> String {
+        encode(["type": "subtitle_font_remove", "family": family])
+    }
+
     // MARK: - Helpers
 
     private static func envelope(

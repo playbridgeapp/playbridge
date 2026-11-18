@@ -117,6 +117,8 @@ final class ConnectionViewModel: ObservableObject {
     }
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
+    /// The connected TV's subtitle style and fonts.
+    private(set) lazy var tvSubtitles = TvSubtitleStyleController { [weak self] text in self?.ws.send(text) ?? false }
     let castPlaybackSession = CastPlaybackSession(renderer: CastSystemPlayback.shared)
     private var externalMediaKind = "video"
 
@@ -215,6 +217,10 @@ final class ConnectionViewModel: ObservableObject {
 
         coordinator.onWatchTogetherJoined = { [weak self] json in
             self?.handleWatchTogetherJoined(json)
+        }
+        // The coordinator delivers on the main queue.
+        coordinator.onSubtitleMessage = { [weak self] json, session in
+            MainActor.assumeIsolated { self?.tvSubtitles.handle(json, session: session) }
         }
 
         ws.onMessage = { [weak self] text in
@@ -2087,6 +2093,20 @@ extension ConnectionViewModel: PageCastTransport {
             endpointKey: endpoint
         )
     }
+
+    /// The connected TV keeps a subtitle style this phone can change.
+    var tvSupportsSubtitleStyle: Bool {
+        guard playBridgeLinkConnected, !isAirPlay, !isExternalReceiver else { return false }
+        return pairedDevice?.features?.contains("subtitle_style_v1") == true
+    }
+
+    /// The connected TV also accepts custom subtitle fonts.
+    var tvSupportsSubtitleFont: Bool {
+        tvSupportsSubtitleStyle && pairedDevice?.features?.contains("subtitle_font_v1") == true
+    }
+
+    /// The connection the TV's subtitle replies must come on to count.
+    var subtitleStyleSession: UUID { ws.capabilitySessionID }
 
     var tvSupportsWatchTogether: Bool {
         guard playBridgeLinkConnected, !isAirPlay else { return false }

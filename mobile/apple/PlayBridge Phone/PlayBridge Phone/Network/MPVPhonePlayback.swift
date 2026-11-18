@@ -34,6 +34,14 @@ import Libmpv
             object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.core.setBackground(false) }
             })
+        core.setSubtitleStyle(Self.subtitleProperties())
+        backgroundObservers.append(NotificationCenter.default.addObserver(forName: .playBridgeSubtitleStyleDidChange,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, !self.closed else { return }
+                    self.core.setSubtitleStyle(Self.subtitleProperties())
+                }
+            })
         backgroundObservers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,
             object: nil, queue: .main) { [weak self] notification in
                 guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue else { return }
@@ -42,6 +50,12 @@ import Libmpv
     }
 
     func configure(_ options: PhonePlayerOptions) { guard !closed else { return }; core.configure(options) }
+
+    /// The phone's subtitle style as mpv options. Only the selected custom font is in the
+    /// fonts directory, because libass loads every font there into memory.
+    private static func subtitleProperties() -> [(String, String)] {
+        [("sub-fonts-dir", SubtitleFontLibrary.shared.fontsDirectory.path)] + SubtitleStyleStore.shared.style.mpvProperties()
+    }
     func attach(_ layer: CAMetalLayer) { guard !closed else { return }; core.attach(layer) }
     func resize() { guard !closed else { return }; core.resize() }
     func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool) {
@@ -88,6 +102,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private var loaded = false
     private var pendingOutputResize = false
     private var options = PhonePlayerOptions()
+    private var subtitleStyle: [(String, String)] = []
     private var pendingSeek: Double?
     private var seekState = PhoneMPVSeekState()
     private var closed = false
@@ -134,6 +149,9 @@ private final class MPVPhoneCore: @unchecked Sendable {
                     emit(.failed(status, "option: " + name)); return
                 }
             }
+            if status >= 0 {
+                for (name, value) in subtitleStyle { _ = mpv_set_option_string(context, name, value) }
+            }
             if status >= 0 { status = mpv_initialize(context) }
             guard status >= 0 else {
                 mpv_terminate_destroy(context); handle = nil
@@ -167,6 +185,16 @@ private final class MPVPhoneCore: @unchecked Sendable {
         }
     }
 
+    func setSubtitleStyle(_ properties: [(String, String)]) {
+        queue.async { [self] in
+            guard !closed else { return }
+            subtitleStyle = properties
+            guard let handle else { return }
+            // A style mpv can't take only changes how subtitles look, so it never stops playback.
+            for (name, value) in properties { _ = mpv_set_property_string(handle, name, value) }
+        }
+    }
+
     func configure(_ options: PhonePlayerOptions) {
         queue.async { [self] in
             guard !closed else { return }
@@ -178,11 +206,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
         guard let handle else { return }
         let prefs = options.preferences
         let values = ["speed": String(prefs.speed), "panscan": prefs.sizing == .fill ? "1" : "0",
-                      "sub-delay": String(options.subtitleDelay), "sub-scale": String(prefs.subtitleScale),
-                      "sub-color": prefs.subtitleColor == .yellow ? "#FFFF00" : "#FFFFFF",
-                      "sub-back-color": prefs.subtitleBackground ? "#000000BF" : "#00000000",
-                      "sub-border-size": "2", "sub-ass-override": "force",
-                      "sub-border-style": prefs.subtitleBackground ? "background-box" : "outline-and-shadow"]
+                      "sub-delay": String(options.subtitleDelay)]
         for (name, value) in values.sorted(by: { $0.key < $1.key }) {
             let status = mpv_set_property_string(handle, name, value)
             if status < 0 { emit(.failed(status, "player setting: " + name)) }

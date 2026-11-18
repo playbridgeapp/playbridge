@@ -1,18 +1,15 @@
 import Foundation
 
 enum PhoneVideoSizing: String, Codable, CaseIterable { case fit, fill }
-enum PhoneSubtitleColor: String, Codable, CaseIterable { case white, yellow }
 
 /// Only presentation choices and language codes are persisted. Never persist
 /// media URLs, track titles, credentials or a media-specific subtitle offset.
+/// How subtitles look is the phone's `SubtitleStyleStore` style, shared with Settings.
 struct PhonePlayerPreferences: Codable, Equatable {
     static let key = "phone_mpv_preferences_v1"
     static let speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
     var sizing: PhoneVideoSizing = .fit
     var speed = 1.0
-    var subtitleScale = 1.0
-    var subtitleColor: PhoneSubtitleColor = .white
-    var subtitleBackground = true
     var audioLanguage: String?
     var subtitlesEnabled = false
     var subtitleLanguage: String?
@@ -20,7 +17,6 @@ struct PhonePlayerPreferences: Codable, Equatable {
     func sanitized() -> Self {
         var copy = self
         copy.speed = Self.speeds.contains(speed) ? speed : 1
-        copy.subtitleScale = subtitleScale.isFinite ? min(2, max(0.75, subtitleScale)) : 1
         copy.audioLanguage = Self.languageCode(audioLanguage)
         copy.subtitleLanguage = Self.languageCode(subtitleLanguage)
         return copy

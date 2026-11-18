@@ -102,6 +102,9 @@ jobs:
       - name: Website playback
         run: bash mobile/apple/tests/run-website-playback-checks.sh
 
+      - name: Subtitle style and fonts
+        run: bash mobile/apple/tests/run-subtitle-style-checks.sh
+
       - name: Apple proxy upstream shim
         run: bash mobile/apple/tests/run-apple-upstream-checks.sh
 

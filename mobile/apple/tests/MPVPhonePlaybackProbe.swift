@@ -192,7 +192,9 @@ enum LocalFileServer {
             throw ProbeError(message: "Missing language-tagged native tracks")
         }
         session.selectAudio(audio.id); session.selectEmbeddedSubtitle(subtitle.id)
-        session.updatePreferences { $0.speed = 2; $0.subtitleScale = 1.5; $0.subtitleColor = .yellow; $0.subtitleBackground = true }
+        session.updatePreferences { $0.speed = 2 }
+        var probeStyle = SubtitleStylePreferences(); probeStyle.size = .extraLarge; probeStyle.background = .box
+        SubtitleStyleStore.shared.setStyle(probeStyle)
         session.setSubtitleDelay(3)
         try await wait("Native 2x speed and subtitle selection") { session.mpvState.speed == 2 && session.mpvState.selectedSubtitle == subtitle.id }
         guard session.preferences.audioLanguage == "en" && session.preferences.subtitleLanguage == "en" else {
@@ -210,7 +212,7 @@ enum LocalFileServer {
         let styleMedia = RoutedStream(url: styleURL, headers: media.headers)
         await session.replaceWebsiteMedia(styleMedia, title: "Language restore", resumeMs: 2000, autoplay: false)
         try await wait("Native language restoration") { session.mpvState.selectedSubtitle == subtitle.id && session.mpvState.selectedAudio == audio.id }
-        guard session.subtitleDelay == 0 && session.preferences.subtitleScale == 1.5 else {
+        guard session.subtitleDelay == 0 && SubtitleStyleStore.shared.style.size == .extraLarge else {
             throw ProbeError(message: "New episode did not reset timing while retaining style")
         }
         try await captureFeature("subtitle-style")
