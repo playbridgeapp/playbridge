@@ -202,6 +202,7 @@ fun PhonePlayerSettingsScreen(onBack: () -> Unit) {
     val mode by settings.phonePlayerMode.collectAsState(initial = PhonePlayerMode.AUTOMATIC)
     val landscapeOpen by settings.phoneLandscapeOpen.collectAsState(initial = PhoneLandscapeOpen.FULLSCREEN)
     val leaveAction by settings.phoneLeaveAction.collectAsState(initial = PhoneLeaveAction.PAUSE)
+    val ambient by settings.phoneAmbient.collectAsState(initial = true)
 
     SettingsPage("Phone player", onBack) {
         SettingsGroupTitle("Player")
@@ -218,6 +219,12 @@ fun PhonePlayerSettingsScreen(onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
+        SettingsGroupTitle("Picture")
+        SettingsSwitch(
+            "Ambient mode",
+            "A soft glow of the video's colours behind the portrait layout and in the bars around a fitted video",
+            ambient,
+        ) { scope.launch { settings.setPhoneAmbient(it) } }
         SettingsGroupTitle("When you leave the player")
         SettingsRadioGroup(PhoneLeaveAction.entries, leaveAction, { it.label }, { it.description }) {
             scope.launch { settings.setPhoneLeaveAction(it) }

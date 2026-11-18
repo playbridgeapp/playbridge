@@ -56,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -143,6 +144,7 @@ private fun ZoomedVideo(state: PlayerScreenState) {
 
                     // SubtitleLayer draws subtitles outside the zoomed frame.
                     subtitleView?.visibility = android.view.View.GONE
+                    state.textureView = findTextureView(this)
                 }
             },
             update = { view ->
@@ -153,8 +155,13 @@ private fun ZoomedVideo(state: PlayerScreenState) {
                     ensurePrepared(player)
                 }
             },
-            modifier = Modifier
-                .fillMaxSize()
+            onRelease = { if (state.textureView != null && findTextureView(it) === state.textureView) state.textureView = null },
+            // Ambient bars: the view takes the picture's shape, centred, with the glow around it.
+            modifier = if (state.ambientFitted) {
+                Modifier.align(Alignment.Center).aspectRatio(state.layoutAspect)
+            } else {
+                Modifier.fillMaxSize()
+            },
         )
     }
 }

@@ -77,6 +77,7 @@ data class ExportedAppSettings(
     val phoneBackgroundPlay: Boolean? = null,
     /** A [com.playbridge.sender.player.PhoneLeaveAction] id. */
     val phoneLeaveAction: String? = null,
+    val phoneAmbient: Boolean? = null,
     /** The phone player's subtitle style as its `subtitle_style` JSON. */
     val phoneSubtitleStyle: String? = null,
     val castHistoryEnabled: Boolean? = null,

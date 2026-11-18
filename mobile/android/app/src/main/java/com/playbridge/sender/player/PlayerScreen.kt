@@ -20,7 +20,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.media3.common.Player
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.playbridge.sender.cast.openInExternalPlayer
+import com.playbridge.sender.data.settings.SettingsRepository
+import org.koin.compose.koinInject
 
 /**
  * The phone player: video, gestures, overlays, controls and sheets. A landscape video on an
@@ -74,6 +80,16 @@ internal fun PlayerScreen(
             val videoHeight = if (portraitLayout) maxWidth / state.layoutAspect else maxHeight
             // Growing from a thumbnail only maps onto an upright screen; landscape just fades in.
             val grow = rememberGrowFromThumbnail(growFrom.takeIf { maxHeight > maxWidth }, onGrown)
+            // Ambient mode: behind the portrait layout, or in the bars around a fitted full-screen video.
+            val ambientOn by ambientSetting()
+            val ambientBars = ambientOn && !portraitLayout && !isInPip && state.videoAspect > 0f &&
+                state.shownResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT && !state.isPanZoomEnabled
+            SideEffect { state.ambientFitted = ambientBars }
+            val ambient = rememberAmbientGlow(state, active = ambientOn && !isInPip && (portraitLayout || ambientBars))
+            if (ambient != null) {
+                if (portraitLayout) PortraitAmbientGlow(ambient, videoTop, videoHeight)
+                else if (ambientBars) AmbientGlow(ambient, Modifier.fillMaxSize(), alpha = 0.55f)
+            }
             val gestures = Modifier
                 .portraitFillGestures(state, enabled = landscapeUpright && !state.locked && !state.isPanZoomEnabled)
                 .playerGestures(state, isInPip, LocalHapticFeedback.current)
@@ -109,4 +125,10 @@ internal fun PlayerScreen(
             PlayerSheetsHost(state, engine, onSwitchEngine, leaveAction, ::openExternal)
         }
     }
+}
+
+@Composable
+private fun ambientSetting(): State<Boolean> {
+    val settings: SettingsRepository = koinInject()
+    return settings.phoneAmbient.collectAsState(initial = false)
 }
