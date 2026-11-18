@@ -76,6 +76,8 @@ struct PlaybackFailure: Equatable {
 @MainActor final class PlaybackSession: ObservableObject {
     @Published private(set) var engineKind = PhonePlaybackEngineKind.mpv
     @Published private(set) var mpvState = PhonePlaybackState()
+    /// Shown in the player's top bar; empty when the source has no useful title.
+    @Published var title: String
     private(set) var alternativeEngine: PhoneAlternativePlaybackEngine?
     var onPlaybackEnd: (() -> Void)?
     var partyPlayInterceptor: (() -> Bool)?
@@ -129,13 +131,14 @@ struct PlaybackFailure: Equatable {
     var isPlaying: Bool { alternativeEngine != nil && !mpvState.paused }
 
     init(media: RoutedStream, route: StreamRoute, contentType: String? = nil,
-         initialOrientation: String? = nil, initialResume: Double = 0,
+         title: String = "", initialOrientation: String? = nil, initialResume: Double = 0,
          preferencesStore: UserDefaults = .standard,
          externalSubtitles: [PhoneExternalSubtitle] = [], subtitleFiles: [URL] = [],
          alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil,
          avPlayerFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil,
          prepare: @escaping () async throws -> RoutedStream) {
         self.route = route
+        self.title = title
         self.externalSubtitles = externalSubtitles
         self.subtitleFiles = subtitleFiles
         self.initialOrientation = initialOrientation
@@ -375,6 +378,7 @@ struct PlaybackFailure: Equatable {
         guard !closed, !Task.isCancelled else { return }
         generation += 1; retryTask?.cancel(); retryTask = nil; retrying = false
         subtitleDelay = 0
+        self.title = title
         if let prepare { self.prepare = prepare }
         sourceURL = media.sourceURL.flatMap(URL.init(string:)) ?? media.url
         self.contentType = contentType

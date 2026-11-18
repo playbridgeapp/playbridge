@@ -1,7 +1,7 @@
 import Foundation
 
 /// The phone player's decoder. mpv is the default for every session; AVPlayer is a
-/// per-session choice for streams mpv handles badly (Player settings or the failure screen).
+/// per-session choice for streams mpv handles badly (the player's More sheet or the failure screen).
 enum PhonePlaybackEngineKind: String, CaseIterable, Identifiable {
     case mpv = "mpv"
     case avPlayer = "avplayer"

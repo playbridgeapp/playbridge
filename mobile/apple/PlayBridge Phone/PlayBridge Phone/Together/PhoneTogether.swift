@@ -432,8 +432,8 @@ final class PhoneTogether: ObservableObject {
         self.defaults = defaults
         self.clockMs = clockMs
         self.sessionFactory = sessionFactory
-        self.playerSessionFactory = playerSessionFactory ?? { routed, _, resume in
-            PlaybackSession(media: routed, route: .direct, initialResume: resume) { routed }
+        self.playerSessionFactory = playerSessionFactory ?? { routed, title, resume in
+            PlaybackSession(media: routed, route: .direct, title: title, initialResume: resume) { routed }
         }
     }
 
@@ -1509,6 +1509,7 @@ final class PhoneTogether: ObservableObject {
         if var existing = activePlayerItem {
             existing.itemID = item.id
             existing.title = item.title
+            existing.session.title = item.title
             activePlayerItem = existing
             existing.session.loadPartyReplacement(media: routed, resume: resumeSeconds, autoplay: false)
         } else {

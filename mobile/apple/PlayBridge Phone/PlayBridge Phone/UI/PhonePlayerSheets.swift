@@ -1,6 +1,7 @@
 import SwiftUI
 
-struct PhonePlayerSettingsView: View {
+/// The player's ⋮ More sheet, grouped like Android's: Playback, Picture, Player.
+struct PhonePlayerMoreSheet: View {
     @ObservedObject var session: PlaybackSession
     @Environment(\.dismiss) private var dismiss
 
@@ -9,12 +10,16 @@ struct PhonePlayerSettingsView: View {
             Form {
                 Section("Playback") {
                     Picker("Speed", selection: preference(\.speed)) {
-                        ForEach(PhonePlayerPreferences.speeds, id: \.self) { Text(String(format: "%g×", $0)).tag($0) }
+                        ForEach(PhonePlayerPreferences.speeds, id: \.self) { Text(PhonePlayerChrome.speedLabel($0)).tag($0) }
                     }
+                    .accessibilityIdentifier("phone-player-speed-picker")
+                }
+                Section("Picture") {
                     Picker("Video sizing", selection: preference(\.sizing)) {
                         Text("Fit — show the entire picture").tag(PhoneVideoSizing.fit)
                         Text("Fill — crop to fill the screen").tag(PhoneVideoSizing.fill)
                     }
+                    .accessibilityIdentifier("phone-player-sizing")
                 }
                 Section {
                     Picker("Player engine", selection: Binding(get: { session.engineKind }, set: { session.switchEngine(to: $0) })) {
@@ -23,9 +28,32 @@ struct PhonePlayerSettingsView: View {
                     }
                     .disabled(session.retrying)
                     .accessibilityIdentifier("phone-player-engine")
+                } header: {
+                    Text("Player")
                 } footer: {
                     Text("Switching reopens the video at the current position. Try AVPlayer when a stream won’t seek or shows no picture in mpv. AVPlayer can’t play MKV files or styled (ASS) subtitles. The choice lasts until you close the player; the next video you open starts with mpv.")
                 }
+            }
+            .navigationTitle("More")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func preference<Value>(_ key: WritableKeyPath<PhonePlayerPreferences, Value>) -> Binding<Value> {
+        Binding(get: { session.preferences[keyPath: key] }, set: { value in session.updatePreferences { $0[keyPath: key] = value } })
+    }
+}
+
+/// Audio and subtitles in one sheet: tracks, preferred languages, subtitle timing and style.
+struct PhonePlayerTracksSheet: View {
+    @ObservedObject var session: PlaybackSession
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
                 Section("Audio") {
                     if !session.mpvState.audioTracks.isEmpty {
                         Picker("Current track", selection: Binding(get: { session.mpvState.selectedAudio ?? session.mpvState.audioTracks.first?.id ?? -1 }, set: { session.selectAudio($0) })) {
@@ -80,19 +108,17 @@ struct PhonePlayerSettingsView: View {
                 }
                 PhoneSubtitleStyleSections()
             }
-            .navigationTitle("Player settings")
+            .navigationTitle("Audio & subtitles")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .presentationDetents([.medium, .large])
     }
 
     private var subtitleSelection: String {
         if let index = session.websiteSubtitleIndex { return "website:\(index)" }
         if let id = session.mpvState.selectedSubtitle { return "embedded:\(id)" }
         return "off"
-    }
-    private func preference<Value>(_ key: WritableKeyPath<PhonePlayerPreferences, Value>) -> Binding<Value> {
-        Binding(get: { session.preferences[keyPath: key] }, set: { value in session.updatePreferences { $0[keyPath: key] = value } })
     }
     private var languages: [String] {
         let tags = session.mpvState.audioTracks.map(\.language) + session.mpvState.subtitleTracks.map(\.language)

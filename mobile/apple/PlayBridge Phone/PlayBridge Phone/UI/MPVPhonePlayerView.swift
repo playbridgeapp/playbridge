@@ -3,6 +3,9 @@ import Metal
 import AVFoundation
 
 /// Touch controls for the phone player (mpv or AVPlayer), operating through PlaybackSession.
+/// Layout follows Android's redesign: Back, the title and Queue / Audio & subtitles / More on
+/// top; Previous / Play / Next in the centre; the remote-style seek bar with Lock, Rotate and
+/// a speed chip at the bottom. Double-tap skips, so there are no ±10 s buttons.
 struct MPVPhonePlayerView: View {
     @ObservedObject var session: PlaybackSession
     @ObservedObject private var subtitleStyle = SubtitleStyleStore.shared
@@ -11,9 +14,10 @@ struct MPVPhonePlayerView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var scrubbing = false
-    @State private var scrubPosition = 0.0
-    @State private var showSettings = false
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var timelineTarget: Double?
+    @State private var showMore = false
+    @State private var showTracks = false
     @State private var showQueue = false
     @State private var seekFeedback = 0
     @State private var feedbackTask: Task<Void, Never>?
@@ -24,6 +28,12 @@ struct MPVPhonePlayerView: View {
         self.onDismiss = onDismiss
         _controls = StateObject(wrappedValue: controls ?? PhonePlayerControls())
     }
+
+    private var buffering: Bool { session.mpvState.buffering || session.websiteWaitingForNext || session.websiteQueueChangingItem }
+    private var hasQueue: Bool { !session.websiteQueueTitles.isEmpty }
+    private var landscape: Bool { verticalSizeClass == .compact }
+    private var chromeShown: Bool { controls.visible && !controls.locked }
+    private var sheetShown: Bool { showMore || showTracks || showQueue }
 
     var body: some View {
         ZStack {
@@ -57,7 +67,7 @@ struct MPVPhonePlayerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
             .accessibilityHidden(true)
-            if session.mpvState.buffering {
+            if buffering && !chromeShown {
                 ProgressView().tint(.white).allowsHitTesting(false)
             }
             if !overlayCaption.isEmpty {
@@ -65,20 +75,28 @@ struct MPVPhonePlayerView: View {
                     Spacer()
                     SubtitleCaptionText(text: overlayCaption, style: subtitleStyle.style)
                         .padding(.horizontal, 20)
-                        .padding(.bottom, controls.visible && !controls.locked ? 124 : 24)
+                        .padding(.bottom, chromeShown ? 128 : 24)
                 }.allowsHitTesting(false)
             }
-            if controls.visible && !controls.locked {
-                VStack(spacing: 0) {
-                    toolbar
-                    Spacer(minLength: 0)
-                    transport
+            if chromeShown {
+                ZStack {
+                    VStack(spacing: 0) {
+                        topBar
+                        Spacer(minLength: 0)
+                        bottomBar
+                    }
+                    centre
                 }.transition(.opacity)
             }
             if controls.locked && controls.unlockVisible {
                 VStack {
-                    HStack {
+                    HStack(spacing: 10) {
                         Spacer()
+                        Text("Controls locked")
+                            .font(Theme.font(size: 13, weight: .medium))
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(.black.opacity(0.7), in: Capsule())
+                            .accessibilityHidden(true)
                         Button { controls.unlock() } label: {
                             Image(systemName: "lock.open.fill").frame(width: 48, height: 48)
                                 .background(.black.opacity(0.7), in: Circle())
@@ -91,23 +109,20 @@ struct MPVPhonePlayerView: View {
                 HStack {
                     if seekFeedback > 0 { Spacer() }
                     Text("\(seekFeedback > 0 ? "+" : "")\(seekFeedback) seconds")
+                        .font(Theme.font(size: 15, weight: .semibold))
                         .padding(16).background(.black.opacity(0.7), in: Capsule())
                     if seekFeedback < 0 { Spacer() }
                 }.padding(24).allowsHitTesting(false).accessibilityHidden(true)
             }
             if let scrubPreview {
-                VStack(spacing: 4) {
-                    Text(scrubPreview.offsetLabel).font(.system(size: 40, weight: .bold)).monospacedDigit()
-                    Text(scrubPreview.timeLabel).font(.title3.weight(.semibold)).monospacedDigit()
-                }
-                .padding(.horizontal, 24).padding(.vertical, 16)
-                .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                scrubHUD(big: scrubPreview.offsetLabel, small: scrubPreview.timeLabel)
+            } else if let timelineTarget {
+                scrubHUD(big: PhonePlayerChrome.clock(timelineTarget),
+                         small: PhonePlayerChrome.signedOffset(target: timelineTarget, from: session.positionSeconds))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .foregroundStyle(.white).tint(.white)
+        .foregroundStyle(.white).tint(Theme.primary)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controls.visible)
         .onAppear { controls.setSuspended(false); updateControls() }
         .onChange(of: session.isPlaying) { _ in updateControls() }
@@ -117,10 +132,9 @@ struct MPVPhonePlayerView: View {
         .onChange(of: voiceOver) { _ in updateControls() }
         .onChange(of: scenePhase) { controls.setSuspended($0 != .active) }
         .onChange(of: session.failure) { if $0 != nil { controls.unlock() } }
-        .onChange(of: showSettings) { _ in controls.setSheetPresented(showSettings || showQueue) }
-        .onChange(of: showQueue) { _ in controls.setSheetPresented(showSettings || showQueue) }
+        .onChange(of: sheetShown) { controls.setSheetPresented($0) }
         .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in
-            scrubbing = false; controls.setScrubbing(false)
+            timelineTarget = nil; controls.setScrubbing(false)
             feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
             controls.reveal()
         }
@@ -128,9 +142,8 @@ struct MPVPhonePlayerView: View {
             controls.stop(); feedbackTask?.cancel(); feedbackTask = nil
             PhonePlayerOrientationLock.release()
         }
-        .sheet(isPresented: $showSettings, onDismiss: { controls.reveal() }) {
-            PhonePlayerSettingsView(session: session)
-        }
+        .sheet(isPresented: $showMore, onDismiss: { controls.reveal() }) { PhonePlayerMoreSheet(session: session) }
+        .sheet(isPresented: $showTracks, onDismiss: { controls.reveal() }) { PhonePlayerTracksSheet(session: session) }
         .sheet(isPresented: $showQueue, onDismiss: { controls.reveal() }) { queue }
     }
 
@@ -139,83 +152,166 @@ struct MPVPhonePlayerView: View {
         session.websiteCaption.isEmpty ? session.mpvState.overlayCaption : session.websiteCaption
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 4) {
-            if let onDismiss {
-                Button(action: onDismiss) { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Close player")
+    private var meta: String {
+        PhonePlayerChrome.meta(queueIndex: session.websiteQueueIndex, queueCount: session.websiteQueueTitles.count,
+                               engine: session.engineKind.label)
+    }
+
+    // MARK: Top bar
+
+    /// In landscape the title sits between Back and the actions; in portrait it has its own row.
+    private var topBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 2) {
+                if let onDismiss {
+                    Button(action: onDismiss) { Image(systemName: "chevron.backward").font(.system(size: 18, weight: .semibold)).frame(width: 44, height: 44) }
+                        .accessibilityLabel("Close player")
+                        .accessibilityIdentifier("phone-player-close")
+                }
+                if landscape { titleBlock.padding(.leading, onDismiss == nil ? 8 : 0) }
+                Spacer(minLength: 8)
+                topActions
             }
-            Spacer(minLength: 0)
-            if !session.websiteQueueTitles.isEmpty {
+            if !landscape { titleBlock.padding(.horizontal, 12) }
+        }
+        .padding(.horizontal, 8).padding(.bottom, 28)
+        .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom).ignoresSafeArea(edges: .top))
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if !session.title.isEmpty {
+                Text(session.title)
+                    .font(Theme.font(size: 16, weight: .semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            Text(meta)
+                .font(Theme.font(size: 12))
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("phone-player-title")
+    }
+
+    private var topActions: some View {
+        HStack(spacing: 2) {
+            if hasQueue {
                 Button { showQueue = true } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
                     .accessibilityLabel("Queue")
+                    .accessibilityIdentifier("phone-player-queue")
             }
-            Button {
-                controls.reveal()
-                session.updatePreferences { $0.sizing = $0.sizing == .fit ? .fill : .fit }
-            } label: {
-                Text(session.preferences.sizing == .fit ? "Fit" : "Fill").font(.callout.bold()).frame(width: 44, height: 44)
-            }.accessibilityLabel("Video sizing: " + (session.preferences.sizing == .fit ? "Fit" : "Fill"))
-                .accessibilityHint("Switch between fitting the picture and filling the screen")
-                .accessibilityIdentifier("phone-player-sizing")
-            Button { showSettings = true } label: {
-                Text(String(format: "%g×", session.preferences.speed)).font(.callout.bold()).frame(minWidth: 44, minHeight: 44)
-            }.accessibilityLabel("Playback speed").accessibilityValue(String(format: "%g times", session.preferences.speed))
-            Button {
-                controls.reveal()
-                PhonePlayerOrientationLock.toggle()
-            } label: { Image(systemName: "rotate.right").frame(width: 44, height: 44) }
-                .accessibilityLabel(PhonePlayerOrientationLock.isLandscape ? "Rotate to portrait" : "Rotate to landscape")
-                .accessibilityIdentifier("phone-player-rotate")
-            Button { controls.lock() } label: { Image(systemName: "lock.fill").frame(width: 44, height: 44) }
-                .accessibilityLabel("Lock player controls").accessibilityIdentifier("phone-player-lock")
-            Button { showSettings = true } label: { Image(systemName: "gearshape").frame(width: 44, height: 44) }
-                .accessibilityLabel("Player settings").accessibilityIdentifier("phone-player-settings")
+            Button { showTracks = true } label: { Image(systemName: "captions.bubble").frame(width: 44, height: 44) }
+                .accessibilityLabel("Audio and subtitles")
+                .accessibilityIdentifier("phone-player-tracks")
+            Button { showMore = true } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                .accessibilityLabel("More")
+                .accessibilityIdentifier("phone-player-more")
         }
-        .padding(.horizontal, 8)
-        .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom))
+        .font(.system(size: 18, weight: .medium))
     }
-    private var transport: some View {
-        VStack(spacing: 12) {
-            if session.websiteWaitingForNext { ProgressView("Loading next episode…").tint(.white) }
-            if let error = session.websiteQueueError { Text(error).font(.footnote) }
-            if let error = session.websiteSubtitleError { Text(error).font(.footnote) }
-            HStack(spacing: 16) {
-                if !session.websiteQueueTitles.isEmpty {
-                    Button { controls.reveal(); session.onWebsiteJump?(session.websiteQueueIndex - 1) } label: {
-                        Image(systemName: "backward.end.fill").frame(width: 44, height: 44)
-                    }.accessibilityLabel("Previous episode").disabled(session.websiteQueueIndex == 0 || session.websiteQueueChangingItem)
+
+    // MARK: Centre
+
+    private var centre: some View {
+        HStack(spacing: landscape ? 56 : 40) {
+            if hasQueue {
+                Button { controls.reveal(); session.onWebsiteJump?(session.websiteQueueIndex - 1) } label: {
+                    Image(systemName: "backward.end.fill").font(.system(size: 26)).frame(width: 56, height: 56)
                 }
-                Button { skip(-10, fromTransport: true) } label: { Image(systemName: "gobackward.10").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Back 10 seconds")
-                Button { controls.reveal(); session.isPlaying ? session.pause() : session.play() } label: {
-                    Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.title).frame(width: 44, height: 44)
-                }.accessibilityLabel(session.isPlaying ? "Pause" : "Play").accessibilityIdentifier("phone-player-play")
-                Button { skip(10, fromTransport: true) } label: { Image(systemName: "goforward.10").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Forward 10 seconds")
-                if !session.websiteQueueTitles.isEmpty {
-                    Button { controls.reveal(); session.onWebsiteJump?(session.websiteQueueIndex + 1) } label: {
-                        Image(systemName: "forward.end.fill").frame(width: 44, height: 44)
-                    }.accessibilityLabel("Next episode").disabled(session.websiteQueueIndex + 1 >= session.websiteQueueTitles.count || session.websiteQueueChangingItem)
-                }
+                .accessibilityLabel("Previous episode")
+                .disabled(session.websiteQueueIndex == 0 || session.websiteQueueChangingItem)
             }
-            HStack {
-                Text(time(scrubbing ? scrubPosition : session.positionSeconds)).monospacedDigit()
-                Slider(value: Binding(get: {
-                    min(max(0, scrubbing ? scrubPosition : session.positionSeconds), max(1, session.durationSeconds))
-                }, set: { scrubPosition = $0 }), in: 0...max(1, session.durationSeconds), onEditingChanged: { editing in
-                    if editing { scrubPosition = max(0, session.positionSeconds); scrubbing = true }
-                    else { session.seek(to: scrubPosition); scrubbing = false }
-                    controls.setScrubbing(editing); controls.reveal()
-                })
-                .disabled(session.durationSeconds <= 0)
-                .accessibilityLabel("Playback position").accessibilityValue(time(session.positionSeconds))
-                Text(time(session.durationSeconds)).monospacedDigit()
-            }.font(.caption)
+            Button { controls.reveal(); session.isPlaying ? session.pause() : session.play() } label: {
+                ZStack {
+                    Circle().fill(.black.opacity(0.45))
+                    if buffering {
+                        ProgressView().tint(.white).scaleEffect(1.3)
+                    } else {
+                        Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 34))
+                    }
+                }
+                .frame(width: 76, height: 76)
+            }
+            .accessibilityLabel(session.isPlaying ? "Pause" : "Play")
+            .accessibilityIdentifier("phone-player-play")
+            if hasQueue {
+                Button { controls.reveal(); session.onWebsiteJump?(session.websiteQueueIndex + 1) } label: {
+                    Image(systemName: "forward.end.fill").font(.system(size: 26)).frame(width: 56, height: 56)
+                }
+                .accessibilityLabel("Next episode")
+                .disabled(session.websiteQueueIndex + 1 >= session.websiteQueueTitles.count || session.websiteQueueChangingItem)
+            }
         }
-        .padding(.horizontal, 20).padding(.vertical, 14)
-        .background(LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+        .buttonStyle(.plain)
     }
+
+    // MARK: Bottom
+
+    private var bottomBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if session.websiteWaitingForNext {
+                Text("Getting the next episode from the website…").font(Theme.font(size: 13))
+            }
+            if let error = session.websiteQueueError { Text(error).font(Theme.font(size: 13)) }
+            if let error = session.websiteSubtitleError { Text(error).font(Theme.font(size: 13)) }
+            PhonePlayerTimeline(
+                position: session.positionSeconds, duration: session.durationSeconds,
+                playing: session.isPlaying, buffering: buffering,
+                onScrub: { target in
+                    timelineTarget = target
+                    controls.setScrubbing(target != nil)
+                },
+                onSeek: { session.seek(to: $0); controls.reveal() },
+                onSkip: { skip($0, fromTransport: true) }
+            )
+            HStack(spacing: 4) {
+                Button { controls.lock() } label: { Image(systemName: "lock").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Lock player controls").accessibilityIdentifier("phone-player-lock")
+                Button {
+                    controls.reveal()
+                    PhonePlayerOrientationLock.toggle()
+                } label: { Image(systemName: "rotate.right").frame(width: 44, height: 44) }
+                    .accessibilityLabel(PhonePlayerOrientationLock.isLandscape ? "Rotate to portrait" : "Rotate to landscape")
+                    .accessibilityIdentifier("phone-player-rotate")
+                Spacer(minLength: 0)
+                chip(PhonePlayerChrome.speedLabel(session.preferences.speed), active: session.preferences.speed != 1) { showMore = true }
+                    .accessibilityLabel("Playback speed")
+                    .accessibilityValue(String(format: "%g times", session.preferences.speed))
+                    .accessibilityHint("Opens More")
+                    .accessibilityIdentifier("phone-player-speed")
+            }
+            .font(.system(size: 18, weight: .medium))
+        }
+        .padding(.horizontal, landscape ? 28 : 16).padding(.top, 32).padding(.bottom, 6)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.88)], startPoint: .top, endPoint: .bottom).ignoresSafeArea(edges: .bottom))
+    }
+
+    private func chip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.font(size: 13, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(active ? Theme.onPrimary : .white)
+                .padding(.horizontal, 14).frame(minHeight: 32)
+                .background(active ? Theme.primary : Color.white.opacity(0.16), in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func scrubHUD(big: String, small: String) -> some View {
+        VStack(spacing: 4) {
+            Text(big).font(.system(size: 40, weight: .bold)).monospacedDigit()
+            Text(small).font(.title3.weight(.semibold)).monospacedDigit()
+        }
+        .padding(.horizontal, 24).padding(.vertical, 16)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private var queue: some View {
         NavigationStack {
             List {
@@ -232,17 +328,16 @@ struct MPVPhonePlayerView: View {
                         }.disabled(session.websiteQueueChangingItem)
                     }
                 } footer: {
-                    Text(session.websiteWaitingForNext ? "Loading next episode…" : "Streams resolves upcoming episodes as needed.")
+                    Text(session.websiteWaitingForNext ? "Getting the next episode from the website…" : "Streams resolves upcoming episodes as needed.")
                 }
             }
             .navigationTitle("Queue").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showQueue = false } } }
         }
+        .presentationDetents([.medium, .large])
     }
     private func updateControls() {
-        controls.update(playing: session.isPlaying,
-                        buffering: session.mpvState.buffering || session.websiteWaitingForNext || session.websiteQueueChangingItem,
-                        voiceOver: voiceOver)
+        controls.update(playing: session.isPlaying, buffering: buffering, voiceOver: voiceOver)
     }
     private func skip(_ offset: Double, fromTransport: Bool) {
         guard !controls.locked else { return }
@@ -255,11 +350,6 @@ struct MPVPhonePlayerView: View {
             do { try await Task.sleep(nanoseconds: 800_000_000) } catch { return }
             guard !Task.isCancelled else { return }; seekFeedback = 0
         }
-    }
-    private func time(_ seconds: Double) -> String {
-        guard seconds.isFinite else { return "0:00" }
-        let value = Int(max(0, min(seconds, 360_000)))
-        return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60) : String(format: "%d:%02d", value / 60, value % 60)
     }
 }
 

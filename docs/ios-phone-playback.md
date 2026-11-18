@@ -10,7 +10,7 @@ Original URL and MIME information remain available for diagnostics.
 
 ## Player engine
 
-**Player settings → Player engine** switches the open player between **mpv** and
+**More (⋯) → Player → Player engine** switches the open player between **mpv** and
 **AVPlayer**. When playback fails, the failure screen also offers **Try with AVPlayer**
 (or **Try with mpv** on AVPlayer). Switching prepares the selected route again, as
 **Try again** does, and reopens the video at the current position; a playing video
@@ -63,15 +63,27 @@ HLS children, so mpv does not go through Wi-Fi/VPN to reach its own proxy. Recei
 casts still use the advertised LAN address. Upstream/private-origin policies and
 registration lifetimes are unchanged; no route silently becomes Direct.
 
-- mpv feeds the website progress, queue and final-close snapshot. Fullscreen website playback includes a live **Queue** and next/previous controls, using that same queue for manual navigation and automatic advancement. An unresolved tail shows **Loading next episode…** and advances when the website supplies it; only an explicit end-of-list finishes the queue.
+- mpv feeds the website progress, queue and final-close snapshot. Fullscreen website playback includes a live **Queue** and next/previous controls, using that same queue for manual navigation and automatic advancement. An unresolved tail shows **Getting the next episode from the website…** and advances when the website supplies it; only an explicit end-of-list finishes the queue.
 - Controls hide after three seconds of playback; a single tap toggles them and
   a double tap on either half seeks ten seconds. Consecutive seeks accumulate.
   Pausing, buffering, scrubbing, opening settings/queue and VoiceOver prevent
-  automatic hiding. Touch lock hides all controls; tapping reveals only Unlock.
-- The overlay includes **Fit/Fill**, speed (0.5×–2×), lock and player settings.
+  automatic hiding. A double-tap or swipe seek leaves the controls as they are,
+  including the brief buffering it causes (for three seconds after the gesture).
+  Touch lock hides all controls; tapping reveals only Unlock.
+- The layout matches Android's redesign. Top: Back, the title (up to two lines,
+  on its own row in portrait) with "3 of 12 · mpv" under it, then **Queue**,
+  **Audio & subtitles** and **More**. Centre: Previous / Play-Pause / Next; there
+  are no ±10 s buttons because double-tap skips (VoiceOver users get the seek
+  bar's adjustable action and named ±10 s actions). Bottom: the seek bar, then
+  Lock, Rotate and a speed chip that opens More.
+- The seek bar draws with the remote's `RemoteTimelineTrack`: it waves while
+  playing, is flat when paused or held, and shimmers while buffering. A tap or drag
+  moves to the point under the finger. Tapping the end time switches between the
+  duration and the time left, and the choice is remembered.
+- **More** has Playback (speed 0.5×–2×), Picture (**Fit/Fill**) and Player (engine).
   Fit preserves the entire image; Fill crops without stretching. The fullscreen
-  toolbar overlays the image and system chrome is hidden.
-- Player settings include audio/subtitle tracks, remembered language preferences,
+  controls overlay the image and system chrome is hidden.
+- **Audio & subtitles** has audio/subtitle tracks, remembered language preferences,
   subtitle delay (±10 seconds) and the subtitle style. A positive delay moves
   captions later. Delay resets on episode changes but survives retry.
 - The subtitle style (size, background, edge, font, and whether styled subtitles
