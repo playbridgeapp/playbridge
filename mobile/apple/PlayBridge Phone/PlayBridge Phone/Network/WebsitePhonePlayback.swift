@@ -49,10 +49,21 @@ import Foundation
         let media = try await prepare(item)
         try Task.checkCancellation()
         let playback = WebsitePhonePlayback(request: request, media: media, alternativeFactory: alternativeFactory, event: event)
-        await playback.session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0, contentType: item["contentType"] as? String, autoplay: false)
+        await playback.session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0, contentType: item["contentType"] as? String, posterURL: posterURL(item), autoplay: false)
         do { try Task.checkCancellation() }
         catch { playback.session.close(); throw error }
         return playback
+    }
+
+    /// The item's landscape backdrop, else its poster or artwork. These URLs were checked with the
+    /// request (private addresses need the user's grant), so the player may load them.
+    static func posterURL(_ item: [String: Any]) -> URL? {
+        guard let metadata = item["visualMetadata"] as? [String: Any] else { return nil }
+        for key in ["backdropUrl", "posterUrl", "artworkUrl"] {
+            if let text = metadata[key] as? String, let url = URL(string: text),
+               let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" { return url }
+        }
+        return nil
     }
 
     /// The coordinator tags each item with the origins approved for it; untagged items get public addresses only.
@@ -109,7 +120,7 @@ import Foundation
         guard !closed else { throw PageCastError(code: "session_ended") }
         index = selected; ended = false; updateTracks(); updateQueue()
         await session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0,
-            contentType: item["contentType"] as? String,
+            contentType: item["contentType"] as? String, posterURL: Self.posterURL(item),
             prepare: { try await Self.prepare(item) })
     }
     private func advanceIfAvailable() {

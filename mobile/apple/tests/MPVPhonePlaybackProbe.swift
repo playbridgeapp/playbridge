@@ -287,9 +287,15 @@ enum LocalFileServer {
             }
             let frame = surface.convert(surface.bounds, to: window)
             let layer = surface.layer as! CAMetalLayer
-            let geometry = "\(name): window=\(window.bounds), view=\(surface.bounds), layer=\(layer.bounds), drawable=\(layer.drawableSize), scale=\(layer.contentsScale)\n"
+            // The landscape fixture on an upright phone uses the portrait layout: a full-width
+            // video box at the top with the controls below. Landscape fills the screen.
+            let centreY = frame.midY / max(1, window.bounds.height)
+            let geometry = "\(name): window=\(window.bounds), view=\(surface.bounds), layer=\(layer.bounds), drawable=\(layer.drawableSize), scale=\(layer.contentsScale)\ncentreY=\(centreY)\n"
             try geometry.write(to: directory.appendingPathComponent(name + ".geometry.txt"), atomically: true, encoding: .utf8)
-            guard frame.width > 100, frame.height > 100, frame.contains(CGPoint(x: window.bounds.midX, y: window.bounds.midY)) else {
+            let placed = orientation.isLandscape
+                ? frame.contains(CGPoint(x: window.bounds.midX, y: window.bounds.midY))
+                : frame.minX <= 1 && frame.width >= window.bounds.width - 1 && frame.minY >= 0 && frame.maxY < window.bounds.height * 0.6
+            guard frame.width > 100, frame.height > 100, placed else {
                 throw ProbeError(message: name + ": video surface is outside the viewport: \(frame)")
             }
             if pausedRotation {

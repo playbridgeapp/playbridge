@@ -22,10 +22,24 @@ struct MPVPhonePlayerView: View {
     @State private var seekFeedback = 0
     @State private var feedbackTask: Task<Void, Never>?
     @State private var scrubPreview: PhonePlayerScrub.Preview?
+    @State private var handBackWhenTurned = false
+    @AppStorage(PhoneAmbientMode.key) private var ambientEnabled = true
+    /// The glow's colours, stepped toward each new frame.
+    @State private var ambientImage: CGImage?
+    /// The same, blurred, as drawn.
+    @State private var ambientDisplay: CGImage?
+    /// The full-screen player shows a landscape video on an upright phone in the portrait layout;
+    /// inline previews never do.
+    let allowsPortraitLayout: Bool
+    /// The cast sheet's thumbnail, shown blurred until the first frame.
+    let poster: UIImage?
 
-    init(session: PlaybackSession, controls: PhonePlayerControls? = nil, onDismiss: (() -> Void)? = nil) {
+    init(session: PlaybackSession, controls: PhonePlayerControls? = nil, allowsPortraitLayout: Bool = false,
+         poster: UIImage? = nil, onDismiss: (() -> Void)? = nil) {
         self.session = session
         self.onDismiss = onDismiss
+        self.allowsPortraitLayout = allowsPortraitLayout
+        self.poster = poster
         _controls = StateObject(wrappedValue: controls ?? PhonePlayerControls())
     }
 
@@ -36,22 +50,163 @@ struct MPVPhonePlayerView: View {
     private var sheetShown: Bool { showMore || showTracks || showQueue }
 
     var body: some View {
-        ZStack {
-            if let engine = session.alternativeEngine as? MPVPhonePlayback {
-                MPVPhoneSurface(engine: engine)
-                    .id(ObjectIdentifier(engine))
-                    .ignoresSafeArea()
-            } else if let engine = session.alternativeEngine as? AVPlayerPhonePlayback {
-                AVPlayerPhoneSurface(engine: engine)
-                    .id(ObjectIdentifier(engine))
-                    .ignoresSafeArea()
+        GeometryReader { geometry in
+            let portrait = portraitLayout
+            let videoHeight = portrait
+                ? PhonePlayerOpening.portraitVideoHeight(width: session.mpvState.videoWidth, height: session.mpvState.videoHeight,
+                                                         screenWidth: geometry.size.width, screenHeight: geometry.size.height)
+                : geometry.size.height
+            // The video keeps its place in the hierarchy in both layouts, so its surface survives rotation.
+            ZStack(alignment: .top) {
+                if portrait && ambientEnabled, let ambientDisplay {
+                    ambientGlow(ambientDisplay, width: geometry.size.width, videoHeight: videoHeight)
+                }
+                videoArea(portrait: portrait)
+                    .frame(width: geometry.size.width, height: videoHeight)
+                if portrait {
+                    portraitPanel
+                        .frame(width: geometry.size.width, height: max(0, geometry.size.height - videoHeight))
+                        .offset(y: videoHeight)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+        }
+        .background((portraitLayout ? Theme.surface : Color.black).ignoresSafeArea())
+        .foregroundStyle(.white).tint(Theme.primary)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controls.visible)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: showsPoster)
+        .onAppear {
+            controls.setSuspended(false); updateControls()
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        }
+        .onChange(of: session.isPlaying) { _ in updateControls() }
+        .onChange(of: session.mpvState.buffering) { _ in updateControls() }
+        .onChange(of: session.websiteWaitingForNext) { _ in updateControls() }
+        .onChange(of: session.websiteQueueChangingItem) { _ in updateControls() }
+        .onChange(of: voiceOver) { _ in updateControls() }
+        .onChange(of: scenePhase) { controls.setSuspended($0 != .active) }
+        .onChange(of: session.failure) { if $0 != nil { controls.unlock() } }
+        .onChange(of: sheetShown) { controls.setSheetPresented($0) }
+        .onChange(of: portraitLayout) { if $0 { controls.unlock() }; controls.reveal() }
+        .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in
+            timelineTarget = nil; controls.setScrubbing(false)
+            feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
+            controls.reveal()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            // Portrait first: after Fullscreen, turning the phone to landscape hands rotation back to it.
+            guard handBackWhenTurned, UIDevice.current.orientation.isLandscape else { return }
+            handBackWhenTurned = false
+            PhonePlayerOrientationLock.handBack()
+        }
+        .task(id: ambientActive) {
+            guard ambientActive else { return }
+            // A tiny frame every second while playing; paused keeps the last glow.
+            var previousWasDark = false
+            while !Task.isCancelled {
+                if session.isPlaying || ambientImage == nil, let engine = session.alternativeEngine {
+                    let frame = await withCheckedContinuation { (continuation: CheckedContinuation<CGImage?, Never>) in
+                        engine.ambientFrame { continuation.resume(returning: $0) }
+                    }
+                    let frameLuma = frame.map(PhoneAmbientFrame.meanLuma)
+                    let glowLuma = ambientImage.map(PhoneAmbientFrame.meanLuma)
+                    let accepted = frameLuma.map { PhoneAmbientFrame.accepts(frameLuma: $0, glowLuma: glowLuma, previousWasDark: previousWasDark) } ?? false
+                    if let frameLuma { previousWasDark = frameLuma < PhoneAmbientFrame.darkLuma }
+                    if accepted, let frame, !Task.isCancelled, let glow = PhoneAmbientFrame.blend(ambientImage, toward: frame) {
+                        // The glow steps a third of the way toward the frame; the layer crossfades.
+                        ambientImage = glow
+                        ambientDisplay = PhoneAmbientFrame.soften(glow) ?? glow
+                    }
+                }
+                try? await Task.sleep(nanoseconds: PhoneAmbientMode.interval)
+            }
+        }
+        .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in ambientImage = nil; ambientDisplay = nil }
+        .onDisappear {
+            controls.stop(); feedbackTask?.cancel(); feedbackTask = nil
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            PhonePlayerOrientationLock.release()
+        }
+        .sheet(isPresented: $showMore, onDismiss: { controls.reveal() }) { PhonePlayerMoreSheet(session: session) }
+        .sheet(isPresented: $showTracks, onDismiss: { controls.reveal() }) { PhonePlayerTracksSheet(session: session) }
+        .sheet(isPresented: $showQueue, onDismiss: { controls.reveal() }) { queue }
+    }
+
+    private var ambientActive: Bool { (portraitLayout || barsAmbient) && ambientEnabled && scenePhase == .active }
+    /// Full screen with Fit: the surface takes the picture's size and the glow fills the bars.
+    private var barsAmbient: Bool {
+        allowsPortraitLayout && ambientEnabled && !portraitLayout && session.preferences.sizing == .fit
+            && session.mpvState.videoWidth > 0 && session.mpvState.videoHeight > 0
+    }
+
+    /// The current frame blown up and blurred behind the video box, fading into the panel below.
+    private func ambientGlow(_ image: CGImage, width: Double, videoHeight: Double) -> some View {
+        let height = max(1, videoHeight) * 2.2
+        return AmbientGlowLayer(image: image, crossfade: reduceMotion ? 0 : 0.9)
+            .frame(width: width * 1.3, height: height)
+            .opacity(0.65)
+            .frame(width: width, height: height)
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.45),
+                                         .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .offset(y: -videoHeight * 0.15)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var portraitLayout: Bool {
+        allowsPortraitLayout && PhonePlayerOpening.usesPortraitLayout(
+            width: session.mpvState.videoWidth, height: session.mpvState.videoHeight, screenIsLandscape: landscape)
+    }
+    /// The blurred poster covers the black screen until the first frame (and stays for audio).
+    private var showsPoster: Bool {
+        session.mpvState.videoWidth == 0 && session.failure == nil && (poster != nil || session.posterURL != nil)
+    }
+
+    /// The picture with everything drawn over it. In the full-screen layout it fills the screen
+    /// under the safe areas; in the portrait layout it is the box at the top.
+    private func videoArea(portrait: Bool) -> some View {
+        let edges: Edge.Set = portrait ? [] : .all
+        return ZStack {
+            Color.black.ignoresSafeArea(edges: edges)
+            if !portrait && barsAmbient, let ambientDisplay {
+                // The whole screen glows; the fitted video covers its middle, leaving the bars lit.
+                AmbientGlowLayer(image: ambientDisplay, crossfade: reduceMotion ? 0 : 0.9)
+                    .opacity(0.55)
+                    .ignoresSafeArea(edges: edges)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            // Always inside the same GeometryReader, so the surface keeps its identity when it
+            // switches between filling the screen and fitting the picture.
+            GeometryReader { full in
+                let fitted = barsAmbient && !portrait
+                    ? PhoneAmbientMode.fittedSize(width: session.mpvState.videoWidth, height: session.mpvState.videoHeight, in: full.size)
+                    : nil
+                Group {
+                    if let engine = session.alternativeEngine as? MPVPhonePlayback {
+                        MPVPhoneSurface(engine: engine)
+                            .id(ObjectIdentifier(engine))
+                    } else if let engine = session.alternativeEngine as? AVPlayerPhonePlayback {
+                        AVPlayerPhoneSurface(engine: engine)
+                            .id(ObjectIdentifier(engine))
+                    }
+                }
+                .frame(width: fitted?.width ?? full.size.width, height: fitted?.height ?? full.size.height)
+                .position(x: full.size.width / 2, y: full.size.height / 2)
+            }
+            .ignoresSafeArea(edges: edges)
+            if showsPoster {
+                posterLayer
+                    .ignoresSafeArea(edges: edges)
+                    .transition(.opacity)
             }
             PhonePlayerSurfaceGestures(
                 duration: session.durationSeconds,
                 position: session.positionSeconds,
                 locked: controls.locked,
                 voiceOver: voiceOver,
-                onTap: { controls.tap() },
+                onTap: { if !portrait { controls.tap() } },
                 onDoubleTap: { skip($0, fromTransport: false) },
                 onScrub: { preview in
                     scrubPreview = preview
@@ -65,9 +220,9 @@ struct MPVPhonePlayerView: View {
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
+            .ignoresSafeArea(edges: edges)
             .accessibilityHidden(true)
-            if buffering && !chromeShown {
+            if buffering && (portrait || !chromeShown) {
                 ProgressView().tint(.white).allowsHitTesting(false)
             }
             if !overlayCaption.isEmpty {
@@ -75,10 +230,21 @@ struct MPVPhonePlayerView: View {
                     Spacer()
                     SubtitleCaptionText(text: overlayCaption, style: subtitleStyle.style)
                         .padding(.horizontal, 20)
-                        .padding(.bottom, chromeShown ? 128 : 24)
+                        .padding(.bottom, chromeShown && !portrait ? 128 : portrait ? 12 : 24)
                 }.allowsHitTesting(false)
             }
-            if chromeShown {
+            if portrait {
+                VStack(spacing: 0) {
+                    HStack(spacing: 2) {
+                        closeButton
+                        Spacer(minLength: 8)
+                        topActions
+                    }
+                    .padding(.horizontal, 8).padding(.bottom, 20)
+                    .background(LinearGradient(colors: [.black.opacity(showsPoster ? 0 : 0.7), .clear], startPoint: .top, endPoint: .bottom))
+                    Spacer(minLength: 0)
+                }
+            } else if chromeShown {
                 ZStack {
                     VStack(spacing: 0) {
                         topBar
@@ -88,7 +254,7 @@ struct MPVPhonePlayerView: View {
                     centre
                 }.transition(.opacity)
             }
-            if controls.locked && controls.unlockVisible {
+            if !portrait && controls.locked && controls.unlockVisible {
                 VStack {
                     HStack(spacing: 10) {
                         Spacer()
@@ -121,30 +287,92 @@ struct MPVPhonePlayerView: View {
                          small: PhonePlayerChrome.signedOffset(target: timelineTarget, from: session.positionSeconds))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .foregroundStyle(.white).tint(Theme.primary)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: controls.visible)
-        .onAppear { controls.setSuspended(false); updateControls() }
-        .onChange(of: session.isPlaying) { _ in updateControls() }
-        .onChange(of: session.mpvState.buffering) { _ in updateControls() }
-        .onChange(of: session.websiteWaitingForNext) { _ in updateControls() }
-        .onChange(of: session.websiteQueueChangingItem) { _ in updateControls() }
-        .onChange(of: voiceOver) { _ in updateControls() }
-        .onChange(of: scenePhase) { controls.setSuspended($0 != .active) }
-        .onChange(of: session.failure) { if $0 != nil { controls.unlock() } }
-        .onChange(of: sheetShown) { controls.setSheetPresented($0) }
-        .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in
-            timelineTarget = nil; controls.setScrubbing(false)
-            feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
-            controls.reveal()
+    }
+
+    private var posterLayer: some View {
+        GeometryReader { geometry in
+            Group {
+                if let poster {
+                    Image(uiImage: poster).resizable().scaledToFill()
+                } else if let url = session.posterURL {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image { image.resizable().scaledToFill() } else { Color.clear }
+                    }
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .blur(radius: 18)
+            .overlay(Color.black.opacity(0.35))
+            .clipped()
         }
-        .onDisappear {
-            controls.stop(); feedbackTask?.cancel(); feedbackTask = nil
-            PhonePlayerOrientationLock.release()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: Portrait layout
+
+    /// A landscape video on an upright phone: title, seek bar and transport under the video,
+    /// with Fullscreen and Up next.
+    private var portraitPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                titleBlock
+                statusLines
+                timeline
+                HStack { Spacer(); centre; Spacer() }
+                HStack(spacing: 8) {
+                    Button { goFullscreen() } label: {
+                        Label("Fullscreen", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .font(Theme.font(size: 13, weight: .semibold))
+                            .padding(.horizontal, 14).frame(minHeight: 32)
+                            .background(Color.white.opacity(0.12), in: Capsule())
+                            .frame(minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("phone-player-fullscreen")
+                    Spacer(minLength: 0)
+                    speedChip
+                }
+                Text("Turn your phone for fullscreen")
+                    .font(Theme.font(size: 12)).foregroundStyle(Theme.onSurfaceVariant)
+                if !upNext.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Up next").font(Theme.font(size: 15, weight: .semibold))
+                        ForEach(upNext, id: \.self) { index in
+                            Button {
+                                controls.reveal(); session.onWebsiteJump?(index)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Text("\(index + 1)").font(Theme.font(size: 12)).monospacedDigit()
+                                        .foregroundStyle(Theme.onSurfaceVariant).frame(minWidth: 22, alignment: .leading)
+                                    Text(session.websiteQueueTitles[index]).font(Theme.font(size: 14)).lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(minHeight: 44).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(session.websiteQueueChangingItem)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 16)
         }
-        .sheet(isPresented: $showMore, onDismiss: { controls.reveal() }) { PhonePlayerMoreSheet(session: session) }
-        .sheet(isPresented: $showTracks, onDismiss: { controls.reveal() }) { PhonePlayerTracksSheet(session: session) }
-        .sheet(isPresented: $showQueue, onDismiss: { controls.reveal() }) { queue }
+    }
+
+    /// The next few queue items after the current one.
+    private var upNext: [Int] {
+        let start = session.websiteQueueIndex + 1
+        guard start < session.websiteQueueTitles.count else { return [] }
+        return Array(start..<min(session.websiteQueueTitles.count, start + 5))
+    }
+
+    private func goFullscreen() {
+        controls.reveal()
+        // Portrait first hands rotation back to the phone once it is turned to match.
+        handBackWhenTurned = PhoneLandscapeOpening.load() == .portraitFirst
+        PhonePlayerOrientationLock.hold(.landscape)
     }
 
     /// Website subtitles, or ticked subtitle files the engine doesn't render itself (AVPlayer).
@@ -163,11 +391,7 @@ struct MPVPhonePlayerView: View {
     private var topBar: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .center, spacing: 2) {
-                if let onDismiss {
-                    Button(action: onDismiss) { Image(systemName: "chevron.backward").font(.system(size: 18, weight: .semibold)).frame(width: 44, height: 44) }
-                        .accessibilityLabel("Close player")
-                        .accessibilityIdentifier("phone-player-close")
-                }
+                closeButton
                 if landscape { titleBlock.padding(.leading, onDismiss == nil ? 8 : 0) }
                 Spacer(minLength: 8)
                 topActions
@@ -175,7 +399,15 @@ struct MPVPhonePlayerView: View {
             if !landscape { titleBlock.padding(.horizontal, 12) }
         }
         .padding(.horizontal, 8).padding(.bottom, 28)
-        .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom).ignoresSafeArea(edges: .top))
+        .background(scrim(top: true).ignoresSafeArea(edges: [.top, .horizontal]))
+    }
+
+    @ViewBuilder private var closeButton: some View {
+        if let onDismiss {
+            Button(action: onDismiss) { Image(systemName: "chevron.backward").font(.system(size: 18, weight: .semibold)).frame(width: 44, height: 44) }
+                .accessibilityLabel("Close player")
+                .accessibilityIdentifier("phone-player-close")
+        }
     }
 
     private var titleBlock: some View {
@@ -225,7 +457,8 @@ struct MPVPhonePlayerView: View {
             }
             Button { controls.reveal(); session.isPlaying ? session.pause() : session.play() } label: {
                 ZStack {
-                    Circle().fill(.black.opacity(0.45))
+                    // Over the blurred poster the scrims are off, so the button needs no dark disc either.
+                    Circle().fill(.black.opacity(showsPoster ? 0.15 : 0.45))
                     if buffering {
                         ProgressView().tint(.white).scaleEffect(1.3)
                     } else {
@@ -251,41 +484,68 @@ struct MPVPhonePlayerView: View {
 
     private var bottomBar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if session.websiteWaitingForNext {
-                Text("Getting the next episode from the website…").font(Theme.font(size: 13))
-            }
-            if let error = session.websiteQueueError { Text(error).font(Theme.font(size: 13)) }
-            if let error = session.websiteSubtitleError { Text(error).font(Theme.font(size: 13)) }
-            PhonePlayerTimeline(
-                position: session.positionSeconds, duration: session.durationSeconds,
-                playing: session.isPlaying, buffering: buffering,
-                onScrub: { target in
-                    timelineTarget = target
-                    controls.setScrubbing(target != nil)
-                },
-                onSeek: { session.seek(to: $0); controls.reveal() },
-                onSkip: { skip($0, fromTransport: true) }
-            )
+            statusLines
+            timeline
             HStack(spacing: 4) {
                 Button { controls.lock() } label: { Image(systemName: "lock").frame(width: 44, height: 44) }
                     .accessibilityLabel("Lock player controls").accessibilityIdentifier("phone-player-lock")
                 Button {
                     controls.reveal()
+                    handBackWhenTurned = false
                     PhonePlayerOrientationLock.toggle()
                 } label: { Image(systemName: "rotate.right").frame(width: 44, height: 44) }
                     .accessibilityLabel(PhonePlayerOrientationLock.isLandscape ? "Rotate to portrait" : "Rotate to landscape")
                     .accessibilityIdentifier("phone-player-rotate")
                 Spacer(minLength: 0)
-                chip(PhonePlayerChrome.speedLabel(session.preferences.speed), active: session.preferences.speed != 1) { showMore = true }
-                    .accessibilityLabel("Playback speed")
-                    .accessibilityValue(String(format: "%g times", session.preferences.speed))
-                    .accessibilityHint("Opens More")
-                    .accessibilityIdentifier("phone-player-speed")
+                speedChip
             }
             .font(.system(size: 18, weight: .medium))
         }
         .padding(.horizontal, landscape ? 28 : 16).padding(.top, 32).padding(.bottom, 6)
-        .background(LinearGradient(colors: [.clear, .black.opacity(0.88)], startPoint: .top, endPoint: .bottom).ignoresSafeArea(edges: .bottom))
+        .background(scrim(top: false).ignoresSafeArea(edges: [.bottom, .horizontal]))
+    }
+
+    @ViewBuilder private var statusLines: some View {
+        if session.websiteWaitingForNext {
+            Text("Getting the next episode from the website…").font(Theme.font(size: 13))
+        }
+        if let error = session.websiteQueueError { Text(error).font(Theme.font(size: 13)) }
+        if let error = session.websiteSubtitleError { Text(error).font(Theme.font(size: 13)) }
+    }
+
+    private var timeline: some View {
+        PhonePlayerTimeline(
+            position: session.positionSeconds, duration: session.durationSeconds,
+            playing: session.isPlaying, buffering: buffering,
+            onScrub: { target in
+                timelineTarget = target
+                controls.setScrubbing(target != nil)
+            },
+            onSeek: { session.seek(to: $0); controls.reveal() },
+            onSkip: { skip($0, fromTransport: true) }
+        )
+    }
+
+    private var speedChip: some View {
+        chip(PhonePlayerChrome.speedLabel(session.preferences.speed), active: session.preferences.speed != 1) { showMore = true }
+            .accessibilityLabel("Playback speed")
+            .accessibilityValue(String(format: "%g times", session.preferences.speed))
+            .accessibilityHint("Opens More")
+            .accessibilityIdentifier("phone-player-speed")
+    }
+
+    /// The fade behind the top or bottom controls. It runs edge to edge (past the safe area,
+    /// so Fill shows no hard sides) and eases out instead of ending in a line; it is off over
+    /// the blurred poster.
+    private func scrim(top: Bool) -> some View {
+        let strength = showsPoster ? 0 : (top ? 0.75 : 0.85)
+        let stops: [Gradient.Stop] = [
+            .init(color: .black.opacity(strength), location: 0),
+            .init(color: .black.opacity(strength * 0.6), location: 0.4),
+            .init(color: .black.opacity(strength * 0.2), location: 0.75),
+            .init(color: .clear, location: 1),
+        ]
+        return LinearGradient(stops: stops, startPoint: top ? .top : .bottom, endPoint: top ? .bottom : .top)
     }
 
     private func chip(_ title: String, active: Bool, action: @escaping () -> Void) -> some View {

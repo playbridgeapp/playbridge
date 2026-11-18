@@ -78,6 +78,8 @@ struct PlaybackFailure: Equatable {
     @Published private(set) var mpvState = PhonePlaybackState()
     /// Shown in the player's top bar; empty when the source has no useful title.
     @Published var title: String
+    /// A website item's backdrop or poster, shown blurred until the first frame.
+    @Published var posterURL: URL?
     private(set) var alternativeEngine: PhoneAlternativePlaybackEngine?
     var onPlaybackEnd: (() -> Void)?
     var partyPlayInterceptor: (() -> Bool)?
@@ -374,17 +376,25 @@ struct PlaybackFailure: Equatable {
         }
     }
 
-    func replaceWebsiteMedia(_ media: RoutedStream, title: String, resumeMs: Int, contentType: String? = nil, prepare: (() async throws -> RoutedStream)? = nil, autoplay: Bool = true) async {
+    func replaceWebsiteMedia(_ media: RoutedStream, title: String, resumeMs: Int, contentType: String? = nil, posterURL: URL? = nil, prepare: (() async throws -> RoutedStream)? = nil, autoplay: Bool = true) async {
         guard !closed, !Task.isCancelled else { return }
         generation += 1; retryTask?.cancel(); retryTask = nil; retrying = false
         subtitleDelay = 0
         self.title = title
+        self.posterURL = posterURL
         if let prepare { self.prepare = prepare }
         sourceURL = media.sourceURL.flatMap(URL.init(string:)) ?? media.url
         self.contentType = contentType
         headerCount = media.sourceHeaders.isEmpty ? media.headers.count : media.sourceHeaders.count
         registration = media.registration
         install(media, resume: Double(resumeMs) / 1000, autoplay: autoplay)
+    }
+
+    /// Audio files and streams never turn the player; there is no picture to fit.
+    var isAudio: Bool {
+        let mime = contentType?.split(separator: ";").first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return mime.hasPrefix("audio/")
+            || ["mp3", "m4a", "aac", "flac", "ogg", "oga", "opus", "wav"].contains(sourceURL.pathExtension.lowercased())
     }
 
     private var isMatroska: Bool {

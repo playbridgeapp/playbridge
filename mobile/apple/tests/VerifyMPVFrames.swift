@@ -6,11 +6,15 @@ for path in CommandLine.arguments.dropFirst() {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), let image = NSBitmapImageRep(data: data) else {
         print("FAIL: Could not read simulator frame \(path)"); exit(1)
     }
+    // The probe records the video's vertical centre (the portrait layout puts it near the top).
+    let geometry = (try? String(contentsOfFile: path.replacingOccurrences(of: ".png", with: ".geometry.txt"), encoding: .utf8)) ?? ""
+    let centreY = geometry.split(separator: "\n").first { $0.hasPrefix("centreY=") }
+        .flatMap { Double($0.dropFirst("centreY=".count)) } ?? 0.5
     var coloured = 0
     for y in 0..<10 {
         for x in 0..<10 {
             let px = Int(Double(image.pixelsWide) * (0.40 + Double(x) * 0.02))
-            let py = Int(Double(image.pixelsHigh) * (0.40 + Double(y) * 0.02))
+            let py = Int(Double(image.pixelsHigh) * (centreY - 0.06 + Double(y) * 0.012))
             guard let colour = image.colorAt(x: px, y: py)?.usingColorSpace(NSColorSpace.deviceRGB) else { continue }
             let channels = [colour.redComponent, colour.greenComponent, colour.blueComponent]
             if channels.max()! > 0.2 && channels.max()! - channels.min()! > 0.15 { coloured += 1 }
