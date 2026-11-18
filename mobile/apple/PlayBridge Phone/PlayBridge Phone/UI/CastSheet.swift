@@ -58,6 +58,10 @@ struct TvCapabilityOptions {
 struct PlayerItem: Identifiable {
     let id = UUID()
     let session: PlaybackSession
+    /// The cast sheet's thumbnail, shown blurred until the first frame.
+    var poster: UIImage?
+    /// The card the player zooms out of (iOS 18+).
+    var zoomSourceID: String?
 #if DEBUG
     var report: () -> String = { "" }
 #endif
@@ -94,6 +98,7 @@ struct CastSheet: View {
     @State private var selectProxyAfterSave = false
     private var streamRoute: StreamRoute { StreamRoute(rawValue: routePreference) ?? .direct }
     @State private var fullscreenPlayerItem: PlayerItem?
+    @Namespace private var playerZoom
     @State private var showDestination = false
     @State private var playOnPage: PlayOnPage?
     @State private var playOnPicking = true
@@ -284,9 +289,10 @@ struct CastSheet: View {
 #else
                     ""
 #endif
-                }) {
+                }, onDismiss: {
                     fullscreenPlayerItem = nil
-                }
+                }, poster: item.poster)
+                .playerZoomTransition(id: item.zoomSourceID, in: playerZoom)
                 .onAppear { tab.suspendPageMedia(true) }
                 .onDisappear { tab.suspendPageMedia(false) }
             }
@@ -633,6 +639,7 @@ struct CastSheet: View {
                         loadingQualities: (video.kind == .hls || video.kind == .dash) && detector.qualities[video.id] == nil,
                         thumbnail: detector.thumbnails[video.id],
                         thumbnailLoading: detector.thumbnailStates[video.id] == .loading,
+                        zoomNamespace: playerZoom,
                         onSelect: {
                             selectVideo(video)
                         },
@@ -875,7 +882,7 @@ struct CastSheet: View {
                                               title: video.withCastTitle(pageTitle: tab.title).displayTitle,
                                               externalSubtitles: externalSubtitles, subtitleFiles: subtitleFiles,
                                               prepare: prepare)
-                var presentation = PlayerItem(session: session)
+                var presentation = PlayerItem(session: session, poster: detector.thumbnails[video.id], zoomSourceID: video.id)
 #if DEBUG
                 presentation.report = { [weak session] in session?.diagnosticsReport() ?? "PlayBridge native playback diagnostics\nSession closed" }
 #endif
@@ -1113,6 +1120,7 @@ struct VideoCard: View {
     let loadingQualities: Bool
     let thumbnail: UIImage?
     let thumbnailLoading: Bool
+    var zoomNamespace: Namespace.ID? = nil
     let onSelect: () -> Void
     let onQualitySelect: (VideoQuality?) -> Void
     let onPlayOnPhone: () -> Void
@@ -1178,6 +1186,7 @@ struct VideoCard: View {
                             }
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .playerZoomSource(id: video.id, in: zoomNamespace)
 
                     Text(video.displayTitle)
                         .font(Theme.font(.headline).weight(.medium))
@@ -1328,10 +1337,13 @@ struct FullScreenVideoPlayerView: View {
     var playerControls: PhonePlayerControls? = nil
     var autoPlayOnAppear = true
     var closeSessionOnDisappear = true
+    var poster: UIImage? = nil
+    @State private var appliedOpening: PhonePlayerOpening?
+    @State private var openingSettled = false
 
     var body: some View {
         ZStack {
-            MPVPhonePlayerView(session: session, controls: playerControls, onDismiss: onDismiss)
+            MPVPhonePlayerView(session: session, controls: playerControls, allowsPortraitLayout: true, poster: poster, onDismiss: onDismiss)
                 if let failure = session.failure {
                     Color.black.opacity(0.94).ignoresSafeArea()
                     ScrollView {
@@ -1398,7 +1410,9 @@ struct FullScreenVideoPlayerView: View {
             if autoPlayOnAppear {
                 session.play()
             }
+            applyOpening()
         }
+        .onChange(of: session.mpvState.videoWidth) { _ in applyOpening() }
         .onDisappear {
             if closeSessionOnDisappear {
                 session.close()
@@ -1419,6 +1433,25 @@ struct FullScreenVideoPlayerView: View {
             Button("OK", role: .cancel) { audioSessionError = nil }
         } message: {
             Text(audioSessionError ?? "")
+        }
+    }
+
+    /// Settings › Phone player › Landscape videos open in: turn to landscape at once (Fullscreen),
+    /// then to portrait if the first frame is vertical. Decided once per opening.
+    private func applyOpening() {
+        guard !openingSettled else { return }
+        let state = session.mpvState
+        guard let decision = PhonePlayerOpening.decide(websiteOrientation: session.initialOrientation,
+                                                       width: state.videoWidth, height: state.videoHeight,
+                                                       isAudio: session.isAudio, preference: PhoneLandscapeOpening.load())
+        else { return }
+        if state.videoWidth > 0 || decision == .followPhone { openingSettled = true }
+        guard decision != appliedOpening else { return }
+        appliedOpening = decision
+        switch decision {
+        case .holdLandscape: PhonePlayerOrientationLock.hold(.landscape)
+        case .holdPortrait: PhonePlayerOrientationLock.hold(.portrait)
+        case .followPhone: break
         }
     }
 }

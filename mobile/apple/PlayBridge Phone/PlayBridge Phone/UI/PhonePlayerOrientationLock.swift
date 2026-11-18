@@ -31,9 +31,26 @@ import UIKit
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
     }
 
+    /// Holds `target` (the opening rule or the Fullscreen button) until the player closes.
+    static func hold(_ target: UIInterfaceOrientationMask) {
+        guard let scene else { return }
+        if start == nil { start = mask(for: scene.interfaceOrientation) }
+        mask = target
+        refresh(scene)
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
+    }
+
+    /// Gives rotation back to the phone while the player stays open (after Fullscreen in
+    /// Portrait first, once the phone is turned to match). Closing still restores the start.
+    static func handBack() {
+        guard mask != nil, let scene else { return }
+        mask = nil
+        refresh(scene)
+    }
+
     /// Called when the player closes; free rotation resumes.
     static func release() {
-        guard mask != nil else { return }
+        guard mask != nil || start != nil else { return }
         mask = nil
         let previous = start
         start = nil

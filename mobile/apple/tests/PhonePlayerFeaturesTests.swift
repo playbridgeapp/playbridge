@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
 final class PhoneSenderServices {
@@ -212,6 +213,68 @@ final class PhoneSenderServices {
         precondition(PhonePlayerChrome.signedOffset(target: 0, from: 30) == "-0:30")
         precondition(PhonePlayerChrome.speedLabel(1) == "1×" && PhonePlayerChrome.speedLabel(1.25) == "1.25×" && PhonePlayerChrome.speedLabel(.nan) == "1×")
         print("PASS player chrome labels")
+
+        // Opening: Settings › Phone player › Landscape videos open in.
+        let wide = PhoneLandscapeOpening.fullscreen, upright = PhoneLandscapeOpening.portraitFirst
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 0, height: 0, isAudio: false, preference: wide) == .holdLandscape,
+                     "Fullscreen turns at once, before the first frame")
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 0, height: 0, isAudio: false, preference: upright) == nil,
+                     "Portrait first waits for the picture's shape")
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 1920, height: 1080, isAudio: false, preference: wide) == .holdLandscape)
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 1920, height: 1080, isAudio: false, preference: upright) == .followPhone)
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 1080, height: 1920, isAudio: false, preference: wide) == .holdPortrait,
+                     "Vertical videos always open in portrait")
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 1080, height: 1920, isAudio: false, preference: upright) == .holdPortrait)
+        precondition(PhonePlayerOpening.decide(websiteOrientation: "portrait", width: 1920, height: 1080, isAudio: false, preference: wide) == .followPhone,
+                     "A website's orientation wins")
+        precondition(PhonePlayerOpening.decide(websiteOrientation: nil, width: 0, height: 0, isAudio: true, preference: wide) == .followPhone,
+                     "Audio never turns the player")
+        precondition(PhonePlayerOpening.usesPortraitLayout(width: 1920, height: 1080, screenIsLandscape: false))
+        precondition(!PhonePlayerOpening.usesPortraitLayout(width: 1920, height: 1080, screenIsLandscape: true))
+        precondition(!PhonePlayerOpening.usesPortraitLayout(width: 1080, height: 1920, screenIsLandscape: false))
+        precondition(!PhonePlayerOpening.usesPortraitLayout(width: 0, height: 0, screenIsLandscape: false))
+        precondition(PhonePlayerOpening.portraitVideoHeight(width: 1920, height: 1080, screenWidth: 400, screenHeight: 800) == 225)
+        precondition(PhonePlayerOpening.portraitVideoHeight(width: 1000, height: 900, screenWidth: 400, screenHeight: 600) == 270, "Capped at 45% of the screen")
+        let openingSuite = "PhonePlayerOpening." + UUID().uuidString
+        let openingStore = UserDefaults(suiteName: openingSuite)!
+        defer { openingStore.removePersistentDomain(forName: openingSuite) }
+        precondition(PhoneLandscapeOpening.load(from: openingStore) == .fullscreen)
+        openingStore.set("portraitFirst", forKey: PhoneLandscapeOpening.key)
+        precondition(PhoneLandscapeOpening.load(from: openingStore) == .portraitFirst)
+        openingStore.set("sideways", forKey: PhoneLandscapeOpening.key)
+        precondition(PhoneLandscapeOpening.load(from: openingStore) == .fullscreen)
+        precondition(PhoneAmbientMode.fittedSize(width: 1920, height: 1080, in: CGSize(width: 874, height: 402)) == CGSize(width: 715, height: 402),
+                     "A 16:9 picture on a wide phone leaves bars at the sides for the glow")
+        precondition(PhoneAmbientMode.fittedSize(width: 1080, height: 1920, in: CGSize(width: 402, height: 874)) == CGSize(width: 402, height: 715))
+        precondition(PhoneAmbientMode.fittedSize(width: 0, height: 0, in: CGSize(width: 874, height: 402)) == nil)
+        print("PASS player opening: fullscreen, portrait first, vertical, website, audio portrait layout and ambient fit")
+
+        // Ambient glow: tiny frames, and steps toward a new frame instead of a jump.
+        func solid(_ r: UInt8, _ g: UInt8, _ b: UInt8, width: Int = 4, height: Int = 2) -> CGImage {
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            for i in 0..<(width * height) { pixels[i * 4] = b; pixels[i * 4 + 1] = g; pixels[i * 4 + 2] = r }
+            return pixels.withUnsafeBytes { PhoneAmbientFrame.downscale(bgrx: $0.baseAddress!, width: width, height: height, stride: width * 4)! }
+        }
+        func centre(_ image: CGImage) -> (Int, Int, Int) {
+            let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            let bytes = context.data!.assumingMemoryBound(to: UInt8.self)
+            return (Int(bytes[0]), Int(bytes[1]), Int(bytes[2]))
+        }
+        let red = solid(255, 0, 0), blue = solid(0, 0, 255)
+        precondition(red.width == PhoneAmbientFrame.width && red.height == 24, "Frames shrink to 48 px wide at their shape")
+        let (r, g, b) = centre(red)
+        precondition(r > 240 && g < 15 && b < 15, "BGRX frames keep their colours: \(r) \(g) \(b)")
+        precondition(PhoneAmbientFrame.blend(nil, toward: red) === red, "The first frame is the glow")
+        let step = centre(PhoneAmbientFrame.blend(red, toward: blue)!)
+        precondition(step.0 > 140 && step.0 < 190 && step.2 > 65 && step.2 < 115, "One step moves about a third of the way: \(step)")
+        precondition(PhoneAmbientFrame.meanLuma(solid(0, 0, 0)) < 0.01 && PhoneAmbientFrame.meanLuma(solid(255, 255, 255)) > 0.99)
+        precondition(!PhoneAmbientFrame.accepts(frameLuma: 0.0, glowLuma: 0.4, previousWasDark: false), "A lone black grab is ignored")
+        precondition(PhoneAmbientFrame.accepts(frameLuma: 0.0, glowLuma: 0.4, previousWasDark: true), "Two dark grabs in a row are a dark scene")
+        precondition(PhoneAmbientFrame.accepts(frameLuma: 0.0, glowLuma: nil, previousWasDark: false))
+        precondition(PhoneAmbientFrame.accepts(frameLuma: 0.2, glowLuma: 0.4, previousWasDark: false))
+        print("PASS ambient frames: shrink, colours, gradual steps and black-grab filtering")
     }
     // Well above the 20 ms hide delay so slow CI runners settle too.
     static func settle() async throws { try await Task.sleep(nanoseconds: 400_000_000) }

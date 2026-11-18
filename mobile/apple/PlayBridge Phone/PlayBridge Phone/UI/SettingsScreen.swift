@@ -2,11 +2,12 @@ import SwiftUI
 
 /// A Settings topic. Each page covers one topic; the hub shows a live summary of each.
 enum SettingsPage: Hashable, CaseIterable {
-    case tv, subtitles, casting, history, browser, remote, about
+    case tv, phonePlayer, subtitles, casting, history, browser, remote, about
 
     var title: String {
         switch self {
         case .tv: return "TV"
+        case .phonePlayer: return "Phone player"
         case .subtitles: return "Audio & subtitles"
         case .casting: return "Casting"
         case .history: return "Cast history"
@@ -19,6 +20,7 @@ enum SettingsPage: Hashable, CaseIterable {
     var icon: String {
         switch self {
         case .tv: return "tv"
+        case .phonePlayer: return "play.rectangle"
         case .subtitles: return "captions.bubble"
         case .casting: return "airplayvideo"
         case .history: return "clock.arrow.circlepath"
@@ -40,6 +42,7 @@ struct SettingsScreen: View {
     /// Observed so the Audio & subtitles summary follows language changes.
     @AppStorage(PhonePlayerPreferences.key) private var playerPreferences: Data?
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
+    @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
     @AppStorage(CastHistorySettings.enabledKey) private var saveHistory = true
     /// Observed so the Cast history summary follows the limit.
     @AppStorage(CastHistorySettings.limitKey) private var historyLimit = CastHistorySettings.defaultLimit
@@ -84,6 +87,7 @@ struct SettingsScreen: View {
                 Group {
                     switch page {
                     case .tv: TvSettingsPage()
+                    case .phonePlayer: PhonePlayerSettingsPage()
                     case .history: CastHistorySettingsForm(store: vm.castHistory)
                     case .subtitles: AudioSubtitleSettingsPage(tv: vm.tvSubtitles)
                     case .casting: CastingSettingsPage()
@@ -116,6 +120,8 @@ struct SettingsScreen: View {
         switch page {
         case .tv:
             return autoConnect ? "Auto-connect to the last TV" : "Auto-connect off"
+        case .phonePlayer:
+            return (PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen).summary
         case .subtitles:
             _ = playerPreferences
             return PhoneLanguageChoices.summary(PhonePlayerPreferences.load(from: .standard))
@@ -157,6 +163,33 @@ private struct TvSettingsPage: View {
             }
         }
         .sheet(isPresented: $showPairedTVs) { AtvPairedTVsSheet(coordinator: atv) }
+    }
+}
+
+/// The phone's own player: how it opens.
+private struct PhonePlayerSettingsPage: View {
+    @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
+    @AppStorage(PhoneAmbientMode.key) private var ambient = true
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Landscape videos open in", selection: Binding(
+                    get: { PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen },
+                    set: { landscapeOpening = $0.rawValue })) {
+                    ForEach(PhoneLandscapeOpening.allCases) { Text($0.label).tag($0) }
+                }
+                .accessibilityIdentifier("settings-landscape-opening")
+            } footer: {
+                Text("Fullscreen turns the player to landscape at once. Portrait first follows how you hold the phone: upright, the video sits on top with the controls below; turn the phone or tap Fullscreen for full screen. Vertical videos always open in portrait, and a website can ask for its own orientation.")
+            }
+            Section {
+                Toggle("Ambient mode", isOn: $ambient).tint(Theme.primary)
+                    .accessibilityIdentifier("settings-ambient-mode")
+            } footer: {
+                Text("When the video sits on top with the controls below, a soft glow of its colours fills the space around it.")
+            }
+        }
     }
 }
 

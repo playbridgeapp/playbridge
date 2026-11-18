@@ -18,6 +18,8 @@ import AVFoundation
     private(set) var failureMessage: String?
 
     let player = AVPlayer()
+    /// Reads frames for ambient mode.
+    private var videoOutput: AVPlayerItemVideoOutput?
     private weak var layer: AVPlayerLayer?
     private let loopbackRouter: LoopbackRouter
     private var options = PhonePlayerOptions()
@@ -136,6 +138,9 @@ import AVFoundation
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         item.textStyleRules = SubtitleStyleStore.shared.style.avTextStyleRules()
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        item.add(output)
+        videoOutput = output
         itemObservations.append(item.observe(\.status, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in self?.statusChanged(token: token) }
         })
@@ -383,6 +388,11 @@ import AVFoundation
         state.paused = player.timeControlStatus == .paused
         state.buffering = seekTarget != nil || player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         state.speed = speed
+        // Keep the last size through seeks; a new item starts from a fresh state.
+        let size = item.presentationSize
+        if size.width.isFinite, size.height.isFinite, size.width >= 1, size.height >= 1 {
+            state.videoWidth = Int(size.width); state.videoHeight = Int(size.height)
+        }
         refreshCaption()
         emit(force: false)
     }
@@ -405,9 +415,21 @@ import AVFoundation
         itemObservations.forEach { $0.invalidate() }; itemObservations.removeAll()
         itemObservers.forEach(NotificationCenter.default.removeObserver); itemObservers.removeAll()
         player.replaceCurrentItem(with: nil)
+        videoOutput = nil
         audioGroup = nil; legibleGroup = nil; embeddedSubtitles = []; overlaySelection = nil
         // Release the old registration only after the item that used it is gone.
         loopback = nil
+    }
+
+    func ambientFrame(_ completion: @escaping @MainActor (CGImage?) -> Void) {
+        guard !closed, !background, let output = videoOutput,
+              let buffer = output.copyPixelBuffer(forItemTime: output.itemTime(forHostTime: CACurrentMediaTime()), itemTimeForDisplay: nil)
+        else { completion(nil); return }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { completion(nil); return }
+        completion(PhoneAmbientFrame.downscale(bgrx: base, width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer),
+                                               stride: CVPixelBufferGetBytesPerRow(buffer)))
     }
 
     func close() {

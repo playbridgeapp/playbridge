@@ -58,6 +58,15 @@ import Libmpv
     }
     func attach(_ layer: CAMetalLayer) { guard !closed else { return }; core.attach(layer) }
     func resize() { guard !closed else { return }; core.resize() }
+    func ambientFrame(_ completion: @escaping @MainActor (CGImage?) -> Void) {
+#if targetEnvironment(simulator)
+        // The frame is read back from the GPU, which crashes the simulator's Metal driver.
+        completion(nil)
+#else
+        guard !closed else { completion(nil); return }
+        core.ambientFrame(completion)
+#endif
+    }
     func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool) {
         guard !closed else { return }
         failureContext = "playback"; networkIssue = nil
@@ -261,6 +270,46 @@ private final class MPVPhoneCore: @unchecked Sendable {
         if status < 0 { emit(.failed(status, "loadfile")) }
     }
 
+    /// mpv's decoded video (no subtitles), shrunk for ambient mode. Never while backgrounded.
+    func ambientFrame(_ completion: @escaping @MainActor (CGImage?) -> Void) {
+        queue.async { [self] in
+            var image: CGImage?
+            if !closed, !background, loaded, let handle {
+                let arguments: [String] = ["screenshot-raw", "video"]
+                let strings: [UnsafeMutablePointer<CChar>] = arguments.map { strdup($0)! }
+                defer { strings.forEach { free($0) } }
+                var pointers: [UnsafePointer<CChar>?] = strings.map { UnsafePointer($0) } + [nil]
+                var node = mpv_node()
+                if mpv_command_ret(handle, &pointers, &node) >= 0 {
+                    image = Self.ambientImage(node)
+                    mpv_free_node_contents(&node)
+                }
+            }
+            nonisolated(unsafe) let frame = image
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(frame) } }
+        }
+    }
+
+    private static func ambientImage(_ node: mpv_node) -> CGImage? {
+        guard node.format == MPV_FORMAT_NODE_MAP, let list = node.u.list?.pointee, let keys = list.keys, let values = list.values else { return nil }
+        var width = 0, height = 0, stride = 0, format = ""
+        var bytes: UnsafeMutableRawPointer?, size = 0
+        for index in 0..<Int(list.num) {
+            guard let key = keys[index] else { continue }
+            let value = values[index]
+            switch String(cString: key) {
+            case "w": if value.format == MPV_FORMAT_INT64 { width = Int(value.u.int64) }
+            case "h": if value.format == MPV_FORMAT_INT64 { height = Int(value.u.int64) }
+            case "stride": if value.format == MPV_FORMAT_INT64 { stride = Int(value.u.int64) }
+            case "format": if value.format == MPV_FORMAT_STRING, let text = value.u.string { format = String(cString: text) }
+            case "data": if value.format == MPV_FORMAT_BYTE_ARRAY, let array = value.u.ba?.pointee { bytes = array.data; size = array.size }
+            default: break
+            }
+        }
+        guard format == "bgr0" || format == "bgra", let bytes, width > 0, height > 0, stride >= width * 4, size >= stride * height else { return nil }
+        return PhoneAmbientFrame.downscale(bgrx: bytes, width: width, height: height, stride: stride)
+    }
+
     func resize() {
         queue.async { [self] in
             guard !closed, !background, loaded, !pendingOutputResize, let handle else { return }
@@ -361,6 +410,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
                 PhonePlaybackLog.log("start file")
                 loaded = false
                 state.loaded = false
+                state.videoWidth = 0; state.videoHeight = 0
                 seekState.reset()
                 if let data = event.pointee.data { entryID = data.assumingMemoryBound(to: mpv_event_start_file.self).pointee.playlist_entry_id }
             case MPV_EVENT_FILE_LOADED:
@@ -463,6 +513,10 @@ private final class MPVPhoneCore: @unchecked Sendable {
         if let resolvedPosition = sampled.position { state.position = resolvedPosition }
         state.buffering = sampled.buffering
         state.speed = Double(propertyString("speed") ?? "") ?? 1
+        let width = Int(propertyString("dwidth") ?? "") ?? 0, height = Int(propertyString("dheight") ?? "") ?? 0
+        let rotate = (Int(propertyString("video-params/rotate") ?? "") ?? 0) % 180 != 0
+        // mpv drops the size while seeking or reconfiguring; keep the last one until the next file.
+        if width > 0, height > 0 { state.videoWidth = rotate ? height : width; state.videoHeight = rotate ? width : height }
         state.selectedAudio = Int(propertyString("aid") ?? "")
         state.selectedSubtitle = Int(propertyString("sid") ?? "")
         if let json = propertyString("track-list"), let data = json.data(using: .utf8),

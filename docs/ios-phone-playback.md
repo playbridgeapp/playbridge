@@ -63,6 +63,31 @@ HLS children, so mpv does not go through Wi-Fi/VPN to reach its own proxy. Recei
 casts still use the advertised LAN address. Upstream/private-origin policies and
 registration lifetimes are unchanged; no route silently becomes Direct.
 
+- **Opening (Settings › Phone player › Landscape videos open in):** **Fullscreen**
+  (default) holds landscape as soon as the player opens; **Portrait first** follows
+  how the phone is held. Once the first frame gives the picture's size
+  (`PhonePlaybackState.videoWidth/Height`), a vertical video is held in portrait
+  either way. A website's requested orientation wins and audio never turns the
+  player. The rule is `PhonePlayerOpening.decide`; it runs once per opening, after
+  which the Rotate and Fullscreen buttons take over.
+- **Portrait layout:** a landscape video on an upright phone shows the video on
+  top (same surface, so mpv only resizes) with the title, seek bar, Previous / Play /
+  Next, **Fullscreen**, the speed chip and **Up next** below. In Portrait first,
+  Fullscreen holds landscape until the phone is turned to match, then hands rotation
+  back to the phone.
+- **No black screen:** until the first frame, the cast sheet's thumbnail (or a
+  website item's backdrop/poster from its visual metadata) shows blurred, then
+  fades out. On iOS 18+ the player zooms out of the cast sheet card's thumbnail.
+- **Ambient mode (Settings › Phone player, on by default):** a blurred glow of the
+  video's colours fills the space around the picture: behind the portrait layout, and
+  the bars in full screen with Fit (the surface then takes exactly the picture's size).
+  Once a second while playing, the engine hands over a 48-pixel copy of the frame (mpv
+  `screenshot-raw video`, AVPlayer `AVPlayerItemVideoOutput`); the glow steps a third of
+  the way toward it so colour changes never dim, and a Core Animation layer crossfades
+  it (a SwiftUI image swap blanks for a frame). mpv's grab reads back from the GPU,
+  which crashes the simulator's Metal driver, so it is off in the simulator.
+- The control scrims run edge to edge (past the safe areas, so Fill shows no hard
+  sides) and are off over the blurred poster.
 - mpv feeds the website progress, queue and final-close snapshot. Fullscreen website playback includes a live **Queue** and next/previous controls, using that same queue for manual navigation and automatic advancement. An unresolved tail shows **Getting the next episode from the website…** and advances when the website supplies it; only an explicit end-of-list finishes the queue.
 - Controls hide after three seconds of playback; a single tap toggles them and
   a double tap on either half seeks ten seconds. Consecutive seeks accumulate.

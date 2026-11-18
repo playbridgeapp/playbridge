@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// The phone player's decoder. mpv is the default for every session; AVPlayer is a
 /// per-session choice for streams mpv handles badly (the player's More sheet or the failure screen).
@@ -41,6 +42,10 @@ struct PhonePlaybackState: Equatable {
     var selectedAudio: Int?
     var selectedSubtitle: Int?
     var speed = 1.0
+    /// The picture's display size once the first frame is decoded (rotation applied);
+    /// zero before that and for audio. Decides landscape vs vertical and hides the poster.
+    var videoWidth = 0
+    var videoHeight = 0
     /// Subtitle text the engine wants drawn over the video (AVPlayer's sidecar subtitles);
     /// empty when the engine renders subtitles itself.
     var overlayCaption = ""
@@ -99,6 +104,8 @@ enum PhonePlaybackNetworkIssue: Equatable {
     func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle])
     /// The source's MIME type, for an engine that registers the stream with the loopback proxy itself.
     func setSourceContentType(_ contentType: String?)
+    /// A tiny copy of the current frame for ambient mode, or nil when there is none.
+    func ambientFrame(_ completion: @escaping @MainActor (CGImage?) -> Void)
     func close()
 }
 
@@ -109,6 +116,7 @@ extension PhoneAlternativePlaybackEngine {
     func setSourceContentType(_ contentType: String?) {}
     func setSpeed(_ speed: Double) {}
     func addExternalSubtitles(_ subtitles: [PhoneExternalSubtitle]) {}
+    func ambientFrame(_ completion: @escaping @MainActor (CGImage?) -> Void) { completion(nil) }
 }
 
 /// Filters captured browser transport artifacts out of `mpv`'s `http-header-fields`

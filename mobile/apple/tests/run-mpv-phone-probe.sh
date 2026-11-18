@@ -24,10 +24,10 @@ phone = repo / 'mobile/apple/PlayBridge Phone'
 source = root / 'PlayBridge Phone'
 source.mkdir()
 for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift',
-             'Network/AVPlayerPhonePlayback.swift', 'Network/AVPlayerPhoneSupport.swift', 'Network/WebsiteCaptionParser.swift', 'Network/PhonePlaybackLog.swift', 'Subtitles/PhoneSubtitleDownload.swift', 'Subtitles/SubtitleContentCheck.swift',
+             'Network/AVPlayerPhonePlayback.swift', 'Network/AVPlayerPhoneSupport.swift', 'Network/PhoneAmbientFrame.swift', 'Network/WebsiteCaptionParser.swift', 'Network/PhonePlaybackLog.swift', 'Subtitles/PhoneSubtitleDownload.swift', 'Subtitles/SubtitleContentCheck.swift',
              'Network/StreamRouteService.swift', 'Network/PhonePlayerPreferences.swift',
              'UI/PhonePlayerControls.swift', 'UI/PhonePlayerScrub.swift', 'UI/PhonePlayerSheets.swift', 'UI/MPVPhonePlayerView.swift',
-             'UI/PhonePlayerChrome.swift', 'UI/PhonePlayerTimeline.swift', 'UI/RemoteTimelineTrack.swift', 'UI/RemoteSeekTimeline.swift', 'Models/Models.swift',
+             'UI/PhonePlayerChrome.swift', 'UI/PhonePlayerTimeline.swift', 'UI/AmbientGlowLayer.swift', 'UI/PhonePlayerOpening.swift', 'UI/RemoteTimelineTrack.swift', 'UI/RemoteSeekTimeline.swift', 'Models/Models.swift',
              'UI/PhonePlayerOpeningOrientationView.swift', 'UI/PhonePlayerOrientationLock.swift', 'UI/Theme.swift', 'UI/SubtitleStyleEditor.swift',
              'Subtitles/SubtitleStyleSettings.swift', 'Subtitles/SubtitleFontLibrary.swift', 'Subtitles/PickedSubtitleFont.swift']:
     shutil.copy2(phone / 'PlayBridge Phone' / name, source / Path(name).name)
