@@ -147,6 +147,111 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         precondition(refused.failure!.message.contains("mpv"))
         refused.close()
 
+        // Automatic: a video mpv can't play moves to AVPlayer once, when AVPlayer plays its format.
+        precondition(PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/x.m3u8")!, contentType: nil))
+        precondition(PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/opaque")!, contentType: "video/mp4; codecs=avc1"))
+        precondition(!PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/x.mkv")!, contentType: nil))
+        precondition(!PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/x.mp4")!, contentType: "video/webm"))
+        precondition(!PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/x.mpd")!, contentType: nil))
+        precondition(!PhoneEngineFallback.avPlayerPlays(url: URL(string: "https://a.test/stream")!, contentType: nil), "Unknown types never switch")
+        precondition(PhoneEngineFallback.allowsSwitch(from: .mpv, code: -17, networkIssue: nil, engineMessage: nil))
+        precondition(PhoneEngineFallback.allowsSwitch(from: .mpv, code: -13, networkIssue: nil, engineMessage: nil))
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .mpv, code: -13, networkIssue: .http(403), engineMessage: nil), "HTTP errors never switch")
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .mpv, code: -13, networkIssue: .certificate, engineMessage: nil))
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .mpv, code: -17, networkIssue: nil, engineMessage: "proxy"), "mpv's own messages never switch")
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .mpv, code: -14, networkIssue: nil, engineMessage: nil))
+        precondition(PhoneEngineFallback.allowsSwitch(from: .avPlayer, code: -11828, networkIssue: nil, engineMessage: "AVPlayer could not play"))
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .avPlayer, code: -1, networkIssue: .http(404), engineMessage: nil))
+        precondition(!PhoneEngineFallback.allowsSwitch(from: .avPlayer, code: -1102, networkIssue: nil, engineMessage: "denied"),
+                     "A refused file is the source's problem, not AVPlayer's")
+        precondition(PhoneEngineFallback.allowsSwitch(from: .avPlayer, code: -1, networkIssue: nil, engineMessage: "needs the phone proxy"))
+        let hlsURL = URL(string: "https://a.test/x.m3u8")!, mkvURL = URL(string: "https://a.test/x.mkv")!
+        precondition(PhoneEngineMode.avPlayerFirst.startingEngine(url: hlsURL, contentType: nil) == .avPlayer)
+        precondition(PhoneEngineMode.avPlayerFirst.startingEngine(url: mkvURL, contentType: nil) == .mpv, "Formats AVPlayer can't play start on mpv")
+        precondition(PhoneEngineMode.mpvFirst.startingEngine(url: hlsURL, contentType: nil) == .mpv)
+        precondition(PhoneEngineMode.mpvOnly.startingEngine(url: hlsURL, contentType: nil) == .mpv)
+        var watch = PhoneEngineFallback.NoPictureWatch()
+        var sound = PhonePlaybackState(position: 10, duration: 600, paused: false, loaded: true)
+        precondition(!watch.sample(sound, isAudio: false, active: true))
+        sound.position = 14; precondition(!watch.sample(sound, isAudio: false, active: true))
+        sound.position = 15; precondition(watch.sample(sound, isAudio: false, active: true), "Five seconds of sound without a picture")
+        var audioWatch = PhoneEngineFallback.NoPictureWatch()
+        sound.position = 10; _ = audioWatch.sample(sound, isAudio: true, active: true)
+        sound.position = 30; precondition(!audioWatch.sample(sound, isAudio: true, active: true), "Audio has no picture to wait for")
+        var pictureWatch = PhoneEngineFallback.NoPictureWatch()
+        var picture = sound; picture.videoWidth = 1920; picture.videoHeight = 1080; picture.position = 10
+        _ = pictureWatch.sample(picture, isAudio: false, active: true); picture.position = 30
+        precondition(!pictureWatch.sample(picture, isAudio: false, active: true))
+        var backgroundWatch = PhoneEngineFallback.NoPictureWatch()
+        sound.position = 10; _ = backgroundWatch.sample(sound, isAudio: false, active: false)
+        sound.position = 30; precondition(!backgroundWatch.sample(sound, isAudio: false, active: false), "Not while the app is in the background")
+
+        let auto = UserDefaults(suiteName: "phone-engine-fallback-\(UUID().uuidString)")!
+        var mpvs: [TestAlternativeEngine] = []
+        var avs: [TestAlternativeEngine] = []
+        let mpvFactory: () -> PhoneAlternativePlaybackEngine? = { let engine = TestAlternativeEngine(); mpvs.append(engine); return engine }
+        let avOnly: () -> PhoneAlternativePlaybackEngine? = { let engine = TestAlternativeEngine(); avs.append(engine); return engine }
+        let falling = PlaybackSession(media: hls, route: .phone, contentType: "application/vnd.apple.mpegurl", preferencesStore: auto,
+                                      alternativeFactory: mpvFactory, avPlayerFactory: avOnly) { hls }
+        mpvs[0].onState?(PhonePlaybackState(position: 30, duration: 600, paused: false, loaded: true, videoWidth: 1280, videoHeight: 720))
+        mpvs[0].onFailure?(-17)
+        precondition(falling.failure == nil && falling.engineKind == .avPlayer && falling.engineNotice?.back == .mpv, "A format failure moves to AVPlayer")
+        for _ in 0..<100 { if !falling.retrying { break }; try await Task.sleep(nanoseconds: 1_000_000) }
+        precondition(avs.count == 1 && avs[0].loads[0].2 == 30 && avs[0].loads[0].3, "AVPlayer resumes at the same point and plays")
+        avs[0].onFailure?(-11828)
+        precondition(falling.failure != nil && falling.engineKind == .avPlayer && mpvs.count == 1, "Only one switch per video")
+        await falling.replaceWebsiteMedia(hls, title: "Next", resumeMs: 0, autoplay: false)
+        precondition(falling.engineKind == .mpv && falling.engineNotice == nil && mpvs.count == 2, "The next video starts on mpv again")
+        mpvs[1].onState?(PhonePlaybackState(position: 0, duration: 600, paused: false, loaded: true))
+        mpvs[1].onState?(PhonePlaybackState(position: 6, duration: 600, paused: false, loaded: true))
+        precondition(falling.engineKind == .avPlayer, "Sound with no picture moves to AVPlayer")
+        for _ in 0..<100 { if !falling.retrying { break }; try await Task.sleep(nanoseconds: 1_000_000) }
+        falling.switchEngine(to: .mpv)
+        for _ in 0..<100 { if !falling.retrying { break }; try await Task.sleep(nanoseconds: 1_000_000) }
+        precondition(falling.engineKind == .mpv && falling.engineNotice == nil, "Switch back")
+        mpvs.last!.onFailure?(-17)
+        precondition(falling.engineKind == .mpv && falling.failure != nil, "After the user's choice, failures are shown")
+        falling.close()
+
+        let network = PlaybackSession(media: hls, route: .phone, contentType: "application/vnd.apple.mpegurl", preferencesStore: auto,
+                                      alternativeFactory: mpvFactory, avPlayerFactory: avOnly) { hls }
+        mpvs.last!.networkIssue = .http(404); mpvs.last!.onFailure?(-13)
+        precondition(network.engineKind == .mpv && network.failure != nil, "Network failures never switch")
+        network.close()
+
+        let mpvOnly = UserDefaults(suiteName: "phone-engine-mpv-only-\(UUID().uuidString)")!
+        mpvOnly.set(PhoneEngineMode.mpvOnly.rawValue, forKey: PhoneEngineMode.key)
+        precondition(PhoneEngineMode.load(from: mpvOnly) == .mpvOnly && PhoneEngineMode.load(from: auto) == .mpvFirst)
+        let pinned = PlaybackSession(media: hls, route: .phone, contentType: "application/vnd.apple.mpegurl", preferencesStore: mpvOnly,
+                                     alternativeFactory: mpvFactory, avPlayerFactory: avOnly) { hls }
+        mpvs.last!.onFailure?(-17)
+        precondition(pinned.engineKind == .mpv && pinned.failure != nil, "mpv only never switches")
+        pinned.close()
+
+        // AVPlayer first: its formats start on AVPlayer; mpv takes over any video AVPlayer can't play.
+        let avFirst = UserDefaults(suiteName: "phone-engine-avplayer-first-\(UUID().uuidString)")!
+        avFirst.set(PhoneEngineMode.avPlayerFirst.rawValue, forKey: PhoneEngineMode.key)
+        let mpvsBefore = mpvs.count, avsBefore = avs.count
+        let avFirstSession = PlaybackSession(media: hls, route: .phone, contentType: "application/vnd.apple.mpegurl", preferencesStore: avFirst,
+                                    alternativeFactory: mpvFactory, avPlayerFactory: avOnly) { hls }
+        precondition(avFirstSession.engineKind == .avPlayer && avs.count == avsBefore + 1 && mpvs.count == mpvsBefore, "HLS starts on AVPlayer")
+        avs.last!.onState?(PhonePlaybackState(position: 20, duration: 600, paused: false, loaded: true, videoWidth: 1280, videoHeight: 720))
+        avs.last!.failureMessage = "AVPlayer could not play this stream."
+        avs.last!.onFailure?(-11828)
+        precondition(avFirstSession.failure == nil && avFirstSession.engineKind == .mpv && avFirstSession.engineNotice?.back == .avPlayer, "AVPlayer's failure moves to mpv")
+        for _ in 0..<100 { if !avFirstSession.retrying { break }; try await Task.sleep(nanoseconds: 1_000_000) }
+        precondition(mpvs.count == mpvsBefore + 1 && mpvs.last!.loads[0].2 == 20, "mpv resumes at the same point")
+        await avFirstSession.replaceWebsiteMedia(hls, title: "Next", resumeMs: 0, autoplay: false)
+        precondition(avFirstSession.engineKind == .avPlayer && avFirstSession.engineNotice == nil, "The next HLS video starts on AVPlayer again")
+        avs.last!.networkIssue = .http(403); avs.last!.onFailure?(-1)
+        precondition(avFirstSession.engineKind == .avPlayer && avFirstSession.failure != nil, "Network failures never switch")
+        let mkvFirst = PlaybackSession(media: mkvMedia, route: .phone, preferencesStore: avFirst,
+                                       alternativeFactory: mpvFactory, avPlayerFactory: avOnly) { mkvMedia }
+        precondition(mkvFirst.engineKind == .mpv, "MKV starts on mpv")
+        mpvs.last!.onFailure?(-17)
+        precondition(mkvFirst.engineKind == .mpv && mkvFirst.failure != nil, "AVPlayer never takes a format it can't play")
+        mkvFirst.close(); avFirstSession.close()
+
         // Routing and error classification for the AVPlayer engine.
         let signed = URL(string: "https://cdn.test/v.m3u8?token=secret")!
         precondition(PhoneAVPlayerSupport.needsLoopback(url: signed, headers: ["Referer": "https://site.test/"]))
@@ -187,6 +292,6 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         precondition(overlay.caption(id: 1000, position: 2, delay: 1.5) == "", "A positive delay shows captions later")
         precondition(overlay.caption(id: 1000, position: 5.5, delay: 1.5) == "Again")
         precondition(overlay.caption(id: nil, position: 2, delay: 0) == "")
-        print("PASS mpv-default formats/files, explicit unavailable engine, routed headers, resume/retry, diagnostics, stale callbacks, multi-format queue, final progress, per-session AVPlayer switch, AVPlayer routing/errors and overlay subtitles")
+        print("PASS mpv-default formats/files, explicit unavailable engine, routed headers, resume/retry, diagnostics, stale callbacks, multi-format queue, final progress, per-session AVPlayer switch, automatic AVPlayer fallback, AVPlayer routing/errors and overlay subtitles")
     }
 }

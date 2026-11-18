@@ -70,6 +70,16 @@ struct MPVPhonePlayerView: View {
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+            .overlay(alignment: .top) {
+                if let notice = session.engineNotice {
+                    PhoneEngineNoticeBanner(message: notice.message, onSwitchBack: { session.switchEngine(to: notice.back) },
+                                            onDismiss: { session.dismissEngineNotice() })
+                        .padding(.top, portrait ? 8 : 64)
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: session.engineNotice)
         }
         .background((portraitLayout ? Theme.surface : Color.black).ignoresSafeArea())
         .foregroundStyle(.white).tint(Theme.primary)
@@ -856,5 +866,36 @@ private final class MPVPhoneSurfaceView: UIView {
             engine.resize()
         }
         lastDrawableSize = size
+    }
+}
+
+/// Says that one player couldn't play the video and the other took over, with a way back. Hides itself
+/// after a while; the More sheet can switch engines at any time.
+struct PhoneEngineNoticeBanner: View {
+    let message: String
+    let onSwitchBack: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Theme.primary)
+            Text(message).font(Theme.font(size: 13)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button("Switch back", action: onSwitchBack)
+                .font(Theme.font(size: 13, weight: .semibold))
+                .accessibilityIdentifier("phone-player-engine-notice-switch-back")
+            Button(action: onDismiss) { Image(systemName: "xmark").frame(width: 32, height: 32) }
+                .accessibilityLabel("Dismiss")
+        }
+        .padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 8)
+        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 1))
+        .frame(maxWidth: 560)
+        .task(id: message) {
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            if !Task.isCancelled { onDismiss() }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("phone-player-engine-notice")
     }
 }

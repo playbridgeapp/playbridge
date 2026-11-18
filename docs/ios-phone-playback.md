@@ -2,10 +2,10 @@
 
 The phone uses standard MPVKit 1.0.0 for local video/audio playback by default:
 website sessions, browser-detected streams, imported files and completed downloads.
-MP4, MKV, HLS, DASH, audio and opaque URLs all start on mpv. Apple's AVPlayer is a
-second engine the user can switch to (see [Player engine](#player-engine)); PlayBridge
-never picks it by format and never falls back to it on its own. A missing engine fails
-explicitly. Retries preserve the selected route, headers, engine and current position.
+With the default Player setting, MP4, MKV, HLS, DASH, audio and opaque URLs all start on mpv. Apple's AVPlayer is a
+second engine: the user can switch to it, the Player setting can start HLS, MP4, MOV and
+audio on it, and a video one player can't play moves to the other once (see
+[Player engine](#player-engine)). A missing engine fails explicitly. Retries preserve the selected route, headers, engine and current position.
 Original URL and MIME information remain available for diagnostics.
 
 ## Player engine
@@ -21,6 +21,34 @@ replacement keep it, and the next video opened starts on mpv again. It is not sa
 as a preference, because AVPlayer suits particular streams (for example an HLS video
 that mpv opens as live and can't seek, or a stream mpv shows without a picture) and
 would be the weaker choice for most others.
+
+### Starting player and fallback
+
+**Settings › Phone player › Player** (`phone_player_engine_mode`, `PhoneEngineMode`):
+
+| Option | A video starts on | Once per video, it moves to |
+|---|---|---|
+| **mpv first** (default) | mpv | AVPlayer, only for HLS, MP4, M4V, MOV and plain audio |
+| **AVPlayer first** | AVPlayer for HLS, MP4, M4V, MOV and plain audio; mpv for everything else | mpv, for any video AVPlayer can't play |
+| **mpv only** | mpv | never |
+
+The format check (`PhoneEngineFallback.avPlayerPlays`) uses the MIME type or extension;
+MKV, WebM, DASH, raw TS and unknown types never go to AVPlayer. A video switches, at the
+current position, when:
+
+- the player fails with an error the other could get past. From mpv: it couldn't open
+  or decode the file (errors -17/-18, or -13 with no network, HTTP or TLS cause; mpv's
+  own messages never switch). From AVPlayer: a format or decoder failure, or a missing
+  phone proxy, since mpv reads more formats and needs no proxy. URL loading errors (such
+  as -1102 when the server refuses the file) never switch.
+- it plays for five seconds of playback with no picture while the app is on screen
+  (an audio-only HLS rendition, a black surface).
+
+Network, HTTP, TLS and certificate failures never switch: the other player would fail
+the same way. A banner names both players and offers **Switch back**; it hides after 12
+seconds. If the second player fails too, its failure is shown. Choosing an engine
+yourself turns switching off for that player, and later episodes keep your choice.
+Otherwise each new episode or party replacement starts on the setting's player again.
 
 With AVPlayer:
 

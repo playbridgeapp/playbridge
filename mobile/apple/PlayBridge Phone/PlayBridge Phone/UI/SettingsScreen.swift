@@ -44,6 +44,7 @@ struct SettingsScreen: View {
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
     @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
     @AppStorage(PhoneLeaveChoice.key) private var leaveChoice = PhoneLeaveChoice.pause.rawValue
+    @AppStorage(PhoneEngineMode.key) private var engineModeSummary = PhoneEngineMode.mpvFirst.rawValue
     @AppStorage(CastHistorySettings.enabledKey) private var saveHistory = true
     /// Observed so the Cast history summary follows the limit.
     @AppStorage(CastHistorySettings.limitKey) private var historyLimit = CastHistorySettings.defaultLimit
@@ -123,7 +124,9 @@ struct SettingsScreen: View {
             return autoConnect ? "Auto-connect to the last TV" : "Auto-connect off"
         case .phonePlayer:
             let opening = (PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen).summary
-            return PhoneLeaveChoice(rawValue: leaveChoice) == .keepPlaying ? opening + " · keeps playing" : opening
+            let engine = (PhoneEngineMode(rawValue: engineModeSummary) ?? .mpvFirst).label
+            let summary = engine + " · " + opening
+            return PhoneLeaveChoice(rawValue: leaveChoice) == .keepPlaying ? summary + " · keeps playing" : summary
         case .subtitles:
             _ = playerPreferences
             return PhoneLanguageChoices.summary(PhonePlayerPreferences.load(from: .standard))
@@ -173,9 +176,20 @@ private struct PhonePlayerSettingsPage: View {
     @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
     @AppStorage(PhoneAmbientMode.key) private var ambient = true
     @AppStorage(PhoneLeaveChoice.key) private var leave = PhoneLeaveChoice.pause.rawValue
+    @AppStorage(PhoneEngineMode.key) private var engineMode = PhoneEngineMode.mpvFirst.rawValue
 
     var body: some View {
         Form {
+            Section {
+                Picker("Player", selection: Binding(
+                    get: { PhoneEngineMode(rawValue: engineMode) ?? .mpvFirst },
+                    set: { engineMode = $0.rawValue })) {
+                    ForEach(PhoneEngineMode.allCases) { Text($0.label).tag($0) }
+                }
+                .accessibilityIdentifier("settings-engine-mode")
+            } footer: {
+                Text("mpv first starts every video on mpv; AVPlayer takes over HLS, MP4, MOV and audio that mpv can’t open, decode or show. AVPlayer first starts those formats on AVPlayer and everything else on mpv; mpv takes over any video AVPlayer can’t play. A switch happens once per video, at the same point, with a way back; network and sign-in errors never switch. mpv only never switches by itself.")
+            }
             Section {
                 Picker("Landscape videos open in", selection: Binding(
                     get: { PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen },
