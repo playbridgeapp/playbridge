@@ -33,6 +33,8 @@ protocol PageCastTransport: AnyObject {
     @MainActor func sendWebsiteToParty(_ request: PageCastRequest) -> Bool
     /// Starts a linked session in the party with the request's items. Throws `PageCastError`.
     @MainActor func startWebsitePartyLink(_ request: PageCastRequest) throws -> PageCastPartyLink
+    /// Tells cast history which page the next cast comes from.
+    func noteCastOrigin(_ origin: CastOrigin)
 }
 
 extension PageCastTransport {
@@ -41,6 +43,7 @@ extension PageCastTransport {
     @MainActor func startWebsitePartyLink(_ request: PageCastRequest) throws -> PageCastPartyLink {
         throw PageCastError(code: "party_unsupported")
     }
+    func noteCastOrigin(_ origin: CastOrigin) {}
     var playbackDestination: [String: Any] { ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": destinationID == nil ? "local" : "native", "connected": destinationID == nil || isConnected] }
     var websiteLocalState: [String: Any]? { nil }
     @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws { throw PageCastError(code: "unsupported_target") }
@@ -158,6 +161,12 @@ final class PageCastCoordinator: ObservableObject {
     }
 
     func attach(_ transport: PageCastTransport) { self.transport = transport }
+
+    /// A website asked for this cast; its page is the tab's own address, never one it supplied.
+    private static func castOrigin(_ request: Request) -> CastOrigin {
+        CastOrigin(pageURL: request.source?.pageCastPageURL, pageInitiated: true,
+                   bridgedApp: request.source?.pageCastIsBridgedApp ?? false)
+    }
 
     func receive(_ message: [String: Any], from source: PageCastSource) {
         guard let origin = source.pageCastOrigin,
@@ -354,6 +363,7 @@ final class PageCastCoordinator: ObservableObject {
             guard let rawId = transport.playbackDestination["id"] as? String else { throw PageCastError(code: "receiver_changed") }
             let session = Session(owner: request, receiverID: rawId, items: parsed.items, grants: grants)
             session.external = true
+            transport.noteCastOrigin(Self.castOrigin(request))
             try await transport.startWebsiteExternalPlayback(phoneFetched)
             try check(request); try checkDestination(expected, origin: request.origin)
             session.playbackID = transport.websitePlayback?.playbackId
@@ -368,6 +378,7 @@ final class PageCastCoordinator: ObservableObject {
         // Replace an old linked authority only once this request is ready to send.
         endSession("superseded")
         let session = request.operation != "cast" ? Session(owner: request, receiverID: receiverID, items: parsed.items, grants: grants) : nil
+        transport.noteCastOrigin(Self.castOrigin(request))
         try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: grants)
         try check(request)
         if let expected { try checkDestination(expected, origin: request.origin) }
@@ -621,7 +632,10 @@ final class PageCastCoordinator: ObservableObject {
         let ids = items.compactMap { $0["id"] as? String }
         if let parsed {
             if session.local { throw PageCastError(code: "unsupported_target") }
-            else { try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: combined) }
+            else {
+                transport.noteCastOrigin(Self.castOrigin(request))
+                try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: combined)
+            }
             try check(request)
             guard active === session else { throw PageCastError(code: "session_ended") }
             session.ids = ids; session.need = nil; session.lastAcceptedNeed = nil

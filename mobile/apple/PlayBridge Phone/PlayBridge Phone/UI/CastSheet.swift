@@ -969,6 +969,8 @@ struct CastSheet: View {
                     throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.")
                 }
                 let subtitleTitles = subtitleURLs.map { url in self.subtitles.first { $0.url == url }?.displayTitle ?? "Subtitle" }
+                vm.noteCastOrigin(CastOrigin(pageURL: tab.urlString, bridgedApp: tab.isBridgedApp,
+                                             preview: detector.thumbnails[video.id]))
                 try await vm.sendRoutedStream(media, video: video.withCastTitle(pageTitle: tab.title), subtitles: subtitles, queue: queue, subtitleTitles: subtitleTitles, airPlayRequest: airPlayRequest)
                 if !queue { nav.navigate(to: .remote) }
                 dismiss()
