@@ -52,9 +52,33 @@ struct PhonePlayerPreferences: Codable, Equatable {
     }
 }
 
+/// Settings › Phone player › When you leave the player (Android #530 without picture-in-picture).
+enum PhoneLeaveChoice: String, CaseIterable, Identifiable {
+    /// Back closes the player; Home and locking the phone pause.
+    case pause
+    /// Back leaves the video playing with a bar to return to it; Home and locking keep the
+    /// sound going with lock-screen controls.
+    case keepPlaying
+
+    static let key = "phone_player_leave"
+    var id: String { rawValue }
+    var label: String { self == .pause ? "Pause" : "Keep playing" }
+
+    static func load(from store: UserDefaults = .standard) -> Self {
+        store.string(forKey: key).flatMap(Self.init(rawValue:)) ?? .pause
+    }
+}
+
 struct PhonePlayerOptions: Equatable {
     var preferences = PhonePlayerPreferences()
     var subtitleDelay = 0.0
+    /// Pinch to fill: crops to the screen for this view only; the saved sizing is unchanged.
+    var displayFill = false
+    /// Settings › Phone player › When you leave the player › Keep playing: Home and locking the
+    /// phone keep the sound going (video decoding stops until the app returns).
+    var keepPlayingInBackground = false
+
+    var fills: Bool { preferences.sizing == .fill || displayFill }
 }
 
 /// Languages offered for the preferred audio and subtitle language, in the player and in Settings.

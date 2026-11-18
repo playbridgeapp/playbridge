@@ -118,6 +118,8 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private var seekState = PhoneMPVSeekState()
     private var closed = false
     private var background = false
+    /// In the background playback pauses, unless Keep playing is chosen.
+    private var pausedByBackground: Bool { background && !options.keepPlayingInBackground }
     private var desiredPaused = true
     private var generation = 0
     private var networkIssue: PhonePlaybackNetworkIssue?
@@ -194,7 +196,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
             generation = token
             request = (url, headers, resume.isFinite ? max(0, resume) : 0)
             desiredPaused = !autoplay
-            state = PhonePlaybackState(position: request!.resume, paused: desiredPaused || background)
+            state = PhonePlaybackState(position: request!.resume, paused: desiredPaused || pausedByBackground)
             loaded = false; entryID = nil; pendingSeek = nil; seekState.reset()
             networkIssue = nil
             emit(.state(state))
@@ -229,7 +231,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private func applyOptions() {
         guard let handle else { return }
         let prefs = options.preferences
-        let values = ["speed": String(prefs.speed), "panscan": prefs.sizing == .fill ? "1" : "0",
+        let values = ["speed": String(prefs.speed), "panscan": options.fills ? "1" : "0",
                       "sub-delay": String(options.subtitleDelay)]
         for (name, value) in values.sorted(by: { $0.key < $1.key }) {
             let status = mpv_set_property_string(handle, name, value)
@@ -261,11 +263,11 @@ private final class MPVPhoneCore: @unchecked Sendable {
         guard headerStatus >= 0 else { emit(.failed(headerStatus, "headers")); return }
         let userAgent = PhoneMPVHTTPHeaders.userAgent(from: request.headers)
         mpv_set_property_string(handle, "user-agent", userAgent)
-        mpv_set_property_string(handle, "pause", desiredPaused || background ? "yes" : "no")
+        mpv_set_property_string(handle, "pause", desiredPaused || pausedByBackground ? "yes" : "no")
         mpv_set_property_string(handle, "sid", "no")
         // mpv 0.38+ places per-file options AFTER the insertion index. Supply
         // resume as a file option rather than a best-effort global property.
-        PhonePlaybackLog.log("loadfile \(PhonePlaybackLog.describe(request.url)) headers=\(PhonePlaybackLog.headerNames(request.headers)) resume=\(request.resume) paused=\(desiredPaused || background)")
+        PhonePlaybackLog.log("loadfile \(PhonePlaybackLog.describe(request.url)) headers=\(PhonePlaybackLog.headerNames(request.headers)) resume=\(request.resume) paused=\(desiredPaused || pausedByBackground)")
         let status = command(["loadfile", request.url.absoluteString, "replace", "-1", "start=\(request.resume)"])
         if status < 0 { emit(.failed(status, "loadfile")) }
     }
@@ -327,13 +329,13 @@ private final class MPVPhoneCore: @unchecked Sendable {
         queue.async { [self] in
             guard !closed else { return }
             desiredPaused = paused
-            state.paused = paused || background
+            state.paused = paused || pausedByBackground
             if !state.paused {
                 state.buffering = seekState.isSeeking
             } else if !seekState.isSeeking {
                 state.buffering = false
             }
-            if let handle { mpv_set_property_string(handle, "pause", paused || background ? "yes" : "no") }
+            if let handle { mpv_set_property_string(handle, "pause", paused || pausedByBackground ? "yes" : "no") }
             emit(.state(state))
         }
     }
@@ -364,11 +366,11 @@ private final class MPVPhoneCore: @unchecked Sendable {
         queue.async { [self] in
             guard !closed, background != value else { return }
             background = value
-            state.paused = value || desiredPaused
-            // Metal cannot draw while backgrounded. Pause and detach decoding;
-            // preserve the user's pause choice when the app returns.
+            state.paused = pausedByBackground || desiredPaused
+            // Metal cannot draw while backgrounded: detach video decoding. Pause too, unless
+            // the user chose to keep playing; preserve the user's pause choice on return.
             if let handle {
-                mpv_set_property_string(handle, "pause", value || desiredPaused ? "yes" : "no")
+                mpv_set_property_string(handle, "pause", pausedByBackground || desiredPaused ? "yes" : "no")
                 mpv_set_property_string(handle, "vid", value ? "no" : "auto")
             }
             emit(.state(state))

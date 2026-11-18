@@ -29,6 +29,8 @@ import AVFoundation
     private var contentType: String?
     private var desiredPaused = true
     private var background = false
+    /// In the background playback pauses, unless Keep playing is chosen.
+    private var pausedByBackground: Bool { background && !options.keepPlayingInBackground }
     private var closed = false
     private var failed = false
     private var ended = false
@@ -83,8 +85,8 @@ import AVFoundation
     func attach(_ layer: AVPlayerLayer) {
         guard !closed else { return }
         self.layer = layer
-        layer.player = player
-        layer.videoGravity = options.preferences.sizing == .fill ? .resizeAspectFill : .resizeAspect
+        if !background || !options.keepPlayingInBackground { layer.player = player }
+        layer.videoGravity = options.fills ? .resizeAspectFill : .resizeAspect
     }
 
     func setSourceContentType(_ contentType: String?) { self.contentType = contentType }
@@ -92,7 +94,7 @@ import AVFoundation
     func configure(_ options: PhonePlayerOptions) {
         guard !closed else { return }
         self.options = options
-        layer?.videoGravity = options.preferences.sizing == .fill ? .resizeAspectFill : .resizeAspect
+        layer?.videoGravity = options.fills ? .resizeAspectFill : .resizeAspect
         setSpeed(options.preferences.speed)
         refreshCaption(); emit(force: true)
     }
@@ -173,7 +175,7 @@ import AVFoundation
                 self.pendingSeek = nil
                 seekLoaded(to: pendingSeek)
             }
-            if !desiredPaused && !background { player.play() }
+            if !desiredPaused && !pausedByBackground { player.play() }
             tick()
         case .failed:
             fail(error: item.error, code: Int32(clamping: (item.error as NSError?)?.code ?? -1), context: "item")
@@ -264,8 +266,8 @@ import AVFoundation
             ended = false
             item.seek(to: .zero, completionHandler: nil)
         }
-        if state.loaded && !background { player.play() }
-        state.paused = background || !state.loaded
+        if state.loaded && !pausedByBackground { player.play() }
+        state.paused = pausedByBackground || !state.loaded
         emit(force: true)
     }
 
@@ -359,12 +361,17 @@ import AVFoundation
     private func setBackground(_ value: Bool) {
         guard !closed, background != value else { return }
         background = value
-        if value {
+        if value && options.keepPlayingInBackground {
+            // Keep playing: a player still attached to a layer pauses in the background,
+            // so detach it; the sound carries on.
+            layer?.player = nil
+        } else if value {
             // Like mpv: pause while in the background and keep the user's pause choice.
             player.pause()
             state.paused = true
-        } else if !desiredPaused, state.loaded, !failed {
-            player.play()
+        } else {
+            if layer?.player !== player { layer?.player = player }
+            if !desiredPaused, state.loaded, !failed { player.play() }
         }
         emit(force: true)
     }

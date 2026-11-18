@@ -146,6 +146,7 @@ struct PlaybackFailure: Equatable {
         self.initialOrientation = initialOrientation
         self.preferencesStore = preferencesStore
         preferences = PhonePlayerPreferences.load(from: preferencesStore)
+        keepPlayingInBackground = PhoneLeaveChoice.load(from: preferencesStore) == .keepPlaying
         self.prepare = prepare
         self.alternativeFactory = alternativeFactory ?? {
 #if os(iOS)
@@ -199,7 +200,7 @@ struct PlaybackFailure: Equatable {
         PhonePlaybackLog.log("session install: engine=\(engineKind.rawValue) route=\(route.rawValue) type=\(contentType ?? "none") \(PhonePlaybackLog.describe(media.url)) "
             + "headers=\(PhonePlaybackLog.headerNames(media.headers)) resume=\(resume) external-subtitles=\(externalSubtitles.count) "
             + "preferred audio=\(preferences.audioLanguage ?? "default") subtitles=\(preferences.subtitlesEnabled ? preferences.subtitleLanguage ?? "first" : "off")")
-        engine.configure(PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay))
+        engine.configure(options)
         if !externalSubtitles.isEmpty { engine.addExternalSubtitles(externalSubtitles) }
         if engineKind == .avPlayer && isMatroska {
             // AVPlayer has no Matroska demuxer; say so rather than waiting for a generic error.
@@ -284,6 +285,26 @@ struct PlaybackFailure: Equatable {
         seek(to: target); skipTarget = target; lastSkip = now
     }
 
+    /// The engine's options: saved preferences plus this session's display choices.
+    private var options: PhonePlayerOptions {
+        PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay,
+                           displayFill: displayFill, keepPlayingInBackground: keepPlayingInBackground)
+    }
+    /// Pinch to fill in the portrait layout; never saved.
+    @Published private(set) var displayFill = false
+    /// Keep playing when the app leaves the foreground (Settings, or the More sheet for this video).
+    @Published private(set) var keepPlayingInBackground = false
+    func setDisplayFill(_ value: Bool) {
+        guard !closed, value != displayFill else { return }
+        displayFill = value
+        alternativeEngine?.configure(options)
+    }
+    func setKeepPlayingInBackground(_ value: Bool) {
+        guard !closed, value != keepPlayingInBackground else { return }
+        keepPlayingInBackground = value
+        alternativeEngine?.configure(options)
+    }
+
     func updatePreferences(applyTracks: Bool = true, _ update: (inout PhonePlayerPreferences) -> Void) {
         guard !closed else { return }
         var next = preferences; update(&next); next = next.sanitized()
@@ -292,13 +313,13 @@ struct PlaybackFailure: Equatable {
             manualSubtitle = false; appliedSubtitle = nil
         }
         preferences = next; preferences.save(to: preferencesStore)
-        alternativeEngine?.configure(PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay))
+        alternativeEngine?.configure(options)
         if applyTracks { applyPreferredTracks() }
     }
     func setSubtitleDelay(_ seconds: Double) {
         guard !closed, seconds.isFinite else { return }
         subtitleDelay = min(10, max(-10, seconds))
-        alternativeEngine?.configure(PhonePlayerOptions(preferences: preferences, subtitleDelay: subtitleDelay))
+        alternativeEngine?.configure(options)
         onSubtitleTimingChange?()
     }
     func setPreferredAudioLanguage(_ language: String?) {

@@ -43,6 +43,7 @@ struct SettingsScreen: View {
     @AppStorage(PhonePlayerPreferences.key) private var playerPreferences: Data?
     @AppStorage(PlayOnPreferences.autoConnectKey) private var autoConnect = true
     @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
+    @AppStorage(PhoneLeaveChoice.key) private var leaveChoice = PhoneLeaveChoice.pause.rawValue
     @AppStorage(CastHistorySettings.enabledKey) private var saveHistory = true
     /// Observed so the Cast history summary follows the limit.
     @AppStorage(CastHistorySettings.limitKey) private var historyLimit = CastHistorySettings.defaultLimit
@@ -121,7 +122,8 @@ struct SettingsScreen: View {
         case .tv:
             return autoConnect ? "Auto-connect to the last TV" : "Auto-connect off"
         case .phonePlayer:
-            return (PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen).summary
+            let opening = (PhoneLandscapeOpening(rawValue: landscapeOpening) ?? .fullscreen).summary
+            return PhoneLeaveChoice(rawValue: leaveChoice) == .keepPlaying ? opening + " · keeps playing" : opening
         case .subtitles:
             _ = playerPreferences
             return PhoneLanguageChoices.summary(PhonePlayerPreferences.load(from: .standard))
@@ -170,6 +172,7 @@ private struct TvSettingsPage: View {
 private struct PhonePlayerSettingsPage: View {
     @AppStorage(PhoneLandscapeOpening.key) private var landscapeOpening = PhoneLandscapeOpening.fullscreen.rawValue
     @AppStorage(PhoneAmbientMode.key) private var ambient = true
+    @AppStorage(PhoneLeaveChoice.key) private var leave = PhoneLeaveChoice.pause.rawValue
 
     var body: some View {
         Form {
@@ -182,6 +185,16 @@ private struct PhonePlayerSettingsPage: View {
                 .accessibilityIdentifier("settings-landscape-opening")
             } footer: {
                 Text("Fullscreen turns the player to landscape at once. Portrait first follows how you hold the phone: upright, the video sits on top with the controls below; turn the phone or tap Fullscreen for full screen. Vertical videos always open in portrait, and a website can ask for its own orientation.")
+            }
+            Section {
+                Picker("When you leave the player", selection: Binding(
+                    get: { PhoneLeaveChoice(rawValue: leave) ?? .pause },
+                    set: { leave = $0.rawValue })) {
+                    ForEach(PhoneLeaveChoice.allCases) { Text($0.label).tag($0) }
+                }
+                .accessibilityIdentifier("settings-leave-choice")
+            } footer: {
+                Text("Pause stops the video when you go back, go home or lock the phone. Keep playing leaves it playing: going back shows a bar to return to it, and going home or locking the phone keeps the sound going with controls on the lock screen. More in the player changes it for one video.")
             }
             Section {
                 Toggle("Ambient mode", isOn: $ambient).tint(Theme.primary)

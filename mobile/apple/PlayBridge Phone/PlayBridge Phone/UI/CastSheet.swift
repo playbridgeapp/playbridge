@@ -291,7 +291,10 @@ struct CastSheet: View {
 #endif
                 }, onDismiss: {
                     fullscreenPlayerItem = nil
-                }, poster: item.poster)
+                }, poster: item.poster,
+                   onPresented: PhonePlayerDock.shared.playerDidAppear,
+                   onKeepPlayingChanged: PhonePlayerDock.shared.keepPlayingChanged,
+                   onLeave: { _ in PhonePlayerDock.shared.leave(item) })
                 .playerZoomTransition(id: item.zoomSourceID, in: playerZoom)
                 .onAppear { tab.suspendPageMedia(true) }
                 .onDisappear { tab.suspendPageMedia(false) }
@@ -1338,6 +1341,11 @@ struct FullScreenVideoPlayerView: View {
     var autoPlayOnAppear = true
     var closeSessionOnDisappear = true
     var poster: UIImage? = nil
+    /// The phone player dock's hooks (PhonePlayerDock): opening, the keep-playing choice
+    /// changing, and leaving. `onLeave` returns true when it kept the video playing.
+    var onPresented: ((PlaybackSession) -> Void)? = nil
+    var onKeepPlayingChanged: ((PlaybackSession) -> Void)? = nil
+    var onLeave: ((PlaybackSession) -> Bool)? = nil
     @State private var appliedOpening: PhonePlayerOpening?
     @State private var openingSettled = false
 
@@ -1411,10 +1419,13 @@ struct FullScreenVideoPlayerView: View {
                 session.play()
             }
             applyOpening()
+            onPresented?(session)
         }
         .onChange(of: session.mpvState.videoWidth) { _ in applyOpening() }
+        .onChange(of: session.keepPlayingInBackground) { _ in onKeepPlayingChanged?(session) }
         .onDisappear {
-            if closeSessionOnDisappear {
+            // Keep playing hands the session to the dock before this player's audio owner ends.
+            if closeSessionOnDisappear, onLeave?(session) != true {
                 session.close()
             }
             if let previousIdleTimerDisabled {

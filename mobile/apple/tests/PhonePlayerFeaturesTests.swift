@@ -46,6 +46,12 @@ final class PhoneSenderServices {
         session.updatePreferences { $0.speed = 1.5; $0.sizing = .fill }
         session.setSubtitleDelay(2)
         precondition(first.configurations.last!.preferences == session.preferences && first.configurations.last!.subtitleDelay == 2)
+        precondition(!session.keepPlayingInBackground, "Pause is the default leave choice")
+        session.setKeepPlayingInBackground(true); session.setDisplayFill(true)
+        precondition(first.configurations.last!.keepPlayingInBackground && first.configurations.last!.displayFill)
+        precondition(session.preferences.sizing == .fill && store.data(forKey: PhonePlayerPreferences.key) != nil)
+        session.setKeepPlayingInBackground(false); session.setDisplayFill(false)
+        precondition(!first.configurations.last!.keepPlayingInBackground && !first.configurations.last!.displayFill)
         first.onState?(state)
         precondition(first.selectedAudio == 2 && first.selectedSubtitle == 4, "A style update must not override a manual track choice")
         session.setPreferredAudioLanguage(nil)
@@ -275,6 +281,21 @@ final class PhoneSenderServices {
         precondition(PhoneAmbientFrame.accepts(frameLuma: 0.0, glowLuma: nil, previousWasDark: false))
         precondition(PhoneAmbientFrame.accepts(frameLuma: 0.2, glowLuma: 0.4, previousWasDark: false))
         print("PASS ambient frames: shrink, colours, gradual steps and black-grab filtering")
+
+        // Leaving the player and pinch to fill.
+        let leaveSuite = "PhoneLeaveChoice." + UUID().uuidString
+        let leaveStore = UserDefaults(suiteName: leaveSuite)!
+        defer { leaveStore.removePersistentDomain(forName: leaveSuite) }
+        precondition(PhoneLeaveChoice.load(from: leaveStore) == .pause, "Pause is the default")
+        leaveStore.set("keepPlaying", forKey: PhoneLeaveChoice.key)
+        precondition(PhoneLeaveChoice.load(from: leaveStore) == .keepPlaying)
+        precondition(!PhonePinchFill.next(filling: false, scale: 1.1) && PhonePinchFill.next(filling: false, scale: 1.3), "Only a clear pinch open fills")
+        precondition(PhonePinchFill.next(filling: true, scale: 0.95) && !PhonePinchFill.next(filling: true, scale: 0.8), "Only a clear pinch closed goes back")
+        precondition(!PhonePinchFill.next(filling: false, scale: 0.5) && PhonePinchFill.next(filling: true, scale: 2), "Pinching the same way again changes nothing")
+        precondition(!PhonePinchFill.next(filling: false, scale: .nan))
+        var fillOptions = PhonePlayerOptions(); precondition(!fillOptions.fills)
+        fillOptions.displayFill = true; precondition(fillOptions.fills && fillOptions.preferences.sizing == .fit, "Pinch fill leaves the saved sizing alone")
+        print("PASS leave choice, pinch to fill and display-only fill")
     }
     // Well above the 20 ms hide delay so slow CI runners settle too.
     static func settle() async throws { try await Task.sleep(nanoseconds: 400_000_000) }

@@ -17,6 +17,19 @@ enum PhoneLandscapeOpening: String, CaseIterable, Identifiable {
     }
 }
 
+/// Pinch to fill in the portrait layout: pinching open fills the upright screen (cropped at
+/// the sides), pinching closed goes back. Small pinches change nothing.
+enum PhonePinchFill {
+    static let openScale = 1.15
+    static let closeScale = 0.87
+    static func next(filling: Bool, scale: Double) -> Bool {
+        guard scale.isFinite else { return filling }
+        if !filling, scale >= openScale { return true }
+        if filling, scale <= closeScale { return false }
+        return filling
+    }
+}
+
 /// Settings › Phone player › Ambient mode: in the portrait layout a soft glow of the
 /// video's colours fills the space around it. On by default.
 enum PhoneAmbientMode {
