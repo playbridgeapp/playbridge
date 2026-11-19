@@ -30,7 +30,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Settings by topic**: Settings is grouped into Phone player, TV, Audio & subtitles, Casting, Browser, Remote and General, each with a live summary.
 - **Edge handle**: The PlayBridge handle shows only in bridged apps. Drag it to either side and any height; the position is remembered, and it no longer triggers the Back gesture.
 - **Browser toolbar while typing**: The bottom toolbar hides while the keyboard is open.
-- **Screen transitions**: The browser's bars fade with the page instead of jumping, and heavy screens fade through instead of crossfading.
+- **Screen transitions**: The browser's bars and page fade together instead of jumping, popping in or vanishing, and heavy screens fade through instead of crossfading. Leaving a bridged app no longer shows the browser bars for a moment.
 - **Watch Together**: Redesigned screen, with a seek bar, Stop and Up next. A video that ends is cleared for everyone. Opening the current party's link keeps you in it; another party's link asks before leaving. Invite links stop working when their party ends.
 - **Licensing**: The phone app now includes mpv-android, so the APK as a whole is distributed under GPL-3.0 terms, like the TV player. PlayBridge's own code stays MPL-2.0. The download is about 14 MB larger.
 
