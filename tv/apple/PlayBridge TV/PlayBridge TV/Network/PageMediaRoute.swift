@@ -90,6 +90,7 @@ nonisolated struct ItemSubtitle: Hashable, Sendable {
     /// nil for a plain URL, which keeps loading as it always has.
     var headers: [String: String]? = nil
     var label: String? = nil
+    var language: String? = nil
 }
 
 /// What the router needs to know about one queue item. The wire payload stays

@@ -67,11 +67,42 @@ extension Playbridge_PlayPayload {
         return all.isEmpty ? nil : all
     }
 
-    /// Valid `subtitle_resources` with their own headers and labels.
+    /// Valid `subtitle_resources` with their own headers, labels, and normalized languages.
     var itemSubtitleResources: [ItemSubtitle] {
         subtitleResources.filter(ExternalSubtitleDownload.isValid).map {
             ItemSubtitle(url: $0.url, headers: $0.headers,
-                         label: $0.hasLabel && !$0.label.isEmpty ? $0.label : nil)
+                         label: $0.hasLabel && !$0.label.isEmpty ? $0.label : nil,
+                         language: $0.hasLanguage ? TrackLanguagePolicy.normalizedCode($0.language) : nil)
+        }
+    }
+
+    /// Validated preferred audio language code from the sender, or nil if absent/invalid.
+    var preferredAudioLanguageOrNil: String? {
+        guard hasPreferredAudioLanguage else { return nil }
+        return TrackLanguagePolicy.normalizedCode(preferredAudioLanguage)
+    }
+
+    /// Validated preferred subtitle language code from the sender, or nil if absent/invalid.
+    var preferredSubtitleLanguageOrNil: String? {
+        guard hasPreferredSubtitleLanguage else { return nil }
+        return TrackLanguagePolicy.normalizedCode(preferredSubtitleLanguage)
+    }
+
+    /// Normalizes valid preferred language fields and clears invalid ones on decode.
+    mutating func sanitizePreferredLanguages() {
+        if hasPreferredAudioLanguage {
+            if let valid = TrackLanguagePolicy.normalizedCode(preferredAudioLanguage) {
+                preferredAudioLanguage = valid
+            } else {
+                clearPreferredAudioLanguage()
+            }
+        }
+        if hasPreferredSubtitleLanguage {
+            if let valid = TrackLanguagePolicy.normalizedCode(preferredSubtitleLanguage) {
+                preferredSubtitleLanguage = valid
+            } else {
+                clearPreferredSubtitleLanguage()
+            }
         }
     }
 

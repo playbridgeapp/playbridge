@@ -18,6 +18,30 @@ struct BookmarkQueueItemPayload: Codable, Equatable {
     let artworkURL: String?
     let mediaKind: String?
     let startPositionMs: Int64?
+    let preferredAudioLanguage: String?
+    let preferredSubtitleLanguage: String?
+
+    init(
+        url: String,
+        title: String?,
+        headers: [String: String]?,
+        subtitles: [BookmarkSubtitlePayload],
+        artworkURL: String?,
+        mediaKind: String?,
+        startPositionMs: Int64?,
+        preferredAudioLanguage: String? = nil,
+        preferredSubtitleLanguage: String? = nil
+    ) {
+        self.url = url
+        self.title = title
+        self.headers = headers
+        self.subtitles = subtitles
+        self.artworkURL = artworkURL
+        self.mediaKind = mediaKind
+        self.startPositionMs = startPositionMs
+        self.preferredAudioLanguage = preferredAudioLanguage
+        self.preferredSubtitleLanguage = preferredSubtitleLanguage
+    }
 }
 
 struct BookmarkResumePayload: Codable, Equatable {
@@ -366,7 +390,9 @@ class HistoryStore: ObservableObject {
             subtitles: [],
             artworkURL: current.artworkURL,
             mediaKind: current.mediaKind,
-            startPositionMs: current.startPositionMs
+            startPositionMs: current.startPositionMs,
+            preferredAudioLanguage: current.preferredAudioLanguage,
+            preferredSubtitleLanguage: current.preferredSubtitleLanguage
         )
         let minimal = BookmarkResumePayload(
             items: [strippedItem],

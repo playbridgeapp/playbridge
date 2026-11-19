@@ -71,6 +71,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let subtitles: [ItemSubtitle]?
+    var preferredAudioLanguage: String? = nil
+    var preferredSubtitleLanguage: String? = nil
     let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let isPreBuffering: Bool
@@ -264,7 +266,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onBack: onBack, onSwitch: onSwitch,
-                    headers: headers, subtitles: subtitles, onBroadcast: onBroadcast,
+                    headers: headers, subtitles: subtitles,
+                    preferredAudioLanguage: preferredAudioLanguage,
+                    preferredSubtitleLanguage: preferredSubtitleLanguage,
+                    onBroadcast: onBroadcast,
                     onLoopChanged: onLoopChanged, onEndOfFile: onEndOfFile,
                     initialLoop: initialLoop, mediaIdentity: mediaIdentity,
                     subtitleOffsetMs: subtitleOffsetMs, onSidecarOverlayChanged: onSidecarOverlayChanged,
@@ -290,6 +295,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         var onBack: () -> Void
         let onSwitch: (PlaybackEngine, Double) -> Void
         let headers: [String: String]?
+        let preferredAudioLanguage: String?
+        let preferredSubtitleLanguage: String?
         var externalSubtitleCatalog: ExternalSubtitleCatalog
         let onBroadcast: ([String: Any]) -> Void
         var onLoopChanged: (Bool, PlayerReportIdentity) -> Bool
@@ -518,6 +525,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
              onBack: @escaping () -> Void,
              onSwitch: @escaping (PlaybackEngine, Double) -> Void,
              headers: [String: String]?, subtitles: [ItemSubtitle]?,
+             preferredAudioLanguage: String?, preferredSubtitleLanguage: String?,
              onBroadcast: @escaping ([String: Any]) -> Void,
              onLoopChanged: @escaping (Bool, PlayerReportIdentity) -> Bool,
              onEndOfFile: @escaping (PlayerReportIdentity) -> PlayerEndDecision,
@@ -531,6 +539,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.onBack = onBack
             self.onSwitch = onSwitch
             self.headers = headers
+            self.preferredAudioLanguage = TrackLanguagePolicy.normalizedCode(preferredAudioLanguage)
+            self.preferredSubtitleLanguage = TrackLanguagePolicy.normalizedCode(preferredSubtitleLanguage)
             self.externalSubtitleCatalog = ExternalSubtitleCatalog(subtitles: subtitles ?? [])
             self.onBroadcast = onBroadcast
             self.onLoopChanged = onLoopChanged
@@ -694,8 +704,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             onSwitch(target, player?.currentTime().seconds ?? 0)
         }
 
-        func selectExternalSubtitle(_ id: Int) {
-            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+        func selectExternalSubtitle(_ id: Int, recordPreference: Bool = true) {
+            if recordPreference {
+                NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+            }
             guard let option = externalSubtitleCatalog.option(for: id),
                   let url = URL(string: option.url) else { return }
             subtitleDownloadTask?.cancel()
@@ -714,7 +726,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
                         else { throw ExternalSubtitleDownloadError.unsupportedFormat }
                         return cues
                     }
-                    DispatchQueue.main.async { self?.finishExternalSubtitleLoad(result, id: requestID, option: option) }
+                    DispatchQueue.main.async {
+                        self?.finishExternalSubtitleLoad(
+                            result, id: requestID, option: option, recordPreference: recordPreference)
+                    }
                 }
                 return
             }
@@ -741,7 +756,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 } else {
                     result = .failure(ExternalSubtitleDownloadError.invalidResponse)
                 }
-                DispatchQueue.main.async { self?.finishExternalSubtitleLoad(result, id: requestID, option: option) }
+                DispatchQueue.main.async {
+                    self?.finishExternalSubtitleLoad(
+                        result, id: requestID, option: option, recordPreference: recordPreference)
+                }
             }
             subtitleDownloadTask = task
             task.resume()
@@ -799,7 +817,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func finishExternalSubtitleLoad(_ result: Result<ExternalSubtitleCues, Error>,
-                                                id: UUID, option: ExternalSubtitleCatalog.Option) {
+                                                id: UUID, option: ExternalSubtitleCatalog.Option,
+                                                recordPreference: Bool = true) {
             guard subtitleRequestID == id, player != nil else { return }
             subtitleSession?.finishTasksAndInvalidate()
             subtitleSession = nil
@@ -811,9 +830,11 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 externalCues = cues
                 setSidecarOverlay(true)
                 if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
-                TrackPreferences.shared.subtitlesOff = false
-                TrackPreferences.shared.subtitleLanguage = nil
-                TrackPreferences.shared.subtitleName = nil
+                if recordPreference {
+                    TrackPreferences.shared.subtitlesOff = false
+                    TrackPreferences.shared.subtitleLanguage = TrackLanguagePolicy.normalizedCode(option.language)
+                    TrackPreferences.shared.subtitleName = option.name
+                }
                 if subtitleTimeObserver == nil, let player {
                     subtitleTimeObserver = player.addPeriodicTimeObserver(
                         forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
@@ -969,9 +990,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         /// Chapters from MP4/MOV chapter tracks. HLS rarely carries them; AVPlayer has no MKV.
-        private func loadChapters(asset: AVAsset) async -> [TimelineChapter] {
-            let languages = Locale.preferredLanguages
-            var groups = (try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: languages)) ?? []
+        private func loadChapters(asset: AVAsset, preferredLanguages: [String]) async -> [TimelineChapter] {
+            var groups = (try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: preferredLanguages)) ?? []
             if groups.isEmpty,
                let firstLocale = (try? await asset.load(.availableChapterLocales))?.first {
                 groups = (try? await asset.loadChapterMetadataGroups(
@@ -1101,12 +1121,17 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         private func loadSelectionGroupsAndBroadcast(asset: AVAsset) {
             if #available(tvOS 16, *) {
+                let chapterLanguages = TrackLanguagePolicy.preferredChapterLanguages(
+                    savedAudioLanguage: TrackPreferences.shared.audioLanguage,
+                    castAudioLanguage: preferredAudioLanguage,
+                    deviceLanguages: Locale.preferredLanguages
+                )
                 Task { [weak self] in
                     guard let self else { return }
                     let identity = self.mediaIdentity
                     let audio = (try? await asset.loadMediaSelectionGroup(for: .audible)) ?? nil
                     let sub = (try? await asset.loadMediaSelectionGroup(for: .legible)) ?? nil
-                    let chapters = await self.loadChapters(asset: asset)
+                    let chapters = await self.loadChapters(asset: asset, preferredLanguages: chapterLanguages)
                     await MainActor.run {
                         guard self.mediaIdentity == identity, self.player?.currentItem?.asset === asset else { return }
                         self.audioGroup = audio
@@ -1450,38 +1475,77 @@ struct NativePlayerView: UIViewControllerRepresentable {
             broadcastTracks()
         }
 
-        /// Re-apply the session's track preferences once the selection groups are loaded,
-        /// so picks carry across episodes (each item gets a fresh AVPlayer).
+        /// Apply track selection priority: saved choice > cast preferred language > device locale.
+        /// Cast preferences are never written back to `TrackPreferences.shared`, so subsequent
+        /// playlist items keep their own languages.
         private func applyPreferredTracks() {
             guard let item = player?.currentItem else { return }
             let prefs = TrackPreferences.shared
 
-            func match(in group: AVMediaSelectionGroup?, language: String?, name: String?)
-                -> AVMediaSelectionOption?
-            {
-                guard let group else { return nil }
-                if let language,
-                   let m = group.options.first(where: {
-                       $0.locale?.identifier == language || $0.extendedLanguageTag == language
-                   }) { return m }
-                if let name, let m = group.options.first(where: { $0.displayName == name }) {
-                    return m
+            func candidates(for group: AVMediaSelectionGroup) -> [TrackLanguagePolicy.TrackCandidate] {
+                group.options.enumerated().map { index, option in
+                    TrackLanguagePolicy.TrackCandidate(
+                        id: index,
+                        name: option.displayName,
+                        language: option.extendedLanguageTag,
+                        secondaryLanguage: option.locale?.identifier,
+                        isForced: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles),
+                        isAccessibility: option.hasMediaCharacteristic(.describesMusicAndSoundForAccessibility)
+                            || option.hasMediaCharacteristic(.transcribesSpokenDialogForAccessibility)
+                    )
                 }
-                return nil
             }
 
-            if let group = audioGroup,
-               let option = match(in: group, language: prefs.audioLanguage, name: prefs.audioName) {
-                item.select(option, in: group)
+            if let group = audioGroup {
+                let savedAudio = TrackLanguagePolicy.SavedTrackChoice(
+                    language: prefs.audioLanguage,
+                    name: prefs.audioName
+                )
+                if savedAudio.language != nil || savedAudio.name != nil || preferredAudioLanguage != nil {
+                    let audioCandidates = candidates(for: group)
+                    if let match = TrackLanguagePolicy.resolveAudioTrack(
+                        candidates: audioCandidates,
+                        saved: savedAudio,
+                        castLanguage: preferredAudioLanguage,
+                        deviceLanguages: Locale.preferredLanguages
+                    ), group.options.indices.contains(match.id) {
+                        item.select(group.options[match.id], in: group)
+                    }
+                }
             }
-            if let group = subtitleGroup {
-                if selectedExternalSubtitleID != nil {
+
+            let savedSubtitle = TrackLanguagePolicy.SavedTrackChoice(
+                language: prefs.subtitleLanguage,
+                name: prefs.subtitleName,
+                isOff: prefs.subtitlesOff
+            )
+            if selectedExternalSubtitleID != nil {
+                if let group = subtitleGroup {
                     item.select(nil, in: group)
-                } else if prefs.subtitlesOff {
+                }
+                return
+            }
+
+            let subCandidates = subtitleGroup.map(candidates(for:)) ?? []
+            switch TrackLanguagePolicy.resolveSubtitleTrack(
+                candidates: subCandidates,
+                saved: savedSubtitle,
+                castLanguage: preferredSubtitleLanguage
+            ) {
+            case .off:
+                if let group = subtitleGroup {
                     item.select(nil, in: group)
-                } else if let option = match(
-                    in: group, language: prefs.subtitleLanguage, name: prefs.subtitleName) {
-                    item.select(option, in: group)
+                }
+            case .track(let match):
+                if let group = subtitleGroup, group.options.indices.contains(match.id) {
+                    item.select(group.options[match.id], in: group)
+                }
+            case .keepDefault:
+                if let extOption = TrackLanguagePolicy.pickExternalSubtitle(
+                    options: externalSubtitleCatalog.options,
+                    castSubtitleLanguage: preferredSubtitleLanguage
+                ) {
+                    selectExternalSubtitle(extOption.id, recordPreference: false)
                 }
             }
         }
