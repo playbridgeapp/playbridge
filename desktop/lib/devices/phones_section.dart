@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../pairing_store.dart';
 import '../ui/pb_widgets.dart';

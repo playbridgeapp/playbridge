@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../tv_connection_store.dart';
 import '../tv_sender_client.dart';

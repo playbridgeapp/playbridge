@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:playbridge_desktop/system_volume.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/remote_volume_commands.dart';
 import 'package:playbridge_desktop/playback_osd.dart';

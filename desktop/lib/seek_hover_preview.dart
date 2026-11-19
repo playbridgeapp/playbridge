@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'chapter_navigation.dart';
 import 'playback_clock.dart';
