@@ -11,10 +11,10 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_webrtc
   local_notifier
   media_kit_libs_windows_video
-  media_kit_video
   screen_retriever_windows
   tray_manager
   volume_controller
+  media_kit_video
   window_manager
 )
 

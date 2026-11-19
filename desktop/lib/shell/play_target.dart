@@ -1,5 +1,5 @@
 import '../ui/protocol_chip.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../tv_discovery.dart';
 import '../tv_sender_controller.dart';
