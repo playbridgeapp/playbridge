@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -116,6 +117,8 @@ fun AppNavHost(
     isBrowserChromeHidden: Boolean,
     onIsBrowserChromeHiddenChange: (Boolean) -> Unit,
     isBridgedAppMode: Boolean = false,
+    /** Like [isBridgedAppMode] but independent of the current screen, for drawing the Browser. */
+    isBridgedAppTab: Boolean = isBridgedAppMode,
     onAppSettings: () -> Unit = {},
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
@@ -423,7 +426,19 @@ fun AppNavHost(
             // Fade through: the old screen is gone before the new one appears, so the two
             // never show through each other.
             if (heavy) {
-                fadeIn(animationSpec = tween(125, delayMillis = 125)) togetherWith fadeOut(animationSpec = tween(125))
+                // The Browser's page ignores alpha, so its screen stays fully drawn and
+                // BrowserSurfaceScrim fades it to the background over the same window.
+                val enter = if (targetState == Screen.Browser) {
+                    fadeIn(animationSpec = tween(1, delayMillis = SCREEN_FADE_MS))
+                } else {
+                    fadeIn(animationSpec = tween(SCREEN_FADE_MS, delayMillis = SCREEN_FADE_MS))
+                }
+                val exit = if (initialState == Screen.Browser) {
+                    fadeOut(animationSpec = tween(1, delayMillis = SCREEN_FADE_MS - 1))
+                } else {
+                    fadeOut(animationSpec = tween(SCREEN_FADE_MS))
+                }
+                enter togetherWith exit
             } else if (targetState == Screen.Tabs && initialState == Screen.Browser) {
                 slideInVertically { height -> height } + fadeIn() togetherWith
                         slideOutVertically { height -> -height } + fadeOut()
@@ -522,7 +537,7 @@ fun AppNavHost(
                             )
                         }
 
-                        if (isBrowserChromeHidden && !isFullscreen && !isBridgedAppMode) {
+                        if (isBrowserChromeHidden && !isFullscreen && !isBridgedAppTab) {
                             BoxWithConstraints(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -1296,6 +1311,9 @@ fun AppNavHost(
                         )
                 )
             }
+            // GeckoView draws on a SurfaceView, which ignores Compose alpha: fade the page
+            // by covering it with the background instead (see BrowserSurfaceScrim).
+            if (targetScreen == Screen.Browser) BrowserSurfaceScrim()
         }
     }
 
@@ -1545,5 +1563,33 @@ private fun NowPlayingBarHost(
         accentColor = accentColor,
         listTint = listTint.takeIf { phoneQueue.active && !externalActive && nativeSelected && wsConnected },
         modifier = modifier,
+    )
+}
+
+/** Each half of a heavy screen's fade-through. */
+private const val SCREEN_FADE_MS = 125
+
+/**
+ * Covers the Browser screen with the background while it fades in or out. The page is a
+ * SurfaceView, so the screen's own fade only reaches the bars: without this the page stays
+ * fully visible and then vanishes (or appears) all at once.
+ */
+@Composable
+private fun AnimatedVisibilityScope.BrowserSurfaceScrim() {
+    val cover by transition.animateFloat(
+        transitionSpec = {
+            if (targetState == EnterExitState.Visible) {
+                tween(SCREEN_FADE_MS, delayMillis = SCREEN_FADE_MS)
+            } else {
+                tween(SCREEN_FADE_MS)
+            }
+        },
+        label = "BrowserSurfaceScrim",
+    ) { state -> if (state == EnterExitState.Visible) 0f else 1f }
+    val color = MaterialTheme.colorScheme.background
+    Box(
+        Modifier
+            .fillMaxSize()
+            .drawBehind { if (cover > 0f) drawRect(color, alpha = cover) },
     )
 }

@@ -812,6 +812,10 @@ class BrowserActivity : ComponentActivity() {
             val installedBridgedApps by bridgedAppStore.apps.collectAsStateWithLifecycle()
             var availableBridgedApp by remember { mutableStateOf<BridgedApp?>(null) }
             var activeBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
+            // The app tab that was just left for the Dashboard. Leaving clears
+            // activeBridgedAppTabId at once, but the Browser keeps drawing that tab while it
+            // fades out, so it must still look like the app (no browser bars) until then.
+            var leavingBridgedAppTabId by remember { mutableStateOf<String?>(null) }
             var previousBrowserTabId by rememberSaveable { mutableStateOf(lastBrowserTabId) }
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
@@ -916,8 +920,12 @@ class BrowserActivity : ComponentActivity() {
                     selectNormalBrowserTab()
                 }
             }
+            // Not tied to currentScreen: the Browser screen keeps drawing while it fades out to
+            // another screen, and a bridged app's bars must stay hidden for that fade too.
+            val drawnBridgedAppTabId = activeBridgedAppTabId
+                ?: leavingBridgedAppTabId.takeIf { currentScreen != Screen.Browser }
             val isBrowserChromeHidden = selectedTabId?.let(chromeHiddenTabIds::contains) == true ||
-                (currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId)
+                (drawnBridgedAppTabId != null && selectedTabId == drawnBridgedAppTabId)
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
 
             Log.d("PB_STARTUP", "Compose: recompose — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, sessionNull=${session == null}, tabsRestored=${tabsRestoredOrReady.value}, sessionsMapSize=${sessions.size}")
@@ -937,8 +945,11 @@ class BrowserActivity : ComponentActivity() {
             var currentUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "about:blank") }
             var isLoading by remember(selectedTabId) { mutableStateOf(false) }
             val currentOrigin = BridgedAppStore.originFor(currentUrl)
-            val isBridgedAppMode = currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId &&
+            // The selected tab is a bridged app, whichever screen is showing. Drawing inside the
+            // Browser screen uses this so a fading-out app keeps its look.
+            val isBridgedAppTab = drawnBridgedAppTabId != null && selectedTabId == drawnBridgedAppTabId &&
                 installedBridgedApps.any { it.tabId == selectedTabId && it.origin == currentOrigin }
+            val isBridgedAppMode = currentScreen == Screen.Browser && isBridgedAppTab
             // Also cover playback auto-switches that bypass onScreenChange. Retain both
             // values while Remote is visible, including across Activity recreation.
             LaunchedEffect(currentScreen, selectedTabId, isBridgedAppMode) {
@@ -2983,12 +2994,14 @@ class BrowserActivity : ComponentActivity() {
                             }
                             if (target == Screen.Dashboard && currentScreen == Screen.Browser &&
                                 selectedTabId != null && selectedTabId == activeBridgedAppTabId) {
+                                leavingBridgedAppTabId = selectedTabId
                                 activeBridgedAppTabId = null
                                 Components.activeBridgedAppTabId = null
                                 // AnimatedContent keeps the outgoing Browser visible briefly.
                                 // Leave its app tab selected until Browser is opened again so
                                 // the ordinary browser page cannot flash during this exit.
                             }
+                            if (target == Screen.Browser) leavingBridgedAppTabId = null
                             if (target == Screen.Browser && currentScreen != Screen.Browser &&
                                 store.state.selectedTabId in bridgedAppTabIds) {
                                 selectNormalBrowserTab()
@@ -3055,6 +3068,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                         },
                         isBridgedAppMode = isBridgedAppMode,
+                        isBridgedAppTab = isBridgedAppTab,
                         onAppSettings = { showAppSettings = true },
                         bridgedApps = installedBridgedApps,
                         onOpenBridgedApp = { app ->
