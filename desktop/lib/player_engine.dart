@@ -220,6 +220,10 @@ abstract class PlayerEngine extends ChangeNotifier {
   /// Native pause intent, independent of buffering. Null lets test/alternate engines use the controller intent.
   bool? get playbackRequested => null;
 
+  /// A bounded failure category seen since playback was last healthy (such as
+  /// `mpv_http_403`), never raw engine text. Null when nothing was recorded.
+  String? get failureCategory => null;
+
   /// The current video frame as encoded image bytes, or null when the engine
   /// cannot capture one (no video, or an engine without frame access).
   Future<Uint8List?> captureFrame() async => null;
