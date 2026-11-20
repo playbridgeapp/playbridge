@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] — 2026-12-01
+
+### Fixed
+- **Seeking after casting through the desktop app**: Browser-only request headers such as `Range` are no longer captured with a video, so players (including other devices in a Watch Together party) don't restart from the beginning on every seek.
+
 ## [0.16.0] — 2026-10-31
 
 ### Changed

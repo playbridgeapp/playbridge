@@ -5,6 +5,11 @@ All notable changes to the `stream-proxy-rust` project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-12-01
+
+### Fixed
+- **Long media links**: Encoded targets longer than 1 KB get a short per-session reference (`/s/<session>/<file>?ref=<id>`) in the proxy's own manifest and playlist rewrites, so mpv no longer truncates the URL at 4,095 bytes and gets a 403. References work only in the session that issued them, stop working when it's revoked, and can't be combined with `uri` or `cap`. Shorter targets are unchanged.
+
 ## [0.16.0] - 2026-10-31
 
 ### Changed

@@ -2,6 +2,32 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0+35] — 2026-12-01
+
+> **Works best together**: Watch Together needs PlayBridge 0.17.0 on the other devices in the party. When the desktop casts to a TV, cast refusal messages need PlayBridge TV Player 0.17.0 or any Apple TV version.
+
+### Added
+- **Redesigned app**: Home, Bookmarks, Devices, Watch Together and Settings replace the Receive/Send sidebar. Home plays files or links on this computer or the chosen TV through one "Plays on" picker; one playback bar covers local and TV playback; Devices groups TVs as Saved, Nearby and "Not available now" next to paired phones, the browser receiver and extension setup; Settings has General, Playback, Advanced and About tabs.
+- **Bookmarks**: Replace Favorites. Bookmark any cast, including local files and private casts (B key). Cards show the cast's artwork or a frame from the video.
+- **Player**: One control row with Stop and Bookmark, side panels for subtitles and audio, queue and more, and Resume or Start over when there's a saved place.
+- **Watch Together**: Start a party (on the shared relay or your own), join with a link, or show a code and QR code so a phone can add this computer. "Watch on this computer" plays along; play, pause, seek and stop from the keyboard, media keys, the extension or a phone go to the party. As host, add your connected TV or another TV by code, lock the party, choose who can change the video and answer requests.
+- **Recent parties**: Every party you start or join is kept in the system's secret store (Keychain, DPAPI or Secret Service) until it ends, at most 20. The history icon in Watch Together lists them with **Rejoin as host** or **Rejoin**, and **Remove**.
+- **Failed cast notifications**: When a cast fails while the window is hidden or not focused, a system notification says why. When a TV refuses a cast, the desktop shows the reason.
+
+### Changed
+- **No Recent list**: Bookmarks replace Recent for now. Stored history is kept but hidden.
+- **Updates and notices**: Updates download and install from a corner card instead of blocking the window. Failed casts and reconnecting notices are corner cards; "Stop trying" disconnects the TV and plays on this computer.
+- **Drops follow "Plays on"**: Dropped and picked files go to the chosen TV; if it's offline the app says so instead of playing locally.
+- **Pairing requests**: Appear as a card without leaving the video.
+- **Tray menu**: Lists only devices that are available now.
+- **Controlled by**: While a website controls the player, its name and **Unlink** sit in the player's title row and hide with the controls, instead of a bar that stayed over the video.
+
+### Fixed
+- **Long links in mpv**: Very long signed links (such as DASH from YouTube-style front ends) play through the proxy instead of failing with 403.
+- **Unanswered playlists**: The desktop receiver answers every playlist with a request id, so phones learn when it can't start one.
+- **Seeking in a party**: Browser-only headers such as `Range` are no longer shared or passed to the player, so other devices don't restart from the beginning on every seek.
+- **Seeking ended the video**: Seeking far ahead in a website video could close the player. The player now reconnects when a server drops the connection, and if a video still ends well before its length, it reloads at that point (a few times at most, then it says "The video stopped loading").
+
 ## [0.16.0+34] — 2026-10-31
 
 > **Works best together**: Phones show the desktop's new remote settings, chapters, volume level and failure reasons with PlayBridge Phone 0.16.0. When the desktop controls a TV, live control updates and failure reasons need PlayBridge TV Player 0.16.0.

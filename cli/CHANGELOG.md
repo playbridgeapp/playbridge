@@ -1,5 +1,14 @@
 # PlayBridge CLI Changelog
 
+## 0.17.0 (2026-12-01)
+
+### Added
+- **Watch Together**: `playbridge together host | join | pair` hosts a party and prints its invite link, joins one as a screen or a remote, or shows a code like a TV and waits for an invite. It uses a simulated player that only keeps time, so you can watch sync in the terminal, and takes `play`, `pause`, `seek`, `load`, `stop`, `lock`, `policy`, `request`, `allow`/`deny` and `pair` commands while running. Invite links stop working when their party ends.
+- **Browser receiver stalls**: A TV web browser that doesn't start loading within 30 seconds, or stops loading for 45 seconds, is reported as failed ("The video didn't start loading." / "The video stopped loading.") instead of spinning.
+
+### Changed
+- **Browser receiver errors**: Playback errors from a TV's web browser show the browser's own sentence, no longer prefixed with "browser receiver connection lost", and never include links or raw error text.
+
 ## 0.16.0 (2026-10-31)
 
 ### Added

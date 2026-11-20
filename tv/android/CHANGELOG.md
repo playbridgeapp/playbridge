@@ -3,6 +3,34 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.17.0] — 2026-12-01 (versionCode 233)
+
+> **Works best together**: Watch Together, phone subtitle style and fonts, and cast refusal messages need PlayBridge Phone 0.17.0 on Android or iPhone. Everyone in a party should use 0.17.0. The GeckoView plugin is unchanged and stays at 0.16.0.
+
+### Added
+- **Redesigned app**: Home replaces the sidebar and Library, with readiness, the name phones see, the number of connected phones and a Bookmarks row. Settings is grouped into Playback, Subtitles, Skip, Phones, Appearance, About and Advanced, and adds "Clear watch history" (bookmarks are kept).
+- **Bookmarks**: Bookmark any cast from the player, including private casts. A bookmark without artwork gets a frame from the video. Long-press a bookmark to resume, start over or remove it.
+- **Redesigned player**: Left/Right show a seek strip and seek once you stop pressing. OK, Up or Down open the control row; Subtitles, Audio, More, Queue and Chapters open as panels on the right. Pre-play offers Resume or Start over when there's a saved place.
+- **Phone confirmations**: "Paused from <phone>", a seek strip with the phone's name, and cards for subtitle, audio, speed, subtitle timing and queue changes. They don't open the controls or take focus.
+- **Watch Together**: Join a party with the code or QR code shown on the TV, or be added by a paired phone. The TV follows the party's play, pause, seek and stop, returns to the party screen when a video stops or ends, and never saves party videos in history. Back or Home leaves the party.
+- **Subtitle style**: Size, background, edge, font and restyling of styled (ASS) subtitles, from TV Settings → Subtitles or from a paired phone. Applies live to mpv, ExoPlayer and the subtitle overlay, with real fonts for non-Latin scripts in mpv.
+- **Custom subtitle fonts**: A paired phone can install up to five fonts (30 MB in all). Choose between them in TV Settings → Subtitle Font.
+
+### Changed
+- **Remote keys**: Up/Down open the controls instead of changing volume (dedicated volume keys still work). Full controls hide after 8 s while playing. Back on a playing video needs a second press within 3 s. Phone remote keys now act exactly like the TV remote's.
+- **No Recent list**: Home shows bookmarks only. Progress is still recorded for resume, and existing history isn't deleted.
+- **Corner cards**: Pairing requests and update downloads appear as cards over the current screen instead of taking it over.
+- **Device name**: Home and Settings show the name phones see instead of the TV's model.
+- **mpv track list**: Cover-art tracks are skipped, and one malformed track no longer hides the whole list.
+
+### Fixed
+- **Cut streams in mpv**: mpv reconnects when a server closes the connection early. If playback stops moving for 15 seconds, the TV reloads at the last good position, at most twice without progress and six times per video, then shows the error.
+- **Compressed HLS playlists in mpv**: Sites that serve gzip-compressed playlists play with video and a normal seek bar instead of audio only.
+- **Long links in mpv**: Very long signed links (such as DASH from YouTube-style front ends) play through the proxy instead of failing.
+- **Unanswered casts**: Every play request with a request id now gets an answer: an unreadable cast, a full command queue or a player that couldn't open is reported to the phone instead of being dropped silently.
+- **Native crash**: The built-in proxy no longer frees its native handle while it's still being polled, which crashed some TVs.
+- **Seeking with a desktop host**: Browser-only headers such as `Range` are no longer passed to the player.
+
 ## Player [0.16.0] — 2026-10-31 (versionCode 232)
 
 > **Install this before GeckoView Plugin 0.16.0.** The new plugin only accepts commands from a player that holds the new browser-control permission; the older plugin keeps working with this player. The phone's matching controls (player Home, Loop switch, browser fullscreen, chapters on the seek bar, failure reasons, live remote updates) need PlayBridge Phone 0.16.0.
