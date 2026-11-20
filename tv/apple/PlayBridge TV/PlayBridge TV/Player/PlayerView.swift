@@ -301,7 +301,7 @@ struct PlayerView: View {
                 BookmarkSubtitlePayload(
                     url: sub.url,
                     label: sub.label,
-                    language: nil,
+                    language: TrackLanguagePolicy.normalizedCode(sub.language),
                     headers: (sub.headers?.isEmpty == false) ? sub.headers : nil
                 )
             }
@@ -315,7 +315,9 @@ struct PlayerView: View {
                 subtitles: subs,
                 artworkURL: artwork,
                 mediaKind: item.hasMediaKind ? item.mediaKind : nil,
-                startPositionMs: item.hasStartPositionMs ? item.startPositionMs : nil
+                startPositionMs: item.hasStartPositionMs ? item.startPositionMs : nil,
+                preferredAudioLanguage: item.preferredAudioLanguageOrNil,
+                preferredSubtitleLanguage: item.preferredSubtitleLanguageOrNil
             )
         }
         let startIndex = max(0, min(playlistStore.currentIndex, max(0, queueItems.count - 1)))
@@ -626,6 +628,8 @@ struct PlayerView: View {
                             url: currentURL,
                             headers: playable?.headers,
                             subtitles: playable?.subtitles,
+                            preferredAudioLanguage: currentRequest.preferredAudioLanguageOrNil,
+                            preferredSubtitleLanguage: currentRequest.preferredSubtitleLanguageOrNil,
                             skipMetadata: skipMetadata(for: currentRequest),
                             initialTime: initialSeekTime(for: currentRequest),
                             mediaIdentity: mediaGeneration,
@@ -682,6 +686,8 @@ struct PlayerView: View {
                             url: currentURL,
                             headers: playable?.headers,
                             subtitles: playable?.subtitles,
+                            preferredAudioLanguage: currentRequest.preferredAudioLanguageOrNil,
+                            preferredSubtitleLanguage: currentRequest.preferredSubtitleLanguageOrNil,
                             skipMetadata: skipMetadata(for: currentRequest),
                             initialTime: initialSeekTime(for: currentRequest),
                             isPreBuffering: isPreBuffering,

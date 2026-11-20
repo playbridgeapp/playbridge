@@ -6,6 +6,8 @@ import CoreGraphics
 #if !canImport(SwiftProtobuf)
 struct Playbridge_PlayPayload {
     private var suppliedID: String?
+    var preferredAudioLanguage: String?
+    var preferredSubtitleLanguage: String?
     var hasItemID: Bool { suppliedID != nil }
     var itemID: String {
         get { suppliedID ?? "" }
@@ -326,6 +328,7 @@ struct ReceiverReviewTests {
         runChapterRemoteTests()
         runSkipSegmentTests()
         runSkipSegmentFetchTests()
+        runPreferredLanguageTests()
     }
 }
 
@@ -3846,4 +3849,267 @@ private func runDevice8MPVRecoveryAndFontValidationTests() {
     #endif
 
     print("PASS: device-round8 mpv lavf/freeze recovery and CoreText invalid font rejection")
+}
+
+private func runPreferredLanguageTests() {
+    // 1. Parsing and validation: 2-3 letters, optional script/region, rejecting invalid values
+    assert(TrackLanguagePolicy.normalizedCode("en") == "en")
+    assert(TrackLanguagePolicy.normalizedCode(" EN ") == "en")
+    assert(TrackLanguagePolicy.normalizedCode("eng") == "en")
+    assert(TrackLanguagePolicy.normalizedCode("fre") == "fr")
+    assert(TrackLanguagePolicy.normalizedCode("fra") == "fr")
+    assert(TrackLanguagePolicy.normalizedCode("por") == "pt")
+    assert(TrackLanguagePolicy.normalizedCode("pt-BR") == "pt-BR")
+    assert(TrackLanguagePolicy.normalizedCode("pt_br") == "pt-BR")
+    assert(TrackLanguagePolicy.normalizedCode("zh-Hans") == "zh-Hans")
+    assert(TrackLanguagePolicy.normalizedCode("es-419") == "es-419")
+
+    for invalid in [
+        nil, "", "   ", "a", "abcd", "english", "french", "12", "123",
+        "und", "mul", "zxx", "mis", "off", "xyz",
+        "en-", "-en", "en--US", "en-1", "en-USA", "en-US-GB",
+        "https://example.com/en"
+    ] {
+        assert(TrackLanguagePolicy.normalizedCode(invalid) == nil, "Expected nil for invalid code: \(String(describing: invalid))")
+    }
+
+    // 2. Priority: saved choice > cast language > device locale (audio)
+    let audioCandidates: [TrackLanguagePolicy.TrackCandidate] = [
+        .init(id: 1, name: "Japanese", language: "jpn"),
+        .init(id: 2, name: "English 5.1", language: "en-US"),
+        .init(id: 3, name: "French", language: "fra"),
+        .init(id: 4, name: "Portuguese (Brazil)", language: "pt-BR"),
+        .init(id: 5, name: "Portuguese (Portugal)", language: "pt-PT"),
+        .init(id: 6, name: "Director Commentary", language: "en"),
+    ]
+    // Saved choice wins over cast and device locale
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(language: "en", name: "Director Commentary"),
+        castLanguage: "fr",
+        deviceLanguages: ["ja"]
+    )?.id == 6)
+    // Saved language wins even if track display name changed between episodes/engines
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(language: "pt-BR", name: "Old Release Name"),
+        castLanguage: "fr",
+        deviceLanguages: ["en"]
+    )?.id == 4)
+    // Cast language wins over device locale when no saved choice exists
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(),
+        castLanguage: "fr",
+        deviceLanguages: ["en-US", "ja"]
+    )?.id == 3)
+    // Cast regional code prefers exact region first, falls back to base language
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(),
+        castLanguage: "pt-BR",
+        deviceLanguages: ["en"]
+    )?.id == 4)
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: [
+            .init(id: 10, name: "English", language: "en"),
+            .init(id: 11, name: "Portuguese", language: "por"),
+        ],
+        saved: .init(),
+        castLanguage: "pt-BR",
+        deviceLanguages: ["en"]
+    )?.id == 11)
+    // Missing/invalid cast language falls back to device locale
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(),
+        castLanguage: "invalid-lang",
+        deviceLanguages: ["fr-CA", "en"]
+    )?.id == 3)
+    // Missing cast language & non-matching device locale returns nil (retains default)
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates,
+        saved: .init(),
+        castLanguage: nil,
+        deviceLanguages: ["ko"]
+    ) == nil)
+
+    // 3. Priority: saved Off > saved choice > cast language > keepDefault (subtitles)
+    let subtitleCandidates: [TrackLanguagePolicy.TrackCandidate] = [
+        .init(id: 1, name: "English (Forced)", language: "en", isForced: true),
+        .init(id: 2, name: "English (SDH)", language: "en", isAccessibility: true),
+        .init(id: 3, name: "English", language: "eng"),
+        .init(id: 4, name: "French (Forced)", language: "fr", isForced: true),
+        .init(id: 5, name: "French", language: "fra"),
+    ]
+    // Saved Off overrides cast preferredSubtitleLanguage
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(isOff: true),
+        castLanguage: "fr"
+    ) == .off)
+    // Saved subtitle choice overrides cast preferredSubtitleLanguage
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(language: "en", name: "English (SDH)"),
+        castLanguage: "fr"
+    ) == .track(subtitleCandidates[1]))
+    // Cast language turns on matching non-forced subtitle over forced track
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(),
+        castLanguage: "fr"
+    ) == .track(subtitleCandidates[4]))
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(),
+        castLanguage: "en"
+    ) == .track(subtitleCandidates[2]))
+    // Without cast subtitle language (or invalid value), keeps default behavior
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(),
+        castLanguage: nil
+    ) == .keepDefault)
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates,
+        saved: .init(),
+        castLanguage: "not-valid"
+    ) == .keepDefault)
+
+    // 4. Per-item languages in a playlist: items do not inherit previous item's cast languages
+    let playlistStore = PlaylistStore()
+    var ep1 = Playbridge_PlayPayload()
+    ep1.preferredAudioLanguage = TrackLanguagePolicy.normalizedCode("fr")
+    ep1.preferredSubtitleLanguage = TrackLanguagePolicy.normalizedCode("fr")
+    var ep2 = Playbridge_PlayPayload()
+    ep2.preferredAudioLanguage = TrackLanguagePolicy.normalizedCode("ja")
+    ep2.preferredSubtitleLanguage = TrackLanguagePolicy.normalizedCode("invalid")
+    let ep3 = Playbridge_PlayPayload()
+    assert(playlistStore.setPlaylist(items: [ep1, ep2, ep3], startIndex: 0))
+    let item1 = playlistStore.currentItem!
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates, saved: .init(),
+        castLanguage: item1.preferredAudioLanguage, deviceLanguages: ["en"]
+    )?.id == 3)
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates, saved: .init(),
+        castLanguage: item1.preferredSubtitleLanguage
+    ) == .track(subtitleCandidates[4]))
+    let item2 = playlistStore.next()!
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates, saved: .init(),
+        castLanguage: item2.preferredAudioLanguage, deviceLanguages: ["en"]
+    )?.id == 1)
+    assert(TrackLanguagePolicy.resolveSubtitleTrack(
+        candidates: subtitleCandidates, saved: .init(),
+        castLanguage: item2.preferredSubtitleLanguage
+    ) == .keepDefault)
+    let item3 = playlistStore.next()!
+    assert(item3.preferredAudioLanguage == nil && item3.preferredSubtitleLanguage == nil)
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: audioCandidates, saved: .init(),
+        castLanguage: item3.preferredAudioLanguage, deviceLanguages: ["en-US"]
+    )?.id == 2)
+
+    // 5. mpv option and pending external subtitle mapping
+    let mpvLangs1 = MPVAudioPolicy.languageOptions(
+        savedAudioLanguage: nil,
+        castAudioLanguage: "pt-BR",
+        savedSubtitleLanguage: nil,
+        castSubtitleLanguage: "fr",
+        subtitlesOff: false,
+        deviceLanguages: ["en-US"]
+    )
+    assert(mpvLangs1.alang == "pt-BR,pt,en-US,en")
+    assert(mpvLangs1.slang == "fr")
+    assert(mpvLangs1.sid == "auto")
+    assert(MPVAudioPolicy.loadArguments(
+        path: "https://example.test/ep1.mkv",
+        isPreBuffering: false,
+        sid: mpvLangs1.sid
+    ) == ["loadfile", "https://example.test/ep1.mkv", "replace", "-1", "aid=auto,mute=no,sid=auto"])
+
+    // Next item with no cast languages clears alang/slang
+    let mpvLangs2 = MPVAudioPolicy.languageOptions(
+        savedAudioLanguage: nil,
+        castAudioLanguage: nil,
+        savedSubtitleLanguage: nil,
+        castSubtitleLanguage: nil,
+        subtitlesOff: false,
+        deviceLanguages: ["en-US"]
+    )
+    assert(mpvLangs2.alang == "" && mpvLangs2.slang == "" && mpvLangs2.sid == "auto")
+
+    // Saved choice wins in mpv options, and subtitlesOff forces sid=no & empty slang
+    let mpvLangs3 = MPVAudioPolicy.languageOptions(
+        savedAudioLanguage: "es",
+        castAudioLanguage: "fr",
+        savedSubtitleLanguage: nil,
+        castSubtitleLanguage: "fr",
+        subtitlesOff: true,
+        deviceLanguages: ["en"]
+    )
+    assert(mpvLangs3.alang == "es,fr,en" && mpvLangs3.slang == "" && mpvLangs3.sid == "no")
+
+    // Pending sender external subtitle selection:
+    // - Preferred subtitle language wins over "first subtitle" when matching external exists and no embedded matches
+    let extSubs = [
+        ItemSubtitle(url: "https://subs.test/en.vtt", label: "English", language: "en"),
+        ItemSubtitle(url: "https://subs.test/fr.vtt", label: "French", language: "fr"),
+    ]
+    let pickedPreferredExt = TrackLanguagePolicy.pickPendingExternalSubtitle(
+        subtitles: extSubs,
+        hasMatchingEmbeddedTrack: false,
+        saved: .init(),
+        castSubtitleLanguage: "fr"
+    )
+    assert(pickedPreferredExt?.subtitle.url == "https://subs.test/fr.vtt" && pickedPreferredExt?.flag == "select")
+
+    // - When embedded track already matches preferred language, first sender subtitle keeps auto-attach
+    let keptFirstAuto = TrackLanguagePolicy.pickPendingExternalSubtitle(
+        subtitles: extSubs,
+        hasMatchingEmbeddedTrack: true,
+        saved: .init(),
+        castSubtitleLanguage: "fr"
+    )
+    assert(keptFirstAuto?.subtitle.url == "https://subs.test/en.vtt" && keptFirstAuto?.flag == "auto")
+
+    // - Without preferred language, first sender subtitle keeps auto-attach
+    let defaultFirstAuto = TrackLanguagePolicy.pickPendingExternalSubtitle(
+        subtitles: extSubs,
+        hasMatchingEmbeddedTrack: false,
+        saved: .init(),
+        castSubtitleLanguage: nil
+    )
+    assert(defaultFirstAuto?.subtitle.url == "https://subs.test/en.vtt" && defaultFirstAuto?.flag == "auto")
+
+    // 6. AVPlayer option matching (extendedLanguageTag + locale + chapters + external catalog fallback)
+    let avAudioCandidates: [TrackLanguagePolicy.TrackCandidate] = [
+        .init(id: 0, name: "Japanese", language: "jpn", secondaryLanguage: "ja_JP"),
+        .init(id: 1, name: "Portuguese", language: nil, secondaryLanguage: "pt_BR"),
+    ]
+    assert(TrackLanguagePolicy.resolveAudioTrack(
+        candidates: avAudioCandidates,
+        saved: .init(),
+        castLanguage: "pt-BR",
+        deviceLanguages: ["en-US"]
+    )?.id == 1)
+    assert(TrackLanguagePolicy.preferredChapterLanguages(
+        savedAudioLanguage: "es",
+        castAudioLanguage: "fr",
+        deviceLanguages: ["en-US", "ja"]
+    ) == ["es", "fr", "en-US", "ja"])
+    let extCatalog = ExternalSubtitleCatalog(subtitles: extSubs)
+    assert(TrackLanguagePolicy.pickExternalSubtitle(options: extCatalog.options, castSubtitleLanguage: "fr")?.url == "https://subs.test/fr.vtt")
+    assert(TrackLanguagePolicy.pickExternalSubtitle(options: extCatalog.options, castSubtitleLanguage: "de") == nil)
+
+    // 7. BookmarkQueueItemPayload backward compatibility and preservation
+    let legacyBookmarkJSON = """
+    {"url":"https://cdn.test/v.mp4","title":"Old","headers":null,"subtitles":[],"artworkURL":null,"mediaKind":null,"startPositionMs":null}
+    """.data(using: .utf8)!
+    let decodedLegacyBookmark = try! JSONDecoder().decode(BookmarkQueueItemPayload.self, from: legacyBookmarkJSON)
+    assert(decodedLegacyBookmark.preferredAudioLanguage == nil && decodedLegacyBookmark.preferredSubtitleLanguage == nil)
+
+    print("PASS: preferred audio/subtitle parsing, priority, per-item isolation, mpv/AVPlayer matching and bookmarks")
 }

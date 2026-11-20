@@ -32,6 +32,18 @@ silence caused by the old fork's AudioUnit-only driver; see
 [mpv-audio-check.md](mpv-audio-check.md). This is not a certified fix for
 every audio codec or output route.
 
+Both engines honour per-item `preferredAudioLanguage` and
+`preferredSubtitleLanguage` from `play`, `playlist`, `queue_add`, and bookmarks,
+ignoring invalid/non-language tags.
+Priority is saved session track choice > cast preferred language > device
+locale (`Locale.preferredLanguages` / `subs-match-os-language`). Cast languages
+are not carried into `TrackPreferences`, so playlist items keep independent
+languages. In MPV, `alang` and `slang` are updated per file, and a matching
+preferred subtitle wins over the first sender-supplied subtitle while keeping
+first-subtitle auto-attach when there is no preferred match. In AVPlayer,
+preferred subtitles turn on a matching embedded or external track when asked,
+and keep default behavior otherwise.
+
 For a Debug run, share `[MPV audio-session]`, audio-output initialization
 warnings and audio-session errors, not network headers. Session samples
 contain generic port types (never device names/IDs), sample

@@ -154,8 +154,8 @@ registration lifetimes are unchanged; no route silently becomes Direct.
   (`subtitle_font_v1`, see `protocol/docs/WSS_FLOW.md`). Font bytes are never logged.
 - The preferred audio and subtitle languages are also in Settings → Audio & subtitles,
   and choosing a track in the player updates them. Video casts send them to the TV
-  (`preferredAudioLanguage` / `preferredSubtitleLanguage`, two-letter codes); the
-  Android TV honours them, the Apple TV ignores them for now.
+  (`preferredAudioLanguage` / `preferredSubtitleLanguage`, two-letter codes); both
+  the Android TV and Apple TV receivers honour them.
 - Subtitles ticked in the cast sheet reach the phone player too: the phone downloads each
   with its own headers (8 MB cap, content checked, HLS subtitle playlists left out), stores
   it as a temporary UTF-8 file removed when the player closes, and mpv adds it with an

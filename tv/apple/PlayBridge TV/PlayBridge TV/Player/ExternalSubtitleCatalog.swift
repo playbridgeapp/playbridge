@@ -9,6 +9,7 @@ struct ExternalSubtitleCatalog {
         let name: String
         /// A subtitle resource's own request headers; nil loads it like a plain URL.
         var headers: [String: String]? = nil
+        var language: String? = nil
     }
 
     let options: [Option]
@@ -30,7 +31,8 @@ struct ExternalSubtitleCatalog {
             let number = seen.count
             return Option(id: -number - 1, url: raw,
                           name: subtitle.label ?? "External subtitle \(number)",
-                          headers: subtitle.headers)
+                          headers: subtitle.headers,
+                          language: subtitle.language)
         }
     }
 

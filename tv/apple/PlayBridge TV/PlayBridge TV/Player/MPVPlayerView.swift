@@ -10,6 +10,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
     let subtitles: [ItemSubtitle]?
+    var preferredAudioLanguage: String? = nil
+    var preferredSubtitleLanguage: String? = nil
     let skipMetadata: SkipSegmentMetadata
     let initialTime: Double
     let mediaIdentity: Int
@@ -56,6 +58,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.url = url
         vc.headers = headers
         vc.subtitles = subtitles
+        vc.preferredAudioLanguage = TrackLanguagePolicy.normalizedCode(preferredAudioLanguage)
+        vc.preferredSubtitleLanguage = TrackLanguagePolicy.normalizedCode(preferredSubtitleLanguage)
         vc.skipMetadata = skipMetadata
         vc.initialTime = initialTime
         vc.mediaIdentity = mediaIdentity
@@ -157,7 +161,9 @@ struct MPVPlayerView: UIViewControllerRepresentable {
                     headers: headers,
                     subtitles: subtitles,
                     initialTime: initialTime,
-                    title: title
+                    title: title,
+                    preferredAudioLanguage: preferredAudioLanguage,
+                    preferredSubtitleLanguage: preferredSubtitleLanguage
                 )
             }
         }
@@ -180,6 +186,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     var url: URL?
     var headers: [String: String]?
     var subtitles: [ItemSubtitle]?
+    var preferredAudioLanguage: String?
+    var preferredSubtitleLanguage: String?
     var initialTime: Double = 0.0
     var mediaIdentity = 0
     var skipMetadata = SkipSegmentMetadata()
@@ -901,7 +909,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
     /// Swap in the next item on the live mpv core (episode advance). All per-item
     /// state is reset; the handle, render context, and demuxer caches survive.
     func loadNewItem(url: URL, headers: [String: String]?, subtitles: [ItemSubtitle]?,
-                     initialTime: Double, title: String?) {
+                     initialTime: Double, title: String?,
+                     preferredAudioLanguage: String? = nil,
+                     preferredSubtitleLanguage: String? = nil) {
         guard !isMpvStopped else { return }
         discardTouchScrub()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
@@ -914,6 +924,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         self.url = url
         self.headers = headers
         self.subtitles = subtitles
+        self.preferredAudioLanguage = TrackLanguagePolicy.normalizedCode(preferredAudioLanguage)
+        self.preferredSubtitleLanguage = TrackLanguagePolicy.normalizedCode(preferredSubtitleLanguage)
         self.initialTime = initialTime
         self.mediaTitle = title
 
@@ -929,7 +941,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         // Per-item resets (mirrors what a fresh controller would start with).
         loadedFileIdentity = -1
-        didApplyTrackPreferences = false
+        userChangedAudioOnCurrentItem = false
+        userChangedSubtitleOnCurrentItem = false
+        audioTrackLanguages = [:]
+        subtitleTrackLanguages = [:]
         ignoreTimeUpdatesUntil = .distantPast
         playbackState.title = title ?? ""
         playbackState.currentTime = initialTime
@@ -972,8 +987,17 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         configureAudioSession()
         let path = url.isFileURL ? url.path : url.absoluteString
         let volume = PlayerAppVolume.mpvVolumeString(level: appLevel)
+        let prefs = TrackPreferences.shared
+        let langOpts = MPVAudioPolicy.languageOptions(
+            savedAudioLanguage: prefs.audioLanguage,
+            castAudioLanguage: preferredAudioLanguage,
+            savedSubtitleLanguage: prefs.subtitleLanguage,
+            castSubtitleLanguage: preferredSubtitleLanguage,
+            subtitlesOff: prefs.subtitlesOff,
+            deviceLanguages: Locale.preferredLanguages
+        )
         let loadArguments = MPVAudioPolicy.loadArguments(
-            path: path, isPreBuffering: isPreBuffering, appMuted: appMuted)
+            path: path, isPreBuffering: isPreBuffering, appMuted: appMuted, sid: langOpts.sid)
         let startTime = fromStart ? 0 : initialTime
         let itemIdentity = mediaIdentity
         let subtitlePosition = self.subtitlePosition
@@ -984,6 +1008,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             self.pendingLoadedAttempt = attempt
             self.queuedSubtitlePosition = subtitlePosition
             mpv_set_property_string(handle, "sub-pos", String(format: "%.2f", subtitlePosition))
+            mpv_set_property_string(handle, "alang", langOpts.alang)
+            mpv_set_property_string(handle, "slang", langOpts.slang)
 
             // User-Agent must go via the dedicated "user-agent" option, not http-header-fields.
             // Fall back to a browser UA — some servers reject mpv's default "Lavf/..." agent.
@@ -1168,22 +1194,58 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         // Surface embedded audio/subtitle tracks right away. (mpvQueue context; updateTracks
         // hops its UI assignment to main.)
-        updateTracks()
+        let embeddedTracks = updateTracks()
 
         // Attach only the sender's first/preferred external subtitle. Others remain in
         // the picker and load only on selection, avoiding many simultaneous fetches.
-        if let firstSub = pendingExternalSubtitles.first {
-            if firstSub.headers != nil {
-                // A subtitle resource sends its own headers, so it is downloaded first.
-                DispatchQueue.main.async { [weak self] in
-                    self?.addDownloadedSubtitle(Self.resource(for: firstSub), flag: "auto") { _ in }
+        let pendingSubs = pendingExternalSubtitles
+        pendingExternalSubtitles = []
+        if !pendingSubs.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isMpvStopped, self.mediaIdentity == generation,
+                      let attempt, self.failureSession.matches(attempt),
+                      self.mpv == handle else { return }
+                let prefs = TrackPreferences.shared
+                let savedSub = TrackLanguagePolicy.SavedTrackChoice(
+                    language: prefs.subtitleLanguage,
+                    name: prefs.subtitleName,
+                    isOff: prefs.subtitlesOff
+                )
+                let resolvedEmbedded = TrackLanguagePolicy.resolveSubtitleTrack(
+                    candidates: embeddedTracks.subtitles,
+                    saved: savedSub,
+                    castLanguage: self.preferredSubtitleLanguage
+                )
+                let hasEmbeddedMatch: Bool
+                if case .track = resolvedEmbedded {
+                    hasEmbeddedMatch = true
+                } else {
+                    hasEmbeddedMatch = false
                 }
-            } else {
-                // Without a title mpv names the track after the file; keep the sender's label.
-                mpvCommandAsync(handle, ["sub-add", firstSub.url, "auto"] + (firstSub.label.map { [$0] } ?? []))
+                guard let pick = TrackLanguagePolicy.pickPendingExternalSubtitle(
+                    subtitles: pendingSubs,
+                    hasMatchingEmbeddedTrack: hasEmbeddedMatch,
+                    saved: savedSub,
+                    castSubtitleLanguage: self.preferredSubtitleLanguage
+                ) else { return }
+                let chosen = pick.subtitle
+                if chosen.headers != nil {
+                    self.addDownloadedSubtitle(Self.resource(for: chosen), flag: pick.flag) { _ in }
+                } else {
+                    self.mpvQueue.async { [weak self] in
+                        guard let self, !self.isMpvStopped, self.mpv == handle else { return }
+                        var args = ["sub-add", chosen.url, pick.flag]
+                        if let lang = chosen.language, !lang.isEmpty {
+                            args.append(chosen.label ?? "External subtitle")
+                            args.append(lang)
+                        } else if let label = chosen.label, !label.isEmpty {
+                            args.append(label)
+                        }
+                        self.mpvCommandAsync(handle, args)
+                    }
+                }
             }
         }
-        pendingExternalSubtitles = []
     }
 
     private func handlePropertyChange(name: String, prop: mpv_event_property) {
@@ -1326,35 +1388,44 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
     // MARK: - Track Selection
 
-    /// One-shot guard so session track preferences are applied once per item; after that
-    /// the user's live changes win.
-    private var didApplyTrackPreferences = false
+    /// Per-item guards: once the user manually chooses a track on the current item,
+    /// late `track-list` updates (such as async `sub-add`) must not override it.
+    private var userChangedAudioOnCurrentItem = false
+    private var userChangedSubtitleOnCurrentItem = false
+    private var audioTrackLanguages: [Int: String] = [:]
+    private var subtitleTrackLanguages: [Int: String] = [:]
 
-    /// Remember an audio pick (by display name) so the next episode — a fresh mpv
-    /// instance — re-applies it. Call on main (reads playbackState).
+    /// Remember an audio pick (by display name and language) so the next episode or
+    /// an engine switch re-applies it. Call on main (reads playbackState).
     private func recordAudioPreference(id: Int) {
+        userChangedAudioOnCurrentItem = true
         if let t = playbackState.audioTracks.first(where: { $0.id == id }) {
             TrackPreferences.shared.audioName = t.name
+            TrackPreferences.shared.audioLanguage = audioTrackLanguages[id]
         }
     }
 
     /// Remember a subtitle pick or an explicit "off" (see above).
     private func recordSubtitlePreference(id: Int) {
+        userChangedSubtitleOnCurrentItem = true
         let prefs = TrackPreferences.shared
         if id < 0 {
             prefs.subtitlesOff = true
             prefs.subtitleName = nil
+            prefs.subtitleLanguage = nil
         } else if let t = playbackState.subtitleTracks.first(where: { $0.id == id }) {
             prefs.subtitlesOff = false
             prefs.subtitleName = t.name
+            prefs.subtitleLanguage = subtitleTrackLanguages[id]
         }
     }
 
     /// Enumerate tracks. MUST be called on `mpvQueue` (never the main thread): synchronous
     /// mpv_* calls wait on mpv's core lock and would stall the UI.
-    private func updateTracks() {
+    @discardableResult
+    private func updateTracks() -> (audio: [TrackLanguagePolicy.TrackCandidate], subtitles: [TrackLanguagePolicy.TrackCandidate]) {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        guard let handle = mpv else { return }
+        guard let handle = mpv else { return ([], []) }
         let itemIdentity = mediaIdentity
 
         var count: Int64 = 0
@@ -1362,6 +1433,10 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         var audioTracks: [(id: Int, name: String)] = []
         var subtitleTracks: [(id: Int, name: String)] = []
+        var audioCandidates: [TrackLanguagePolicy.TrackCandidate] = []
+        var subtitleCandidates: [TrackLanguagePolicy.TrackCandidate] = []
+        var audioLangMap: [Int: String] = [:]
+        var subtitleLangMap: [Int: String] = [:]
         var loadedExternalURLs = Set<String>()
 
         for i in 0..<count {
@@ -1371,8 +1446,14 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             var trackId: Int64 = 0
             mpv_get_property(handle, "\(prefix)/id", MPV_FORMAT_INT64, &trackId)
 
+            var isForcedFlag: Int32 = 0
+            mpv_get_property(handle, "\(prefix)/forced", MPV_FORMAT_FLAG, &isForcedFlag)
+            var isExternalFlag: Int32 = 0
+            mpv_get_property(handle, "\(prefix)/external", MPV_FORMAT_FLAG, &isExternalFlag)
+
             let rawTitle = stringProperty(handle, "\(prefix)/title")
             let lang = stringProperty(handle, "\(prefix)/lang")
+            let normalizedLang = TrackLanguagePolicy.candidateTag(lang)
             let displayName: String
             if let t = rawTitle, !t.isEmpty {
                 displayName = t
@@ -1382,10 +1463,27 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                 displayName = "Track \(trackId)"
             }
 
+            let id = Int(trackId)
             switch type {
-            case "audio": audioTracks.append((id: Int(trackId), name: displayName))
+            case "audio":
+                audioTracks.append((id: id, name: displayName))
+                audioCandidates.append(TrackLanguagePolicy.TrackCandidate(
+                    id: id,
+                    name: displayName,
+                    language: lang,
+                    isExternal: isExternalFlag != 0
+                ))
+                if let normalizedLang { audioLangMap[id] = normalizedLang }
             case "sub":
-                subtitleTracks.append((id: Int(trackId), name: displayName))
+                subtitleTracks.append((id: id, name: displayName))
+                subtitleCandidates.append(TrackLanguagePolicy.TrackCandidate(
+                    id: id,
+                    name: displayName,
+                    language: lang,
+                    isForced: isForcedFlag != 0,
+                    isExternal: isExternalFlag != 0
+                ))
+                if let normalizedLang { subtitleLangMap[id] = normalizedLang }
                 if let filename = stringProperty(handle, "\(prefix)/external-filename") {
                     loadedExternalURLs.insert(filename)
                 }
@@ -1400,6 +1498,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
 
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isMpvStopped, self.mediaIdentity == itemIdentity else { return }
+            self.audioTrackLanguages = audioLangMap
+            self.subtitleTrackLanguages = subtitleLangMap
             self.playbackState.audioTracks = audioTracks
             self.playbackState.subtitleTracks = subtitleTracks
             let loadedSources = loadedExternalURLs.compactMap { self.downloadedSubtitleSources[$0] }
@@ -1408,32 +1508,54 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             self.playbackState.currentAudioIndex = Int(currentAid)
             self.playbackState.currentSubtitleIndex = Int(currentSid)
 
-            // Carry the session's track picks (made on a previous episode's instance)
-            // into this item, once, as soon as tracks are known.
-            if !self.didApplyTrackPreferences && !audioTracks.isEmpty {
-                self.didApplyTrackPreferences = true
-                let prefs = TrackPreferences.shared
-                if let name = prefs.audioName,
-                   let t = audioTracks.first(where: { $0.name == name }),
-                   t.id != Int(currentAid) {
-                    self.setPropertyAsync("aid", value: String(t.id))
-                    self.playbackState.currentAudioIndex = t.id
+            let prefs = TrackPreferences.shared
+            if !self.userChangedAudioOnCurrentItem && !audioCandidates.isEmpty {
+                let savedAudio = TrackLanguagePolicy.SavedTrackChoice(
+                    language: prefs.audioLanguage,
+                    name: prefs.audioName
+                )
+                if savedAudio.language != nil || savedAudio.name != nil || self.preferredAudioLanguage != nil,
+                   let match = TrackLanguagePolicy.resolveAudioTrack(
+                       candidates: audioCandidates,
+                       saved: savedAudio,
+                       castLanguage: self.preferredAudioLanguage,
+                       deviceLanguages: Locale.preferredLanguages
+                   ),
+                   match.id != Int(currentAid) {
+                    self.setPropertyAsync("aid", value: String(match.id))
+                    self.playbackState.currentAudioIndex = match.id
                 }
-                if prefs.subtitlesOff {
+            }
+
+            if !self.userChangedSubtitleOnCurrentItem {
+                let savedSub = TrackLanguagePolicy.SavedTrackChoice(
+                    language: prefs.subtitleLanguage,
+                    name: prefs.subtitleName,
+                    isOff: prefs.subtitlesOff
+                )
+                switch TrackLanguagePolicy.resolveSubtitleTrack(
+                    candidates: subtitleCandidates,
+                    saved: savedSub,
+                    castLanguage: self.preferredSubtitleLanguage
+                ) {
+                case .off:
                     if currentSid > 0 {
                         self.setPropertyAsync("sid", value: "no")
                         self.playbackState.currentSubtitleIndex = -1
                     }
-                } else if let name = prefs.subtitleName,
-                          let t = subtitleTracks.first(where: { $0.name == name }),
-                          t.id != Int(currentSid) {
-                    self.setPropertyAsync("sid", value: String(t.id))
-                    self.playbackState.currentSubtitleIndex = t.id
+                case .track(let match):
+                    if match.id != Int(currentSid) {
+                        self.setPropertyAsync("sid", value: String(match.id))
+                        self.playbackState.currentSubtitleIndex = match.id
+                    }
+                case .keepDefault:
+                    break
                 }
             }
 
             self.broadcastTracks()
         }
+        return (audioCandidates, subtitleCandidates)
     }
 
     // MARK: - HDR (tvOS display criteria)
@@ -2183,6 +2305,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
             addDownloadedSubtitle(resource, flag: "select") { [weak self] ok in
                 completion(ok)
                 if ok {
+                    self?.userChangedSubtitleOnCurrentItem = true
+                    TrackPreferences.shared.subtitlesOff = false
                     let title = PhoneConfirmations.subtitleChangeTitle(
                         trackName: resource.hasLabel ? resource.label : nil,
                         off: false
@@ -2241,7 +2365,11 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                     }
                     let label = resource.hasLabel && !resource.label.isEmpty
                         ? resource.label : "External subtitle"
-                    let ok = self.mpvCommand(handle, ["sub-add", file.path, flag, label]) >= 0
+                    var args = ["sub-add", file.path, flag, label]
+                    if resource.hasLanguage, !resource.language.isEmpty {
+                        args.append(resource.language)
+                    }
+                    let ok = self.mpvCommand(handle, args) >= 0
                     if ok { self.updateTracks() }
                     DispatchQueue.main.async {
                         guard self.lateSubtitleSelectionID == id else {
@@ -2264,27 +2392,35 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         resource.url = subtitle.url
         resource.headers = subtitle.headers ?? [:]
         if let label = subtitle.label { resource.label = label }
+        if let language = subtitle.language { resource.language = language }
         return resource
     }
 
     private func selectSubtitleTrack(_ trackId: Int) {
         if let option = externalSubtitleCatalog.option(for: trackId), let headers = option.headers {
+            userChangedSubtitleOnCurrentItem = true
             addDownloadedSubtitle(
-                Self.resource(for: ItemSubtitle(url: option.url, headers: headers, label: option.name)),
+                Self.resource(for: ItemSubtitle(
+                    url: option.url, headers: headers, label: option.name, language: option.language)),
                 flag: "select") { _ in }
             TrackPreferences.shared.subtitlesOff = false
             TrackPreferences.shared.subtitleName = option.name
+            TrackPreferences.shared.subtitleLanguage = option.language
             return
         }
         if let option = externalSubtitleCatalog.option(for: trackId) {
+            userChangedSubtitleOnCurrentItem = true
             // `cached` selects an existing file if the user taps again while loading.
             // The track-list observer replaces this menu entry once loading succeeds.
             mpvQueue.async { [weak self] in
                 guard let self, let handle = self.mpv else { return }
-                self.mpvCommandAsync(handle, ["sub-add", option.url, "cached", option.name])
+                var args = ["sub-add", option.url, "cached", option.name]
+                if let lang = option.language, !lang.isEmpty { args.append(lang) }
+                self.mpvCommandAsync(handle, args)
             }
             TrackPreferences.shared.subtitlesOff = false
             TrackPreferences.shared.subtitleName = option.name
+            TrackPreferences.shared.subtitleLanguage = option.language
             return
         }
         setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
@@ -2433,6 +2569,8 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         case let c where c.hasPrefix("add_subtitle:"):
             let urlStr = String(c.dropFirst("add_subtitle:".count))
             guard let handle = mpv, !urlStr.isEmpty else { break }
+            userChangedSubtitleOnCurrentItem = true
+            TrackPreferences.shared.subtitlesOff = false
             // Async: a remote sub-add opens a network fetch; never block the event queue.
             mpvQueue.async { [weak self] in self?.mpvCommandAsync(handle, ["sub-add", urlStr, "select"]) }
         case let c where c.hasPrefix("switch_player:"):
