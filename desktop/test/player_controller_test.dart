@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/media_kind.dart';
 import 'package:playbridge_desktop/player_controller.dart';
+import 'package:playbridge_desktop/playback_stall_detector.dart';
 import 'package:playbridge_desktop/player_engine.dart';
 import 'package:playbridge_desktop/stream_proxy_server.dart';
 
@@ -412,6 +413,114 @@ void main() {
     expect(c.queue, isEmpty);
     expect(c.currentIndex, -1);
     expect(c.state, 'idle');
+  });
+
+  group('early end of file', () {
+    test('only counts well before a known length, never live', () {
+      expect(
+          PlayerController.isEarlyEnd(pos: 151804, dur: 1016000, live: false),
+          isTrue);
+      expect(
+          PlayerController.isEarlyEnd(pos: 1010000, dur: 1016000, live: false),
+          isFalse,
+          reason: 'within the last 15 s is a real end');
+      expect(
+          PlayerController.isEarlyEnd(pos: 990000, dur: 1000000, live: false),
+          isFalse,
+          reason: 'past 98% is a real end');
+      expect(
+          PlayerController.isEarlyEnd(pos: 5000, dur: 0, live: false), isFalse,
+          reason: 'unknown length');
+      expect(PlayerController.isEarlyEnd(pos: 5000, dur: 600000, live: true),
+          isFalse,
+          reason: 'live streams never end early');
+    });
+
+    test('reloads at the position instead of stopping, keeping the playback id',
+        () async {
+      final engine = _FakeEngine()
+        ..positionMsValue = 151804
+        ..durationMsValue = 1016000;
+      final c = PlayerController(engineForTest: engine);
+      await c.playPlaylist([item(1)], 0);
+      final playbackId = c.playbackId;
+      final opensBefore = engine.openCount;
+
+      c.notifyCompletedForTest();
+      await c.earlyEndReloadFutureForTest;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(engine.stopCount, 0);
+      expect(engine.openCount, opensBefore + 1);
+      expect(engine.lastSeekMs, 151804);
+      expect(c.queue.length, 1);
+      expect(c.playbackId, playbackId);
+      expect(c.hasTerminalError, isFalse);
+    });
+
+    test('gives up with a failure after two reloads without progress',
+        () async {
+      final engine = _FakeEngine()
+        ..positionMsValue = 440529
+        ..durationMsValue = 3081600;
+      final c = PlayerController(engineForTest: engine);
+      final failures = <String>[];
+      c.onTerminalError = (f) => failures.add(f.error);
+      await c.playPlaylist([item(1)], 0);
+
+      for (var i = 0; i < 2; i++) {
+        c.notifyCompletedForTest();
+        await c.earlyEndReloadFutureForTest;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(engine.stopCount, 0);
+
+      c.notifyCompletedForTest();
+      await c.terminalErrorFutureForTest;
+      expect(failures, [PlaybackStallDetector.message]);
+      expect(engine.stopCount, 1);
+    });
+
+    test('progress between ends allows more reloads, up to six per video',
+        () async {
+      final engine = _FakeEngine()..durationMsValue = 3600000;
+      final c = PlayerController(engineForTest: engine);
+      final failures = <String>[];
+      c.onTerminalError = (f) => failures.add(f.error);
+      await c.playPlaylist([item(1)], 0);
+
+      for (var i = 0; i < 6; i++) {
+        engine.positionMsValue = 60000 * (i + 1);
+        c.notifyCompletedForTest();
+        await c.earlyEndReloadFutureForTest;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(failures, isEmpty);
+
+      engine.positionMsValue = 60000 * 7;
+      c.notifyCompletedForTest();
+      await c.terminalErrorFutureForTest;
+      expect(failures, [PlaybackStallDetector.message]);
+    });
+
+    test('a new item starts with fresh reload limits', () async {
+      final engine = _FakeEngine()
+        ..positionMsValue = 300000
+        ..durationMsValue = 1800000;
+      final c = PlayerController(engineForTest: engine);
+      await c.playPlaylist([item(1), item(2)], 0);
+      for (var i = 0; i < 2; i++) {
+        c.notifyCompletedForTest();
+        await c.earlyEndReloadFutureForTest;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      await c.jumpTo(1);
+      c.notifyCompletedForTest();
+      await c.earlyEndReloadFutureForTest;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(c.hasTerminalError, isFalse);
+      expect(c.currentIndex, 1);
+    });
   });
 
   test('completion of a single video stops', () async {

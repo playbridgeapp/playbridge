@@ -81,6 +81,10 @@ class MpvEngine extends PlayerEngine {
   int _proxyLeaseGeneration = 0;
   bool _pageMedia = false;
   final _failureLogs = MpvFailureLogState();
+
+  @override
+  String? get failureCategory => _failureLogs.code;
+
   MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
@@ -646,6 +650,10 @@ class MpvEngine extends PlayerEngine {
         await native.setProperty('demuxer-max-bytes', '314572800');
         await native.setProperty('demuxer-max-back-bytes', '104857600');
         await native.setProperty('network-timeout', '60');
+        // Ask the server for the rest when a connection drops, instead of
+        // treating the cut as the end of the file.
+        await native.setProperty('stream-lavf-o', mpvLavfReconnectOptions);
+        await native.setProperty('demuxer-lavf-o', mpvLavfReconnectOptions);
         // Tuning ported from the tvOS receiver (see MPVPlayerView.swift):
         // - framedrop=decoder+vo: when decode can't keep up (high-bitrate HEVC),
         //   drop at the decoder too instead of letting A/V drift — the default

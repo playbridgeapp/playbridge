@@ -221,6 +221,8 @@ void main() {
     await joinAndLoad(f);
     final stops = f.engine.stops;
 
+    // A real end: mpv reports end of file at the video's length.
+    f.engine.positionMs = f.engine.durationMs;
     f.player.notifyCompletedForTest();
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
