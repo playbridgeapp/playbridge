@@ -2680,6 +2680,17 @@ private func runBookmarkTests() {
     let startOverResume = store.resumePayload(for: bookmarkedItem, startOver: true)!
     assert(startOverResume.startPositionMs == 0)
 
+    // A single bookmark is loaded into the queue like a cast, so the player treats it as the
+    // current item (Back, engine switches and phone commands are ignored otherwise).
+    let bookmarkQueue = PlaylistStore()
+    assert(bookmarkQueue.setPlaylist(items: [Playbridge_PlayPayload()], startIndex: restoredResume.startIndex))
+    assert(bookmarkQueue.currentItem != nil, "Single bookmark has a current queue item")
+    let bookmarkIdentity = PlayerMediaIdentity(playbackID: bookmarkQueue.playbackID,
+                                               itemID: bookmarkQueue.currentItemID)
+    assert(bookmarkIdentity.matches(playbackID: bookmarkQueue.playbackID,
+                                    itemID: bookmarkQueue.currentItemID, active: true),
+           "Single bookmark matches the player's current-item check")
+
     // Thumbnail file creation + deletion on unbookmark
     let thumbDir = BookmarkThumbnailPolicy.thumbnailsDirectory(baseDirectory: tempDir)
     try! FileManager.default.createDirectory(at: thumbDir, withIntermediateDirectories: true)
