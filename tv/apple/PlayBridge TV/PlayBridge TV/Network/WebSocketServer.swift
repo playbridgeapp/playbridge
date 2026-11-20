@@ -1759,11 +1759,10 @@ class WebSocketServer: ObservableObject {
         progressWebhook.finish(clear: true)
         currentSenderName = nil
         skipPreplayForCurrentRequest = true
-        if payloads.count > 1 {
-            _ = playlistStore?.setPlaylist(items: payloads, startIndex: targetIndex)
-        } else {
-            playlistStore?.clear()
-        }
+        // Load even a single bookmark into the queue, like a cast. The player only acts on
+        // Back, engine switches and phone commands for the queue's current item; with an
+        // empty queue those were silently ignored.
+        guard playlistStore?.setPlaylist(items: payloads, startIndex: targetIndex) == true else { return }
         if !item.isPrivate, let url = target.validURL {
             historyStore?.addToHistory(url: url, title: target.titleOrNil, headers: target.headersOrNil)
         }
