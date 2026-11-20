@@ -20,11 +20,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Drops follow "Plays on"**: Dropped and picked files go to the chosen TV; if it's offline the app says so instead of playing locally.
 - **Pairing requests**: Appear as a card without leaving the video.
 - **Tray menu**: Lists only devices that are available now.
+- **Controlled by**: While a website controls the player, its name and **Unlink** sit in the player's title row and hide with the controls, instead of a bar that stayed over the video.
 
 ### Fixed
 - **Long links in mpv**: Very long signed links (such as DASH from YouTube-style front ends) play through the proxy instead of failing with 403.
 - **Unanswered playlists**: The desktop receiver answers every playlist with a request id, so phones learn when it can't start one.
 - **Seeking in a party**: Browser-only headers such as `Range` are no longer shared or passed to the player, so other devices don't restart from the beginning on every seek.
+- **Seeking ended the video**: Seeking far ahead in a website video could close the player. The player now reconnects when a server drops the connection, and if a video still ends well before its length, it reloads at that point (a few times at most, then it says "The video stopped loading").
 
 ## [0.16.0+34] — 2026-10-31
 
