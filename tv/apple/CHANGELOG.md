@@ -12,6 +12,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **One player look**: mpv and AVPlayer share the same controls: pill buttons, side panels for audio, subtitles, speed and settings, corner cards, skip intro/recap and "Paused from <phone>" confirmations.
 - **Watch Together**: Join a party with the code or QR code shown on the TV, or be added by a paired phone. The TV follows the party's play, pause, seek, speed and stop, shows who's in the party, and returns to the party screen when a video stops or ends. Only Back, Close or Leave party leaves.
 - **Subtitle style and fonts**: Size, Font, Background, Edge and "Use this style on pre-styled subtitles too", with a preview, on the TV or from a paired phone. A paired phone can install up to five custom fonts (30 MB in all).
+- **Preferred languages**: Both players follow the audio and subtitle languages sent with a cast, then the TV's own languages. A track you pick by hand stays for the rest of the cast, a saved "off" for subtitles wins, and each playlist item uses its own languages.
 
 ### Fixed
 - **Cut streams in mpv**: When a server closes the connection early, mpv asks for the rest. If playback still stops moving, the player reloads at the last good position, at most twice without progress and six times per video, then shows "The video stopped loading" instead of freezing.
