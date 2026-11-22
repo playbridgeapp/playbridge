@@ -874,7 +874,10 @@ open class PlayerActivity : ComponentActivity() {
         // also stops the activity first; onPictureInPictureModeChanged then closes the player.)
         // Otherwise leaving pauses. Rotation never gets here: the activity handles it itself.
         // A party video keeps playing in step with the others until the player closes.
-        if (partyItem != null || isInPipModeState.value || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
+        // Locking the phone from the full-screen player never opens the window (the screen is
+        // already off), so with Picture-in-picture chosen it keeps playing too, as YouTube does.
+        val locked = pipOnLeave && player?.playWhenReady == true && getSystemService(android.os.PowerManager::class.java)?.isInteractive == false
+        if (partyItem != null || isInPipModeState.value || locked || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
             startBackgroundMediaSession()
         } else {
             player?.playWhenReady = false
