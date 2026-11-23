@@ -196,6 +196,9 @@ class BrowserActivity : ComponentActivity() {
         const val ACTION_OPEN_DOWNLOADS = "com.playbridge.sender.OPEN_DOWNLOADS"
         const val EXTRA_OPEN_DOWNLOAD_FILE = "open_download_file"
         const val EXTRA_MEDIA_TAB_ID = "media_notification_tab_id"
+
+        /** The browser the app is showing, so a second start can hand over to it. */
+        private var running: java.lang.ref.WeakReference<BrowserActivity>? = null
     }
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
@@ -378,6 +381,9 @@ class BrowserActivity : ComponentActivity() {
     private val tabManager: TabManager get() = Components.tabManager
     private val browserHostOwner = Any()
 
+    /** Set when this instance only answered a launcher tap while the app's task already existed. */
+    private var launchedOnTopOfRunningApp = false
+
     /**
      * A web URL captured from the launching/incoming Intent (a link tapped in another app),
      * awaiting consumption by the Compose tree once tabs are restored. Compose state so
@@ -389,6 +395,30 @@ class BrowserActivity : ComponentActivity() {
     /** A Watch Together invite link opened the app: show the party screen. */
     private val pendingWatchTogether = androidx.compose.runtime.mutableStateOf(false)
     private val pendingDownloadNotification = mutableStateOf<DownloadNotificationOpen?>(null)
+
+    /**
+     * The browser is `singleTop`, not `singleTask`: a `singleTask` start from the launcher clears
+     * the screens above the browser, which stopped a video playing in the player on top of it.
+     * Android now makes a second instance when the browser isn't on top. A plain launcher tap
+     * just finishes it, leaving the player showing, as YouTube does. Any other start (a link,
+     * a notification, a party invite) keeps what `singleTask` did: the player closes and the
+     * running browser gets the intent. Returns true when this instance is that second one.
+     */
+    private fun handOverToRunningBrowser(savedInstanceState: Bundle?): Boolean {
+        val existing = running?.get()
+        if (savedInstanceState != null || existing == null || existing === this || existing.isFinishing || existing.isDestroyed) {
+            return false
+        }
+        launchedOnTopOfRunningApp = true
+        val launcherTap = intent?.action == Intent.ACTION_MAIN &&
+            intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.data == null
+        if (!launcherTap) {
+            com.playbridge.sender.player.PlayerActivity.finishCurrent()
+            existing.onNewIntent(intent)
+        }
+        finish()
+        return true
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -589,6 +619,8 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (handOverToRunningBrowser(savedInstanceState)) return
+        running = java.lang.ref.WeakReference(this)
 
 
 
@@ -3658,6 +3690,11 @@ class BrowserActivity : ComponentActivity() {
  }
 
     override fun onDestroy() {
+        if (launchedOnTopOfRunningApp) {
+            super.onDestroy()
+            return
+        }
+        if (running?.get() === this) running = null
         Components.extensionPrompts.detach(this)
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
         // Only tear sessions down when the Activity is actually finishing.
