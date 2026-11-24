@@ -5,9 +5,9 @@ import 'package:path_provider/path_provider.dart';
 
 /// "Launch at login" that doesn't depend on any third-party plugin.
 ///
-/// macOS  — writes a LaunchAgent plist into `~/Library/LaunchAgents/`
-/// Linux  — writes an XDG autostart `.desktop` file into `~/.config/autostart/`
-/// Windows — TODO (would need win32_registry to write HKCU\…\Run)
+/// macOS   — writes a LaunchAgent plist into `~/Library/LaunchAgents/`
+/// Linux   — writes an XDG autostart `.desktop` file into `~/.config/autostart/`
+/// Windows — writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via `reg.exe`
 class AutoLaunch {
   AutoLaunch({
     required this.executablePath,
@@ -31,7 +31,20 @@ class AutoLaunch {
   final String executablePath;
   final String? _home;
 
+  static const _windowsRunKey =
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
+  static const _windowsValueName = 'PlayBridge';
+
+  bool get _useWindowsRegistry => Platform.isWindows && _home == null;
+
   Future<bool> isEnabled() async {
+    if (_useWindowsRegistry) {
+      final res = await Process.run(
+        'reg',
+        ['query', _windowsRunKey, '/v', _windowsValueName],
+      );
+      return res.exitCode == 0;
+    }
     for (final f in _entryFiles([bundleId, ...legacyIds])) {
       if (await f.exists()) return true;
     }
@@ -39,6 +52,31 @@ class AutoLaunch {
   }
 
   Future<void> enable() async {
+    if (_useWindowsRegistry) {
+      final res = await Process.run(
+        'reg',
+        [
+          'add',
+          _windowsRunKey,
+          '/v',
+          _windowsValueName,
+          '/t',
+          'REG_SZ',
+          '/d',
+          '"$executablePath"',
+          '/f',
+        ],
+      );
+      if (res.exitCode != 0) {
+        throw ProcessException(
+          'reg',
+          ['add', _windowsRunKey],
+          '${res.stderr}'.trim(),
+          res.exitCode,
+        );
+      }
+      return;
+    }
     final f = _entryFile(bundleId);
     if (f == null) return;
     await f.parent.create(recursive: true);
@@ -46,11 +84,21 @@ class AutoLaunch {
     await _deleteAll(legacyIds);
   }
 
-  Future<void> disable() => _deleteAll([bundleId, ...legacyIds]);
+  Future<void> disable() async {
+    if (_useWindowsRegistry) {
+      await Process.run(
+        'reg',
+        ['delete', _windowsRunKey, '/v', _windowsValueName, '/f'],
+      );
+      return;
+    }
+    await _deleteAll([bundleId, ...legacyIds]);
+  }
 
   /// Rewrites a legacy entry under [bundleId] (pointing at this executable), so
   /// launch-at-login survives the bundle id change without starting twice.
   Future<void> migrateLegacy() async {
+    if (_useWindowsRegistry) return;
     var legacy = false;
     for (final f in _entryFiles(legacyIds)) {
       if (await f.exists()) legacy = true;

@@ -126,9 +126,14 @@ Future<void> main(List<String> args) async {
     return false; // not handled — preserve default reporting
   };
 
-  windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
-    await windowManager.setPreventClose(true);
-  });
+  windowManager.waitUntilReadyToShow(
+    const WindowOptions(titleBarStyle: TitleBarStyle.hidden),
+    () async {
+      await windowManager.setPreventClose(true);
+      await windowManager.show();
+      await windowManager.focus();
+    },
+  );
 
   final results = await Future.wait([
     PairingStore.load(),
@@ -1535,17 +1540,27 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               if (!hideChrome)
-                                const SizedBox(
+                                SizedBox(
                                   height: titleBarHeight,
                                   child: DragToMoveArea(
                                     child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
                                       children: [
-                                        SizedBox(
+                                        const SizedBox(
                                           width: PbMetrics.sidebarWidth,
                                           child: ColoredBox(
                                               color: PbColors.sidebar),
                                         ),
-                                        Expanded(child: SizedBox.expand()),
+                                        Expanded(
+                                          child: Platform.isMacOS
+                                              ? const SizedBox.expand()
+                                              : const WindowCaption(
+                                                  brightness: Brightness.dark,
+                                                  backgroundColor:
+                                                      Colors.transparent,
+                                                ),
+                                        ),
                                       ],
                                     ),
                                   ),
