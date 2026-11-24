@@ -147,7 +147,12 @@ nonisolated enum AppleProxyUpstream {
 
         private let condition = NSCondition()
         private let capacity = 512 * 1024
-        private var buffer = Data()
+        /// Received bytes not yet read, as a queue of chunks. One growing `Data` drained with
+        /// `removeFirst` keeps every byte it ever held in its storage until the response closes,
+        /// so a long stream held in memory all the bytes that had passed through it.
+        private var chunks: [Data] = []
+        private var headOffset = 0
+        private var buffered = 0
         private var metadata: Metadata?
         private var failure: String?
         private var finished = false
@@ -209,7 +214,7 @@ nonisolated enum AppleProxyUpstream {
             condition.lock()
             defer { condition.unlock() }
             let deadline = Date().addingTimeInterval(35)
-            while buffer.isEmpty && !finished && !closed {
+            while buffered == 0 && !finished && !closed {
                 if !condition.wait(until: deadline) {
                     failure = "Upstream body read timed out"
                     finished = true
@@ -221,12 +226,22 @@ nonisolated enum AppleProxyUpstream {
                 error?.pointee = strdup("Upstream response closed")
                 return -1
             }
-            if !buffer.isEmpty {
-                let length = min(count, buffer.count)
-                buffer.copyBytes(to: bytes, count: length)
-                buffer.removeFirst(length)
+            if buffered > 0 {
+                var copied = 0
+                while copied < count, let first = chunks.first {
+                    let take = min(first.count - headOffset, count - copied)
+                    let start = first.startIndex + headOffset
+                    first.copyBytes(to: bytes + copied, from: start..<(start + take))
+                    copied += take
+                    headOffset += take
+                    buffered -= take
+                    if headOffset == first.count {
+                        chunks.removeFirst()
+                        headOffset = 0
+                    }
+                }
                 condition.broadcast()
-                return Int32(length)
+                return Int32(copied)
             }
             if let failure {
                 error?.pointee = strdup(failure)
@@ -239,7 +254,9 @@ nonisolated enum AppleProxyUpstream {
             condition.lock()
             guard !closed else { condition.unlock(); return }
             closed = true
-            buffer.removeAll()
+            chunks.removeAll()
+            headOffset = 0
+            buffered = 0
             condition.broadcast()
             condition.unlock()
             task.cancel()
@@ -280,7 +297,7 @@ nonisolated enum AppleProxyUpstream {
             defer { condition.unlock() }
             while offset < data.count && !closed && !finished {
                 let deadline = Date().addingTimeInterval(35)
-                while buffer.count >= capacity && !closed && !finished {
+                while buffered >= capacity && !closed && !finished {
                     if !condition.wait(until: deadline) {
                         failure = "Upstream consumer stalled"
                         finished = true
@@ -290,8 +307,9 @@ nonisolated enum AppleProxyUpstream {
                     }
                 }
                 guard !closed && !finished else { return }
-                let length = min(capacity - buffer.count, data.count - offset)
-                buffer.append(data.subdata(in: offset..<(offset + length)))
+                let length = min(capacity - buffered, data.count - offset)
+                chunks.append(data.subdata(in: offset..<(offset + length)))
+                buffered += length
                 offset += length
                 condition.broadcast()
             }
