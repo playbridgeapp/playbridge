@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -1550,8 +1550,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                     ),
                                   ),
                                 ),
-                              LinkedPlaybackBanner(
-                                  coordinator: _extBridge.linkedPlayback),
+                              // While a video shows, the player's title row
+                              // carries this instead, hiding with the controls.
+                              if (!(_showingVideo && hasMedia))
+                                LinkedPlaybackBanner(
+                                    coordinator: _extBridge.linkedPlayback),
                               Expanded(
                                 child: Row(
                                   crossAxisAlignment:
@@ -1712,6 +1715,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                                 _bookmarkableItem!
                                                                     .url),
                                                     mode: _chromeMode,
+                                                    titleTrailing:
+                                                        LinkedPlaybackChip(
+                                                            coordinator: _extBridge
+                                                                .linkedPlayback),
                                                     showQueueControls: hasQueue,
                                                     onPanelOpened: () {
                                                       setState(

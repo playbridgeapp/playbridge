@@ -345,7 +345,7 @@ open class PlayerActivity : ComponentActivity() {
     /**
      * Back, by "When you leave the player" while a video plays. Picture-in-picture shrinks it into
      * a window over the browser, as YouTube's mini player does: Android moves the player into the
-     * window and leaves the app's task, which the InApp player screens share, underneath. Keep
+     * window and leaves the browser's task underneath. Keep
      * playing sends the player's task behind the browser (its own task; when the choice was made
      * in the More sheet of a shared-task player, the app goes behind the home screen) and it plays
      * on under a media notification. Otherwise, or without PiP, the player closes.
@@ -404,8 +404,9 @@ open class PlayerActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Android 12+ opens the window itself (setAutoEnterEnabled); older versions are asked here.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && pipOnLeave && player?.playWhenReady == true) enterPip()
+        // Android 12+ opens the window itself on Home (setAutoEnterEnabled), but not always when
+        // switching to another app, so ask here on every version; an open window stays as it is.
+        if (pipOnLeave && player?.playWhenReady == true) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
@@ -874,7 +875,11 @@ open class PlayerActivity : ComponentActivity() {
         // also stops the activity first; onPictureInPictureModeChanged then closes the player.)
         // Otherwise leaving pauses. Rotation never gets here: the activity handles it itself.
         // A party video keeps playing in step with the others until the player closes.
-        if (partyItem != null || isInPipModeState.value || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
+        // Locking the phone never opens the window (the screen is already off), and the window can
+        // be refused or skipped when switching apps. With Picture-in-picture chosen a playing
+        // video keeps going under the media notification instead of stopping, as YouTube does.
+        val pipPlaying = pipOnLeave && player?.playWhenReady == true
+        if (partyItem != null || isInPipModeState.value || pipPlaying || leaveActionState.value == PhoneLeaveAction.KEEP_PLAYING) {
             startBackgroundMediaSession()
         } else {
             player?.playWhenReady = false
@@ -911,6 +916,11 @@ open class PlayerActivity : ComponentActivity() {
 
     companion object {
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
+
+        /** Closes the player still open, if any: another screen is taking over the app's task. */
+        fun finishCurrent() {
+            current?.get()?.takeIf { !it.isFinishing }?.finish()
+        }
 
         /** Brings back the player still playing in the background, or null when there's none. */
         fun returnIntent(context: Context): Intent? {

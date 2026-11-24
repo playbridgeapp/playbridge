@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 
 import '../player_chrome_policy.dart';
@@ -42,6 +42,7 @@ class PlayerChrome extends StatefulWidget {
     this.onBookmark,
     this.bookmarked = false,
     this.onMoveToTv,
+    this.titleTrailing,
   });
 
   final PlayerController player;
@@ -78,6 +79,9 @@ class PlayerChrome extends StatefulWidget {
 
   /// "Move to a TV" button. Renders nothing when null.
   final VoidCallback? onMoveToTv;
+
+  /// Shown at the end of the title row and hidden with it.
+  final Widget? titleTrailing;
 
   @override
   State<PlayerChrome> createState() => _PlayerChromeState();
@@ -170,6 +174,7 @@ class _PlayerChromeState extends State<PlayerChrome> {
             player: widget.player,
             visible: widget.mode == PlayerChromeMode.full,
             onBack: widget.onBack,
+            trailing: widget.titleTrailing,
           ),
         ),
         if (panel != null)

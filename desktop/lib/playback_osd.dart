@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Centered, auto-fading on-screen display for pause / seek / volume cues.
 class PlaybackOsd extends StatelessWidget {

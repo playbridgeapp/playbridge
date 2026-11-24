@@ -1294,13 +1294,17 @@ class WebSocketServer: ObservableObject {
 
         switch action {
         case "play":
-            if let p = try? Playbridge_PlayPayload(jsonString: payloadJson), p.validURL != nil {
+            if var p = try? Playbridge_PlayPayload(jsonString: payloadJson), p.validURL != nil {
+                p.sanitizePreferredLanguages()
                 handlePlay(p, requestID: requestID, connection: connection)
             } else {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             }
         case "playlist":
-            if let p = try? Playbridge_PlaylistPayload(jsonString: payloadJson) {
+            if var p = try? Playbridge_PlaylistPayload(jsonString: payloadJson) {
+                for index in p.items.indices {
+                    p.items[index].sanitizePreferredLanguages()
+                }
                 handlePlaylist(p, requestID: requestID, connection: connection)
             } else {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
@@ -1310,7 +1314,11 @@ class WebSocketServer: ObservableObject {
                 completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
                 return
             }
-            let candidates = p.items.isEmpty && p.hasItem ? [p.item] : p.items
+            let candidates = (p.items.isEmpty && p.hasItem ? [p.item] : p.items).map { item -> Playbridge_PlayPayload in
+                var copy = item
+                copy.sanitizePreferredLanguages()
+                return copy
+            }
             let valid = candidates.filter { $0.validURL != nil }
             ordered { [self] in
                 guard let store = self.playlistStore else { return }
@@ -1637,7 +1645,14 @@ class WebSocketServer: ObservableObject {
 
     func handlePlay(_ payload: Playbridge_PlayPayload, requestID: String? = nil, connection: NWConnection? = nil) {
         guard let url = payload.validURL else { return }
+        var payload = payload
+        payload.sanitizePreferredLanguages()
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
+        #if DEBUG
+        if payload.preferredAudioLanguageOrNil != nil || payload.preferredSubtitleLanguageOrNil != nil {
+            print("[WebSocket] play preferred languages audio=\(payload.preferredAudioLanguageOrNil ?? "-") sub=\(payload.preferredSubtitleLanguageOrNil ?? "-")")
+        }
+        #endif
         debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
         ordered { [self] in
             guard await self.admitPageMedia([payload], routing: 0) else {
@@ -1718,8 +1733,15 @@ class WebSocketServer: ObservableObject {
                 var s = Playbridge_SubtitleResource()
                 s.url = sub.url
                 if let label = sub.label { s.label = label }
+                if let lang = TrackLanguagePolicy.normalizedCode(sub.language) { s.language = lang }
                 if let h = sub.headers, !h.isEmpty { s.headers = h }
                 return s
+            }
+            if let audioLang = TrackLanguagePolicy.normalizedCode(qItem.preferredAudioLanguage) {
+                p.preferredAudioLanguage = audioLang
+            }
+            if let subLang = TrackLanguagePolicy.normalizedCode(qItem.preferredSubtitleLanguage) {
+                p.preferredSubtitleLanguage = subLang
             }
             if idx == resume.startIndex {
                 p.startPositionMs = resume.startPositionMs
@@ -1737,11 +1759,10 @@ class WebSocketServer: ObservableObject {
         progressWebhook.finish(clear: true)
         currentSenderName = nil
         skipPreplayForCurrentRequest = true
-        if payloads.count > 1 {
-            _ = playlistStore?.setPlaylist(items: payloads, startIndex: targetIndex)
-        } else {
-            playlistStore?.clear()
-        }
+        // Load even a single bookmark into the queue, like a cast. The player only acts on
+        // Back, engine switches and phone commands for the queue's current item; with an
+        // empty queue those were silently ignored.
+        guard playlistStore?.setPlaylist(items: payloads, startIndex: targetIndex) == true else { return }
         if !item.isPrivate, let url = target.validURL {
             historyStore?.addToHistory(url: url, title: target.titleOrNil, headers: target.headersOrNil)
         }

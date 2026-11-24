@@ -1,7 +1,7 @@
 import 'history_store.dart';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'auto_launch.dart';
 import 'keyboard_shortcuts_sheet.dart';

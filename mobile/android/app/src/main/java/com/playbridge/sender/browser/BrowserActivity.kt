@@ -196,6 +196,9 @@ class BrowserActivity : ComponentActivity() {
         const val ACTION_OPEN_DOWNLOADS = "com.playbridge.sender.OPEN_DOWNLOADS"
         const val EXTRA_OPEN_DOWNLOAD_FILE = "open_download_file"
         const val EXTRA_MEDIA_TAB_ID = "media_notification_tab_id"
+
+        /** The browser the app is showing, so a second start can hand over to it. */
+        private var running: java.lang.ref.WeakReference<BrowserActivity>? = null
     }
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
@@ -378,6 +381,9 @@ class BrowserActivity : ComponentActivity() {
     private val tabManager: TabManager get() = Components.tabManager
     private val browserHostOwner = Any()
 
+    /** Set when this instance only answered a launcher tap while the app's task already existed. */
+    private var launchedOnTopOfRunningApp = false
+
     /**
      * A web URL captured from the launching/incoming Intent (a link tapped in another app),
      * awaiting consumption by the Compose tree once tabs are restored. Compose state so
@@ -389,6 +395,30 @@ class BrowserActivity : ComponentActivity() {
     /** A Watch Together invite link opened the app: show the party screen. */
     private val pendingWatchTogether = androidx.compose.runtime.mutableStateOf(false)
     private val pendingDownloadNotification = mutableStateOf<DownloadNotificationOpen?>(null)
+
+    /**
+     * The browser is `singleTop`, not `singleTask`: a `singleTask` start from the launcher clears
+     * the screens above the browser, which stopped a video playing in the player on top of it.
+     * Android now makes a second instance when the browser isn't on top. A plain launcher tap
+     * just finishes it, leaving the player showing, as YouTube does. Any other start (a link,
+     * a notification, a party invite) keeps what `singleTask` did: the player closes and the
+     * running browser gets the intent. Returns true when this instance is that second one.
+     */
+    private fun handOverToRunningBrowser(savedInstanceState: Bundle?): Boolean {
+        val existing = running?.get()
+        if (savedInstanceState != null || existing == null || existing === this || existing.isFinishing || existing.isDestroyed) {
+            return false
+        }
+        launchedOnTopOfRunningApp = true
+        val launcherTap = intent?.action == Intent.ACTION_MAIN &&
+            intent.hasCategory(Intent.CATEGORY_LAUNCHER) && intent.data == null
+        if (!launcherTap) {
+            com.playbridge.sender.player.PlayerActivity.finishCurrent()
+            existing.onNewIntent(intent)
+        }
+        finish()
+        return true
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -589,6 +619,8 @@ class BrowserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (handOverToRunningBrowser(savedInstanceState)) return
+        running = java.lang.ref.WeakReference(this)
 
 
 
@@ -812,6 +844,10 @@ class BrowserActivity : ComponentActivity() {
             val installedBridgedApps by bridgedAppStore.apps.collectAsStateWithLifecycle()
             var availableBridgedApp by remember { mutableStateOf<BridgedApp?>(null) }
             var activeBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
+            // The app tab that was just left for the Dashboard. Leaving clears
+            // activeBridgedAppTabId at once, but the Browser keeps drawing that tab while it
+            // fades out, so it must still look like the app (no browser bars) until then.
+            var leavingBridgedAppTabId by remember { mutableStateOf<String?>(null) }
             var previousBrowserTabId by rememberSaveable { mutableStateOf(lastBrowserTabId) }
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
@@ -916,8 +952,12 @@ class BrowserActivity : ComponentActivity() {
                     selectNormalBrowserTab()
                 }
             }
+            // Not tied to currentScreen: the Browser screen keeps drawing while it fades out to
+            // another screen, and a bridged app's bars must stay hidden for that fade too.
+            val drawnBridgedAppTabId = activeBridgedAppTabId
+                ?: leavingBridgedAppTabId.takeIf { currentScreen != Screen.Browser }
             val isBrowserChromeHidden = selectedTabId?.let(chromeHiddenTabIds::contains) == true ||
-                (currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId)
+                (drawnBridgedAppTabId != null && selectedTabId == drawnBridgedAppTabId)
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
 
             Log.d("PB_STARTUP", "Compose: recompose — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, sessionNull=${session == null}, tabsRestored=${tabsRestoredOrReady.value}, sessionsMapSize=${sessions.size}")
@@ -937,8 +977,11 @@ class BrowserActivity : ComponentActivity() {
             var currentUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "about:blank") }
             var isLoading by remember(selectedTabId) { mutableStateOf(false) }
             val currentOrigin = BridgedAppStore.originFor(currentUrl)
-            val isBridgedAppMode = currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId &&
+            // The selected tab is a bridged app, whichever screen is showing. Drawing inside the
+            // Browser screen uses this so a fading-out app keeps its look.
+            val isBridgedAppTab = drawnBridgedAppTabId != null && selectedTabId == drawnBridgedAppTabId &&
                 installedBridgedApps.any { it.tabId == selectedTabId && it.origin == currentOrigin }
+            val isBridgedAppMode = currentScreen == Screen.Browser && isBridgedAppTab
             // Also cover playback auto-switches that bypass onScreenChange. Retain both
             // values while Remote is visible, including across Activity recreation.
             LaunchedEffect(currentScreen, selectedTabId, isBridgedAppMode) {
@@ -2983,12 +3026,14 @@ class BrowserActivity : ComponentActivity() {
                             }
                             if (target == Screen.Dashboard && currentScreen == Screen.Browser &&
                                 selectedTabId != null && selectedTabId == activeBridgedAppTabId) {
+                                leavingBridgedAppTabId = selectedTabId
                                 activeBridgedAppTabId = null
                                 Components.activeBridgedAppTabId = null
                                 // AnimatedContent keeps the outgoing Browser visible briefly.
                                 // Leave its app tab selected until Browser is opened again so
                                 // the ordinary browser page cannot flash during this exit.
                             }
+                            if (target == Screen.Browser) leavingBridgedAppTabId = null
                             if (target == Screen.Browser && currentScreen != Screen.Browser &&
                                 store.state.selectedTabId in bridgedAppTabIds) {
                                 selectNormalBrowserTab()
@@ -3055,6 +3100,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                         },
                         isBridgedAppMode = isBridgedAppMode,
+                        isBridgedAppTab = isBridgedAppTab,
                         onAppSettings = { showAppSettings = true },
                         bridgedApps = installedBridgedApps,
                         onOpenBridgedApp = { app ->
@@ -3644,6 +3690,11 @@ class BrowserActivity : ComponentActivity() {
  }
 
     override fun onDestroy() {
+        if (launchedOnTopOfRunningApp) {
+            super.onDestroy()
+            return
+        }
+        if (running?.get() === this) running = null
         Components.extensionPrompts.detach(this)
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
         // Only tear sessions down when the Activity is actually finishing.

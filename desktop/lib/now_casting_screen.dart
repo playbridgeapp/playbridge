@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'shell/playback_bar.dart' show formatPlaybackClock;
 import 'tv_sender_controller.dart';

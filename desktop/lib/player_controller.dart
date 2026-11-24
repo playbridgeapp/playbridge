@@ -857,6 +857,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> _openCurrentItem({bool paused = false}) async {
+    _resetEarlyEndRecovery();
     _hasTerminalError = false;
     _terminalError = null;
     _stallTimer?.cancel();
@@ -1024,6 +1025,80 @@ class PlayerController extends ChangeNotifier {
     });
   }
 
+  // Early-end recovery: mpv reports end of file when a read fails or a server
+  // closes the connection early (often right after a seek). Reload at that
+  // position instead of ending, but never forever.
+  static const _earlyEndMarginMs = 15000;
+  static const _earlyEndMaxWithoutProgress = 2;
+  static const _earlyEndMaxPerItem = 6;
+  int _earlyEndReloadsWithoutProgress = 0;
+  int _earlyEndReloads = 0;
+  int _earlyEndLastPositionMs = -1;
+
+  void _resetEarlyEndRecovery() {
+    _earlyEndReloadsWithoutProgress = 0;
+    _earlyEndReloads = 0;
+    _earlyEndLastPositionMs = -1;
+  }
+
+  /// True when an end of file at [pos] is too far before the known length to
+  /// be the real end. Live streams and unknown lengths never count.
+  @visibleForTesting
+  static bool isEarlyEnd(
+          {required int pos, required int dur, required bool live}) =>
+      !live && dur > 0 && pos < dur - _earlyEndMarginMs && pos < dur * 0.98;
+
+  /// Handles an early end of file. Returns true when it took over (reload or
+  /// failure), false when the end should be treated normally.
+  bool _recoverEarlyEnd(int pos, int dur) {
+    if (currentMediaKind == MediaKind.image) return false;
+    if (!isEarlyEnd(pos: pos, dur: dur, live: isLive)) return false;
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) return false;
+    final item = _queue[_currentIndex];
+    if (pos > _earlyEndLastPositionMs + 5000) {
+      _earlyEndReloadsWithoutProgress = 0;
+    }
+    final category = _engine.failureCategory ?? 'no_error_reported';
+    if (_earlyEndReloadsWithoutProgress >= _earlyEndMaxWithoutProgress ||
+        _earlyEndReloads >= _earlyEndMaxPerItem) {
+      debugPrint('[player] stream ended early at ${pos}ms of ${dur}ms '
+          '($category); giving up after $_earlyEndReloads reloads');
+      unawaited(_handleTerminalError(PlaybackStallDetector.message));
+      return true;
+    }
+    _earlyEndReloadsWithoutProgress++;
+    _earlyEndReloads++;
+    _earlyEndLastPositionMs = pos;
+    debugPrint('[player] stream ended early at ${pos}ms of ${dur}ms '
+        '($category); reloading there ($_earlyEndReloads)');
+    final future = _reloadAt(item, pos);
+    earlyEndReloadFutureForTest = future;
+    unawaited(future);
+    return true;
+  }
+
+  @visibleForTesting
+  Future<void>? earlyEndReloadFutureForTest;
+
+  /// Reopens [item] at [positionMs], keeping speed, loop and the playback id.
+  Future<void> _reloadAt(QueueItem item, int positionMs) async {
+    try {
+      item.startPositionMs = positionMs;
+      _startStallMonitor();
+      await _engine.open(item);
+      if (_currentIndex < 0 ||
+          _currentIndex >= _queue.length ||
+          !identical(_queue[_currentIndex], item)) {
+        return;
+      }
+      await _engine.setPlaybackRate(_playbackRate);
+      await _applyItemSettings();
+      unawaited(_applyStartPosition());
+    } catch (e) {
+      await _handleTerminalError(e);
+    }
+  }
+
   void _onCompleted() {
     if (_looping && currentMediaKind != MediaKind.image) return;
     // media_kit can emit completed=true on demuxer EOF while still opening /
@@ -1038,6 +1113,7 @@ class PlayerController extends ChangeNotifier {
           '[player] ignoring early completed (pos=${pos}ms dur=${dur}ms) — still buffering?');
       return;
     }
+    if (_recoverEarlyEnd(pos, dur)) return;
     _playbackBoundary('ended', sessionEnded: !hasNext);
     if (inParty) {
       partyControls!.videoEnded();

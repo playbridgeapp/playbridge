@@ -41,6 +41,25 @@ struct AppleProxyUpstreamTests {
         callbacks.close(handle)
         precondition(read(handle).0 == -1)
 
+        // A body read with sizes that never line up with the received chunks arrives intact.
+        let (patternHandle, patternStatus, _) = open("/pattern")
+        precondition(patternHandle > 0 && patternStatus == 200)
+        var position = 0
+        var step = 0
+        let readSizes = [1, 7, 4093, 65536, 100003, 262147]
+        while true {
+            let (count, bytes) = read(patternHandle, count: readSizes[step % readSizes.count])
+            precondition(count >= 0)
+            if count == 0 { break }
+            for (offset, byte) in bytes.enumerated() {
+                precondition(byte == UInt8((position + offset) % 251), "byte \(position + offset) is wrong")
+            }
+            position += Int(count)
+            step += 1
+        }
+        precondition(position == 3 * 1024 * 1024 + 17, "pattern body length \(position)")
+        callbacks.close(patternHandle)
+
         let (rangeHandle, rangeStatus, rangeMetadata) = open("/range", headers: "{\"Range\":\"bytes=4-7\"}")
         let decoded = try JSONDecoder().decode([String: String].self, from: Data(rangeMetadata.utf8))
         precondition(rangeStatus == 206 && decoded["content-range"] == "bytes 4-7/10")

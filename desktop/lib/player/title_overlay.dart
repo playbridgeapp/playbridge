@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../player_controller.dart';
 import '../ui/pb_theme.dart';
@@ -13,6 +13,7 @@ class TitleOverlay extends StatelessWidget {
     required this.player,
     required this.visible,
     this.onBack,
+    this.trailing,
   });
 
   final PlayerController player;
@@ -20,6 +21,9 @@ class TitleOverlay extends StatelessWidget {
 
   /// Shows a back button ("Back to Home. Playback continues") when set.
   final VoidCallback? onBack;
+
+  /// Shown at the end of the title row, such as who controls the player.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -116,6 +120,10 @@ class TitleOverlay extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 16),
+                    trailing!,
+                  ],
                 ],
               ),
             ),

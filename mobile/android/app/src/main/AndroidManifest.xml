@@ -57,7 +57,7 @@
         <activity
             android:name=".browser.BrowserActivity"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.PlayBridge"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density"
             android:windowSoftInputMode="adjustResize">

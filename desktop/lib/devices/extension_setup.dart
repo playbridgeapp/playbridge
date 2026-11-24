@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../context_menu_installer.dart';
 import '../native_host_installer.dart';

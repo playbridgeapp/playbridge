@@ -47,6 +47,7 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Network/PlaybackProgressWebhook.swift" \
   "$source_root/Player/MPVHTTPHeaders.swift" \
   "$source_root/Player/MPVAudioPolicy.swift" \
+  "$source_root/Player/TrackLanguagePolicy.swift" \
   "$source_root/Player/ExternalSubtitleCatalog.swift" \
   "$source_root/Player/ExternalSubtitleDownload.swift" \
   "$source_root/Player/ExternalSubtitleCues.swift" \

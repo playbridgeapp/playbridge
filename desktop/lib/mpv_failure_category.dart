@@ -23,6 +23,15 @@ String? mpvFailureCategory(String prefix, String text) {
   return null;
 }
 
+/// FFmpeg HTTP reconnect options for `stream-lavf-o` and `demuxer-lavf-o`, matching the
+/// Android and Apple players. Reconnects on network errors and 429/5xx responses with backoff
+/// capped at 5 seconds. The bundled FFmpeg (Lavf 60) has no `reconnect_max_retries`; the delay
+/// cap still limits a disconnect to a few quick tries. `reconnect_streamed` is left out: with it
+/// FFmpeg treats the normal end of a response of unknown length (such as a gzip-compressed HLS
+/// playlist) as a dropped connection.
+const mpvLavfReconnectOptions = 'reconnect=1,reconnect_on_network_error=1,'
+    'reconnect_on_http_error="429,5xx",reconnect_delay_max=5';
+
 /// Retain only categories observed since the last healthy playback point.
 class MpvFailureLogState {
   String? code;
