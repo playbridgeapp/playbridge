@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **Cut streams in mpv**: When a server closes the connection early, mpv asks for the rest. If playback still stops moving, the player reloads at the last good position, at most twice without progress and six times per video, then shows "The video stopped loading" instead of freezing.
 - **Compressed HLS playlists in mpv**: Sites that serve gzip-compressed playlists play with video and a normal seek bar instead of audio only.
+- **Memory growth in long website casts**: Playing a long video from a website no longer makes the app use more and more memory until the system closes it after an hour or so.
 
 ## [0.16.0] — 2026-10-31 (build 11)
 

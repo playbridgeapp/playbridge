@@ -34,6 +34,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Compressed HLS playlists in mpv** play with video and a normal seek bar instead of audio only.
 - **Seeking with a desktop host** no longer freezes.
 - **Gesture seeks** no longer bring the controls up.
+- **Memory growth in long website casts**: Playing a long video from a website no longer makes the app use more and more memory until the system closes it after an hour or so.
 
 ### Security
 - **Favicons** load from the site itself instead of Google's favicon service.
