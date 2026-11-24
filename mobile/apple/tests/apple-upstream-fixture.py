@@ -79,6 +79,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert self.headers['User-Agent'] == 'AppleFixture'
             body = b'A' * (2 * 1024 * 1024)
             self.send_response(200)
+        elif self.path == '/pattern':
+            # Every byte depends on its position, so lost, repeated or reordered bytes show.
+            body = bytes(i % 251 for i in range(3 * 1024 * 1024 + 17))
+            self.send_response(200)
         elif self.path == '/range':
             assert self.headers['Range'] == 'bytes=4-7'
             body = b'4567'
