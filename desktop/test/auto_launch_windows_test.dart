@@ -67,9 +67,7 @@ void main() {
             ? ProcessResult(0, 0, exe, '')
             : ProcessResult(0, 5, '', 'Access is denied');
     final broken = AutoLaunch(
-        executablePath: exe,
-        registryRunner: failing,
-        useWindowsRegistry: true);
+        executablePath: exe, registryRunner: failing, useWindowsRegistry: true);
     expect(broken.enable(), throwsA(isA<ProcessException>()));
     expect(broken.disable(), throwsA(isA<ProcessException>()));
   });
