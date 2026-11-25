@@ -33,7 +33,7 @@ class NavSidebar extends StatelessWidget {
     return Container(
       width: PbMetrics.sidebarWidth,
       color: PbColors.sidebar,
-      padding: EdgeInsets.fromLTRB(12, Platform.isMacOS ? 20 : 0, 12, 16),
+      padding: EdgeInsets.fromLTRB(12, Platform.isWindows ? 0 : 20, 12, 16),
       child: FocusTraversalGroup(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

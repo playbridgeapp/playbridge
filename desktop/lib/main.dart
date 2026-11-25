@@ -127,11 +127,16 @@ Future<void> main(List<String> args) async {
   };
 
   windowManager.waitUntilReadyToShow(
-    const WindowOptions(titleBarStyle: TitleBarStyle.hidden),
+    WindowOptions(
+      titleBarStyle:
+          Platform.isWindows ? TitleBarStyle.hidden : TitleBarStyle.normal,
+    ),
     () async {
       await windowManager.setPreventClose(true);
-      await windowManager.show();
-      await windowManager.focus();
+      // The Windows runner keeps the window hidden until this callback ends.
+      // Other platforms show it natively, and focusing here would steal focus
+      // when launch-at-login starts the app.
+      if (Platform.isWindows) await windowManager.show();
     },
   );
 
@@ -1553,7 +1558,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                               color: PbColors.sidebar),
                                         ),
                                         Expanded(
-                                          child: Platform.isMacOS
+                                          child: !Platform.isWindows
                                               ? const SizedBox.expand()
                                               : const WindowCaption(
                                                   brightness: Brightness.dark,
