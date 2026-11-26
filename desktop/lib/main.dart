@@ -128,8 +128,9 @@ Future<void> main(List<String> args) async {
 
   windowManager.waitUntilReadyToShow(
     WindowOptions(
-      titleBarStyle:
-          Platform.isWindows ? TitleBarStyle.hidden : TitleBarStyle.normal,
+      // Left unset elsewhere: macOS styles its own transparent titlebar in
+      // MainFlutterWindow.swift and an explicit style would override it.
+      titleBarStyle: Platform.isWindows ? TitleBarStyle.hidden : null,
     ),
     () async {
       await windowManager.setPreventClose(true);
