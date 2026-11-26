@@ -33,7 +33,9 @@ struct SettingsView: View {
     @State private var confirmForgetAll = false
     @State private var restartedNotice = false
     @State private var connectPhoneFocusID = AppFocusID()
-    @State private var firstPairedPhoneFocusID = AppFocusID()
+    /// One focus target per list position, so focus can stay on the same row
+    /// slot after a phone above or at that slot is forgotten.
+    @State private var phoneForgetFocusIDs = (0..<32).map { _ in AppFocusID() }
     @State private var forgetAllFocusID = AppFocusID()
     @State private var clearHistoryFocusID = AppFocusID()
     @State private var openLicencesFocusID = AppFocusID()
@@ -143,10 +145,22 @@ struct SettingsView: View {
                 DispatchQueue.main.async { appRemoteDriver?.focus(connectPhoneFocusID) }
             }
         }
-        .onChange(of: server.pairedDevicesList.map(\.id)) { _, _ in
-            if selectedCategory == .phones && !confirmForgetAll {
-                DispatchQueue.main.async { appRemoteDriver?.focus(connectPhoneFocusID) }
+        .onChange(of: server.pairedDevicesList.map(\.id)) { oldIDs, newIDs in
+            guard selectedCategory == .phones && !confirmForgetAll else { return }
+            // After a Forget, stay on the Forget button now at that position
+            // (or the last one). Only fall back to "Connect another phone"
+            // when no phones remain or one was added.
+            var target = connectPhoneFocusID
+            if newIDs.count < oldIDs.count, !newIDs.isEmpty {
+                var removed = newIDs.count
+                for position in 0..<newIDs.count where oldIDs[position] != newIDs[position] {
+                    removed = position
+                    break
+                }
+                let index = min(removed, newIDs.count - 1)
+                if index < phoneForgetFocusIDs.count { target = phoneForgetFocusIDs[index] }
             }
+            DispatchQueue.main.async { appRemoteDriver?.focus(target) }
         }
     }
 
@@ -287,7 +301,7 @@ struct SettingsView: View {
         case .playback: return playbackFirstFocusID
         case .subtitles: return subtitlesFirstFocusID
         case .skip: return skipFirstFocusID
-        case .phones: return server.pairedDevicesList.isEmpty ? connectPhoneFocusID : firstPairedPhoneFocusID
+        case .phones: return server.pairedDevicesList.isEmpty ? connectPhoneFocusID : phoneForgetFocusIDs[0]
         case .appearance: return themeFocusIDs[.dark]
         case .about: return openLicencesFocusID
         case .advanced: return advancedFirstFocusID
@@ -679,7 +693,7 @@ struct SettingsView: View {
                 PhoneDeviceRow(
                     device: device,
                     isConnectedNow: server.connectedDeviceNames.contains(device.deviceName),
-                    forgetFocusID: index == 0 ? firstPairedPhoneFocusID : nil,
+                    forgetFocusID: index < phoneForgetFocusIDs.count ? phoneForgetFocusIDs[index] : nil,
                     onForget: { server.forgetDevice(device) }
                 )
             }
