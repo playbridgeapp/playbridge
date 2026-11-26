@@ -180,8 +180,10 @@ class TrayController with TrayListener {
     }
 
     try {
-      await trayManager.setIcon('assets/tray_icon.png', isTemplate: true);
-      debugPrint('[tray] icon set from assets/tray_icon.png');
+      final iconAsset =
+          Platform.isWindows ? 'assets/tray_icon.ico' : 'assets/tray_icon.png';
+      await trayManager.setIcon(iconAsset, isTemplate: !Platform.isWindows);
+      debugPrint('[tray] icon set from $iconAsset');
     } catch (e) {
       debugPrint(
           '[tray] setIcon(asset) failed: $e — will retry with title fallback');
