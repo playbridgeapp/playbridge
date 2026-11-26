@@ -1593,7 +1593,8 @@ struct DeviceConnectionSheet: View {
         guard showsFailure, !vm.isConnected else { return nil }
         switch vm.state {
         case .error(let message): return message
-        case .authFailed, .pinMismatch: return "This TV was reset or reinstalled. Pair it again to keep using it."
+        case .authFailed: return "This device no longer recognises this phone. Pair it again to keep using it."
+        case .pinMismatch: return "This TV was reset or reinstalled. Pair it again to keep using it."
         case .pairingDenied(let name): return "\(name) denied the pairing request."
         default: return nil
         }

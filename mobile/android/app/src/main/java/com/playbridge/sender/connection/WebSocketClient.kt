@@ -548,7 +548,7 @@ class WebSocketClient(
                         // Error. Reconnects happen on demand: the "ensure connected before
                         // sending" paths and the startup auto-connect cover recovery, without
                         // a background retry loop flapping the connection UI.
-                        updateConnectionState(ConnectionState.Error(t.message ?: "Unknown error"))
+                        updateConnectionState(webSocketStateAfterFailure(_connectionState.value, t.message))
                     } else {
                         Log.d(TAG, "Ignoring onFailure for stale socket")
                     }
@@ -977,6 +977,22 @@ class WebSocketClient(
         scope.cancel()
         client.dispatcher.executorService.shutdown()
     }
+}
+
+/**
+ * The state after the socket drops with an error. A receiver that rejects a token and then
+ * closes the connection abruptly (the desktop does) surfaces as a failure right after the
+ * rejection; the rejection must stay what the UI shows so the user is asked to pair again
+ * instead of seeing a generic error.
+ */
+internal fun webSocketStateAfterFailure(
+    current: WebSocketClient.ConnectionState,
+    message: String?,
+): WebSocketClient.ConnectionState = when (current) {
+    is WebSocketClient.ConnectionState.AuthFailed,
+    is WebSocketClient.ConnectionState.PairingDenied,
+    is WebSocketClient.ConnectionState.PinMismatch -> current
+    else -> WebSocketClient.ConnectionState.Error(message ?: "Unknown error")
 }
 
 internal class LinkLocalDns : Dns {
