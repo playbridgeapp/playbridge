@@ -866,6 +866,13 @@ where
             }
         }
     }
+    // Tell the peer why the stream ended. Without a close frame it sees an
+    // abrupt EOF, which senders report as a connection failure.
+    let _ = tokio::time::timeout(
+        Duration::from_secs(1),
+        SinkExt::<Message>::close(&mut socket),
+    )
+    .await;
     Ok(())
 }
 
@@ -1242,6 +1249,32 @@ mod tests {
             assert!(!matches!(closed, Ok(Some(_))));
             host.shutdown().await;
         }
+    }
+
+    #[tokio::test]
+    async fn rejected_token_gets_a_clean_websocket_close() {
+        let mut config = ReceiverConfig::new("Test".into(), "test-id".into(), identity());
+        config.preferred_port = 0;
+        let host = ReceiverHost::start(config).await.unwrap();
+        let endpoint = format!("wss://127.0.0.1:{}/", host.port());
+        let mut socket = SecureWebSocket::connect_pinned(&endpoint, host.fingerprint())
+            .await
+            .unwrap();
+        socket
+            .send(&SenderFrame::Auth {
+                token: "TEST_ONLY_NOT_A_CREDENTIAL".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            socket.receive().await.unwrap(),
+            Some(ReceiverFrame::AuthResponse { success: false, .. })
+        ));
+        let closed = tokio::time::timeout(Duration::from_secs(2), socket.receive())
+            .await
+            .unwrap();
+        assert!(matches!(closed, Ok(None)), "expected a clean close");
+        host.shutdown().await;
     }
 
     #[test]
