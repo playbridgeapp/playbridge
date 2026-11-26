@@ -45,6 +45,7 @@ void main() {
     expect(image.videoRenderer, isFalse);
     expect(image.proxyToggle, isFalse);
     expect(image.speedMenu, isFalse);
+    expect(image.loopToggle, isFalse);
     expect(image.playbackSettings, isFalse);
     expect(image.externalPlayer, isFalse);
     expect(image.queueControls, isTrue);
@@ -61,6 +62,7 @@ void main() {
       isImage: false,
     );
     expect(audio.speedMenu, isTrue);
+    expect(audio.loopToggle, isTrue);
     expect(audio.proxyToggle, isTrue);
     expect(audio.externalPlayer, isTrue);
     expect(audio.playbackSettings, isFalse);

@@ -210,6 +210,10 @@ class BookmarkIntent extends Intent {
   const BookmarkIntent();
 }
 
+class LoopToggleIntent extends Intent {
+  const LoopToggleIntent();
+}
+
 class StatsToggleIntent extends Intent {
   const StatsToggleIntent();
 }
@@ -1063,6 +1067,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd('Volume ${(next * 100).round()}%');
   }
 
+  void _toggleLoop() {
+    final kind = _player.currentMediaKind;
+    if (_player.queue.isEmpty ||
+        kind == null ||
+        kind == MediaKind.image ||
+        _player.engineType != EngineType.mpvInternal) {
+      return;
+    }
+    final next = !_player.looping;
+    unawaited(_player.setLooping(next));
+    _showOsd(next ? 'Repeat on' : 'Repeat off');
+  }
+
   void _cycleVideoScaling() {
     if (_player.currentMediaKind != MediaKind.video) return;
     final next = nextVideoScalingMode(_player.videoScaling);
@@ -1362,6 +1379,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const NextChapterIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyL):
+                const LoopToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyB):
                 const BookmarkIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -1450,6 +1469,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               BookmarkIntent: CallbackAction<BookmarkIntent>(
                 onInvoke: (_) {
                   unawaited(_toggleCurrentBookmark());
+                  return null;
+                },
+              ),
+              LoopToggleIntent: CallbackAction<LoopToggleIntent>(
+                onInvoke: (_) {
+                  _toggleLoop();
                   return null;
                 },
               ),
