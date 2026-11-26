@@ -523,6 +523,7 @@ class MorePanel extends StatelessWidget {
           );
           final mpv = p.engineType == EngineType.mpvInternal;
           final showSpeed = mpv && vis.speedMenu;
+          final showLoop = mpv && vis.loopToggle;
           final showPicture = mpv && vis.playbackSettings;
           final statsAvailable = showStats != null &&
               kind == MediaKind.video &&
@@ -549,6 +550,14 @@ class MorePanel extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
               ],
+              if (showLoop)
+                PlayerOptionRow(
+                  tall: true,
+                  label: 'Repeat this video',
+                  value: p.looping ? 'On' : 'Off',
+                  onTap: () => unawaited(p.setLooping(!p.looping)),
+                ),
+              if (showLoop) const SizedBox(height: 16),
               if (showPicture) ...[
                 const PlayerPanelHeading('Picture'),
                 PlayerChoiceGrid(

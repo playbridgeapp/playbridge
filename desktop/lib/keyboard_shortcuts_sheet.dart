@@ -12,7 +12,7 @@ Future<void> showKeyboardShortcutsSheet(BuildContext context) {
   );
 }
 
-/// Every keyboard shortcut registered in `main.dart` (Space, F, I, Z, G, H,
+/// Every keyboard shortcut registered in `main.dart` (Space, F, I, L, Z, G, H,
 /// [, ], arrows, PgUp, PgDn, ?), plus the mouse and drag-and-drop gestures.
 /// Keep in sync with the `Shortcuts` map there; do not list unregistered keys.
 const List<(String, String)> kKeyboardShortcuts = [
@@ -25,6 +25,7 @@ const List<(String, String)> kKeyboardShortcuts = [
   ('Slower or faster', '[ ]'),
   ('Fit, zoom or fill the picture', 'Z'),
   ('Subtitles earlier or later', 'G H'),
+  ('Repeat this video', 'L'),
   ('Bookmark this video', 'B'),
   ('Playback stats', 'I'),
   ('This list', '?'),
