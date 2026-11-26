@@ -25,14 +25,12 @@ struct SettingsView: View {
     @AppStorage("bookmark_thumbnails_enabled") var bookmarkThumbnailsEnabled: Bool = true
 
     @State private var showLicences = false
-    @State private var showConnectPhone = false
     @State private var activeSubtitlePicker: SubtitlePickerKind?
     @State private var lastSubtitlePicker: SubtitlePickerKind?
     @State private var confirmClearHistory = false
     @State private var historyClearedNotice = false
     @State private var confirmForgetAll = false
     @State private var restartedNotice = false
-    @State private var connectPhoneFocusID = AppFocusID()
     /// One focus target per list position, so focus can stay on the same row
     /// slot after a phone above or at that slot is forgotten.
     @State private var phoneForgetFocusIDs = (0..<32).map { _ in AppFocusID() }
@@ -65,14 +63,7 @@ struct SettingsView: View {
             .padding(.horizontal, TvSpacing.screenGutter)
             .padding(.top, TvSpacing.screenTop)
             .padding(.bottom, TvScale.pt(24))
-            .disabled(showLicences || showConnectPhone || activeSubtitlePicker != nil)
-
-            if showConnectPhone {
-                ConnectAnotherPhoneModal {
-                    showConnectPhone = false
-                }
-                .zIndex(20)
-            }
+            .disabled(showLicences || activeSubtitlePicker != nil)
 
             if let kind = activeSubtitlePicker {
                 subtitlePickerSheet(for: kind)
@@ -104,7 +95,6 @@ struct SettingsView: View {
         .appRemoteScope(
             back: handleBack,
             home: {
-                showConnectPhone = false
                 onBack()
             },
             initialFocus: categoryFocusIDs[selectedCategory],
@@ -125,11 +115,6 @@ struct SettingsView: View {
                 }
             }
         }
-        .onChange(of: showConnectPhone) { _, isShown in
-            if !isShown {
-                DispatchQueue.main.async { appRemoteDriver?.focus(connectPhoneFocusID) }
-            }
-        }
         .onChange(of: showLicences) { _, isShown in
             if !isShown {
                 DispatchQueue.main.async { appRemoteDriver?.focus(openLicencesFocusID) }
@@ -142,16 +127,19 @@ struct SettingsView: View {
         }
         .onChange(of: confirmForgetAll) { _, isShown in
             if !isShown && selectedCategory == .phones {
-                DispatchQueue.main.async { appRemoteDriver?.focus(connectPhoneFocusID) }
+                let target = server.pairedDevicesList.isEmpty
+                    ? categoryFocusIDs[.phones]
+                    : forgetAllFocusID
+                DispatchQueue.main.async { target.map { appRemoteDriver?.focus($0) } }
             }
         }
         .onChange(of: server.pairedDevicesList.map(\.id)) { oldIDs, newIDs in
             guard selectedCategory == .phones && !confirmForgetAll else { return }
             // After a Forget, stay on the Forget button now at that position
-            // (or the last one). Only fall back to "Connect another phone"
-            // when no phones remain or one was added.
-            var target = connectPhoneFocusID
-            if newIDs.count < oldIDs.count, !newIDs.isEmpty {
+            // (or the last one). With no phones left, return to the sidebar.
+            guard newIDs.count < oldIDs.count else { return }
+            var target = categoryFocusIDs[.phones]
+            if !newIDs.isEmpty {
                 var removed = newIDs.count
                 for position in 0..<newIDs.count where oldIDs[position] != newIDs[position] {
                     removed = position
@@ -160,7 +148,7 @@ struct SettingsView: View {
                 let index = min(removed, newIDs.count - 1)
                 if index < phoneForgetFocusIDs.count { target = phoneForgetFocusIDs[index] }
             }
-            DispatchQueue.main.async { appRemoteDriver?.focus(target) }
+            DispatchQueue.main.async { target.map { appRemoteDriver?.focus($0) } }
         }
     }
 
@@ -237,7 +225,7 @@ struct SettingsView: View {
     }
 
     private func handleFocusChange(_ newID: AppFocusID?) {
-        if newID == nil, activeSubtitlePicker != nil || showConnectPhone || showLicences {
+        if newID == nil, activeSubtitlePicker != nil || showLicences {
             return
         }
         let previousZone = currentFocusZone
@@ -280,13 +268,12 @@ struct SettingsView: View {
 
     private func handleBack() {
         switch SettingsFocusNavigation.backOutcome(
-            showingConnectPhone: showConnectPhone || activeSubtitlePicker != nil,
+            showingConnectPhone: activeSubtitlePicker != nil,
             zone: currentFocusZone,
             selectedCategory: selectedCategory
         ) {
         case .closeOverlay:
             activeSubtitlePicker = nil
-            showConnectPhone = false
         case .returnToSidebar(let category):
             if let id = categoryFocusIDs[category] {
                 appRemoteDriver?.focus(id)
@@ -301,7 +288,7 @@ struct SettingsView: View {
         case .playback: return playbackFirstFocusID
         case .subtitles: return subtitlesFirstFocusID
         case .skip: return skipFirstFocusID
-        case .phones: return server.pairedDevicesList.isEmpty ? connectPhoneFocusID : phoneForgetFocusIDs[0]
+        case .phones: return server.pairedDevicesList.isEmpty ? nil : phoneForgetFocusIDs[0]
         case .appearance: return themeFocusIDs[.dark]
         case .about: return openLicencesFocusID
         case .advanced: return advancedFirstFocusID
@@ -323,10 +310,6 @@ struct SettingsView: View {
         }
         if currentFocusID == themeFocusIDs[.amoled], let dark = themeFocusIDs[.dark] {
             appRemoteDriver?.focus(dark)
-            return true
-        }
-        if currentFocusID == forgetAllFocusID {
-            appRemoteDriver?.focus(connectPhoneFocusID)
             return true
         }
         if let sidebarID = categoryFocusIDs[selectedCategory] {
@@ -700,14 +683,6 @@ struct SettingsView: View {
         }
 
         HStack(spacing: TvScale.pt(12)) {
-            TvPillButton(
-                title: "Connect another phone",
-                icon: "plus",
-                tone: .app,
-                focusID: connectPhoneFocusID,
-                action: { showConnectPhone = true }
-            )
-
             if !server.pairedDevicesList.isEmpty {
                 TvPillButton(
                     title: "Forget all",
@@ -727,7 +702,7 @@ struct SettingsView: View {
         }
         .padding(.top, TvScale.pt(14))
 
-        Text("Forgetting a phone disconnects it from this TV. Bookmarks stay.")
+        Text("Forgetting a phone disconnects it from this TV. Bookmarks stay. To add a phone, open PlayBridge on it and choose this TV.")
             .font(TvText.caption)
             .foregroundColor(colors.onSurfaceMuted)
             .padding(.top, TvScale.pt(6))
