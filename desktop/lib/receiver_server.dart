@@ -230,7 +230,12 @@ class ReceiverServer extends ChangeNotifier {
       player.queueChanges.addListener(_broadcastPlaylistStatus);
       _statusTimer = Timer.periodic(
         const Duration(milliseconds: 500),
-        (_) => _broadcastStatus(),
+        (_) {
+          // Position ticks only matter to a paired phone while something is
+          // loaded; the player listener already reports every state change.
+          if (_authedClientCount == 0 || player.state == 'idle') return;
+          _broadcastStatus();
+        },
       );
       notifyListeners();
       return boundPort;
@@ -239,6 +244,31 @@ class ReceiverServer extends ChangeNotifier {
       await stop();
       rethrow;
     }
+  }
+
+  DateTime? _lastHandshakeLog;
+  int _suppressedHandshakeLogs = 0;
+
+  /// Phones that probe the port or drop mid-handshake are routine, so those
+  /// errors are logged at most once a minute with a count of the rest.
+  void _logReceiverError(String message) {
+    if (!message.endsWith('handshake failed') &&
+        !message.endsWith('handshake timed out')) {
+      debugPrint('[server] Rust receiver: $message');
+      return;
+    }
+    final now = DateTime.now();
+    final last = _lastHandshakeLog;
+    if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+      _suppressedHandshakeLogs++;
+      return;
+    }
+    final more = _suppressedHandshakeLogs == 0
+        ? ''
+        : ' (+$_suppressedHandshakeLogs more in the last minute)';
+    _suppressedHandshakeLogs = 0;
+    _lastHandshakeLog = now;
+    debugPrint('[server] Rust receiver: $message$more');
   }
 
   void _handleRuntimeEvent(Map<String, Object?> event) {
@@ -334,7 +364,7 @@ class ReceiverServer extends ChangeNotifier {
           });
         }
       case 'error':
-        debugPrint('[server] Rust receiver: ${event['message']}');
+        _logReceiverError('${event['message']}');
       case 'finished':
         _volumeTimer?.cancel();
         _volumeTimer = null;
