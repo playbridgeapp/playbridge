@@ -20,7 +20,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Subtitle style and fonts**: Size, background, edge, font and restyling of ASS subtitles, with a preview, for the phone player and the TV. Add up to five custom fonts.
 - **Cast history redesign**: Preview pictures, where you stopped, Resume on TVs, Google Cast, DLNA, TV browser and AirPlay, filters, search, link expiry and a 25–500 cast limit. Bridged-app casts are left out by default.
 - **TV refusals**: An alert says why the TV refused a cast.
-- **Pair again** for a saved TV that was reset or reinstalled.
+- **Pair again** for a saved TV that was reset or reinstalled, or that forgot this phone: it says it no longer recognises the phone instead of "Couldn't connect".
 - **Camera uploads**: Websites can ask for a photo or video to upload.
 
 ### Changed

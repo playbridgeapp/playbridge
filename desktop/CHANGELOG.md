@@ -9,7 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Redesigned app**: Home, Bookmarks, Devices, Watch Together and Settings replace the Receive/Send sidebar. Home plays files or links on this computer or the chosen TV through one "Plays on" picker; one playback bar covers local and TV playback; Devices groups TVs as Saved, Nearby and "Not available now" next to paired phones, the browser receiver and extension setup; Settings has General, Playback, Advanced and About tabs.
 - **Bookmarks**: Replace Favorites. Bookmark any cast, including local files and private casts (B key). Cards show the cast's artwork or a frame from the video.
-- **Player**: One control row with Stop and Bookmark, side panels for subtitles and audio, queue and more, and Resume or Start over when there's a saved place.
+- **Player**: One control row with Stop and Bookmark, side panels for subtitles and audio, queue and more, and Resume or Start over when there's a saved place. **Repeat this video** in the More panel (or the L key) loops the current video.
 - **Watch Together**: Start a party (on the shared relay or your own), join with a link, or show a code and QR code so a phone can add this computer. "Watch on this computer" plays along; play, pause, seek and stop from the keyboard, media keys, the extension or a phone go to the party. As host, add your connected TV or another TV by code, lock the party, choose who can change the video and answer requests.
 - **Recent parties**: Every party you start or join is kept in the system's secret store (Keychain, DPAPI or Secret Service) until it ends, at most 20. The history icon in Watch Together lists them with **Rejoin as host** or **Rejoin**, and **Remove**.
 - **Failed cast notifications**: When a cast fails while the window is hidden or not focused, a system notification says why. When a TV refuses a cast, the desktop shows the reason.
@@ -24,6 +24,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - **Long links in mpv**: Very long signed links (such as DASH from YouTube-style front ends) play through the proxy instead of failing with 403.
+- **Windows window and startup**: The title bar matches the app with working minimise, maximise and close, the PlayBridge icon shows in the window and tray, and launch at login works.
+- **Forgotten phones**: When the desktop forgets a phone, that phone now asks to pair again instead of saying "Couldn't connect".
 - **Unanswered playlists**: The desktop receiver answers every playlist with a request id, so phones learn when it can't start one.
 - **Seeking in a party**: Browser-only headers such as `Range` are no longer shared or passed to the player, so other devices don't restart from the beginning on every seek.
 - **Seeking ended the video**: Seeking far ahead in a website video could close the player. The player now reconnects when a server drops the connection, and if a video still ends well before its length, it reloads at that point (a few times at most, then it says "The video stopped loading").

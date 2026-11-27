@@ -22,7 +22,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Custom subtitle fonts**: Add up to five .ttf, .otf or .ttc fonts (30 MB in all) for the phone player, or send them to the TV with progress.
 - **Cast history redesign**: Each cast keeps its title, site, device, where it stopped, length and preview picture. Positions are saved while connected, and Resume continues from there on PlayBridge TVs, Google Cast, DLNA and the watch party. Filters (All, Unfinished, Failed, Expired), search, link expiry ("Link expires in 2 h"), an optional link check, and Settings → Cast history with a limit of 25 to 500 casts (50 by default). Casts from bridged apps are left out by default.
 - **TV refusals**: When the TV refuses a cast, a popup says why ("The TV is busy. Try again in a moment."). TV playback failures also show as a popup instead of a banner.
-- **Pair again**: A saved TV that was reset or reinstalled shows "Reset or reinstalled · Pair again" instead of "Couldn't connect". Pair again replaces only that TV's pairing with a new code-verified one.
+- **Pair again**: A saved TV that was reset or reinstalled shows "Reset or reinstalled · Pair again" instead of "Couldn't connect". Pair again replaces only that TV's pairing with a new code-verified one. A TV or computer that forgot this phone says it no longer recognises it and offers Pair again, instead of "Couldn't connect".
 - **File uploads**: `<input type="file">` on web pages opens the system file picker.
 
 ### Changed
