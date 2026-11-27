@@ -35,6 +35,9 @@ struct SettingsView: View {
     /// slot after a phone above or at that slot is forgotten.
     @State private var phoneForgetFocusIDs = (0..<32).map { _ in AppFocusID() }
     @State private var forgetAllFocusID = AppFocusID()
+    /// Last control focused in the selected pane, so coming back from the sidebar
+    /// resumes there. Cleared when another pane is selected.
+    @State private var lastDetailFocusID: AppFocusID?
     @State private var clearHistoryFocusID = AppFocusID()
     @State private var openLicencesFocusID = AppFocusID()
     @State private var playbackFirstFocusID = AppFocusID()
@@ -125,6 +128,7 @@ struct SettingsView: View {
                 DispatchQueue.main.async { appRemoteDriver?.focus(clearHistoryFocusID) }
             }
         }
+        .onChange(of: selectedCategory) { _, _ in lastDetailFocusID = nil }
         .onChange(of: confirmForgetAll) { _, isShown in
             if !isShown && selectedCategory == .phones {
                 let target = server.pairedDevicesList.isEmpty
@@ -134,6 +138,7 @@ struct SettingsView: View {
             }
         }
         .onChange(of: server.pairedDevicesList.map(\.id)) { oldIDs, newIDs in
+            lastDetailFocusID = nil
             guard selectedCategory == .phones && !confirmForgetAll else { return }
             // After a Forget, stay on the Forget button now at that position
             // (or the last one). With no phones left, return to the sidebar.
@@ -196,6 +201,9 @@ struct SettingsView: View {
                 focusDetailPane(for: category)
             }
         )
+        // From the detail pane Left returns to the selected category; the other
+        // rows are skipped so focus does not flash on them first.
+        .disabled(currentFocusZone == .detail && selectedCategory != category)
     }
 
     // MARK: - Detail Pane
@@ -222,6 +230,12 @@ struct SettingsView: View {
         .focusSection()
         .appRemoteScroll()
         .appRemoteDirection(handleDetailDirection)
+        // From the sidebar only the pane's first control can take focus, so the
+        // engine lands there directly instead of flashing on a middle control
+        // and then being redirected.
+        .appFocusGate { id in
+            currentFocusZone == .detail || id == entryFocusID(for: selectedCategory)
+        }
     }
 
     private func handleFocusChange(_ newID: AppFocusID?) {
@@ -243,7 +257,7 @@ struct SettingsView: View {
             return
         }
         if wasSidebarButton, newCategory == nil, let newID,
-           let firstID = firstDetailFocusID(for: selectedCategory), newID != firstID {
+           let firstID = entryFocusID(for: selectedCategory), newID != firstID {
             currentFocusID = firstID
             DispatchQueue.main.async {
                 appRemoteDriver?.focus(firstID)
@@ -251,6 +265,7 @@ struct SettingsView: View {
             return
         }
         currentFocusID = newID
+        if let newID, newCategory == nil { lastDetailFocusID = newID }
         if let newCategory {
             selectedCategory = SettingsFocusNavigation.categorySelectionOnSidebarFocus(
                 focusedCategory: newCategory
@@ -283,6 +298,12 @@ struct SettingsView: View {
         }
     }
 
+    /// Where focus lands when entering a pane: the control last used in it, else its first.
+    private func entryFocusID(for category: SettingsCategory) -> AppFocusID? {
+        if category == selectedCategory, let lastDetailFocusID { return lastDetailFocusID }
+        return firstDetailFocusID(for: category)
+    }
+
     private func firstDetailFocusID(for category: SettingsCategory) -> AppFocusID? {
         switch category {
         case .playback: return playbackFirstFocusID
@@ -296,7 +317,7 @@ struct SettingsView: View {
     }
 
     private func focusDetailPane(for category: SettingsCategory) {
-        guard let targetID = firstDetailFocusID(for: category) else { return }
+        guard let targetID = entryFocusID(for: category) else { return }
         DispatchQueue.main.async {
             appRemoteDriver?.focus(targetID)
         }
@@ -683,6 +704,7 @@ struct SettingsView: View {
         }
 
         HStack(spacing: TvScale.pt(12)) {
+            Spacer(minLength: 0)
             if !server.pairedDevicesList.isEmpty {
                 TvPillButton(
                     title: "Forget all",
@@ -698,6 +720,8 @@ struct SettingsView: View {
                 ) {
                     server.forgetAllDevices()
                 }
+                // Right-aligned under the Forget buttons so Down reaches it.
+                .padding(.trailing, TvScale.pt(26))
             }
         }
         .padding(.top, TvScale.pt(14))
