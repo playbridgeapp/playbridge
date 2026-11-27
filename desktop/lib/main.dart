@@ -126,9 +126,20 @@ Future<void> main(List<String> args) async {
     return false; // not handled — preserve default reporting
   };
 
-  windowManager.waitUntilReadyToShow(const WindowOptions(), () async {
-    await windowManager.setPreventClose(true);
-  });
+  windowManager.waitUntilReadyToShow(
+    WindowOptions(
+      // Left unset elsewhere: macOS styles its own transparent titlebar in
+      // MainFlutterWindow.swift and an explicit style would override it.
+      titleBarStyle: Platform.isWindows ? TitleBarStyle.hidden : null,
+    ),
+    () async {
+      await windowManager.setPreventClose(true);
+      // The Windows runner keeps the window hidden until this callback ends.
+      // Other platforms show it natively, and focusing here would steal focus
+      // when launch-at-login starts the app.
+      if (Platform.isWindows) await windowManager.show();
+    },
+  );
 
   final results = await Future.wait([
     PairingStore.load(),
@@ -198,6 +209,10 @@ class NextChapterIntent extends Intent {
 
 class BookmarkIntent extends Intent {
   const BookmarkIntent();
+}
+
+class LoopToggleIntent extends Intent {
+  const LoopToggleIntent();
 }
 
 class StatsToggleIntent extends Intent {
@@ -1053,6 +1068,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd('Volume ${(next * 100).round()}%');
   }
 
+  void _toggleLoop() {
+    final kind = _player.currentMediaKind;
+    if (_player.queue.isEmpty ||
+        kind == null ||
+        kind == MediaKind.image ||
+        _player.engineType != EngineType.mpvInternal) {
+      return;
+    }
+    final next = !_player.looping;
+    unawaited(_player.setLooping(next));
+    _showOsd(next ? 'Repeat on' : 'Repeat off');
+  }
+
   void _cycleVideoScaling() {
     if (_player.currentMediaKind != MediaKind.video) return;
     final next = nextVideoScalingMode(_player.videoScaling);
@@ -1352,6 +1380,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const NextChapterIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyL):
+                const LoopToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyB):
                 const BookmarkIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -1440,6 +1470,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               BookmarkIntent: CallbackAction<BookmarkIntent>(
                 onInvoke: (_) {
                   unawaited(_toggleCurrentBookmark());
+                  return null;
+                },
+              ),
+              LoopToggleIntent: CallbackAction<LoopToggleIntent>(
+                onInvoke: (_) {
+                  _toggleLoop();
                   return null;
                 },
               ),
@@ -1535,17 +1571,27 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               if (!hideChrome)
-                                const SizedBox(
+                                SizedBox(
                                   height: titleBarHeight,
                                   child: DragToMoveArea(
                                     child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
                                       children: [
-                                        SizedBox(
+                                        const SizedBox(
                                           width: PbMetrics.sidebarWidth,
                                           child: ColoredBox(
                                               color: PbColors.sidebar),
                                         ),
-                                        Expanded(child: SizedBox.expand()),
+                                        Expanded(
+                                          child: !Platform.isWindows
+                                              ? const SizedBox.expand()
+                                              : const WindowCaption(
+                                                  brightness: Brightness.dark,
+                                                  backgroundColor:
+                                                      Colors.transparent,
+                                                ),
+                                        ),
                                       ],
                                     ),
                                   ),

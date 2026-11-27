@@ -5,16 +5,24 @@ import 'package:path_provider/path_provider.dart';
 
 /// "Launch at login" that doesn't depend on any third-party plugin.
 ///
-/// macOS  — writes a LaunchAgent plist into `~/Library/LaunchAgents/`
-/// Linux  — writes an XDG autostart `.desktop` file into `~/.config/autostart/`
-/// Windows — TODO (would need win32_registry to write HKCU\…\Run)
+/// macOS   — writes a LaunchAgent plist into `~/Library/LaunchAgents/`
+/// Linux   — writes an XDG autostart `.desktop` file into `~/.config/autostart/`
+/// Windows — writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via `reg.exe`
+typedef RegistryRunner = Future<ProcessResult> Function(
+    String executable, List<String> arguments);
+
 class AutoLaunch {
   AutoLaunch({
     required this.executablePath,
     this.bundleId = appId,
     this.legacyIds = legacyAppIds,
     String? home,
-  }) : _home = home;
+    @visibleForTesting RegistryRunner? registryRunner,
+    @visibleForTesting bool? useWindowsRegistry,
+  })  : _home = home,
+        _runReg = registryRunner ?? Process.run,
+        _useWindowsRegistry =
+            useWindowsRegistry ?? (Platform.isWindows && home == null);
 
   /// The macOS bundle id, also the LaunchAgent label / autostart file name.
   static const appId = 'app.playbridge.desktop';
@@ -30,8 +38,24 @@ class AutoLaunch {
   final List<String> legacyIds;
   final String executablePath;
   final String? _home;
+  final RegistryRunner _runReg;
+  final bool _useWindowsRegistry;
+
+  static const _windowsRunKey =
+      r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
+  static const _windowsValueName = 'PlayBridge';
 
   Future<bool> isEnabled() async {
+    if (_useWindowsRegistry) {
+      final res = await _runReg(
+        'reg',
+        ['query', _windowsRunKey, '/v', _windowsValueName],
+      );
+      // A value left behind by a moved or reinstalled app points at a path that
+      // no longer starts PlayBridge: only this executable counts as enabled.
+      return res.exitCode == 0 &&
+          '${res.stdout}'.toLowerCase().contains(executablePath.toLowerCase());
+    }
     for (final f in _entryFiles([bundleId, ...legacyIds])) {
       if (await f.exists()) return true;
     }
@@ -39,6 +63,31 @@ class AutoLaunch {
   }
 
   Future<void> enable() async {
+    if (_useWindowsRegistry) {
+      final res = await _runReg(
+        'reg',
+        [
+          'add',
+          _windowsRunKey,
+          '/v',
+          _windowsValueName,
+          '/t',
+          'REG_SZ',
+          '/d',
+          '"$executablePath"',
+          '/f',
+        ],
+      );
+      if (res.exitCode != 0) {
+        throw ProcessException(
+          'reg',
+          ['add', _windowsRunKey],
+          '${res.stderr}'.trim(),
+          res.exitCode,
+        );
+      }
+      return;
+    }
     final f = _entryFile(bundleId);
     if (f == null) return;
     await f.parent.create(recursive: true);
@@ -46,11 +95,34 @@ class AutoLaunch {
     await _deleteAll(legacyIds);
   }
 
-  Future<void> disable() => _deleteAll([bundleId, ...legacyIds]);
+  Future<void> disable() async {
+    if (_useWindowsRegistry) {
+      final query = await _runReg(
+        'reg',
+        ['query', _windowsRunKey, '/v', _windowsValueName],
+      );
+      if (query.exitCode != 0) return; // nothing to remove
+      final res = await _runReg(
+        'reg',
+        ['delete', _windowsRunKey, '/v', _windowsValueName, '/f'],
+      );
+      if (res.exitCode != 0) {
+        throw ProcessException(
+          'reg',
+          ['delete', _windowsRunKey],
+          '${res.stderr}'.trim(),
+          res.exitCode,
+        );
+      }
+      return;
+    }
+    await _deleteAll([bundleId, ...legacyIds]);
+  }
 
   /// Rewrites a legacy entry under [bundleId] (pointing at this executable), so
   /// launch-at-login survives the bundle id change without starting twice.
   Future<void> migrateLegacy() async {
+    if (_useWindowsRegistry) return;
     var legacy = false;
     for (final f in _entryFiles(legacyIds)) {
       if (await f.exists()) legacy = true;
@@ -76,9 +148,6 @@ class AutoLaunch {
     if (Platform.isLinux) {
       // XDG autostart spec: any .desktop file dropped here runs at login.
       return File('$home/.config/autostart/$id.desktop');
-    }
-    if (Platform.isWindows) {
-      debugPrint('[auto_launch] Windows is not implemented yet');
     }
     return null;
   }

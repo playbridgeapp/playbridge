@@ -793,7 +793,12 @@ private fun PlayOnPairing(
             }
             is WebSocketClient.ConnectionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
             is WebSocketClient.ConnectionState.PinMismatch, WebSocketClient.ConnectionState.AuthFailed -> {
-                Text("$name was reset or reinstalled. Pair it again to keep using it.",
+                Text(
+                    if (state is WebSocketClient.ConnectionState.AuthFailed) {
+                        "$name no longer recognises this phone. Pair it again to keep using it."
+                    } else {
+                        "$name was reset or reinstalled. Pair it again to keep using it."
+                    },
                     color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
                 Button(onClick = repair) { Text("Pair again") }
             }

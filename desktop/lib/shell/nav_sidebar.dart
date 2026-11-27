@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:material_ui/material_ui.dart';
 
 import '../ui/pb_theme.dart';
@@ -30,7 +33,7 @@ class NavSidebar extends StatelessWidget {
     return Container(
       width: PbMetrics.sidebarWidth,
       color: PbColors.sidebar,
-      padding: const EdgeInsets.fromLTRB(12, 20, 12, 16),
+      padding: EdgeInsets.fromLTRB(12, Platform.isWindows ? 0 : 20, 12, 16),
       child: FocusTraversalGroup(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -147,7 +150,7 @@ class NavItem extends StatelessWidget {
   }
 }
 
-/// Rounded accent square with a play triangle, the PlayBridge mark.
+/// Rounded PlayBridge icon mark matching the app icon.
 class _BrandMark extends StatelessWidget {
   const _BrandMark();
 
@@ -162,20 +165,42 @@ class _BrandMark extends StatelessWidget {
 class _BrandPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final s = size.width / 32;
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(0, 0, size.width, size.height),
-        Radius.circular(9 * s),
+        Radius.circular(size.width * 0.22),
       ),
-      Paint()..color = PbColors.accent,
+      Paint()..color = const Color(0xFFE6F0FF),
     );
-    final path = Path()
-      ..moveTo(12 * s, 9.5 * s)
-      ..lineTo(12 * s, 22.5 * s)
-      ..lineTo(23 * s, 16 * s)
-      ..close();
-    canvas.drawPath(path, Paint()..color = PbColors.background);
+
+    final s = size.width / 1024;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(-13 * math.pi / 180);
+    canvas.translate(-cx, -cy);
+
+    final stroke = Paint()
+      ..color = const Color(0xFF1A3FA6)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 170 * s
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final stem = Path()
+      ..moveTo(332 * s, 772 * s)
+      ..lineTo(332 * s, 252 * s);
+    final bowl = Path()
+      ..moveTo(332 * s, 252 * s)
+      ..lineTo(552 * s, 252 * s)
+      ..cubicTo(692 * s, 252 * s, 772 * s, 332 * s, 772 * s, 422 * s)
+      ..cubicTo(772 * s, 512 * s, 692 * s, 582 * s, 552 * s, 582 * s)
+      ..lineTo(332 * s, 582 * s);
+
+    canvas.drawPath(stem, stroke);
+    canvas.drawPath(bowl, stroke);
+    canvas.restore();
   }
 
   @override

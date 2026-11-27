@@ -163,6 +163,7 @@ private struct AppScopeBinding {
 private struct AppScopeKey: EnvironmentKey { static let defaultValue: AppScopeBinding? = nil }
 private struct AppRevealKey: EnvironmentKey { static let defaultValue: ((AppFocusID) -> Void)? = nil }
 private struct AppDirectionKey: EnvironmentKey { static let defaultValue: ((AppFocusDirection) -> Bool)? = nil }
+private struct AppFocusGateKey: EnvironmentKey { static let defaultValue: ((AppFocusID) -> Bool)? = nil }
 
 extension EnvironmentValues {
     var appRemoteDriver: AppRemoteFocusDriver? {
@@ -209,6 +210,7 @@ private struct AppRemoteAction: ViewModifier {
     @Environment(\.appScopeBinding) private var scope
     @Environment(\.appRemoteReveal) private var reveal
     @Environment(\.appRemoteDirection) private var environmentDirection
+    @Environment(\.appFocusGate) private var focusGate
     @State private var generatedID = AppFocusID()
     let suppliedID: AppFocusID?
     let action: () -> Void
@@ -217,7 +219,8 @@ private struct AppRemoteAction: ViewModifier {
     func body(content: Content) -> some View {
         let id = suppliedID ?? generatedID
         if let scope {
-            content.focused(scope.focus, equals: id)
+            content.disabled(focusGate?(id) == false)
+                .focused(scope.focus, equals: id)
                 .id(id)
                 .background(AppActionRegistration(id: id, scope: scope.id, action: action, direction: direction ?? environmentDirection, reveal: reveal))
                 .onAppear { focusChanged(scope.focus.wrappedValue == id) }
@@ -240,6 +243,10 @@ private extension EnvironmentValues {
     var appRemoteDirection: ((AppFocusDirection) -> Bool)? {
         get { self[AppDirectionKey.self] }
         set { self[AppDirectionKey.self] = newValue }
+    }
+    var appFocusGate: ((AppFocusID) -> Bool)? {
+        get { self[AppFocusGateKey.self] }
+        set { self[AppFocusGateKey.self] = newValue }
     }
 }
 private final class AppRemoteScopeView: UIView {
@@ -399,5 +406,15 @@ private struct AppRemoteConfirmation: View {
         .padding(80)
         .appRemoteScope(back: { dismiss() }, home: { dismiss() }, initialFocus: cancelID)
         .onExitCommand { dismiss() }
+    }
+}
+
+extension View {
+    /// Lets a screen veto focus for some controls (for example everything but the
+    /// first control of a pane while focus is still in a neighbouring column), so
+    /// the focus engine lands on the intended control directly instead of flashing
+    /// on another one first.
+    func appFocusGate(_ allows: @escaping (AppFocusID) -> Bool) -> some View {
+        environment(\.appFocusGate, allows)
     }
 }

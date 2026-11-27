@@ -79,6 +79,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/tray_icon.png
+    - assets/tray_icon.ico
     # The native-messaging host binary, bundled so `flutter build` carries it and
     # the app can register it with browsers. Compile it via scripts/build_host.sh
     # before building. Empty in a fresh checkout (the app falls back to build/).

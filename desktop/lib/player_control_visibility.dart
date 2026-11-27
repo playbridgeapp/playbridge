@@ -10,6 +10,7 @@ class PlayerControlVisibility {
     required this.videoRenderer,
     required this.proxyToggle,
     required this.speedMenu,
+    required this.loopToggle,
     required this.playbackSettings,
     required this.externalPlayer,
   });
@@ -31,6 +32,9 @@ class PlayerControlVisibility {
 
   /// Speed is meaningful for timed A/V, not still images.
   final bool speedMenu;
+
+  /// Repeat-one is meaningful for timed A/V, not still images.
+  final bool loopToggle;
 
   /// Fit/Zoom/Fill and subtitle delay — video only.
   final bool playbackSettings;
@@ -55,6 +59,7 @@ class PlayerControlVisibility {
       videoRenderer: isLinux && isVideo,
       proxyToggle: timed,
       speedMenu: timed,
+      loopToggle: timed,
       playbackSettings: isVideo,
       externalPlayer: timed,
     );
