@@ -214,7 +214,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(spacing: TvScale.pt(18)) {
-                    QRCodeCardView(urlString: "https://playbridge.app", size: TvScale.pt(248))
+                    QRCodeCardView(urlString: "https://playbridge.app/senders", size: TvScale.pt(248))
                     Text("Scan with your phone's camera")
                         .font(.system(size: TvScale.pt(18)))
                         .foregroundColor(colors.onSurface)
