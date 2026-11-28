@@ -2,6 +2,24 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] — 2026-12-01 (build 12)
+
+> **Works best together**: Watch Together and phone subtitle style and fonts need PlayBridge Phone 0.17.0 on Android or iPhone. Everyone in a party should use 0.17.0.
+
+### Added
+- **Redesigned app**: Home shows readiness, the name phones see, the number of connected phones and a Bookmarks row; first run shows the QR code and steps until a phone is paired. Settings is grouped into Playback, Subtitles, Skip, Phones, Appearance, About and Advanced, with the right-hand pane following focus.
+- **Bookmarks**: Hold a bookmark to resume, start over or remove it.
+- **One player look**: mpv and AVPlayer share the same controls: pill buttons, side panels for audio, subtitles, speed and settings, corner cards, skip intro/recap and "Paused from <phone>" confirmations.
+- **Watch Together**: Join a party with the code or QR code shown on the TV, or be added by a paired phone. The TV follows the party's play, pause, seek, speed and stop, shows who's in the party, and returns to the party screen when a video stops or ends. Only Back, Close or Leave party leaves.
+- **Subtitle style and fonts**: Size, Font, Background, Edge and "Use this style on pre-styled subtitles too", with a preview, on the TV or from a paired phone. A paired phone can install up to five custom fonts (30 MB in all).
+- **Preferred languages**: Both players follow the audio and subtitle languages sent with a cast, then the TV's own languages. A track you pick by hand stays for the rest of the cast, a saved "off" for subtitles wins, and each playlist item uses its own languages.
+
+### Fixed
+- **Cut streams in mpv**: When a server closes the connection early, mpv asks for the rest. If playback still stops moving, the player reloads at the last good position, at most twice without progress and six times per video, then shows "The video stopped loading" instead of freezing.
+- **Compressed HLS playlists in mpv**: Sites that serve gzip-compressed playlists play with video and a normal seek bar instead of audio only.
+- **Memory growth in long website casts**: Playing a long video from a website no longer makes the app use more and more memory until the system closes it after an hour or so.
+- **Audio dropouts with surround sound**: 5.1 audio no longer cuts out for a moment now and then. On an HDMI connection that supports eight channels, surround soundtracks are sent to the TV as 7.1.
+
 ## [0.16.0] — 2026-10-31 (build 11)
 
 > **mpv is now the default player.** A saved choice is kept; if you never picked one, playback now uses mpv. AVPlayer stays available in Settings, and mpv takes over when AVPlayer fails.

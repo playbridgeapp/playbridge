@@ -3,6 +3,49 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] — 2026-12-01 (versionCode 230)
+
+> **Works best together**: Watch Together, the TV's subtitle style and custom subtitle fonts need PlayBridge TV Player 0.17.0, PlayBridge Desktop 0.17.0 or PlayBridge for Apple TV 0.17.0. Everyone in a party should use 0.17.0: a 0.16.x member stays in the party but can keep showing a video that was stopped. Cast refusal messages need a receiver that answers play requests (TV Player and Desktop 0.17.0, any Apple TV version).
+
+### Added
+- **Watch Together**: Start or join a party from Dashboard → Watch together and watch the same video in step with other phones, TVs and computers. Share an invite link, join with a link or a 6-character code, add your connected TV or another TV by its code, and play, pause, seek or stop for everyone. The host chooses who can change the video (only the host, ask first, or anyone), can lock the party and approve requests, and can share their sign-in for a video with their own devices only. "Watch on this phone" plays along in the phone player. Party videos are never saved in cast history.
+- **Watch party as a cast target**: While in a party, "Watch party" appears in the Play on sheet. With it selected, casts and playlists from the browser, the cast sheet and bridged apps go to the party, and the rest of a playlist goes to Up next, which you can reorder, play now, remove from or clear. The next video loads when the current one ends. Picking a TV or This phone casts there and keeps you in the party.
+- **Recent parties**: Every party you start or join is kept until it ends (at most 20), sealed with an Android Keystore key and left out of backups. The history icon in Watch together lists them with **Rejoin as host** for parties you started, **Rejoin** and **Remove**. Opening a saved party's link rejoins with the same identity, so a host stays host and their TVs still count as theirs.
+- **mpv phone player**: mpv joins ExoPlayer as a second player. **Automatic** (default) starts on ExoPlayer and moves a video to mpv once, at the same position, on container, decoder or format errors. Choose ExoPlayer only or mpv in Settings → Phone player, or switch the current video from the player.
+- **Redesigned phone player**: A top bar with the title, queue position and engine; Previous, Play/Pause and Next; a wavy seek bar that shades an active A-B loop; Lock, Rotate and picture-in-picture; chips for speed, A-B loop and zoom; a More sheet (speed, repeat, A-B loop, aspect, zoom and pan, capture frame, player); and one Audio & subtitles sheet.
+- **Opening the player**: The player grows out of the cast sheet's thumbnail and shows a blurred poster until the first frame. **Landscape videos open in** chooses Fullscreen (default) or Portrait first, which shows the video above the title, seek bar, controls and Up next until you turn the phone.
+- **Ambient mode**: A soft glow of the video's colours fills the space behind the portrait layout and the bars around a full-screen video. On by default in Settings → Phone player.
+- **When you leave the player**: Choose Pause (default), Keep playing (the video keeps playing behind the browser and under the media notification) or Picture-in-picture for Back, Home and locking the phone. The player's More sheet changes it for the current video. Picture-in-picture has play/pause, Next and Play in background buttons.
+- **Pinch to fill**: In the portrait layout, pinching open on a landscape video fills the screen; pinching closed goes back.
+- **Phone player from the Dashboard**: ⋮ → Phone player returns to a video playing in the background, or opens a file or a link.
+- **Subtitle style**: One editor with a live preview for size, background, edge, font and restyling styled (ASS) subtitles. Edit the phone player's style in Settings → Audio & subtitles, and the TV's from Play on → Configure TV → Subtitles.
+- **Custom subtitle fonts**: Add up to five .ttf, .otf or .ttc fonts (30 MB in all) for the phone player, or send them to the TV with progress.
+- **Cast history redesign**: Each cast keeps its title, site, device, where it stopped, length and preview picture. Positions are saved while connected, and Resume continues from there on PlayBridge TVs, Google Cast, DLNA and the watch party. Filters (All, Unfinished, Failed, Expired), search, link expiry ("Link expires in 2 h"), an optional link check, and Settings → Cast history with a limit of 25 to 500 casts (50 by default). Casts from bridged apps are left out by default.
+- **TV refusals**: When the TV refuses a cast, a popup says why ("The TV is busy. Try again in a moment."). TV playback failures also show as a popup instead of a banner.
+- **Pair again**: A saved TV that was reset or reinstalled shows "Reset or reinstalled · Pair again" instead of "Couldn't connect". Pair again replaces only that TV's pairing with a new code-verified one. A TV or computer that forgot this phone says it no longer recognises it and offers Pair again, instead of "Couldn't connect".
+- **File uploads**: `<input type="file">` on web pages opens the system file picker.
+
+### Changed
+- **Subtitles checked on detection**: Detected subtitles are checked and their language identified straight away; error pages and thumbnail sprites are hidden. The cast sheet lists your preferred language first and pre-ticks it when one is set. Ticked subtitles reach the phone player, and the phone player follows your preferred audio and subtitle languages.
+- **Settings by topic**: Settings is grouped into Phone player, TV, Audio & subtitles, Casting, Browser, Remote and General, each with a live summary.
+- **Edge handle**: The PlayBridge handle shows only in bridged apps. Drag it to either side and any height; the position is remembered, and it no longer triggers the Back gesture.
+- **Browser toolbar while typing**: The bottom toolbar hides while the keyboard is open.
+- **Screen transitions**: The browser's bars and page fade together instead of jumping, popping in or vanishing, and heavy screens fade through instead of crossfading. Leaving a bridged app no longer shows the browser bars for a moment.
+- **Watch Together**: Redesigned screen, with a seek bar, Stop and Up next. A video that ends is cleared for everyone. Opening the current party's link keeps you in it; another party's link asks before leaving. Invite links stop working when their party ends.
+- **Licensing**: The phone app now includes mpv-android, so the APK as a whole is distributed under GPL-3.0 terms, like the TV player. PlayBridge's own code stays MPL-2.0. The download is about 14 MB larger.
+
+### Fixed
+- **Sidecar subtitles in ExoPlayer**: Subtitles with the wrong type, such as SRT labelled as WebVTT, are read by their content instead of being dropped.
+- **Compressed HLS playlists in mpv**: Sites that serve gzip-compressed playlists play with video and a normal seek bar instead of audio only.
+- **Cut streams in mpv**: mpv reconnects when a server closes the connection early.
+- **Long links in mpv**: Very long signed links (such as DASH from YouTube-style front ends) play through the phone's proxy instead of failing.
+- **Native crash**: The phone's proxy no longer frees its native handle while it's still being polled.
+- **Seeking with a desktop host**: Browser-only headers such as `Range` are no longer passed on, so seeking doesn't restart from the beginning.
+- **Browser receiver errors**: When the phone hosts a TV's web browser, its failures show the browser's own sentence.
+
+### Security
+- **Favicons**: Site icons load from the site itself instead of Google's favicon service, so open sites are no longer sent to Google.
+
 ## [0.16.0] — 2026-10-31 (versionCode 229)
 
 > **Upgrading removes the Library.** The Library, Stremio add-ons, debrid providers and Nuvio scrapers are gone, and their data is deleted on upgrade: installed add-ons, watchlist, resume positions, scrapers, debrid and TMDB/OMDB/TVDB keys, and their caches. Collections, IPTV, bridged apps, browser casting, Phone Files, downloads and the remote stay. Old backups still import; the removed sections are ignored.

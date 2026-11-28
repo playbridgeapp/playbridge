@@ -3,6 +3,42 @@
 All notable changes to the iOS phone app (`app.playbridge.phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] — 2026-12-01 (build 12)
+
+> **Works best together**: Watch Together, the TV's subtitle style and custom fonts need PlayBridge 0.17.0 on the TV or desktop. Everyone in a party should use 0.17.0.
+
+### Added
+- **Watch Together**: Start or join a party from the Dashboard and watch in step with other phones, TVs and computers. Share an invite link (it opens the app, also from the TV's QR code) or join with a code, add your TV or desktop, and play, pause, seek or stop for everyone. The host decides who can change the video. Party videos aren't saved in history.
+- **Watch party as a cast target**: While the party is selected in Play on, casts from the cast sheet, browser, Playlists, collections and history go to the party, the rest of a playlist goes to Up next, and bridged apps run their session in the party.
+- **Recent parties**: Parties you start or join are kept in this iPhone's Keychain until they end. Rejoin as host, rejoin, or swipe to remove.
+- **AVPlayer phone player**: Settings → Phone player → Player: **mpv first** (default), **AVPlayer first** or **mpv only**. A video the first engine can't play moves to the other once, with **Switch back**. AVPlayer only takes HLS, MP4, M4V, MOV and audio.
+- **Redesigned phone player**: Title with queue position and engine, Previous/Play/Next, a wavy seek bar, Lock, Rotate, a speed chip, and More and Audio & subtitles sheets.
+- **Opening the player**: Grows out of the cast sheet card (iOS 18+) over a blurred poster. **Landscape videos open in**: Fullscreen (default) or Portrait first.
+- **Ambient mode**: A glow of the video's colours around the picture. On by default.
+- **Keep playing**: **When you leave the player**: Pause (default) or Keep playing, with lock-screen controls and a "Playing on this phone" bar.
+- **Pinch to fill** in the portrait layout, and **Dashboard → ⋯ → Phone player** to reopen the video or play a file or link.
+- **Subtitle style and fonts**: Size, background, edge, font and restyling of ASS subtitles, with a preview, for the phone player and the TV. Add up to five custom fonts.
+- **Cast history redesign**: Preview pictures, where you stopped, Resume on TVs, Google Cast, DLNA, TV browser and AirPlay, filters, search, link expiry and a 25–500 cast limit. Bridged-app casts are left out by default.
+- **TV refusals**: An alert says why the TV refused a cast.
+- **Pair again** for a saved TV that was reset or reinstalled, or that forgot this phone: it says it no longer recognises the phone instead of "Couldn't connect".
+- **Camera uploads**: Websites can ask for a photo or video to upload.
+
+### Changed
+- **Subtitles checked on detection**: Error pages and thumbnail sprites are hidden, your preferred language is listed first and pre-ticked, ticked subtitles reach the phone player, and casts send your preferred languages.
+- **Settings by topic**, each page with a live summary.
+- **Subtitles**: No more yellow style; ASS subtitles keep their own look unless restyling is on.
+- **Edge handle**: Drag it to either side and any height.
+- **Browser toolbar**: A hardware keyboard's shortcut bar no longer hides it.
+
+### Fixed
+- **Compressed HLS playlists in mpv** play with video and a normal seek bar instead of audio only.
+- **Seeking with a desktop host** no longer freezes.
+- **Gesture seeks** no longer bring the controls up.
+- **Memory growth in long website casts**: Playing a long video from a website no longer makes the app use more and more memory until the system closes it after an hour or so.
+
+### Security
+- **Favicons** load from the site itself instead of Google's favicon service.
+
 ## [0.16.0] — 2026-10-31 (build 11)
 
 > **Works best together**: Chapters and skip segments on the seek bar, the playback failure reason and Apple TV app control need PlayBridge receivers 0.16.0. Older receivers keep working with the controls they report.
