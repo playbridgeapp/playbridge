@@ -729,6 +729,9 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
         mpv_observe_property(handle, 0, "video-params/gamma", MPV_FORMAT_STRING)
         // JSON `[{"title","time"}]`; fires again when the next file loads.
         mpv_observe_property(handle, 0, "chapter-list", MPV_FORMAT_STRING)
+        // Source channel count of the selected audio track: picks the output layout (see
+        // MPVAudioPolicy.outputChannels). Fires on load and on every audio track switch.
+        mpv_observe_property(handle, 0, "current-tracks/audio/demux-channel-count", MPV_FORMAT_INT64)
 
         // Retain self for the callback's lifetime (released in teardown()). The callback fires
         // on mpv's own thread, so self must outlive the installed callback.
@@ -1284,6 +1287,20 @@ class MPVViewController: UIViewController, UIGestureRecognizerDelegate {
                   let cString = prop.data?.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee,
                   let handle = mpv else { break }
             if !String(cString: cString).isEmpty { detectAndApplyHDR(handle: handle) }
+
+        case "current-tracks/audio/demux-channel-count":
+            // No audio track (or no value yet) reports a non-int64 format: treat as stereo/auto.
+            let sourceChannels = prop.format == MPV_FORMAT_INT64
+                ? Int(prop.data?.assumingMemoryBound(to: Int64.self).pointee ?? 0) : 0
+            let layout = MPVAudioPolicy.outputChannels(
+                sourceChannels: sourceChannels,
+                maxOutputChannels: AVAudioSession.sharedInstance().maximumOutputNumberOfChannels)
+            if let handle = mpv {
+                mpv_set_property_string(handle, "audio-channels", layout)
+                #if DEBUG
+                print("[MPV audio-debug] source channels=\(sourceChannels) -> audio-channels=\(layout)")
+                #endif
+            }
 
         case "demuxer-cache-duration":
             guard prop.format == MPV_FORMAT_DOUBLE,

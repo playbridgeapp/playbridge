@@ -1,5 +1,16 @@
 /// Reset per-item audio choices on a reused core; restore named track preferences after discovery.
 enum MPVAudioPolicy {
+    /// mpv `audio-channels` for the current audio track.
+    ///
+    /// Surround (5.1+) tracks are sent as 7.1 whenever the HDMI route reports at least eight
+    /// output channels. On Apple TV, mpv's 5.1 output to the TV intermittently drops audio for a
+    /// moment (float or 16-bit, either 5.1 layout, no mpv-side event), while the same stream as
+    /// 7.1 does not. mpv fills the extra channels itself. Stereo/mono tracks, and routes that
+    /// cannot take eight channels, keep mpv's normal `auto-safe` choice.
+    static func outputChannels(sourceChannels: Int, maxOutputChannels: Int) -> String {
+        sourceChannels >= 6 && maxOutputChannels >= 8 ? "7.1" : "auto-safe"
+    }
+
     /// Pre-buffer mute and the user's app mute both silence this file. App mute
     /// stays on after pre-buffering ends. App volume is the separate mpv
     /// `volume` property (0–100) and is not rewritten here.
