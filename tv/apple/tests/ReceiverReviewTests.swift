@@ -203,6 +203,14 @@ struct ReceiverReviewTests {
         assert(reusedAudioOptions["volume"] == "75")
         for (name, value) in MPVAudioPolicy.loadOptions(isPreBuffering: true) { reusedAudioOptions[name] = value }
         assert(reusedAudioOptions["aid"] == "auto" && reusedAudioOptions["mute"] == "yes")
+        // Surround goes out as 7.1 when the route has 8 channels; everything else stays auto-safe.
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 6, maxOutputChannels: 8) == "7.1")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 8, maxOutputChannels: 8) == "7.1")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 6, maxOutputChannels: 6) == "auto-safe")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 6, maxOutputChannels: 2) == "auto-safe")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 2, maxOutputChannels: 8) == "auto-safe")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 1, maxOutputChannels: 8) == "auto-safe")
+        assert(MPVAudioPolicy.outputChannels(sourceChannels: 0, maxOutputChannels: 8) == "auto-safe")
         assert(MPVAudioPolicy.muteValue(isPreBuffering: false) == "no")
         assert(MPVAudioPolicy.muteValue(isPreBuffering: true) == "yes")
         assert(MPVAudioPolicy.muteValue(isPreBuffering: false, appMuted: true) == "yes")
